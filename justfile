@@ -15,8 +15,8 @@ release:
 alias r := release
 
 # Run all tests
-test:
-    cargo test
+test *ARGS:
+    cargo test --all-features {{ARGS}}
 
 alias t := test
 
@@ -28,7 +28,7 @@ alias tv := test-verbose
 
 # Run clippy lints
 lint:
-    cargo clippy -- -D warnings
+    cargo clippy --all-targets --all-features -- -D warnings
 
 alias l := lint
 
@@ -75,3 +75,6 @@ watch-lint:
     cargo watch -x clippy
 
 alias wl := watch-lint
+
+# Run all CI checks (test, lint, format check)
+ci: test lint fmt-check

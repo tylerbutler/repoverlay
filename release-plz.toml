@@ -1,0 +1,19 @@
+[workspace]
+# Allow updating Cargo.toml even without a Cargo.lock
+allow_dirty = ["Cargo.toml"]
+
+# Changelog configuration
+changelog_update = true
+
+# PR configuration
+pr_draft = false
+pr_labels = ["release"]
+
+# Git configuration
+git_release_enable = true
+git_release_draft = false
+git_tag_enable = true
+
+# Commit message format
+git_release_name = "v{{ version }}"
+git_tag_name = "v{{ version }}"
