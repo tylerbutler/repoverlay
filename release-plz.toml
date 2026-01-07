@@ -1,7 +1,4 @@
 [workspace]
-# Allow dirty working directory (needed when Cargo.lock is gitignored)
-allow_dirty = true
-
 # Changelog configuration
 changelog_update = true
 
