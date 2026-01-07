@@ -6,11 +6,6 @@ changelog_update = true
 pr_draft = false
 pr_labels = ["release"]
 
-# Git configuration
-git_release_enable = true
-git_release_draft = false
-git_tag_enable = true
-
-# Commit message format
-git_release_name = "v{{ version }}"
-git_tag_name = "v{{ version }}"
+# Git configuration - disabled since cargo-dist handles releases
+git_release_enable = false
+git_tag_enable = false
