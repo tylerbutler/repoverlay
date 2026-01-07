@@ -1,6 +1,6 @@
 [workspace]
-# Allow updating Cargo.toml even without a Cargo.lock
-allow_dirty = ["Cargo.toml"]
+# Allow dirty working directory (needed when Cargo.lock is gitignored)
+allow_dirty = true
 
 # Changelog configuration
 changelog_update = true
