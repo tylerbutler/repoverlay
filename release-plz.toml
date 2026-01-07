@@ -1,7 +1,4 @@
 [workspace]
-# Allow updating Cargo.toml even without a Cargo.lock
-allow_dirty = ["Cargo.toml"]
-
 # Changelog configuration
 changelog_update = true
 
