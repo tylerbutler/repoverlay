@@ -14,8 +14,9 @@ release:
 
 alias r := release
 
-# Run all tests
+# Run all tests (builds binary first for CLI tests)
 test *ARGS:
+    cargo build
     cargo test --all-features {{ARGS}}
 
 alias t := test
