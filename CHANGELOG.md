@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/tylerbutler/repoverlay/compare/v0.1.0...v0.1.1) - 2026-01-07
+
+### Other
+
+- add installation methods to README
+- add cargo-dist for binary releases and Homebrew distribution
+
 ## [0.1.0](https://github.com/tylerbutler/repoverlay/releases/tag/v0.1.0) - 2026-01-07
 
 ### Added
