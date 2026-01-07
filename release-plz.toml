@@ -6,6 +6,9 @@ changelog_update = true
 pr_draft = false
 pr_labels = ["release"]
 
-# Git configuration - disabled since cargo-dist handles releases
+# Git configuration
+# Disable GitHub release creation - cargo-dist handles this with binary assets
 git_release_enable = false
-git_tag_enable = false
+# Enable git tag creation - this triggers cargo-dist release workflow
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
