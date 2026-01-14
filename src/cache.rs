@@ -302,19 +302,19 @@ impl CacheManager {
             commit: commit.to_string(),
         };
 
-        let meta_path = repo_path.join(".repoverlay-cache-meta.toml");
-        fs::write(&meta_path, toml::to_string_pretty(&meta)?)?;
+        let meta_path = repo_path.join(".repoverlay-cache-meta.ccl");
+        fs::write(&meta_path, sickle::to_string(&meta)?)?;
 
         Ok(())
     }
 
     /// Load cache metadata.
     fn load_meta(&self, repo_path: &Path) -> Option<CacheMeta> {
-        let meta_path = repo_path.join(".repoverlay-cache-meta.toml");
+        let meta_path = repo_path.join(".repoverlay-cache-meta.ccl");
         if meta_path.exists()
             && let Ok(content) = fs::read_to_string(&meta_path)
         {
-            return toml::from_str(&content).ok();
+            return sickle::from_str(&content).ok();
         }
         None
     }

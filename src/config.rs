@@ -1,0 +1,224 @@
+//! Configuration management for repoverlay.
+//!
+//! Handles global and per-repo configuration using CCL format.
+//! Global config: `~/.config/repoverlay/config.ccl`
+//! Per-repo config: `.repoverlay/config.ccl`
+
+use anyhow::{Context, Result};
+use directories::ProjectDirs;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Global repoverlay configuration.
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
+pub struct RepoverlayConfig {
+    /// Overlay repository configuration (optional).
+    #[serde(default)]
+    pub overlay_repo: Option<OverlayRepoConfig>,
+}
+
+/// Configuration for a shared overlay repository.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct OverlayRepoConfig {
+    /// Git URL of the overlay repository.
+    pub url: String,
+    /// Optional override for the local clone path.
+    /// Default: `~/.local/share/repoverlay/overlay-repo/`
+    #[serde(default)]
+    pub local_path: Option<PathBuf>,
+}
+
+/// Get the global config directory path.
+///
+/// Returns `~/.config/repoverlay/` on Linux/macOS.
+pub fn config_dir() -> Result<PathBuf> {
+    let proj_dirs = ProjectDirs::from("", "", "repoverlay")
+        .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+
+    Ok(proj_dirs.config_dir().to_path_buf())
+}
+
+/// Get the path to the global config file.
+pub fn global_config_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("config.ccl"))
+}
+
+/// Get the path to the per-repo config file.
+pub fn repo_config_path(repo_path: &Path) -> PathBuf {
+    repo_path.join(".repoverlay").join("config.ccl")
+}
+
+/// Load the global configuration.
+pub fn load_global_config() -> Result<RepoverlayConfig> {
+    let config_path = global_config_path()?;
+
+    if !config_path.exists() {
+        return Ok(RepoverlayConfig::default());
+    }
+
+    let content = fs::read_to_string(&config_path)
+        .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+
+    sickle::from_str(&content)
+        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))
+}
+
+/// Load the per-repo configuration.
+pub fn load_repo_config(repo_path: &Path) -> Result<Option<RepoverlayConfig>> {
+    let config_path = repo_config_path(repo_path);
+
+    if !config_path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&config_path)
+        .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+
+    let config: RepoverlayConfig = sickle::from_str(&content)
+        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+
+    Ok(Some(config))
+}
+
+/// Load configuration, merging global with per-repo overrides.
+///
+/// Per-repo settings override global settings.
+pub fn load_config(repo_path: Option<&Path>) -> Result<RepoverlayConfig> {
+    let mut config = load_global_config()?;
+
+    if let Some(repo) = repo_path
+        && let Some(repo_config) = load_repo_config(repo)?
+        && repo_config.overlay_repo.is_some()
+    {
+        config.overlay_repo = repo_config.overlay_repo;
+    }
+
+    Ok(config)
+}
+
+/// Generate a config file with helpful comments.
+pub fn generate_config_ccl(config: &OverlayRepoConfig) -> String {
+    let mut output = String::new();
+    output.push_str("/= repoverlay global configuration\n");
+    output.push_str("/= This file configures repoverlay's overlay repository integration.\n\n");
+    output.push_str("overlay_repo =\n");
+    output.push_str("  /= url: The Git URL of the shared overlay repository.\n");
+    output.push_str("  /= This is where overlays are stored and retrieved from.\n");
+    output.push_str("  /= Supports HTTPS and SSH URLs.\n");
+    output.push_str(&format!("  url = {}\n", config.url));
+
+    if let Some(ref local_path) = config.local_path {
+        output.push_str("\n  /= local_path: Override the default clone location.\n");
+        output.push_str(&format!("  local_path = {}\n", local_path.display()));
+    } else {
+        output.push_str("\n  /= local_path (optional): Override the default clone location.\n");
+        output.push_str(
+            "  /= By default, the repo is cloned to ~/.local/share/repoverlay/overlay-repo/\n",
+        );
+        output.push_str("  /= Uncomment to use a custom path instead:\n");
+        output.push_str("  /= local_path = /custom/path/to/clone\n");
+    }
+
+    output
+}
+
+/// Save the global configuration with helpful comments.
+pub fn save_global_config_with_comments(config: &OverlayRepoConfig) -> Result<()> {
+    let config_path = global_config_path()?;
+
+    // Ensure config directory exists
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+    }
+
+    let content = generate_config_ccl(config);
+
+    fs::write(&config_path, content)
+        .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_config_dir() {
+        let dir = config_dir();
+        assert!(dir.is_ok());
+        let dir = dir.unwrap();
+        assert!(dir.ends_with("repoverlay") || dir.to_string_lossy().contains("repoverlay"));
+    }
+
+    #[test]
+    fn test_repo_config_path() {
+        let repo = PathBuf::from("/some/repo");
+        let path = repo_config_path(&repo);
+        assert_eq!(path, PathBuf::from("/some/repo/.repoverlay/config.ccl"));
+    }
+
+    #[test]
+    fn test_load_global_config_missing() {
+        // Should return default config when file doesn't exist
+        // This test relies on the config file not existing in the test environment
+        let config = load_global_config();
+        // May fail if config exists, but that's okay
+        if let Ok(cfg) = config {
+            assert!(cfg.overlay_repo.is_none());
+        }
+    }
+
+    #[test]
+    fn test_load_repo_config_missing() {
+        let temp = TempDir::new().unwrap();
+        let config = load_repo_config(temp.path()).unwrap();
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn test_generate_config_ccl() {
+        let config = OverlayRepoConfig {
+            url: "https://github.com/user/repo-overlays".to_string(),
+            local_path: None,
+        };
+        let ccl = generate_config_ccl(&config);
+        assert!(ccl.contains("overlay_repo ="));
+        assert!(ccl.contains("url = https://github.com/user/repo-overlays"));
+        assert!(ccl.contains("/= repoverlay global configuration"));
+    }
+
+    #[test]
+    fn test_generate_config_ccl_with_local_path() {
+        let config = OverlayRepoConfig {
+            url: "https://github.com/user/repo-overlays".to_string(),
+            local_path: Some(PathBuf::from("/custom/path")),
+        };
+        let ccl = generate_config_ccl(&config);
+        assert!(ccl.contains("local_path = /custom/path"));
+    }
+
+    #[test]
+    fn test_roundtrip_config() {
+        let config = RepoverlayConfig {
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/test/overlays".to_string(),
+                local_path: None,
+            }),
+        };
+
+        // Serialize to CCL
+        let ccl = sickle::to_string(&config).unwrap();
+
+        // Deserialize back
+        let parsed: RepoverlayConfig = sickle::from_str(&ccl).unwrap();
+
+        assert!(parsed.overlay_repo.is_some());
+        let overlay_repo = parsed.overlay_repo.unwrap();
+        assert_eq!(overlay_repo.url, "https://github.com/test/overlays");
+        assert!(overlay_repo.local_path.is_none());
+    }
+}

@@ -12,7 +12,6 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.9"
 walkdir = "2"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
@@ -21,6 +20,7 @@ colored = "3"
 url = "2"
 directories = "5"
 dialoguer = "0.11"
+sickle = { version = "0.1", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,10 +1,11 @@
 mod cache;
+mod config;
 mod detection;
 mod github;
+mod overlay_repo;
 mod state;
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::fs;
@@ -16,10 +17,10 @@ use cache::CacheManager;
 use github::GitHubSource;
 use state::{
     CONFIG_FILE, FileEntry, GIT_EXCLUDE, GlobalMeta, LinkType, MANAGED_SECTION_NAME, META_FILE,
-    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, StateMeta,
-    exclude_marker_end, exclude_marker_start, list_applied_overlays, load_all_overlay_targets,
-    load_external_states, load_overlay_state, normalize_overlay_name, remove_external_state,
-    save_external_state,
+    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, exclude_marker_end,
+    exclude_marker_start, list_applied_overlays, load_all_overlay_targets, load_external_states,
+    load_overlay_state, normalize_overlay_name, remove_external_state, save_external_state,
+    save_overlay_state,
 };
 
 /// Overlay config files into git repositories without committing them
@@ -168,6 +169,55 @@ enum Commands {
         #[command(subcommand)]
         command: CacheCommand,
     },
+
+    /// Initialize overlay repository configuration
+    #[command(name = "init-repo")]
+    InitRepo {
+        /// URL of the overlay repository (e.g., https://github.com/user/repo-overlays)
+        url: String,
+
+        /// Skip cloning the repository
+        #[arg(long)]
+        no_clone: bool,
+    },
+
+    /// List available overlays from the overlay repository
+    List {
+        /// Filter by target repository (format: org/repo)
+        #[arg(short, long)]
+        target: Option<String>,
+
+        /// Update overlay repo before listing
+        #[arg(long)]
+        update: bool,
+    },
+
+    /// Publish an overlay to the overlay repository
+    Publish {
+        /// Path to the overlay source directory
+        source: PathBuf,
+
+        /// Target repository (format: org/repo)
+        /// Auto-detected from current git remote if not specified
+        #[arg(short, long)]
+        target: Option<String>,
+
+        /// Overlay name (defaults from repoverlay.ccl or directory name)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Commit message
+        #[arg(short, long)]
+        message: Option<String>,
+
+        /// Skip push to remote (just commit locally)
+        #[arg(long)]
+        no_push: bool,
+
+        /// Show what would be published without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -251,6 +301,29 @@ fn main() -> Result<()> {
         Commands::Cache { command } => {
             handle_cache_command(command)?;
         }
+        Commands::InitRepo { url, no_clone } => {
+            init_repo(&url, no_clone)?;
+        }
+        Commands::List { target, update } => {
+            list_overlays(target.as_deref(), update)?;
+        }
+        Commands::Publish {
+            source,
+            target,
+            name,
+            message,
+            no_push,
+            dry_run,
+        } => {
+            publish_overlay(
+                &source,
+                target.as_deref(),
+                name.as_deref(),
+                message.as_deref(),
+                no_push,
+                dry_run,
+            )?;
+        }
     }
 
     Ok(())
@@ -268,6 +341,7 @@ struct ResolvedSource {
 ///
 /// For GitHub URLs, downloads/updates the cache and returns the cached path.
 /// For local paths, returns the path directly.
+/// For overlay repo references (org/repo/name), resolves from the managed overlay repository.
 fn resolve_source(
     source_str: &str,
     ref_override: Option<&str>,
@@ -309,16 +383,66 @@ fn resolve_source(
         });
     }
 
-    // Treat as local path
+    // Try to parse as local path first
     let path = PathBuf::from(source_str);
-    let canonical = path
-        .canonicalize()
-        .with_context(|| format!("Overlay source not found: {}", source_str))?;
+    if path.exists() {
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("Overlay source not found: {}", source_str))?;
 
-    Ok(ResolvedSource {
-        path: canonical.clone(),
-        source_info: OverlaySource::local(canonical),
-    })
+        return Ok(ResolvedSource {
+            path: canonical.clone(),
+            source_info: OverlaySource::local(canonical),
+        });
+    }
+
+    // Try to parse as overlay repo reference (org/repo/name)
+    if let Some((org, repo, name)) = overlay_repo::parse_overlay_reference(source_str) {
+        // Load config and create overlay repo manager
+        let config = config::load_config(None)?;
+        let overlay_config = config.overlay_repo.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Overlay repository not configured.\n\n\
+                 To apply overlays from a shared repository, first run:\n\
+                 repoverlay init-repo <url>\n\n\
+                 Or use a local path or GitHub URL instead."
+            )
+        })?;
+
+        let manager = overlay_repo::OverlayRepoManager::new(overlay_config)?;
+        manager.ensure_cloned()?;
+
+        if update {
+            println!("{} overlay repository...", "Updating".blue().bold());
+            manager.pull()?;
+        }
+
+        let overlay_path = manager.get_overlay_path(&org, &repo, &name)?;
+        let commit = manager.get_current_commit()?;
+
+        println!(
+            "{} overlay: {}/{}/{}",
+            "Resolving".blue().bold(),
+            org,
+            repo,
+            name
+        );
+
+        return Ok(ResolvedSource {
+            path: overlay_path,
+            source_info: OverlaySource::overlay_repo(org, repo, name, commit),
+        });
+    }
+
+    // Nothing matched
+    bail!(
+        "Overlay source not found: {}\n\n\
+         Valid formats:\n\
+         - Local path: ./my-overlay\n\
+         - GitHub URL: https://github.com/owner/repo\n\
+         - Overlay repo: org/repo/name",
+        source_str
+    )
 }
 
 fn apply_overlay(
@@ -354,7 +478,7 @@ fn apply_overlay(
     let config: OverlayConfig = if config_path.exists() {
         let content = fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read config: {}", config_path.display()))?;
-        toml::from_str(&content)
+        sickle::from_str(&content)
             .with_context(|| format!("Failed to parse config: {}", config_path.display()))?
     } else {
         OverlayConfig::default()
@@ -373,7 +497,7 @@ fn apply_overlay(
 
     // Check if this specific overlay already exists
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-    let overlay_state_path = overlays_dir.join(format!("{}.toml", normalized_name));
+    let overlay_state_path = overlays_dir.join(format!("{}.ccl", normalized_name));
     if overlay_state_path.exists() {
         bail!(
             "Overlay '{}' is already applied. Run 'repoverlay remove {}' first.",
@@ -387,8 +511,8 @@ fn apply_overlay(
 
     println!("{} overlay: {}", "Applying".green().bold(), overlay_name);
 
-    // Collect files to overlay
-    let mut files: Vec<FileEntry> = Vec::new();
+    // Collect files to overlay and build state
+    let mut state = OverlayState::new(overlay_name.clone(), resolved.source_info);
     let mut exclude_entries: Vec<String> = Vec::new();
 
     for entry in WalkDir::new(source)
@@ -398,7 +522,7 @@ fn apply_overlay(
     {
         let rel_path = entry.path().strip_prefix(source)?;
 
-        // Skip the config file itself
+        // Skip the config file
         if rel_path == Path::new(CONFIG_FILE) {
             continue;
         }
@@ -408,7 +532,7 @@ fn apply_overlay(
         if rel_str_check.starts_with(".git/")
             || rel_str_check.starts_with(".git\\")
             || rel_str_check == ".git"
-            || rel_str_check == ".repoverlay-cache-meta.toml"
+            || rel_str_check == ".repoverlay-cache-meta.ccl"
         {
             continue;
         }
@@ -471,7 +595,7 @@ fn apply_overlay(
 
         println!("  {} {}", "+".green(), target_rel.display());
 
-        files.push(FileEntry {
+        state.add_file(FileEntry {
             source: rel_path.to_path_buf(),
             target: target_rel.clone(),
             link_type,
@@ -482,7 +606,7 @@ fn apply_overlay(
         exclude_entries.push(exclude_path);
     }
 
-    if files.is_empty() {
+    if state.file_count() == 0 {
         bail!("No files found in overlay source: {}", source.display());
     }
 
@@ -496,20 +620,13 @@ fn apply_overlay(
     let meta_path = target.join(STATE_DIR).join(META_FILE);
     if !meta_path.exists() {
         let global_meta = GlobalMeta::default();
-        fs::write(&meta_path, toml::to_string_pretty(&global_meta)?)?;
+        let meta_content =
+            sickle::to_string(&global_meta).context("Failed to serialize global meta")?;
+        fs::write(&meta_path, meta_content)?;
     }
 
-    // Save overlay state
-    let state = OverlayState {
-        meta: StateMeta {
-            applied_at: Utc::now(),
-            source: resolved.source_info,
-            name: overlay_name.clone(),
-        },
-        files,
-    };
-
-    fs::write(&overlay_state_path, toml::to_string_pretty(&state)?)?;
+    // Save overlay state to in-repo location
+    save_overlay_state(&target, &state)?;
 
     // Save external backup for restore capability
     if let Err(e) = save_external_state(&target, &normalized_name, &state) {
@@ -523,7 +640,7 @@ fn apply_overlay(
     println!(
         "\n{} Applied {} file(s) from '{}'",
         "✓".green().bold(),
-        state.files.len(),
+        state.file_count(),
         overlay_name
     );
 
@@ -621,7 +738,7 @@ fn remove_overlay(target: &Path, name: Option<String>, remove_all: bool) -> Resu
 }
 
 fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &str) -> Result<()> {
-    let state_file = overlays_dir.join(format!("{}.toml", name));
+    let state_file = overlays_dir.join(format!("{}.ccl", name));
 
     if !state_file.exists() {
         // List available overlays for helpful error message
@@ -640,10 +757,10 @@ fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &str) -> Resu
 
     let state = load_overlay_state(target, name)?;
 
-    println!("{} overlay: {}", "Removing".red().bold(), state.meta.name);
+    println!("{} overlay: {}", "Removing".red().bold(), state.name);
 
     // Remove files
-    for entry in &state.files {
+    for entry in state.file_entries() {
         let file_path = target.join(&entry.target);
 
         if file_path.exists() || file_path.is_symlink() {
@@ -673,9 +790,9 @@ fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &str) -> Resu
 
     // Update git exclude (remove this overlay's section)
     let exclude_entries: Vec<String> = state
-        .files
+        .file_entries()
         .iter()
-        .map(|f| f.target.to_string_lossy().replace('\\', "/"))
+        .map(|e| e.target.to_string_lossy().replace('\\', "/"))
         .collect();
     update_git_exclude(target, name, &exclude_entries, false)?;
 
@@ -694,8 +811,8 @@ fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &str) -> Resu
     println!(
         "\n{} Removed {} file(s) from '{}'",
         "✓".green().bold(),
-        state.files.len(),
-        state.meta.name
+        state.file_count(),
+        state.name
     );
 
     Ok(())
@@ -754,10 +871,10 @@ fn show_status(target: &Path, filter_name: Option<String>) -> Result<()> {
 fn show_single_overlay_status(target: &Path, name: &str) -> Result<()> {
     let state = load_overlay_state(target, name)?;
 
-    println!("  {} {}", "Overlay:".bold(), state.meta.name.cyan());
+    println!("  {} {}", "Overlay:".bold(), state.name.cyan());
 
     // Display source based on type
-    match &state.meta.source {
+    match &state.source {
         OverlaySource::Local { path } => {
             println!("    Source:  {}", path.display());
         }
@@ -775,15 +892,30 @@ fn show_single_overlay_status(target: &Path, name: &str) -> Result<()> {
                 println!("    Subpath: {}", sp);
             }
         }
+        OverlaySource::OverlayRepo {
+            org,
+            repo,
+            name: overlay_name,
+            commit,
+        } => {
+            println!(
+                "    Source:  {}/{}/{} {}",
+                org,
+                repo,
+                overlay_name,
+                "(overlay repo)".dimmed()
+            );
+            println!("    Commit:  {}", &commit[..12.min(commit.len())]);
+        }
     }
 
     println!(
         "    Applied: {}",
-        state.meta.applied_at.format("%Y-%m-%d %H:%M:%S UTC")
+        state.applied_at.format("%Y-%m-%d %H:%M:%S UTC")
     );
-    println!("    Files:   {}", state.files.len());
+    println!("    Files:   {}", state.file_count());
 
-    for entry in &state.files {
+    for entry in state.file_entries() {
         let target_path = target.join(&entry.target);
         let status = if target_path.exists() || target_path.is_symlink() {
             "✓".green()
@@ -832,13 +964,24 @@ fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
     );
 
     for state in &external_states {
-        println!("  - {}", state.meta.name);
-        match &state.meta.source {
+        println!("  - {}", state.name);
+        match &state.source {
             OverlaySource::Local { path } => {
                 println!("    Source: {}", path.display());
             }
             OverlaySource::GitHub { url, git_ref, .. } => {
                 println!("    Source: {} ({})", url, git_ref);
+            }
+            OverlaySource::OverlayRepo {
+                org,
+                repo,
+                name: overlay_name,
+                ..
+            } => {
+                println!(
+                    "    Source: {}/{}/{} (overlay repo)",
+                    org, repo, overlay_name
+                );
             }
         }
     }
@@ -852,14 +995,22 @@ fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
 
     // Restore each overlay
     for state in external_states {
-        let source_str = match &state.meta.source {
+        let source_str = match &state.source {
             OverlaySource::Local { path } => path.to_string_lossy().to_string(),
             OverlaySource::GitHub { url, .. } => url.clone(),
+            OverlaySource::OverlayRepo {
+                org,
+                repo,
+                name: overlay_name,
+                ..
+            } => {
+                format!("{}/{}/{}", org, repo, overlay_name)
+            }
         };
 
-        let ref_override = match &state.meta.source {
+        let ref_override = match &state.source {
             OverlaySource::GitHub { git_ref, .. } => Some(git_ref.as_str()),
-            _ => None,
+            OverlaySource::Local { .. } | OverlaySource::OverlayRepo { .. } => None,
         };
 
         // Re-apply the overlay
@@ -867,7 +1018,7 @@ fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
             &source_str,
             &target,
             false, // Use symlinks by default
-            Some(state.meta.name.clone()),
+            Some(state.name.clone()),
             ref_override,
             true, // Update cache
         ) {
@@ -876,7 +1027,7 @@ fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
                 eprintln!(
                     "  {} Failed to restore '{}': {}",
                     "Error:".red(),
-                    state.meta.name,
+                    state.name,
                     e
                 );
             }
@@ -932,7 +1083,7 @@ fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result
             subpath,
             url,
             ..
-        } = &state.meta.source
+        } = &state.source
         {
             let source = GitHubSource {
                 owner: owner.clone(),
@@ -945,20 +1096,20 @@ fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result
                 Ok(Some(new_commit)) => {
                     updates_available.push((
                         overlay_name.clone(),
-                        state.meta.name.clone(),
+                        state.name.clone(),
                         url.clone(),
                         commit.clone(),
                         new_commit,
                     ));
                 }
                 Ok(None) => {
-                    println!("  {} {} is up to date", "✓".green(), state.meta.name);
+                    println!("  {} {} is up to date", "✓".green(), state.name);
                 }
                 Err(e) => {
                     println!(
                         "  {} Could not check {} for updates: {}",
                         "?".yellow(),
-                        state.meta.name,
+                        state.name,
                         e
                     );
                 }
@@ -967,7 +1118,7 @@ fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result
             println!(
                 "  {} {} is a local overlay (not updatable)",
                 "-".dimmed(),
-                state.meta.name
+                state.name
             );
         }
     }
@@ -997,21 +1148,21 @@ fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result
     println!();
 
     // Apply updates
-    for (normalized_name, _, _, _, _) in updates_available {
-        let state = load_overlay_state(&target, &normalized_name)?;
+    for (normalized_name, _, _, _, _) in &updates_available {
+        let state = load_overlay_state(&target, normalized_name)?;
 
-        if let OverlaySource::GitHub { url, git_ref, .. } = &state.meta.source {
+        if let OverlaySource::GitHub { url, git_ref, .. } = &state.source {
             // Remove old overlay
             let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-            remove_single_overlay(&target, &overlays_dir, &normalized_name)?;
+            remove_single_overlay(&target, &overlays_dir, normalized_name)?;
 
             // Re-apply with update
             apply_overlay(
                 url,
                 &target,
                 false,
-                Some(state.meta.name.clone()),
-                Some(git_ref),
+                Some(state.name.clone()),
+                Some(git_ref.as_str()),
                 true,
             )?;
         }
@@ -1297,7 +1448,7 @@ fn create_overlay(
         }
     }
 
-    // Generate repoverlay.toml
+    // Generate repoverlay.ccl
     let overlay_name = name.unwrap_or_else(|| {
         output_dir
             .file_name()
@@ -1307,16 +1458,23 @@ fn create_overlay(
     });
 
     let config_content = format!(
-        r#"[overlay]
-name = "{}"
+        r#"/= Overlay configuration file.
+/= This file describes an overlay and how it should be applied.
 
-[mappings]
-# Add path mappings here if needed
-# "source_path" = "target_path"
+overlay =
+  /= name: Display name for this overlay.
+  /= Used in status output and when listing overlays.
+  name = {}
+
+/= mappings (optional): Remap file paths when applying the overlay.
+/= Keys are source paths (in the overlay), values are target paths (in the repo).
+/= Use this to rename files or place them in different locations.
+/= mappings =
+/=   .envrc.template = .envrc
 "#,
         overlay_name
     );
-    fs::write(output_dir.join("repoverlay.toml"), config_content)?;
+    fs::write(output_dir.join("repoverlay.ccl"), config_content)?;
 
     println!(
         "{} overlay at: {}",
@@ -1382,7 +1540,7 @@ fn create_overlay_with_files(
         }
     }
 
-    // Generate repoverlay.toml
+    // Generate repoverlay.ccl
     let overlay_name = name.unwrap_or_else(|| {
         output_dir
             .file_name()
@@ -1392,16 +1550,23 @@ fn create_overlay_with_files(
     });
 
     let config_content = format!(
-        r#"[overlay]
-name = "{}"
+        r#"/= Overlay configuration file.
+/= This file describes an overlay and how it should be applied.
 
-[mappings]
-# Add path mappings here if needed
-# "source_path" = "target_path"
+overlay =
+  /= name: Display name for this overlay.
+  /= Used in status output and when listing overlays.
+  name = {}
+
+/= mappings (optional): Remap file paths when applying the overlay.
+/= Keys are source paths (in the overlay), values are target paths (in the repo).
+/= Use this to rename files or place them in different locations.
+/= mappings =
+/=   .envrc.template = .envrc
 "#,
         overlay_name
     );
-    fs::write(output_dir.join("repoverlay.toml"), config_content)?;
+    fs::write(output_dir.join("repoverlay.ccl"), config_content)?;
 
     println!(
         "{} overlay at: {}",
@@ -1535,6 +1700,325 @@ fn handle_cache_command(command: CacheCommand) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Initialize overlay repository configuration.
+fn init_repo(url: &str, no_clone: bool) -> Result<()> {
+    use config::{OverlayRepoConfig, global_config_path, save_global_config_with_comments};
+    use overlay_repo::OverlayRepoManager;
+
+    // Validate URL looks reasonable
+    if !url.starts_with("https://") && !url.starts_with("git@") {
+        bail!(
+            "Invalid repository URL. Use HTTPS (https://github.com/...) or SSH (git@github.com:...) format."
+        );
+    }
+
+    let config = OverlayRepoConfig {
+        url: url.to_string(),
+        local_path: None,
+    };
+
+    // Save configuration
+    save_global_config_with_comments(&config)?;
+    println!(
+        "{} Configuration saved to: {}",
+        "✓".green().bold(),
+        global_config_path()?.display()
+    );
+
+    if no_clone {
+        println!(
+            "\n{} Skipped cloning. Run 'repoverlay list' to clone and see available overlays.",
+            "Note:".yellow()
+        );
+        return Ok(());
+    }
+
+    // Clone the repository
+    println!("{} overlay repository...", "Cloning".blue().bold());
+    let manager = OverlayRepoManager::new(config)?;
+    manager.ensure_cloned()?;
+
+    // List available overlays
+    let overlays = manager.list_overlays()?;
+    println!(
+        "\n{} Overlay repository initialized with {} overlay(s) available.",
+        "✓".green().bold(),
+        overlays.len()
+    );
+
+    if !overlays.is_empty() {
+        println!("\nRun 'repoverlay list' to see available overlays.");
+    }
+
+    Ok(())
+}
+
+/// List available overlays from the overlay repository.
+fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
+    use config::load_config;
+    use overlay_repo::OverlayRepoManager;
+
+    let config = load_config(None)?;
+
+    let overlay_config = config.overlay_repo.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Overlay repository not configured.\n\n\
+             Run 'repoverlay init-repo <url>' to set up an overlay repository.\n\
+             Example: repoverlay init-repo https://github.com/tylerbutler/repo-overlays"
+        )
+    })?;
+
+    let manager = OverlayRepoManager::new(overlay_config)?;
+    manager.ensure_cloned()?;
+
+    if update {
+        println!("{} overlay repository...", "Updating".blue().bold());
+        manager.pull()?;
+    }
+
+    let overlays = if let Some(filter) = target_filter {
+        // Parse org/repo filter
+        let parts: Vec<&str> = filter.split('/').collect();
+        if parts.len() != 2 {
+            bail!("Invalid target filter format. Use: org/repo");
+        }
+        manager.list_overlays_for_repo(parts[0], parts[1])?
+    } else {
+        manager.list_overlays()?
+    };
+
+    if overlays.is_empty() {
+        if target_filter.is_some() {
+            println!(
+                "{} No overlays found for {}.",
+                "Status:".bold(),
+                target_filter.unwrap()
+            );
+        } else {
+            println!("{} No overlays found in repository.", "Status:".bold());
+        }
+        return Ok(());
+    }
+
+    println!("{}\n", "Available overlays:".bold());
+
+    // Group by org/repo
+    let mut current_group: Option<(String, String)> = None;
+    for overlay in &overlays {
+        let group = (overlay.org.clone(), overlay.repo.clone());
+        if current_group.as_ref() != Some(&group) {
+            if current_group.is_some() {
+                println!();
+            }
+            println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
+            current_group = Some(group);
+        }
+        let config_marker = if overlay.has_config {
+            ""
+        } else {
+            " (no config)"
+        };
+        println!("  - {}{}", overlay.name, config_marker.dimmed());
+    }
+
+    println!(
+        "\nTo apply an overlay: repoverlay apply {}",
+        "<org>/<repo>/<name>".dimmed()
+    );
+
+    Ok(())
+}
+
+/// Publish an overlay to the overlay repository.
+fn publish_overlay(
+    source: &Path,
+    target: Option<&str>,
+    name: Option<&str>,
+    message: Option<&str>,
+    no_push: bool,
+    dry_run: bool,
+) -> Result<()> {
+    use config::load_config;
+    use overlay_repo::OverlayRepoManager;
+
+    // Validate source exists
+    let source = source
+        .canonicalize()
+        .with_context(|| format!("Overlay source not found: {}", source.display()))?;
+
+    if !source.is_dir() {
+        bail!("Source must be a directory: {}", source.display());
+    }
+
+    // Load config
+    let config = load_config(None)?;
+    let overlay_config = config.overlay_repo.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Overlay repository not configured.\n\n\
+             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+        )
+    })?;
+
+    // Determine target org/repo
+    let (org, repo) = if let Some(t) = target {
+        let parts: Vec<&str> = t.split('/').collect();
+        if parts.len() != 2 {
+            bail!("Invalid target format. Use: org/repo");
+        }
+        (parts[0].to_string(), parts[1].to_string())
+    } else {
+        // Try to detect from current git remote
+        detect_target_repo(&source)?
+    };
+
+    // Determine overlay name
+    let overlay_name = if let Some(n) = name {
+        n.to_string()
+    } else {
+        // Try to read from repoverlay.ccl
+        let config_path = source.join(CONFIG_FILE);
+
+        if config_path.exists() {
+            let content = fs::read_to_string(&config_path)?;
+            let cfg: state::OverlayConfig =
+                sickle::from_str(&content).with_context(|| "Failed to parse repoverlay.ccl")?;
+            cfg.overlay
+                .name
+                .unwrap_or_else(|| source.file_name().unwrap().to_string_lossy().to_string())
+        } else {
+            source.file_name().unwrap().to_string_lossy().to_string()
+        }
+    };
+
+    println!("{} Publishing overlay:", "Publish".blue().bold());
+    println!("  Source:  {}", source.display());
+    println!("  Target:  {}/{}", org, repo);
+    println!("  Name:    {}", overlay_name);
+
+    if dry_run {
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+        println!("\nWould publish to: {}/{}/{}", org, repo, overlay_name);
+        return Ok(());
+    }
+
+    // Create manager and ensure cloned
+    let manager = OverlayRepoManager::new(overlay_config)?;
+    manager.ensure_cloned()?;
+
+    // Pull latest
+    println!("\n{} latest changes...", "Pulling".blue().bold());
+    manager.pull()?;
+
+    // Stage the overlay
+    println!("{} overlay files...", "Copying".blue().bold());
+    let dest = manager.stage_overlay(&org, &repo, &overlay_name, &source)?;
+    println!("  Copied to: {}", dest.display());
+
+    // Check if there are changes
+    if !manager.has_staged_changes()? {
+        println!("\n{} No changes to publish.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // Commit
+    let commit_msg = message
+        .unwrap_or(&format!(
+            "Update overlay: {}/{}/{}",
+            org, repo, overlay_name
+        ))
+        .to_string();
+
+    println!("{} changes...", "Committing".blue().bold());
+    manager.commit(&commit_msg)?;
+
+    // Push
+    if no_push {
+        println!(
+            "\n{} Changes committed but not pushed (--no-push).",
+            "Note:".yellow()
+        );
+    } else {
+        println!("{} to remote...", "Pushing".blue().bold());
+        manager.push()?;
+        println!(
+            "\n{} Overlay published: {}/{}/{}",
+            "✓".green().bold(),
+            org,
+            repo,
+            overlay_name
+        );
+    }
+
+    println!(
+        "\nTo apply: repoverlay apply {}/{}/{}",
+        org, repo, overlay_name
+    );
+
+    Ok(())
+}
+
+/// Detect org/repo from git remote origin.
+fn detect_target_repo(path: &Path) -> Result<(String, String)> {
+    use std::process::Command;
+
+    // Get the git remote URL
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(path)
+        .output()
+        .context("Failed to get git remote")?;
+
+    if !output.status.success() {
+        bail!(
+            "Could not detect target repository from git remote.\n\
+             Please specify --target org/repo"
+        );
+    }
+
+    let url = String::from_utf8(output.stdout)?.trim().to_string();
+
+    // Parse GitHub URL to extract owner/repo
+    // Supports:
+    //   https://github.com/owner/repo.git
+    //   git@github.com:owner/repo.git
+    //   https://github.com/owner/repo
+    let (owner, repo) = if url.contains("github.com") {
+        if url.starts_with("git@") {
+            // SSH format: git@github.com:owner/repo.git
+            let parts: Vec<&str> = url
+                .trim_start_matches("git@github.com:")
+                .trim_end_matches(".git")
+                .split('/')
+                .collect();
+            if parts.len() >= 2 {
+                (parts[0].to_string(), parts[1].to_string())
+            } else {
+                bail!("Could not parse git remote URL: {}", url);
+            }
+        } else {
+            // HTTPS format
+            let parts: Vec<&str> = url
+                .trim_start_matches("https://github.com/")
+                .trim_end_matches(".git")
+                .split('/')
+                .collect();
+            if parts.len() >= 2 {
+                (parts[0].to_string(), parts[1].to_string())
+            } else {
+                bail!("Could not parse git remote URL: {}", url);
+            }
+        }
+    } else {
+        bail!(
+            "Could not detect target repository from git remote.\n\
+             Non-GitHub remotes are not supported for auto-detection.\n\
+             Please specify --target org/repo"
+        );
+    };
+
+    Ok((owner, repo))
 }
 
 fn update_git_exclude(
@@ -1835,10 +2319,9 @@ mod tests {
             let overlay = create_test_overlay(&[
                 (".envrc", "export FOO=bar"),
                 (
-                    "repoverlay.toml",
-                    r#"
-[mappings]
-".envrc" = ".env"
+                    "repoverlay.ccl",
+                    r#"mappings =
+  .envrc = .env
 "#,
                 ),
             ]);
@@ -1866,10 +2349,9 @@ mod tests {
             let overlay = create_test_overlay(&[
                 (".envrc", "export FOO=bar"),
                 (
-                    "repoverlay.toml",
-                    r#"
-[overlay]
-name = "my-custom-overlay"
+                    "repoverlay.ccl",
+                    r#"overlay =
+  name = my-custom-overlay
 "#,
                 ),
             ]);
@@ -1887,7 +2369,7 @@ name = "my-custom-overlay"
             // State file should be named after the normalized overlay name
             let state_file = repo
                 .path()
-                .join(".repoverlay/overlays/my-custom-overlay.toml");
+                .join(".repoverlay/overlays/my-custom-overlay.ccl");
             assert!(state_file.exists(), "state file should use overlay name");
         }
 
@@ -1906,7 +2388,7 @@ name = "my-custom-overlay"
             )
             .unwrap();
 
-            let state_file = repo.path().join(".repoverlay/overlays/custom-name.toml");
+            let state_file = repo.path().join(".repoverlay/overlays/custom-name.ccl");
             assert!(state_file.exists(), "state file should use override name");
         }
 
@@ -2604,9 +3086,9 @@ name = "my-custom-overlay"
             let content = fs::read_to_string(&overlay_file).unwrap();
             assert_eq!(content, "export FOO=bar");
 
-            // Check repoverlay.toml was generated
-            let config_file = output.path().join("test-overlay/repoverlay.toml");
-            assert!(config_file.exists(), "repoverlay.toml should exist");
+            // Check repoverlay.ccl was generated
+            let config_file = output.path().join("test-overlay/repoverlay.ccl");
+            assert!(config_file.exists(), "repoverlay.ccl should exist");
         }
 
         #[test]
@@ -2641,7 +3123,7 @@ name = "my-custom-overlay"
         }
 
         #[test]
-        fn generates_repoverlay_toml_with_name() {
+        fn generates_repoverlay_ccl_with_name() {
             let source = create_test_repo();
             let output = TempDir::new().unwrap();
 
@@ -2658,7 +3140,7 @@ name = "my-custom-overlay"
             assert!(result.is_ok());
 
             let config_content =
-                fs::read_to_string(output.path().join("test-overlay/repoverlay.toml")).unwrap();
+                fs::read_to_string(output.path().join("test-overlay/repoverlay.ccl")).unwrap();
             assert!(config_content.contains("my-custom-name"));
         }
 

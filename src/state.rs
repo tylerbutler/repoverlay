@@ -2,6 +2,9 @@
 //!
 //! Handles overlay state persistence, both in-repo (`.repoverlay/`) and external
 //! (`~/.local/share/repoverlay/`) for recovery after `git clean`.
+//!
+//! Due to sickle's serde limitations (no support for nested maps or complex structures),
+//! state files use a completely flat format with string-encoded data.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -15,14 +18,14 @@ use std::path::{Path, PathBuf};
 /// Constants for state directory structure
 pub const STATE_DIR: &str = ".repoverlay";
 pub const OVERLAYS_DIR: &str = "overlays";
-pub const META_FILE: &str = "meta.toml";
-pub const CONFIG_FILE: &str = "repoverlay.toml";
+pub const META_FILE: &str = "meta.ccl";
+pub const CONFIG_FILE: &str = "repoverlay.ccl";
 pub const GIT_EXCLUDE: &str = ".git/info/exclude";
 pub const MANAGED_SECTION_NAME: &str = "managed";
 
-/// Source of an overlay - can be local or from GitHub.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(tag = "type", rename_all = "lowercase")]
+/// Source of an overlay - can be local, from GitHub, or from a shared overlay repository.
+/// This is used for in-memory representation; see OverlayStateFlat for serialization.
+#[derive(Debug, Clone)]
 pub enum OverlaySource {
     /// Local filesystem overlay
     Local {
@@ -45,6 +48,17 @@ pub enum OverlaySource {
         subpath: Option<String>,
         /// When the cache was last updated
         cached_at: DateTime<Utc>,
+    },
+    /// Overlay from a shared overlay repository (org/repo/name format)
+    OverlayRepo {
+        /// Target organization (e.g., "microsoft")
+        org: String,
+        /// Target repository (e.g., "FluidFramework")
+        repo: String,
+        /// Overlay name (e.g., "claude-config")
+        name: String,
+        /// Commit SHA at time of apply
+        commit: String,
     },
 }
 
@@ -74,6 +88,16 @@ impl OverlaySource {
         }
     }
 
+    /// Create a new overlay repository source.
+    pub fn overlay_repo(org: String, repo: String, name: String, commit: String) -> Self {
+        OverlaySource::OverlayRepo {
+            org,
+            repo,
+            name,
+            commit,
+        }
+    }
+
     /// Get a display string for the source.
     #[allow(dead_code)]
     pub fn display(&self) -> String {
@@ -87,6 +111,20 @@ impl OverlaySource {
             } => {
                 format!("{} ({}@{})", url, git_ref, &commit[..12.min(commit.len())])
             }
+            OverlaySource::OverlayRepo {
+                org,
+                repo,
+                name,
+                commit,
+            } => {
+                format!(
+                    "{}/{}/{} (@{})",
+                    org,
+                    repo,
+                    name,
+                    &commit[..12.min(commit.len())]
+                )
+            }
         }
     }
 
@@ -96,12 +134,95 @@ impl OverlaySource {
         matches!(self, OverlaySource::GitHub { .. })
     }
 
+    /// Check if this is an overlay repository source.
+    #[allow(dead_code)]
+    pub fn is_overlay_repo(&self) -> bool {
+        matches!(self, OverlaySource::OverlayRepo { .. })
+    }
+
     /// Get the local path for this source (for local sources only).
     #[allow(dead_code)]
     pub fn local_path(&self) -> Option<&Path> {
         match self {
             OverlaySource::Local { path } => Some(path),
-            OverlaySource::GitHub { .. } => None,
+            OverlaySource::GitHub { .. } | OverlaySource::OverlayRepo { .. } => None,
+        }
+    }
+
+    /// Encode source as a string for flat storage.
+    /// Format: "type|field1|field2|..."
+    fn to_encoded_string(&self) -> String {
+        match self {
+            OverlaySource::Local { path } => {
+                format!("local|{}", path.to_string_lossy())
+            }
+            OverlaySource::GitHub {
+                url,
+                owner,
+                repo,
+                git_ref,
+                commit,
+                subpath,
+                cached_at,
+            } => {
+                format!(
+                    "github|{}|{}|{}|{}|{}|{}|{}",
+                    url,
+                    owner,
+                    repo,
+                    git_ref,
+                    commit,
+                    subpath.as_deref().unwrap_or(""),
+                    cached_at.to_rfc3339()
+                )
+            }
+            OverlaySource::OverlayRepo {
+                org,
+                repo,
+                name,
+                commit,
+            } => {
+                format!("overlay_repo|{}|{}|{}|{}", org, repo, name, commit)
+            }
+        }
+    }
+
+    /// Decode source from encoded string.
+    fn from_encoded_string(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.splitn(8, '|').collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        match parts[0] {
+            "local" if parts.len() >= 2 => Some(OverlaySource::Local {
+                path: PathBuf::from(parts[1]),
+            }),
+            "github" if parts.len() >= 8 => {
+                let cached_at = DateTime::parse_from_rfc3339(parts[7])
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now());
+                Some(OverlaySource::GitHub {
+                    url: parts[1].to_string(),
+                    owner: parts[2].to_string(),
+                    repo: parts[3].to_string(),
+                    git_ref: parts[4].to_string(),
+                    commit: parts[5].to_string(),
+                    subpath: if parts[6].is_empty() {
+                        None
+                    } else {
+                        Some(parts[6].to_string())
+                    },
+                    cached_at,
+                })
+            }
+            "overlay_repo" if parts.len() >= 5 => Some(OverlaySource::OverlayRepo {
+                org: parts[1].to_string(),
+                repo: parts[2].to_string(),
+                name: parts[3].to_string(),
+                commit: parts[4].to_string(),
+            }),
+            _ => None,
         }
     }
 }
@@ -118,48 +239,144 @@ impl Default for GlobalMeta {
     }
 }
 
-/// State file tracking an applied overlay (.repoverlay/overlays/<name>.toml).
+/// Flat state file format for CCL serialization.
+/// All fields are primitive strings to work around sickle's limitations.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct OverlayStateFlat {
+    /// Overlay display name
+    pub name: String,
+    /// ISO 8601 timestamp when applied
+    pub applied_at: String,
+    /// Encoded source info (type|field1|field2|...)
+    pub source: String,
+    /// Comma-separated list of "target_path:source_path:link_type" entries
+    #[serde(default)]
+    pub files: String,
+}
+
+/// State file tracking an applied overlay (.repoverlay/overlays/<name>.ccl).
+/// In-memory representation with proper types.
+#[derive(Debug, Clone)]
 pub struct OverlayState {
-    pub meta: StateMeta,
+    pub name: String,
+    pub applied_at: DateTime<Utc>,
+    pub source: OverlaySource,
     pub files: Vec<FileEntry>,
 }
 
-/// Metadata about an applied overlay.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct StateMeta {
-    pub applied_at: DateTime<Utc>,
-    #[serde(flatten)]
-    pub source: OverlaySource,
-    pub name: String,
-}
+impl OverlayState {
+    /// Create a new overlay state.
+    pub fn new(name: String, source: OverlaySource) -> Self {
+        Self {
+            name,
+            applied_at: Utc::now(),
+            source,
+            files: Vec::new(),
+        }
+    }
 
-/// Legacy metadata format (for backward compatibility).
-#[derive(Debug, Deserialize)]
-pub struct LegacyStateMeta {
-    pub applied_at: DateTime<Utc>,
-    pub source: PathBuf,
-    pub name: String,
+    /// Add a file entry to the state.
+    pub fn add_file(&mut self, entry: FileEntry) {
+        self.files.push(entry);
+    }
+
+    /// Convert to flat format for serialization.
+    pub fn to_flat(&self) -> OverlayStateFlat {
+        let files_str = self
+            .files
+            .iter()
+            .map(|f| {
+                let link_str = match f.link_type {
+                    LinkType::Symlink => "symlink",
+                    LinkType::Copy => "copy",
+                };
+                format!(
+                    "{}:{}:{}",
+                    f.target.to_string_lossy(),
+                    f.source.to_string_lossy(),
+                    link_str
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+
+        OverlayStateFlat {
+            name: self.name.clone(),
+            applied_at: self.applied_at.to_rfc3339(),
+            source: self.source.to_encoded_string(),
+            files: files_str,
+        }
+    }
+
+    /// Create from flat format after deserialization.
+    pub fn from_flat(flat: OverlayStateFlat) -> Option<Self> {
+        let applied_at = DateTime::parse_from_rfc3339(&flat.applied_at)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now());
+
+        let source = OverlaySource::from_encoded_string(&flat.source)?;
+
+        let files = if flat.files.is_empty() {
+            Vec::new()
+        } else {
+            flat.files
+                .split(',')
+                .filter_map(|entry| {
+                    let parts: Vec<&str> = entry.splitn(3, ':').collect();
+                    if parts.len() == 3 {
+                        let link_type = match parts[2] {
+                            "copy" => LinkType::Copy,
+                            _ => LinkType::Symlink,
+                        };
+                        Some(FileEntry {
+                            target: PathBuf::from(parts[0]),
+                            source: PathBuf::from(parts[1]),
+                            link_type,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        Some(Self {
+            name: flat.name,
+            applied_at,
+            source,
+            files,
+        })
+    }
+
+    /// Get the number of files in the overlay.
+    pub fn file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Iterate over file entries.
+    pub fn file_entries(&self) -> &[FileEntry] {
+        &self.files
+    }
 }
 
 /// A file entry in the overlay state.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct FileEntry {
     pub source: PathBuf,
     pub target: PathBuf,
-    #[serde(rename = "type")]
     pub link_type: LinkType,
 }
 
 /// Type of file link.
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LinkType {
     Symlink,
     Copy,
 }
 
-/// Configuration file for an overlay source (repoverlay.toml).
+/// Configuration file for an overlay source (repoverlay.ccl).
+/// Note: This uses nested structures which won't roundtrip through sickle,
+/// but it's only read (not written) by repoverlay.
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct OverlayConfig {
     #[serde(default)]
@@ -206,8 +423,10 @@ pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlaySta
         fs::write(&marker_path, target.display().to_string())?;
     }
 
-    let state_file = dir.join(format!("{}.toml", overlay_name));
-    fs::write(&state_file, toml::to_string_pretty(state)?)?;
+    let state_file = dir.join(format!("{}.ccl", overlay_name));
+    let flat = state.to_flat();
+    let content = sickle::to_string(&flat).context("Failed to serialize state to CCL")?;
+    fs::write(&state_file, content)?;
 
     Ok(())
 }
@@ -215,7 +434,7 @@ pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlaySta
 /// Remove overlay state from the external backup location.
 pub fn remove_external_state(target: &Path, overlay_name: &str) -> Result<()> {
     let dir = external_state_dir_for_target(target)?;
-    let state_file = dir.join(format!("{}.toml", overlay_name));
+    let state_file = dir.join(format!("{}.ccl", overlay_name));
 
     if state_file.exists() {
         fs::remove_file(&state_file)?;
@@ -250,11 +469,13 @@ pub fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.extension().map(|e| e == "toml").unwrap_or(false)
+        if path.extension().map(|e| e == "ccl").unwrap_or(false)
             && path.file_name() != Some(std::ffi::OsStr::new(".target_path"))
         {
             let content = fs::read_to_string(&path)?;
-            if let Ok(state) = toml::from_str::<OverlayState>(&content) {
+            if let Ok(flat) = sickle::from_str::<OverlayStateFlat>(&content)
+                && let Some(state) = OverlayState::from_flat(flat)
+            {
                 states.push(state);
             }
         }
@@ -309,14 +530,17 @@ pub fn load_all_overlay_targets(
     for entry in fs::read_dir(&overlays_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().map(|e| e == "toml").unwrap_or(false) {
+        if path.extension().map(|e| e == "ccl").unwrap_or(false) {
             let content = fs::read_to_string(&path)?;
-            let state: OverlayState = toml::from_str(&content)?;
-            let overlay_name = state.meta.name.clone();
-
-            for file in state.files {
-                let target_str = file.target.to_string_lossy().to_string();
-                targets.insert(target_str, overlay_name.clone());
+            if let Ok(flat) = sickle::from_str::<OverlayStateFlat>(&content)
+                && let Some(state) = OverlayState::from_flat(flat)
+            {
+                for file in &state.files {
+                    targets.insert(
+                        file.target.to_string_lossy().to_string(),
+                        state.name.clone(),
+                    );
+                }
             }
         }
     }
@@ -337,7 +561,7 @@ pub fn list_applied_overlays(target: &Path) -> Result<Vec<String>> {
         .filter(|e| {
             e.path()
                 .extension()
-                .map(|ext| ext == "toml")
+                .map(|ext| ext == "ccl")
                 .unwrap_or(false)
         })
         .filter_map(|e| {
@@ -356,36 +580,31 @@ pub fn load_overlay_state(target: &Path, name: &str) -> Result<OverlayState> {
     let state_file = target
         .join(STATE_DIR)
         .join(OVERLAYS_DIR)
-        .join(format!("{}.toml", name));
+        .join(format!("{}.ccl", name));
 
     let content = fs::read_to_string(&state_file)
         .with_context(|| format!("Failed to read overlay state: {}", name))?;
 
-    // Try to parse with new format first, fall back to legacy
-    if let Ok(state) = toml::from_str::<OverlayState>(&content) {
-        return Ok(state);
-    }
-
-    // Try legacy format and convert
-    #[derive(Deserialize)]
-    struct LegacyOverlayState {
-        meta: LegacyStateMeta,
-        files: Vec<FileEntry>,
-    }
-
-    let legacy: LegacyOverlayState = toml::from_str(&content)
+    let flat: OverlayStateFlat = sickle::from_str(&content)
         .with_context(|| format!("Failed to parse overlay state: {}", name))?;
 
-    Ok(OverlayState {
-        meta: StateMeta {
-            applied_at: legacy.meta.applied_at,
-            source: OverlaySource::Local {
-                path: legacy.meta.source,
-            },
-            name: legacy.meta.name,
-        },
-        files: legacy.files,
-    })
+    OverlayState::from_flat(flat)
+        .ok_or_else(|| anyhow::anyhow!("Failed to decode overlay state: {}", name))
+}
+
+/// Save an overlay state to the in-repo state file.
+pub fn save_overlay_state(target: &Path, state: &OverlayState) -> Result<()> {
+    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+    fs::create_dir_all(&overlays_dir)?;
+
+    let normalized_name = normalize_overlay_name(&state.name)?;
+    let state_file = overlays_dir.join(format!("{}.ccl", normalized_name));
+
+    let flat = state.to_flat();
+    let content = sickle::to_string(&flat).context("Failed to serialize overlay state")?;
+    fs::write(&state_file, content)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -429,6 +648,69 @@ mod tests {
     }
 
     #[test]
+    fn test_overlay_source_encoding_local() {
+        let source = OverlaySource::local(PathBuf::from("/path/to/overlay"));
+        let encoded = source.to_encoded_string();
+        let decoded = OverlaySource::from_encoded_string(&encoded).unwrap();
+
+        match decoded {
+            OverlaySource::Local { path } => {
+                assert_eq!(path, PathBuf::from("/path/to/overlay"));
+            }
+            _ => panic!("Expected Local source"),
+        }
+    }
+
+    #[test]
+    fn test_overlay_source_encoding_github() {
+        let source = OverlaySource::github(
+            "https://github.com/owner/repo".to_string(),
+            "owner".to_string(),
+            "repo".to_string(),
+            "main".to_string(),
+            "abc123def456".to_string(),
+            Some("subdir".to_string()),
+        );
+        let encoded = source.to_encoded_string();
+        let decoded = OverlaySource::from_encoded_string(&encoded).unwrap();
+
+        match decoded {
+            OverlaySource::GitHub {
+                url, owner, repo, ..
+            } => {
+                assert_eq!(url, "https://github.com/owner/repo");
+                assert_eq!(owner, "owner");
+                assert_eq!(repo, "repo");
+            }
+            _ => panic!("Expected GitHub source"),
+        }
+    }
+
+    #[test]
+    fn test_overlay_state_flat_roundtrip() {
+        let mut state = OverlayState::new(
+            "test-overlay".to_string(),
+            OverlaySource::local(PathBuf::from("/overlay/source")),
+        );
+        state.add_file(FileEntry {
+            source: PathBuf::from(".envrc"),
+            target: PathBuf::from(".envrc"),
+            link_type: LinkType::Symlink,
+        });
+        state.add_file(FileEntry {
+            source: PathBuf::from("config.json"),
+            target: PathBuf::from(".config/app/config.json"),
+            link_type: LinkType::Copy,
+        });
+
+        let flat = state.to_flat();
+        let restored = OverlayState::from_flat(flat).unwrap();
+
+        assert_eq!(restored.name, "test-overlay");
+        assert_eq!(restored.files.len(), 2);
+    }
+
+    #[test]
     fn test_hash_path_consistency() {
         let path = Path::new("/test/path");
         let hash1 = hash_path(path);
@@ -448,18 +730,15 @@ mod tests {
         let temp_target = TempDir::new().unwrap();
         let target_path = temp_target.path();
 
-        let state = OverlayState {
-            meta: StateMeta {
-                applied_at: Utc::now(),
-                source: OverlaySource::local(PathBuf::from("/overlay/source")),
-                name: "test-overlay".to_string(),
-            },
-            files: vec![FileEntry {
-                source: PathBuf::from(".envrc"),
-                target: PathBuf::from(".envrc"),
-                link_type: LinkType::Symlink,
-            }],
-        };
+        let mut state = OverlayState::new(
+            "test-overlay".to_string(),
+            OverlaySource::local(PathBuf::from("/overlay/source")),
+        );
+        state.add_file(FileEntry {
+            source: PathBuf::from(".envrc"),
+            target: PathBuf::from(".envrc"),
+            link_type: LinkType::Symlink,
+        });
 
         // Save
         save_external_state(target_path, "test-overlay", &state).unwrap();
@@ -467,7 +746,7 @@ mod tests {
         // Load
         let loaded = load_external_states(target_path).unwrap();
         assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].meta.name, "test-overlay");
+        assert_eq!(loaded[0].name, "test-overlay");
 
         // Remove
         remove_external_state(target_path, "test-overlay").unwrap();
