@@ -1,4 +1,5 @@
 mod cache;
+mod detection;
 mod github;
 mod state;
 
@@ -1054,11 +1055,76 @@ fn create_overlay(
         }
     };
 
-    // For now, require explicit --include files (interactive mode comes later)
+    // If no includes specified, run discovery mode
     if include.is_empty() {
+        // Discover files in the repository
+        let discovered = detection::discover_files(source);
+
+        if discovered.is_empty() {
+            bail!(
+                "No files discovered and none specified.\n\n\
+                 Use --include to specify files to include in the overlay.\n\
+                 Example:\n  repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-config"
+            );
+        }
+
+        // In dry-run mode without includes, show discovered files
+        if dry_run {
+            println!(
+                "{} Discovered files in: {}",
+                "Discovery:".cyan().bold(),
+                source.display()
+            );
+            println!();
+
+            let groups = detection::group_by_category(&discovered);
+            for (category, files) in groups {
+                let category_name = match category {
+                    detection::FileCategory::AiConfig => "AI Configurations".green(),
+                    detection::FileCategory::Gitignored => "Gitignored".yellow(),
+                    detection::FileCategory::Untracked => "Untracked".blue(),
+                };
+                let preselected_note = if files.iter().any(|f| f.preselected) {
+                    " (pre-selected)"
+                } else {
+                    ""
+                };
+                println!("{}{}:", category_name.bold(), preselected_note.dimmed());
+                for file in files {
+                    let marker = if file.preselected { "[x]" } else { "[ ]" };
+                    println!("  {} {}", marker, file.path.display());
+                }
+                println!();
+            }
+
+            println!(
+                "{}",
+                "Use --include to specify which files to include:".dimmed()
+            );
+            // Suggest command based on discovered AI configs
+            let ai_configs: Vec<_> = discovered
+                .iter()
+                .filter(|f| f.category == detection::FileCategory::AiConfig)
+                .collect();
+            if !ai_configs.is_empty() {
+                let includes: Vec<_> = ai_configs
+                    .iter()
+                    .map(|f| format!("--include {}", f.path.display()))
+                    .collect();
+                println!(
+                    "  repoverlay create {} --output ~/overlays/my-config",
+                    includes.join(" ")
+                );
+            }
+            return Ok(());
+        }
+
+        // Without dry-run and no includes, require explicit files (for now)
+        // Interactive mode will handle this case later
         bail!(
             "No files specified. Use --include to specify files to include in the overlay.\n\n\
-             Example:\n  repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-config"
+             Run with --dry-run to see discovered files:\n  repoverlay create --dry-run\n\n\
+             Or specify files explicitly:\n  repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-config"
         );
     }
 
@@ -2431,10 +2497,11 @@ name = "my-custom-overlay"
         }
 
         #[test]
-        fn fails_when_no_files_specified() {
+        fn fails_when_no_files_specified_and_none_discovered() {
             let source = create_test_repo();
             let output = TempDir::new().unwrap();
 
+            // Empty repo with no discoverable files
             let result = create_overlay(
                 source.path(),
                 Some(output.path().join("test-overlay")),
@@ -2444,12 +2511,35 @@ name = "my-custom-overlay"
                 false,
             );
             assert!(result.is_err());
+            // Error message now mentions discovery
+            let err_msg = result.unwrap_err().to_string();
             assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("No files specified")
+                err_msg.contains("No files") || err_msg.contains("--include"),
+                "Expected error about no files, got: {}",
+                err_msg
             );
+        }
+
+        #[test]
+        fn dry_run_shows_discovered_files() {
+            let source = create_test_repo();
+
+            // Create some AI config files to be discovered
+            fs::create_dir_all(source.path().join(".claude")).unwrap();
+            fs::write(source.path().join(".claude/settings.json"), "{}").unwrap();
+            fs::write(source.path().join("CLAUDE.md"), "# Claude").unwrap();
+
+            // Dry run without --include should show discovered files
+            let result = create_overlay(
+                source.path(),
+                None,
+                &[], // no explicit includes
+                None,
+                true, // dry_run
+                false,
+            );
+            // Should succeed (just prints discovery info)
+            assert!(result.is_ok());
         }
 
         #[test]
