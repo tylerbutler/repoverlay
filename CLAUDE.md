@@ -31,7 +31,7 @@ repoverlay is a CLI tool that overlays config files into git repositories withou
 
 ### Module Structure
 
-- **`src/main.rs`** - CLI entry point using clap. Contains the core command handlers (`apply_overlay`, `remove_overlay`, `show_status`, `restore_overlays`, `update_overlays`) and git exclude file management.
+- **`src/main.rs`** - CLI entry point using clap. Contains the core command handlers (`apply_overlay`, `remove_overlay`, `show_status`, `restore_overlays`, `update_overlays`, `create_overlay`, `switch_overlay`) and git exclude file management.
 
 - **`src/state.rs`** - State persistence layer. Manages overlay state in two locations:
   - In-repo: `.repoverlay/overlays/<name>.toml` - tracks applied overlays
@@ -46,6 +46,8 @@ repoverlay is a CLI tool that overlays config files into git repositories withou
 1. **Apply**: Source (local path or GitHub URL) -> `resolve_source()` -> files walked -> symlinks/copies created -> state saved -> git exclude updated
 2. **Remove**: Load state -> remove files -> clean empty dirs -> update git exclude -> remove state
 3. **Restore**: Load external state backup -> re-apply overlays (for recovery after `git clean`)
+4. **Create**: Source repo -> validate include paths -> copy files to output dir -> generate `repoverlay.toml`
+5. **Switch**: Remove all existing overlays -> apply new overlay (atomic replacement)
 
 ### State File Format
 
@@ -64,7 +66,7 @@ Overlay files are excluded from git tracking via `.git/info/exclude` using named
 
 Tests are organized in `src/main.rs` under `mod tests`:
 - Unit tests: `remove_section`, `state` tests
-- Integration tests: `apply`, `remove`, `status` modules
+- Integration tests: `apply`, `remove`, `status`, `create`, `switch` modules
 - CLI tests: `cli` module using `assert_cmd`
 
 Tests create temporary git repos using `tempfile::TempDir` and the `create_test_repo()` / `create_test_overlay()` helpers.

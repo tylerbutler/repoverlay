@@ -113,6 +113,55 @@ enum Commands {
         dry_run: bool,
     },
 
+    /// Create a new overlay from files in a repository
+    Create {
+        /// Source repository to extract files from (defaults to current directory)
+        #[arg(short, long)]
+        source: Option<PathBuf>,
+
+        /// Output directory for the new overlay
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Include specific files or directories (can be specified multiple times)
+        #[arg(short, long)]
+        include: Vec<PathBuf>,
+
+        /// Overlay name (defaults to output directory name)
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Show what would be created without creating files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip interactive prompts, use defaults
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Switch to a different overlay (removes all existing overlays first)
+    Switch {
+        /// Path to overlay source directory OR GitHub URL
+        source: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Force copy mode instead of symlinks (default on Windows)
+        #[arg(long)]
+        copy: bool,
+
+        /// Override the overlay name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Git ref (branch, tag, or commit) to use (GitHub sources only)
+        #[arg(short, long, value_name = "REF")]
+        r#ref: Option<String>,
+    },
+
     /// Manage the overlay cache
     Cache {
         #[command(subcommand)]
@@ -176,6 +225,27 @@ fn main() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             update_overlays(&target, name, dry_run)?;
+        }
+        Commands::Create {
+            source,
+            output,
+            include,
+            name,
+            dry_run,
+            yes,
+        } => {
+            let source = source.unwrap_or_else(|| PathBuf::from("."));
+            create_overlay(&source, output, &include, name, dry_run, yes)?;
+        }
+        Commands::Switch {
+            source,
+            target,
+            copy,
+            name,
+            r#ref,
+        } => {
+            let target = target.unwrap_or_else(|| PathBuf::from("."));
+            switch_overlay(&source, &target, copy, name, r#ref.as_deref())?;
         }
         Commands::Cache { command } => {
             handle_cache_command(command)?;
@@ -945,6 +1015,191 @@ fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result
             )?;
         }
     }
+
+    Ok(())
+}
+
+/// Create a new overlay from files in a repository.
+///
+/// Discovers AI config files, gitignored files, and untracked files,
+/// then copies selected files to the output directory.
+fn create_overlay(
+    source: &Path,
+    output: Option<PathBuf>,
+    include: &[PathBuf],
+    name: Option<String>,
+    dry_run: bool,
+    _yes: bool,
+) -> Result<()> {
+    // Verify source is a git repository
+    if !source.join(".git").exists() {
+        bail!(
+            "Source directory is not a git repository: {}",
+            source.display()
+        );
+    }
+
+    // Determine output directory
+    let output_dir = match output {
+        Some(p) => p,
+        None => {
+            // Default to ~/.local/share/repoverlay/overlays/<repo-name>
+            let repo_name = source
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("overlay");
+            let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
+                .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
+            proj_dirs.data_dir().join("overlays").join(repo_name)
+        }
+    };
+
+    // For now, require explicit --include files (interactive mode comes later)
+    if include.is_empty() {
+        bail!(
+            "No files specified. Use --include to specify files to include in the overlay.\n\n\
+             Example:\n  repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-config"
+        );
+    }
+
+    // Validate all include paths exist
+    for path in include {
+        let full_path = source.join(path);
+        if !full_path.exists() {
+            bail!("Include path does not exist: {}", path.display());
+        }
+    }
+
+    if dry_run {
+        println!(
+            "{} Would create overlay at: {}",
+            "Dry run:".yellow().bold(),
+            output_dir.display()
+        );
+        println!();
+        println!("Files to include:");
+        for path in include {
+            let full_path = source.join(path);
+            if full_path.is_dir() {
+                for entry in walkdir::WalkDir::new(&full_path)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                {
+                    let rel = entry.path().strip_prefix(source).unwrap_or(entry.path());
+                    println!("  + {}", rel.display());
+                }
+            } else {
+                println!("  + {}", path.display());
+            }
+        }
+        return Ok(());
+    }
+
+    // Create output directory
+    fs::create_dir_all(&output_dir)?;
+
+    // Copy files to output directory
+    let mut copied_files = Vec::new();
+    for path in include {
+        let src_path = source.join(path);
+        if src_path.is_dir() {
+            // Copy directory recursively
+            for entry in walkdir::WalkDir::new(&src_path)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+            {
+                let rel_path = entry.path().strip_prefix(source)?;
+                let dest_path = output_dir.join(rel_path);
+                if let Some(parent) = dest_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(entry.path(), &dest_path)?;
+                copied_files.push(rel_path.to_path_buf());
+            }
+        } else {
+            // Copy single file
+            let dest_path = output_dir.join(path);
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&src_path, &dest_path)?;
+            copied_files.push(path.clone());
+        }
+    }
+
+    // Generate repoverlay.toml
+    let overlay_name = name.unwrap_or_else(|| {
+        output_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("overlay")
+            .to_string()
+    });
+
+    let config_content = format!(
+        r#"[overlay]
+name = "{}"
+
+[mappings]
+# Add path mappings here if needed
+# "source_path" = "target_path"
+"#,
+        overlay_name
+    );
+    fs::write(output_dir.join("repoverlay.toml"), config_content)?;
+
+    println!(
+        "{} overlay at: {}",
+        "Created".green().bold(),
+        output_dir.display()
+    );
+    println!();
+    println!("Files included:");
+    for file in &copied_files {
+        println!("  + {}", file.display());
+    }
+    println!();
+    println!(
+        "Apply with: {} {} {}",
+        "repoverlay apply".cyan(),
+        output_dir.display(),
+        "--target <repo>".dimmed()
+    );
+
+    Ok(())
+}
+
+/// Switch to a different overlay by removing all existing overlays first.
+///
+/// This is equivalent to `repoverlay remove --all && repoverlay apply <source>`,
+/// but performed atomically.
+fn switch_overlay(
+    source: &str,
+    target: &Path,
+    copy: bool,
+    name: Option<String>,
+    ref_override: Option<&str>,
+) -> Result<()> {
+    // Verify target is a git repository
+    if !target.join(".git").exists() {
+        bail!("Target is not a git repository: {}", target.display());
+    }
+
+    // Check if any overlays are currently applied
+    let state_dir = target.join(".repoverlay/overlays");
+    let has_overlays = state_dir.exists() && fs::read_dir(&state_dir)?.next().is_some();
+
+    if has_overlays {
+        println!("{} existing overlays...", "Removing".yellow().bold());
+        // Remove all existing overlays
+        remove_overlay(target, None, true)?;
+    }
+
+    // Apply the new overlay
+    println!("{} new overlay...", "Applying".blue().bold());
+    apply_overlay(source, target, copy, name, ref_override, false)?;
 
     Ok(())
 }
@@ -2063,6 +2318,314 @@ name = "my-custom-overlay"
                 .assert()
                 .success()
                 .stdout(predicate::str::contains("repoverlay"));
+        }
+    }
+
+    // Integration tests for create command
+    mod create {
+        use super::*;
+
+        #[test]
+        fn creates_overlay_with_single_file() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            // Create a file in the source repo
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("test-overlay")),
+                &[PathBuf::from(".envrc")],
+                None,
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "create_overlay failed: {:?}", result);
+
+            // Check file was copied
+            let overlay_file = output.path().join("test-overlay/.envrc");
+            assert!(overlay_file.exists(), ".envrc should exist in overlay");
+
+            // Check content is correct
+            let content = fs::read_to_string(&overlay_file).unwrap();
+            assert_eq!(content, "export FOO=bar");
+
+            // Check repoverlay.toml was generated
+            let config_file = output.path().join("test-overlay/repoverlay.toml");
+            assert!(config_file.exists(), "repoverlay.toml should exist");
+        }
+
+        #[test]
+        fn creates_overlay_with_directory() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            // Create a directory with files
+            fs::create_dir_all(source.path().join(".claude")).unwrap();
+            fs::write(
+                source.path().join(".claude/settings.json"),
+                r#"{"key": "value"}"#,
+            )
+            .unwrap();
+            fs::write(source.path().join(".claude/commands.md"), "# Commands").unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("test-overlay")),
+                &[PathBuf::from(".claude")],
+                None,
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "create_overlay failed: {:?}", result);
+
+            // Check directory was copied
+            let overlay_dir = output.path().join("test-overlay/.claude");
+            assert!(overlay_dir.exists(), ".claude directory should exist");
+            assert!(overlay_dir.join("settings.json").exists());
+            assert!(overlay_dir.join("commands.md").exists());
+        }
+
+        #[test]
+        fn generates_repoverlay_toml_with_name() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("test-overlay")),
+                &[PathBuf::from(".envrc")],
+                Some("my-custom-name".to_string()),
+                false,
+                false,
+            );
+            assert!(result.is_ok());
+
+            let config_content =
+                fs::read_to_string(output.path().join("test-overlay/repoverlay.toml")).unwrap();
+            assert!(config_content.contains("my-custom-name"));
+        }
+
+        #[test]
+        fn dry_run_does_not_create_files() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("test-overlay")),
+                &[PathBuf::from(".envrc")],
+                None,
+                true, // dry_run
+                false,
+            );
+            assert!(result.is_ok());
+
+            // Check no files were created
+            assert!(!output.path().join("test-overlay").exists());
+        }
+
+        #[test]
+        fn fails_when_no_files_specified() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("test-overlay")),
+                &[], // empty include
+                None,
+                false,
+                false,
+            );
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("No files specified")
+            );
+        }
+
+        #[test]
+        fn fails_on_nonexistent_include_path() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("test-overlay")),
+                &[PathBuf::from("nonexistent.txt")],
+                None,
+                false,
+                false,
+            );
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("does not exist"));
+        }
+
+        #[test]
+        fn fails_on_non_git_source() {
+            let source = TempDir::new().unwrap(); // Not a git repo
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("test-overlay")),
+                &[PathBuf::from(".envrc")],
+                None,
+                false,
+                false,
+            );
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not a git repository")
+            );
+        }
+    }
+
+    // Integration tests for switch command
+    mod switch {
+        use super::*;
+
+        #[test]
+        fn removes_existing_overlays_before_applying() {
+            let repo = create_test_repo();
+            let overlay1 = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+            let overlay2 = create_test_overlay(&[(".env.local", "LOCAL=true")]);
+
+            // Apply first overlay
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("first-overlay".to_string()),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Verify first overlay is applied
+            assert!(repo.path().join(".envrc").exists());
+
+            // Switch to second overlay
+            let result = switch_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("second-overlay".to_string()),
+                None,
+            );
+            assert!(result.is_ok(), "switch_overlay failed: {:?}", result);
+
+            // Verify first overlay is removed
+            assert!(
+                !repo.path().join(".envrc").exists(),
+                ".envrc should be removed"
+            );
+
+            // Verify second overlay is applied
+            assert!(
+                repo.path().join(".env.local").exists(),
+                ".env.local should exist"
+            );
+        }
+
+        #[test]
+        fn applies_to_empty_repo() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            let result = switch_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("new-overlay".to_string()),
+                None,
+            );
+            assert!(result.is_ok());
+
+            assert!(repo.path().join(".envrc").exists());
+        }
+
+        #[test]
+        fn fails_on_non_git_target() {
+            let target = TempDir::new().unwrap(); // Not a git repo
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            let result = switch_overlay(
+                overlay.path().to_str().unwrap(),
+                target.path(),
+                false,
+                None,
+                None,
+            );
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not a git repository")
+            );
+        }
+
+        #[test]
+        fn removes_multiple_overlays_before_applying() {
+            let repo = create_test_repo();
+            let overlay1 = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+            let overlay2 = create_test_overlay(&[(".env.local", "LOCAL=true")]);
+            let overlay3 = create_test_overlay(&[(".env.prod", "PROD=true")]);
+
+            // Apply first two overlays
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-a".to_string()),
+                None,
+                false,
+            )
+            .unwrap();
+            apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-b".to_string()),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Verify both overlays are applied
+            assert!(repo.path().join(".envrc").exists());
+            assert!(repo.path().join(".env.local").exists());
+
+            // Switch to third overlay
+            switch_overlay(
+                overlay3.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-c".to_string()),
+                None,
+            )
+            .unwrap();
+
+            // Verify old overlays are removed
+            assert!(!repo.path().join(".envrc").exists());
+            assert!(!repo.path().join(".env.local").exists());
+
+            // Verify new overlay is applied
+            assert!(repo.path().join(".env.prod").exists());
         }
     }
 }

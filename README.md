@@ -55,6 +55,12 @@ repoverlay status
 
 # Remove an overlay
 repoverlay remove my-overlay
+
+# Create an overlay from files in current repo
+repoverlay create --include .claude/ --output ~/overlays/my-ai-config
+
+# Switch to a different overlay (removes existing, applies new)
+repoverlay switch ~/overlays/other-config
 ```
 
 ## Usage
@@ -130,6 +136,36 @@ repoverlay restore
 
 # Preview what would be restored
 repoverlay restore --dry-run
+```
+
+### Create overlays from existing repos
+
+Extract files from an existing repository to create a new overlay:
+
+```bash
+# Create an overlay with specific files
+repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-ai-config
+
+# Preview what would be created
+repoverlay create --include .claude/ --output ~/overlays/test --dry-run
+
+# Specify a custom overlay name
+repoverlay create --include .envrc --output ~/overlays/env --name my-env-config
+```
+
+### Switch overlays
+
+Replace all existing overlays with a new one (useful for switching between AI agent configurations):
+
+```bash
+# Switch to a different overlay (removes all existing, applies new)
+repoverlay switch ~/overlays/typescript-ai
+
+# Switch to a GitHub-hosted overlay
+repoverlay switch https://github.com/user/ai-configs/tree/main/rust
+
+# Switch with custom name
+repoverlay switch ~/overlays/new-config --name my-config
 ```
 
 ### Manage cache
