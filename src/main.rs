@@ -1041,8 +1041,8 @@ fn create_overlay(
     }
 
     // Determine output directory
-    let output_dir = match output {
-        Some(p) => p,
+    let output_dir = match &output {
+        Some(p) => p.clone(),
         None => {
             // Default to ~/.local/share/repoverlay/overlays/<repo-name>
             let repo_name = source
@@ -1119,13 +1119,115 @@ fn create_overlay(
             return Ok(());
         }
 
-        // Without dry-run and no includes, require explicit files (for now)
-        // Interactive mode will handle this case later
-        bail!(
-            "No files specified. Use --include to specify files to include in the overlay.\n\n\
-             Run with --dry-run to see discovered files:\n  repoverlay create --dry-run\n\n\
-             Or specify files explicitly:\n  repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-config"
+        // Interactive mode: let user select files
+        if !_yes {
+            use dialoguer::MultiSelect;
+
+            println!(
+                "{} Discovered files in: {}",
+                "Discovery:".cyan().bold(),
+                source.display()
+            );
+            println!();
+
+            // Build selection items with category headers
+            let mut items: Vec<String> = Vec::new();
+            let mut defaults: Vec<bool> = Vec::new();
+            let mut file_indices: Vec<usize> = Vec::new(); // Maps selection index to discovered file index
+
+            let groups = detection::group_by_category(&discovered);
+            for (_category, files) in &groups {
+                // Add items with category prefix for context
+                for file in files.iter() {
+                    let prefix = match file.category {
+                        detection::FileCategory::AiConfig => "[AI] ",
+                        detection::FileCategory::Gitignored => "[GI] ",
+                        detection::FileCategory::Untracked => "[UT] ",
+                    };
+                    items.push(format!("{}{}", prefix, file.path.display()));
+                    defaults.push(file.preselected);
+                    // Find the index in discovered
+                    if let Some(idx) = discovered.iter().position(|f| f.path == file.path) {
+                        file_indices.push(idx);
+                    }
+                }
+            }
+
+            if items.is_empty() {
+                bail!("No files to select");
+            }
+
+            println!(
+                "{}: AI config, {}: Gitignored, {}: Untracked",
+                "[AI]".green(),
+                "[GI]".yellow(),
+                "[UT]".blue()
+            );
+            println!();
+
+            let selections = MultiSelect::new()
+                .with_prompt("Select files to include (Space to toggle, Enter to confirm)")
+                .items(&items)
+                .defaults(&defaults)
+                .interact()?;
+
+            if selections.is_empty() {
+                bail!("No files selected. Aborting.");
+            }
+
+            // Convert selections to include paths
+            let selected_paths: Vec<PathBuf> = selections
+                .iter()
+                .map(|&idx| discovered[file_indices[idx]].path.clone())
+                .collect();
+
+            // Get output directory from user if not specified
+            let final_output = if output.is_none() {
+                use dialoguer::Input;
+
+                let default_name = source
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("overlay");
+                let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
+                let default_path = proj_dirs.data_dir().join("overlays").join(default_name);
+
+                let path_str: String = Input::new()
+                    .with_prompt("Output directory")
+                    .default(default_path.display().to_string())
+                    .interact_text()?;
+
+                PathBuf::from(path_str)
+            } else {
+                output_dir.clone()
+            };
+
+            // Now create the overlay with selected files
+            return create_overlay_with_files(source, &final_output, &selected_paths, name);
+        }
+
+        // With --yes flag but no includes, use pre-selected files (AI configs)
+        let preselected: Vec<PathBuf> = discovered
+            .iter()
+            .filter(|f| f.preselected)
+            .map(|f| f.path.clone())
+            .collect();
+
+        if preselected.is_empty() {
+            bail!(
+                "No files specified and no AI configs found to auto-select.\n\n\
+                 Use --include to specify files:\n  repoverlay create --include .envrc --output ~/overlays/my-config"
+            );
+        }
+
+        println!(
+            "{} Using {} pre-selected AI config file(s)",
+            "Auto-select:".cyan().bold(),
+            preselected.len()
         );
+
+        return create_overlay_with_files(source, &output_dir, &preselected, name);
     }
 
     // Validate all include paths exist
@@ -1164,6 +1266,91 @@ fn create_overlay(
 
     // Create output directory
     fs::create_dir_all(&output_dir)?;
+
+    // Copy files to output directory
+    let mut copied_files = Vec::new();
+    for path in include {
+        let src_path = source.join(path);
+        if src_path.is_dir() {
+            // Copy directory recursively
+            for entry in walkdir::WalkDir::new(&src_path)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+            {
+                let rel_path = entry.path().strip_prefix(source)?;
+                let dest_path = output_dir.join(rel_path);
+                if let Some(parent) = dest_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(entry.path(), &dest_path)?;
+                copied_files.push(rel_path.to_path_buf());
+            }
+        } else {
+            // Copy single file
+            let dest_path = output_dir.join(path);
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&src_path, &dest_path)?;
+            copied_files.push(path.clone());
+        }
+    }
+
+    // Generate repoverlay.toml
+    let overlay_name = name.unwrap_or_else(|| {
+        output_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("overlay")
+            .to_string()
+    });
+
+    let config_content = format!(
+        r#"[overlay]
+name = "{}"
+
+[mappings]
+# Add path mappings here if needed
+# "source_path" = "target_path"
+"#,
+        overlay_name
+    );
+    fs::write(output_dir.join("repoverlay.toml"), config_content)?;
+
+    println!(
+        "{} overlay at: {}",
+        "Created".green().bold(),
+        output_dir.display()
+    );
+    println!();
+    println!("Files included:");
+    for file in &copied_files {
+        println!("  + {}", file.display());
+    }
+    println!();
+    println!(
+        "Apply with: {} {} {}",
+        "repoverlay apply".cyan(),
+        output_dir.display(),
+        "--target <repo>".dimmed()
+    );
+
+    Ok(())
+}
+
+/// Helper to create overlay with specified files.
+///
+/// This is used by both the interactive mode and --yes mode when files are
+/// discovered automatically.
+fn create_overlay_with_files(
+    source: &Path,
+    output_dir: &Path,
+    include: &[PathBuf],
+    name: Option<String>,
+) -> Result<()> {
+    // Create output directory
+    fs::create_dir_all(output_dir)?;
 
     // Copy files to output directory
     let mut copied_files = Vec::new();
