@@ -23,6 +23,20 @@ use state::{
     save_overlay_state,
 };
 
+/// Canonicalize a path and return an error with a descriptive message if it fails.
+fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf> {
+    path.canonicalize()
+        .with_context(|| format!("{} not found: {}", description, path.display()))
+}
+
+/// Validate that a path is a git repository (has a .git directory).
+fn validate_git_repo(path: &Path) -> Result<()> {
+    if !path.join(".git").exists() {
+        bail!("Target is not a git repository: {}", path.display());
+    }
+    Ok(())
+}
+
 /// Overlay config files into git repositories without committing them
 #[derive(Parser)]
 #[command(name = "repoverlay")]
@@ -458,13 +472,8 @@ fn apply_overlay(
     let source = &resolved.path;
 
     // Validate target exists and is a git repo
-    let target = target
-        .canonicalize()
-        .with_context(|| format!("Target directory not found: {}", target.display()))?;
-
-    if !target.join(".git").exists() {
-        bail!("Target is not a git repository: {}", target.display());
-    }
+    let target = canonicalize_path(target, "Target directory")?;
+    validate_git_repo(&target)?;
 
     // Determine link type
     let link_type = if force_copy || cfg!(windows) {
@@ -648,10 +657,7 @@ fn apply_overlay(
 }
 
 fn remove_overlay(target: &Path, name: Option<String>, remove_all: bool) -> Result<()> {
-    let target = target
-        .canonicalize()
-        .with_context(|| format!("Target directory not found: {}", target.display()))?;
-
+    let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
 
     if !overlays_dir.exists() {
@@ -819,9 +825,7 @@ fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &str) -> Resu
 }
 
 fn show_status(target: &Path, filter_name: Option<String>) -> Result<()> {
-    let target = target
-        .canonicalize()
-        .with_context(|| format!("Target directory not found: {}", target.display()))?;
+    let target = canonicalize_path(target, "Target directory")?;
 
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
 
@@ -940,13 +944,8 @@ fn show_single_overlay_status(target: &Path, name: &str) -> Result<()> {
 }
 
 fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
-    let target = target
-        .canonicalize()
-        .with_context(|| format!("Target directory not found: {}", target.display()))?;
-
-    if !target.join(".git").exists() {
-        bail!("Target is not a git repository: {}", target.display());
-    }
+    let target = canonicalize_path(target, "Target directory")?;
+    validate_git_repo(&target)?;
 
     // Load external state
     let external_states = load_external_states(&target)?;
@@ -1038,10 +1037,7 @@ fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
 }
 
 fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result<()> {
-    let target = target
-        .canonicalize()
-        .with_context(|| format!("Target directory not found: {}", target.display()))?;
-
+    let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
 
     if !overlays_dir.exists() {
@@ -1415,15 +1411,25 @@ fn create_overlay(
         return Ok(());
     }
 
-    // Create output directory
-    fs::create_dir_all(&output_dir)?;
+    // Use shared helper to copy files and generate config
+    create_overlay_with_files(source, &output_dir, include, name)
+}
 
-    // Copy files to output directory
+/// Copy files from source to output directory.
+///
+/// Handles both individual files and directories recursively.
+/// Returns the list of copied file paths (relative to source).
+fn copy_files_to_overlay(
+    source: &Path,
+    output_dir: &Path,
+    include: &[PathBuf],
+) -> Result<Vec<PathBuf>> {
+    fs::create_dir_all(output_dir)?;
+
     let mut copied_files = Vec::new();
     for path in include {
         let src_path = source.join(path);
         if src_path.is_dir() {
-            // Copy directory recursively
             for entry in walkdir::WalkDir::new(&src_path)
                 .into_iter()
                 .filter_map(|e| e.ok())
@@ -1438,7 +1444,6 @@ fn create_overlay(
                 copied_files.push(rel_path.to_path_buf());
             }
         } else {
-            // Copy single file
             let dest_path = output_dir.join(path);
             if let Some(parent) = dest_path.parent() {
                 fs::create_dir_all(parent)?;
@@ -1448,16 +1453,12 @@ fn create_overlay(
         }
     }
 
-    // Generate repoverlay.ccl
-    let overlay_name = name.unwrap_or_else(|| {
-        output_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("overlay")
-            .to_string()
-    });
+    Ok(copied_files)
+}
 
-    let config_content = format!(
+/// Generate overlay config file content.
+fn generate_overlay_config(name: &str) -> String {
+    format!(
         r#"/= Overlay configuration file.
 /= This file describes an overlay and how it should be applied.
 
@@ -1472,10 +1473,12 @@ overlay =
 /= mappings =
 /=   .envrc.template = .envrc
 "#,
-        overlay_name
-    );
-    fs::write(output_dir.join("repoverlay.ccl"), config_content)?;
+        name
+    )
+}
 
+/// Print overlay creation success message.
+fn print_overlay_created(output_dir: &Path, copied_files: &[PathBuf]) {
     println!(
         "{} overlay at: {}",
         "Created".green().bold(),
@@ -1483,7 +1486,7 @@ overlay =
     );
     println!();
     println!("Files included:");
-    for file in &copied_files {
+    for file in copied_files {
         println!("  + {}", file.display());
     }
     println!();
@@ -1493,8 +1496,6 @@ overlay =
         output_dir.display(),
         "--target <repo>".dimmed()
     );
-
-    Ok(())
 }
 
 /// Helper to create overlay with specified files.
@@ -1507,40 +1508,8 @@ fn create_overlay_with_files(
     include: &[PathBuf],
     name: Option<String>,
 ) -> Result<()> {
-    // Create output directory
-    fs::create_dir_all(output_dir)?;
+    let copied_files = copy_files_to_overlay(source, output_dir, include)?;
 
-    // Copy files to output directory
-    let mut copied_files = Vec::new();
-    for path in include {
-        let src_path = source.join(path);
-        if src_path.is_dir() {
-            // Copy directory recursively
-            for entry in walkdir::WalkDir::new(&src_path)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-            {
-                let rel_path = entry.path().strip_prefix(source)?;
-                let dest_path = output_dir.join(rel_path);
-                if let Some(parent) = dest_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::copy(entry.path(), &dest_path)?;
-                copied_files.push(rel_path.to_path_buf());
-            }
-        } else {
-            // Copy single file
-            let dest_path = output_dir.join(path);
-            if let Some(parent) = dest_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(&src_path, &dest_path)?;
-            copied_files.push(path.clone());
-        }
-    }
-
-    // Generate repoverlay.ccl
     let overlay_name = name.unwrap_or_else(|| {
         output_dir
             .file_name()
@@ -1549,42 +1518,11 @@ fn create_overlay_with_files(
             .to_string()
     });
 
-    let config_content = format!(
-        r#"/= Overlay configuration file.
-/= This file describes an overlay and how it should be applied.
-
-overlay =
-  /= name: Display name for this overlay.
-  /= Used in status output and when listing overlays.
-  name = {}
-
-/= mappings (optional): Remap file paths when applying the overlay.
-/= Keys are source paths (in the overlay), values are target paths (in the repo).
-/= Use this to rename files or place them in different locations.
-/= mappings =
-/=   .envrc.template = .envrc
-"#,
-        overlay_name
-    );
-    fs::write(output_dir.join("repoverlay.ccl"), config_content)?;
-
-    println!(
-        "{} overlay at: {}",
-        "Created".green().bold(),
-        output_dir.display()
-    );
-    println!();
-    println!("Files included:");
-    for file in &copied_files {
-        println!("  + {}", file.display());
-    }
-    println!();
-    println!(
-        "Apply with: {} {} {}",
-        "repoverlay apply".cyan(),
-        output_dir.display(),
-        "--target <repo>".dimmed()
-    );
+    fs::write(
+        output_dir.join("repoverlay.ccl"),
+        generate_overlay_config(&overlay_name),
+    )?;
+    print_overlay_created(output_dir, &copied_files);
 
     Ok(())
 }
@@ -1600,13 +1538,10 @@ fn switch_overlay(
     name: Option<String>,
     ref_override: Option<&str>,
 ) -> Result<()> {
-    // Verify target is a git repository
-    if !target.join(".git").exists() {
-        bail!("Target is not a git repository: {}", target.display());
-    }
+    validate_git_repo(target)?;
 
     // Check if any overlays are currently applied
-    let state_dir = target.join(".repoverlay/overlays");
+    let state_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
     let has_overlays = state_dir.exists() && fs::read_dir(&state_dir)?.next().is_some();
 
     if has_overlays {
@@ -1844,10 +1779,7 @@ fn publish_overlay(
     use overlay_repo::OverlayRepoManager;
 
     // Validate source exists
-    let source = source
-        .canonicalize()
-        .with_context(|| format!("Overlay source not found: {}", source.display()))?;
-
+    let source = canonicalize_path(source, "Overlay source")?;
     if !source.is_dir() {
         bail!("Source must be a directory: {}", source.display());
     }
@@ -1963,7 +1895,6 @@ fn publish_overlay(
 fn detect_target_repo(path: &Path) -> Result<(String, String)> {
     use std::process::Command;
 
-    // Get the git remote URL
     let output = Command::new("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(path)
@@ -1978,47 +1909,32 @@ fn detect_target_repo(path: &Path) -> Result<(String, String)> {
     }
 
     let url = String::from_utf8(output.stdout)?.trim().to_string();
+    parse_github_owner_repo(&url)
+}
 
-    // Parse GitHub URL to extract owner/repo
-    // Supports:
-    //   https://github.com/owner/repo.git
-    //   git@github.com:owner/repo.git
-    //   https://github.com/owner/repo
-    let (owner, repo) = if url.contains("github.com") {
-        if url.starts_with("git@") {
-            // SSH format: git@github.com:owner/repo.git
-            let parts: Vec<&str> = url
-                .trim_start_matches("git@github.com:")
-                .trim_end_matches(".git")
-                .split('/')
-                .collect();
-            if parts.len() >= 2 {
-                (parts[0].to_string(), parts[1].to_string())
-            } else {
-                bail!("Could not parse git remote URL: {}", url);
-            }
-        } else {
-            // HTTPS format
-            let parts: Vec<&str> = url
-                .trim_start_matches("https://github.com/")
-                .trim_end_matches(".git")
-                .split('/')
-                .collect();
-            if parts.len() >= 2 {
-                (parts[0].to_string(), parts[1].to_string())
-            } else {
-                bail!("Could not parse git remote URL: {}", url);
-            }
-        }
-    } else {
+/// Parse owner/repo from a GitHub URL (HTTPS or SSH format).
+fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
+    if !url.contains("github.com") {
         bail!(
             "Could not detect target repository from git remote.\n\
              Non-GitHub remotes are not supported for auto-detection.\n\
              Please specify --target org/repo"
         );
-    };
+    }
 
-    Ok((owner, repo))
+    // Normalize URL: strip prefix and .git suffix, then split by /
+    let path_part = url
+        .trim_start_matches("git@github.com:")
+        .trim_start_matches("https://github.com/")
+        .trim_start_matches("http://github.com/")
+        .trim_end_matches(".git");
+
+    let parts: Vec<&str> = path_part.split('/').collect();
+    if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+        Ok((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        bail!("Could not parse git remote URL: {}", url)
+    }
 }
 
 fn update_git_exclude(
