@@ -261,13 +261,9 @@ mod tests {
 
         let configs = detect_ai_configs(repo.path());
 
-        assert!(configs.iter().any(|f| f.path == PathBuf::from(".claude")));
-        assert!(configs.iter().any(|f| f.path == PathBuf::from("CLAUDE.md")));
-        assert!(
-            configs
-                .iter()
-                .any(|f| f.path == PathBuf::from(".cursorrules"))
-        );
+        assert!(configs.iter().any(|f| f.path == Path::new(".claude")));
+        assert!(configs.iter().any(|f| f.path == Path::new("CLAUDE.md")));
+        assert!(configs.iter().any(|f| f.path == Path::new(".cursorrules")));
 
         // All should be pre-selected
         assert!(configs.iter().all(|f| f.preselected));
@@ -294,8 +290,8 @@ mod tests {
 
         let ignored = detect_gitignored_files(repo.path());
 
-        assert!(ignored.iter().any(|f| f.path == PathBuf::from(".envrc")));
-        assert!(ignored.iter().any(|f| f.path == PathBuf::from("debug.log")));
+        assert!(ignored.iter().any(|f| f.path == Path::new(".envrc")));
+        assert!(ignored.iter().any(|f| f.path == Path::new("debug.log")));
         assert!(
             ignored
                 .iter()
@@ -314,12 +310,8 @@ mod tests {
 
         let untracked = detect_untracked_files(repo.path());
 
-        assert!(
-            untracked
-                .iter()
-                .any(|f| f.path == PathBuf::from("scratch.txt"))
-        );
-        assert!(untracked.iter().any(|f| f.path == PathBuf::from("todo.md")));
+        assert!(untracked.iter().any(|f| f.path == Path::new("scratch.txt")));
+        assert!(untracked.iter().any(|f| f.path == Path::new("todo.md")));
         assert!(
             untracked
                 .iter()

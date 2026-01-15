@@ -1725,12 +1725,8 @@ fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
     };
 
     if overlays.is_empty() {
-        if target_filter.is_some() {
-            println!(
-                "{} No overlays found for {}.",
-                "Status:".bold(),
-                target_filter.unwrap()
-            );
+        if let Some(filter) = target_filter {
+            println!("{} No overlays found for {}.", "Status:".bold(), filter);
         } else {
             println!("{} No overlays found in repository.", "Status:".bold());
         }

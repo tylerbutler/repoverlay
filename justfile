@@ -82,7 +82,7 @@ ci: test lint fmt-check
 
 # Run tests with coverage (generates lcov.info)
 test-coverage:
-    cargo llvm-cov nextest --all-features --lcov --output-path lcov.info
+    cargo llvm-cov --all-features --lcov --output-path lcov.info
 
 alias tc := test-coverage
 

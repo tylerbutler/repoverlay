@@ -28,7 +28,7 @@ jobs:
       - name: Install tools
         uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-llvm-cov,cargo-nextest
+          tool: just,cargo-llvm-cov
 
       - name: Run tests with coverage
         run: just test-coverage
