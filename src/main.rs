@@ -2760,14 +2760,14 @@ mod tests {
     // CLI integration tests using assert_cmd
     mod cli {
         use super::*;
-        use assert_cmd::assert::OutputAssertExt;
+        use assert_cmd::Command;
         use predicates::prelude::*;
 
-        fn repoverlay_cmd() -> std::process::Command {
-            let path = std::env::var("CARGO_BIN_EXE_repoverlay").unwrap_or_else(|_| {
-                env!("CARGO_MANIFEST_DIR").to_string() + "/target/debug/repoverlay"
-            });
-            std::process::Command::new(path)
+        fn repoverlay_cmd() -> Command {
+            // Using deprecated cargo_bin because tests are in src/main.rs (not tests/ dir).
+            // The cargo_bin! macro requires CARGO_BIN_EXE_* which isn't set during clippy.
+            #[allow(deprecated)]
+            Command::cargo_bin("repoverlay").expect("Failed to find repoverlay binary")
         }
 
         #[test]

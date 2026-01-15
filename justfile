@@ -82,7 +82,12 @@ ci: test lint fmt-check
 
 # Run tests with coverage (generates lcov.info)
 test-coverage:
-    cargo llvm-cov --all-features --lcov --output-path lcov.info
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Set up llvm-cov environment and build the binary first
+    source <(cargo llvm-cov show-env --export-prefix)
+    cargo build --all-features
+    cargo llvm-cov --no-clean --all-features --lcov --output-path lcov.info
 
 alias tc := test-coverage
 
