@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/tylerbutler/repoverlay/compare/v0.1.3...v0.1.4) - 2026-01-15
+
+### Added
+
+- add overlay repository management with CCL config format
+- add interactive mode for overlay creation
+- add smart discovery for overlay creation
+- add create and switch commands
+
+### Fixed
+
+- coverage workflow builds binary before running tests
+- resolve clippy warnings and coverage workflow issues
+
+### Other
+
+- improve test coverage for cache, config, github, and overlay_repo modules
+- add code coverage, security audit, and documentation checks
+- extract helper functions to reduce code duplication
+
 ## [0.1.3](https://github.com/tylerbutler/repoverlay/compare/v0.1.2...v0.1.3) - 2026-01-07
 
 ### Other
