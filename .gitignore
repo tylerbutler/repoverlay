@@ -1,2 +1,4 @@
 /target/
+/coverage/
+lcov.info
 .claude/settings.local.json

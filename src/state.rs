@@ -254,7 +254,7 @@ pub struct OverlayStateFlat {
     pub files: String,
 }
 
-/// State file tracking an applied overlay (.repoverlay/overlays/<name>.ccl).
+/// State file tracking an applied overlay (`.repoverlay/overlays/<name>.ccl`).
 /// In-memory representation with proper types.
 #[derive(Debug, Clone)]
 pub struct OverlayState {

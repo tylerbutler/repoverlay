@@ -54,8 +54,8 @@ enum Commands {
         ///
         /// Examples:
         ///   ./my-overlay
-        ///   https://github.com/owner/repo
-        ///   https://github.com/owner/repo/tree/main/overlays/rust
+        ///   <https://github.com/owner/repo>
+        ///   <https://github.com/owner/repo/tree/main/overlays/rust>
         source: String,
 
         /// Target repository directory (defaults to current directory)
@@ -187,7 +187,7 @@ enum Commands {
     /// Initialize overlay repository configuration
     #[command(name = "init-repo")]
     InitRepo {
-        /// URL of the overlay repository (e.g., https://github.com/user/repo-overlays)
+        /// URL of the overlay repository (e.g., `https://github.com/user/repo-overlays`)
         url: String,
 
         /// Skip cloning the repository

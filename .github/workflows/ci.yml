@@ -61,3 +61,36 @@ jobs:
 
       - name: Check formatting
         run: just fmt-check
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+
+      - name: Run cargo-audit
+        run: cargo audit
+
+      - name: Run cargo-deny
+        run: cargo deny check
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build documentation
+        run: cargo doc --no-deps --all-features

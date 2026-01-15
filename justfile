@@ -79,3 +79,30 @@ alias wl := watch-lint
 
 # Run all CI checks (test, lint, format check)
 ci: test lint fmt-check
+
+# Run tests with coverage (generates lcov.info)
+test-coverage:
+    cargo llvm-cov nextest --all-features --lcov --output-path lcov.info
+
+alias tc := test-coverage
+
+# Generate HTML coverage report
+coverage-html:
+    cargo llvm-cov nextest --all-features --html --output-dir coverage
+
+# Open coverage report in browser
+coverage-report: coverage-html
+    open coverage/html/index.html || xdg-open coverage/html/index.html 2>/dev/null || echo "Open coverage/html/index.html manually"
+
+# Run security audit
+audit:
+    cargo audit
+    cargo deny check
+
+alias a := audit
+
+# Build documentation (fails on warnings)
+docs:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+alias d := docs
