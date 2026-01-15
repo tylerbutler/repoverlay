@@ -460,6 +460,7 @@ pub fn cache_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_cache_manager_creation() {
@@ -484,5 +485,214 @@ mod tests {
 
         // Subpath should not affect cache path (repo is cached, subpath is used at read time)
         assert!(path.ends_with("github/owner/repo"));
+    }
+
+    #[test]
+    fn test_cache_dir_function() {
+        let dir = cache_dir();
+        assert!(dir.is_ok());
+        let dir = dir.unwrap();
+        assert!(dir.to_string_lossy().contains("repoverlay"));
+    }
+
+    #[test]
+    fn test_cache_manager_cache_dir_accessor() {
+        let manager = CacheManager::new().unwrap();
+        let dir = manager.cache_dir();
+        assert!(dir.to_string_lossy().contains("repoverlay"));
+    }
+
+    #[test]
+    fn test_cache_meta_roundtrip() {
+        let meta = CacheMeta {
+            clone_url: "https://github.com/owner/repo.git".to_string(),
+            last_fetched: Utc::now(),
+            requested_ref: "main".to_string(),
+            commit: "abc123def456789012345678901234567890abcdef".to_string(),
+        };
+
+        let serialized = sickle::to_string(&meta).unwrap();
+        let deserialized: CacheMeta = sickle::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.clone_url, meta.clone_url);
+        assert_eq!(deserialized.requested_ref, meta.requested_ref);
+        assert_eq!(deserialized.commit, meta.commit);
+    }
+
+    #[test]
+    fn test_list_cached_empty_cache() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let repos = manager.list_cached().unwrap();
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn test_list_cached_with_repos() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create fake cached repos
+        let repo1 = temp.path().join("github/owner1/repo1");
+        let repo2 = temp.path().join("github/owner2/repo2");
+        fs::create_dir_all(&repo1).unwrap();
+        fs::create_dir_all(&repo2).unwrap();
+
+        let repos = manager.list_cached().unwrap();
+        assert_eq!(repos.len(), 2);
+
+        // Should be sorted by owner/repo
+        assert_eq!(repos[0].owner, "owner1");
+        assert_eq!(repos[0].repo, "repo1");
+        assert_eq!(repos[1].owner, "owner2");
+        assert_eq!(repos[1].repo, "repo2");
+    }
+
+    #[test]
+    fn test_list_cached_with_metadata() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create fake cached repo with metadata
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let meta = CacheMeta {
+            clone_url: "https://github.com/owner/repo.git".to_string(),
+            last_fetched: Utc::now(),
+            requested_ref: "main".to_string(),
+            commit: "abc123".to_string(),
+        };
+        let meta_path = repo_path.join(".repoverlay-cache-meta.ccl");
+        fs::write(&meta_path, sickle::to_string(&meta).unwrap()).unwrap();
+
+        let repos = manager.list_cached().unwrap();
+        assert_eq!(repos.len(), 1);
+        assert!(repos[0].meta.is_some());
+        assert_eq!(repos[0].meta.as_ref().unwrap().commit, "abc123");
+    }
+
+    #[test]
+    fn test_clear_cache_empty() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let count = manager.clear_cache().unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_clear_cache_with_repos() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create fake cached repos
+        let repo1 = temp.path().join("github/owner1/repo1");
+        let repo2 = temp.path().join("github/owner1/repo2");
+        fs::create_dir_all(&repo1).unwrap();
+        fs::create_dir_all(&repo2).unwrap();
+
+        let count = manager.clear_cache().unwrap();
+        assert_eq!(count, 2);
+
+        // Verify directory is removed
+        assert!(!temp.path().join("github").exists());
+    }
+
+    #[test]
+    fn test_remove_cached_nonexistent() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let removed = manager.remove_cached("owner", "repo").unwrap();
+        assert!(!removed);
+    }
+
+    #[test]
+    fn test_remove_cached_existing() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create fake cached repo
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let removed = manager.remove_cached("owner", "repo").unwrap();
+        assert!(removed);
+        assert!(!repo_path.exists());
+    }
+
+    #[test]
+    fn test_remove_cached_cleans_empty_owner_dir() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create single repo for owner
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        manager.remove_cached("owner", "repo").unwrap();
+
+        // Owner directory should be removed since it's now empty
+        assert!(!temp.path().join("github/owner").exists());
+    }
+
+    #[test]
+    fn test_remove_cached_preserves_sibling_repos() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create two repos for same owner
+        let repo1 = temp.path().join("github/owner/repo1");
+        let repo2 = temp.path().join("github/owner/repo2");
+        fs::create_dir_all(&repo1).unwrap();
+        fs::create_dir_all(&repo2).unwrap();
+
+        manager.remove_cached("owner", "repo1").unwrap();
+
+        // Owner directory should still exist with repo2
+        assert!(temp.path().join("github/owner").exists());
+        assert!(repo2.exists());
+    }
+
+    #[test]
+    fn test_list_cached_skips_non_directories() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create github directory with a file (not a directory)
+        let github_dir = temp.path().join("github");
+        fs::create_dir_all(&github_dir).unwrap();
+        fs::write(github_dir.join("some_file.txt"), "content").unwrap();
+
+        // Create actual repo directory
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let repos = manager.list_cached().unwrap();
+        // Should only find the actual repo, not the file
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].owner, "owner");
     }
 }

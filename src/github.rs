@@ -333,4 +333,145 @@ mod tests {
             "https://github.com/owner/repo/tree/main/subdir"
         );
     }
+
+    #[test]
+    fn test_display_url_default_with_subpath() {
+        // Create source with default ref but with subpath
+        let mut source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+        source.subpath = Some(PathBuf::from("some/path"));
+
+        assert_eq!(
+            source.display_url(),
+            "https://github.com/owner/repo/tree/HEAD/some/path"
+        );
+    }
+
+    #[test]
+    fn test_git_ref_is_default() {
+        assert!(GitRef::Default.is_default());
+        assert!(!GitRef::Branch("main".to_string()).is_default());
+        assert!(!GitRef::Tag("v1.0".to_string()).is_default());
+        assert!(!GitRef::Commit("abc123".to_string()).is_default());
+    }
+
+    #[test]
+    fn test_git_ref_display() {
+        assert_eq!(format!("{}", GitRef::Default), "(default branch)");
+        assert_eq!(
+            format!("{}", GitRef::Branch("main".to_string())),
+            "branch:main"
+        );
+        assert_eq!(
+            format!("{}", GitRef::Tag("v1.0.0".to_string())),
+            "tag:v1.0.0"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                GitRef::Commit("abc123def456789012345678901234567890abcdef".to_string())
+            ),
+            "commit:abc123def456"
+        );
+    }
+
+    #[test]
+    fn test_git_ref_display_short_commit() {
+        // Commit shorter than 12 chars should display in full
+        assert_eq!(
+            format!("{}", GitRef::Commit("abc123".to_string())),
+            "commit:abc123"
+        );
+    }
+
+    #[test]
+    fn test_cache_key_tag() {
+        // Create a source and manually set it to a tag
+        let mut source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+        source.git_ref = GitRef::Tag("v1.0.0".to_string());
+
+        assert_eq!(source.cache_key(), "owner__repo__tag-v1.0.0");
+    }
+
+    #[test]
+    fn test_sanitize_for_path() {
+        assert_eq!(sanitize_for_path("main"), "main");
+        assert_eq!(sanitize_for_path("feature/branch"), "feature_branch");
+        assert_eq!(sanitize_for_path("v1.0.0"), "v1.0.0");
+        assert_eq!(sanitize_for_path("branch-name_123"), "branch-name_123");
+        assert_eq!(sanitize_for_path("special!@#chars"), "special___chars");
+    }
+
+    #[test]
+    fn test_with_ref_override_none() {
+        let source = GitHubSource::parse("https://github.com/owner/repo/tree/main")
+            .unwrap()
+            .with_ref_override(None);
+
+        // Should keep original ref
+        assert_eq!(source.git_ref, GitRef::Branch("main".to_string()));
+    }
+
+    #[test]
+    fn test_with_ref_override_commit() {
+        // Use exactly 40 hex characters for a valid commit SHA
+        let source = GitHubSource::parse("https://github.com/owner/repo")
+            .unwrap()
+            .with_ref_override(Some("abcd1234abcd1234abcd1234abcd1234abcd1234"));
+
+        // 40 hex chars is detected as commit
+        if let GitRef::Commit(sha) = &source.git_ref {
+            assert_eq!(sha, "abcd1234abcd1234abcd1234abcd1234abcd1234");
+        } else {
+            panic!("Expected GitRef::Commit");
+        }
+    }
+
+    #[test]
+    fn test_git_ref_from_str_branch() {
+        // Non-40 hex char string should be parsed as branch
+        let git_ref = GitRef::from_str("main");
+        assert_eq!(git_ref, GitRef::Branch("main".to_string()));
+
+        let git_ref = GitRef::from_str("feature-branch");
+        assert_eq!(git_ref, GitRef::Branch("feature-branch".to_string()));
+    }
+
+    #[test]
+    fn test_git_ref_from_str_commit() {
+        // Exactly 40 hex chars should be parsed as commit
+        let git_ref = GitRef::from_str("abcd1234abcd1234abcd1234abcd1234abcd1234");
+        assert!(matches!(git_ref, GitRef::Commit(_)));
+    }
+
+    #[test]
+    fn test_git_ref_from_str_not_commit_wrong_length() {
+        // Less than 40 chars should not be commit
+        let git_ref = GitRef::from_str("abc123");
+        assert!(matches!(git_ref, GitRef::Branch(_)));
+    }
+
+    #[test]
+    fn test_git_ref_from_str_not_commit_non_hex() {
+        // 40 chars but not all hex should not be commit
+        let git_ref = GitRef::from_str("ghijklmnopqrstuvwxyz1234567890abcdefghij");
+        assert!(matches!(git_ref, GitRef::Branch(_)));
+    }
+
+    #[test]
+    fn test_parse_unknown_path_component() {
+        // URLs with unknown path components after repo should use default ref
+        let source = GitHubSource::parse("https://github.com/owner/repo/issues");
+        // This will succeed but with default ref (unknown path component is ignored)
+        assert!(source.is_ok());
+        let source = source.unwrap();
+        assert_eq!(source.git_ref, GitRef::Default);
+    }
+
+    #[test]
+    fn test_git_ref_as_str() {
+        assert_eq!(GitRef::Default.as_str(), "HEAD");
+        assert_eq!(GitRef::Branch("main".to_string()).as_str(), "main");
+        assert_eq!(GitRef::Tag("v1.0".to_string()).as_str(), "v1.0");
+        assert_eq!(GitRef::Commit("abc123".to_string()).as_str(), "abc123");
+    }
 }

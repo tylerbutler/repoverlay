@@ -378,6 +378,7 @@ pub fn parse_overlay_reference(s: &str) -> Option<(String, String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_parse_overlay_reference_valid() {
@@ -421,5 +422,186 @@ mod tests {
         let path = path.unwrap();
         assert!(path.to_string_lossy().contains("repoverlay"));
         assert!(path.ends_with("overlay-repo"));
+    }
+
+    #[test]
+    fn test_overlay_repo_meta_roundtrip() {
+        let meta = OverlayRepoMeta {
+            clone_url: "https://github.com/org/repo.git".to_string(),
+            last_fetched: Utc::now(),
+            commit: "abc123def456".to_string(),
+        };
+
+        let serialized = sickle::to_string(&meta).unwrap();
+        let deserialized: OverlayRepoMeta = sickle::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.clone_url, meta.clone_url);
+        assert_eq!(deserialized.commit, meta.commit);
+    }
+
+    #[test]
+    fn test_available_overlay_clone() {
+        let overlay = AvailableOverlay {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "claude-config".to_string(),
+            has_config: true,
+        };
+
+        let cloned = overlay.clone();
+        assert_eq!(cloned.org, overlay.org);
+        assert_eq!(cloned.repo, overlay.repo);
+        assert_eq!(cloned.name, overlay.name);
+        assert_eq!(cloned.has_config, overlay.has_config);
+    }
+
+    #[test]
+    fn test_overlay_repo_manager_needs_clone_no_path() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(temp.path().join("nonexistent")),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        assert!(manager.needs_clone());
+    }
+
+    #[test]
+    fn test_overlay_repo_manager_needs_clone_no_git_dir() {
+        let temp = TempDir::new().unwrap();
+        // Create directory but not .git subdirectory
+        fs::create_dir_all(temp.path().join("overlay-repo")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(temp.path().join("overlay-repo")),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        assert!(manager.needs_clone());
+    }
+
+    #[test]
+    fn test_overlay_repo_manager_does_not_need_clone_with_git_dir() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        assert!(!manager.needs_clone());
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_basic() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("file1.txt"), "content1").unwrap();
+        fs::write(src.join("file2.txt"), "content2").unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        assert!(dst.join("file1.txt").exists());
+        assert!(dst.join("file2.txt").exists());
+        assert_eq!(
+            fs::read_to_string(dst.join("file1.txt")).unwrap(),
+            "content1"
+        );
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_nested() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+
+        fs::create_dir_all(src.join("subdir")).unwrap();
+        fs::write(src.join("root.txt"), "root").unwrap();
+        fs::write(src.join("subdir/nested.txt"), "nested").unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        assert!(dst.join("root.txt").exists());
+        assert!(dst.join("subdir/nested.txt").exists());
+        assert_eq!(
+            fs::read_to_string(dst.join("subdir/nested.txt")).unwrap(),
+            "nested"
+        );
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_skips_git_dir() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+
+        fs::create_dir_all(src.join(".git")).unwrap();
+        fs::write(src.join("file.txt"), "content").unwrap();
+        fs::write(src.join(".git/config"), "git config").unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        assert!(dst.join("file.txt").exists());
+        assert!(!dst.join(".git").exists());
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_fails_on_non_directory() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("file.txt");
+        fs::write(&file_path, "content").unwrap();
+
+        let result = copy_dir_recursive(&file_path, temp.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a directory"));
+    }
+
+    #[test]
+    fn test_get_overlay_path_nonexistent() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let result = manager.get_overlay_path("org", "repo", "missing");
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_get_overlay_path_exists() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        fs::create_dir_all(repo_path.join("org/repo/overlay-name")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path.clone()),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let result = manager
+            .get_overlay_path("org", "repo", "overlay-name")
+            .unwrap();
+
+        assert_eq!(result, repo_path.join("org/repo/overlay-name"));
     }
 }

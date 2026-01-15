@@ -221,4 +221,87 @@ mod tests {
         assert_eq!(overlay_repo.url, "https://github.com/test/overlays");
         assert!(overlay_repo.local_path.is_none());
     }
+
+    #[test]
+    fn test_load_repo_config_valid() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let config_content = r#"
+overlay_repo =
+  url = https://github.com/org/overlays
+"#;
+        fs::write(config_dir.join("config.ccl"), config_content).unwrap();
+
+        let config = load_repo_config(temp.path()).unwrap();
+        assert!(config.is_some());
+        let config = config.unwrap();
+        assert!(config.overlay_repo.is_some());
+        assert_eq!(
+            config.overlay_repo.unwrap().url,
+            "https://github.com/org/overlays"
+        );
+    }
+
+    #[test]
+    fn test_load_config_uses_global_when_no_repo() {
+        // When repo_path is None, should return global config
+        // This is a bit tricky to test fully without mocking the global config
+        // but we can at least verify the function runs
+        let result = load_config(None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_load_config_repo_overrides_global() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let repo_config_content = r#"
+overlay_repo =
+  url = https://github.com/repo/specific
+"#;
+        fs::write(config_dir.join("config.ccl"), repo_config_content).unwrap();
+
+        // The repo config should be used when present
+        let config = load_config(Some(temp.path())).unwrap();
+        // If repo config has overlay_repo, it should override global
+        if let Some(overlay_repo) = config.overlay_repo {
+            assert_eq!(overlay_repo.url, "https://github.com/repo/specific");
+        }
+    }
+
+    #[test]
+    fn test_global_config_path() {
+        let path = global_config_path();
+        assert!(path.is_ok());
+        let path = path.unwrap();
+        assert!(path.ends_with("config.ccl"));
+        assert!(path.to_string_lossy().contains("repoverlay"));
+    }
+
+    #[test]
+    fn test_overlay_repo_config_with_local_path_roundtrip() {
+        let config = RepoverlayConfig {
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/test/overlays".to_string(),
+                local_path: Some(PathBuf::from("/custom/path")),
+            }),
+        };
+
+        let ccl = sickle::to_string(&config).unwrap();
+        let parsed: RepoverlayConfig = sickle::from_str(&ccl).unwrap();
+
+        assert!(parsed.overlay_repo.is_some());
+        let overlay_repo = parsed.overlay_repo.unwrap();
+        assert_eq!(overlay_repo.local_path, Some(PathBuf::from("/custom/path")));
+    }
+
+    #[test]
+    fn test_default_repoverlay_config() {
+        let config = RepoverlayConfig::default();
+        assert!(config.overlay_repo.is_none());
+    }
 }
