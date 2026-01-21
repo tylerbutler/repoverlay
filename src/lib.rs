@@ -51,9 +51,18 @@ pub struct ResolvedSource {
 
 /// Resolve a source string to a local path.
 ///
-/// For GitHub URLs, downloads/updates the cache and returns the cached path.
-/// For local paths, returns the path directly.
-/// For overlay repo references (org/repo/name), resolves from the managed overlay repository.
+/// Resolution order:
+/// 1. GitHub URL (`https://github.com/...`) - downloads to cache, returns cached path
+/// 2. Local path (`./path` or `/path`) - returns path directly after validation
+/// 3. Overlay repo reference (`org/repo/name`) - resolves from configured shared repository
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The source doesn't match any valid format
+/// - A local path doesn't exist
+/// - GitHub fetch fails
+/// - Overlay repo is not configured (for org/repo/name format)
 pub fn resolve_source(
     source_str: &str,
     ref_override: Option<&str>,
@@ -158,6 +167,27 @@ pub fn resolve_source(
 }
 
 /// Apply an overlay to a target git repository.
+///
+/// # Workflow
+///
+/// 1. Resolve source location (local path, GitHub URL, or overlay repo)
+/// 2. Validate target is a git repository
+/// 3. Load overlay config (`repoverlay.ccl`) if present
+/// 4. Determine overlay name (CLI override > config > directory name)
+/// 5. Check for conflicts with existing overlays and files
+/// 6. Create symlinks or copies for each file
+/// 7. Update `.git/info/exclude` with overlay section
+/// 8. Save state to `.repoverlay/overlays/<name>.ccl`
+/// 9. Save external backup for restore capability
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Source resolution fails
+/// - Target is not a git repository
+/// - Overlay with same name already exists
+/// - File conflicts with existing overlay or repo file
+/// - No files found in overlay source
 pub fn apply_overlay(
     source_str: &str,
     target: &Path,
@@ -356,6 +386,16 @@ pub fn apply_overlay(
 }
 
 /// Remove applied overlay(s) from a target repository.
+///
+/// # Workflow
+///
+/// 1. Load overlay state from `.repoverlay/overlays/<name>.ccl`
+/// 2. Remove each file/symlink managed by the overlay
+/// 3. Clean up empty parent directories
+/// 4. Remove overlay section from `.git/info/exclude`
+/// 5. Delete state file
+/// 6. Remove external backup
+/// 7. If no overlays remain, remove `.repoverlay/` directory
 pub fn remove_overlay(target: &Path, name: Option<String>, remove_all: bool) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
@@ -601,6 +641,14 @@ pub fn show_single_overlay_status(target: &Path, name: &str) -> Result<()> {
 }
 
 /// Restore overlays after git clean or other removal.
+///
+/// Uses external state backup (`~/.local/share/repoverlay/applied/`) to recover
+/// overlays that were removed by `git clean -fdx` or similar operations.
+///
+/// # Workflow
+///
+/// 1. Load external state backup for the target repository
+/// 2. For each saved overlay state, re-apply using original source
 pub fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
@@ -695,6 +743,15 @@ pub fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
 }
 
 /// Update applied overlays from remote sources.
+///
+/// Only GitHub-sourced overlays can be updated. Local overlays are skipped.
+///
+/// # Workflow
+///
+/// 1. List applied overlays (optionally filtered by name)
+/// 2. For each GitHub overlay, check remote for new commits
+/// 3. Report available updates
+/// 4. If not dry-run, remove and re-apply each overlay with updated cache
 pub fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
@@ -827,6 +884,20 @@ pub fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Re
 }
 
 /// Create a new overlay from files in a repository.
+///
+/// # Modes
+///
+/// - **Discovery mode** (no `--include`): Scans repository for candidate files
+///   (AI configs, gitignored, untracked) and presents interactive selection
+/// - **Explicit mode** (`--include` flags): Copies specified files directly
+///
+/// # Workflow
+///
+/// 1. Validate source is a git repository
+/// 2. If no includes specified, discover candidate files
+/// 3. Interactive selection or use pre-selected AI configs (with `--yes`)
+/// 4. Copy selected files to output directory
+/// 5. Generate `repoverlay.ccl` config file
 pub fn create_overlay(
     source: &Path,
     output: Option<PathBuf>,
@@ -1178,6 +1249,14 @@ pub fn create_overlay_with_files(
 }
 
 /// Switch to a different overlay by removing all existing overlays first.
+///
+/// Atomic replacement of all overlays - useful for switching between different
+/// configurations (e.g., different AI agent setups).
+///
+/// # Workflow
+///
+/// 1. Remove all existing overlays (if any)
+/// 2. Apply the new overlay
 pub fn switch_overlay(
     source: &str,
     target: &Path,

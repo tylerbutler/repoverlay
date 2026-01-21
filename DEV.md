@@ -80,10 +80,14 @@ release-plz determines version bumps from conventional commit messages:
 
 ```
 src/
-├── main.rs    # CLI entry point and command handlers
-├── state.rs   # State persistence (in-repo and external backup)
-├── github.rs  # GitHub URL parsing
-└── cache.rs   # GitHub repository cache management
+├── main.rs        # CLI entry point and command handlers
+├── lib.rs         # Core library with apply/remove/status operations
+├── state.rs       # State persistence (in-repo and external backup)
+├── github.rs      # GitHub URL parsing and source resolution
+├── cache.rs       # GitHub repository cache management
+├── config.rs      # Global and per-repo configuration (CCL format)
+├── overlay_repo.rs # Shared overlay repository integration
+└── detection.rs   # File discovery for overlay creation
 ```
 
-See `CLAUDE.md` for detailed architecture documentation.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation.
