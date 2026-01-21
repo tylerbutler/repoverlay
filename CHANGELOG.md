@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/tylerbutler/repoverlay/compare/v0.1.5...v0.1.6) - 2026-01-21
+
+### Added
+
+- use ~/.config for config and default create to overlay repo ([#12](https://github.com/tylerbutler/repoverlay/pull/12))
+
 ## [0.1.5](https://github.com/tylerbutler/repoverlay/compare/v0.1.4...v0.1.5) - 2026-01-21
 
 ### Other
