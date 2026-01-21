@@ -6,7 +6,6 @@
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -61,6 +60,11 @@ impl OverlayRepoManager {
         };
 
         Ok(Self { repo_path, config })
+    }
+
+    /// Get the path to the overlay repository.
+    pub fn path(&self) -> &Path {
+        &self.repo_path
     }
 
     /// Check if the overlay repository needs to be cloned.
@@ -317,11 +321,11 @@ impl OverlayRepoManager {
 }
 
 /// Get the default path for the overlay repository clone.
+///
+/// Returns `~/.config/repoverlay/overlay-repo/` - stored alongside config
+/// since it's user-managed content.
 pub fn default_overlay_repo_path() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("", "", "repoverlay")
-        .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-
-    Ok(proj_dirs.data_dir().join(OVERLAY_REPO_DIR))
+    Ok(crate::config::config_dir()?.join(OVERLAY_REPO_DIR))
 }
 
 /// Copy a directory recursively.
