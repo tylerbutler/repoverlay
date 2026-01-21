@@ -883,6 +883,26 @@ pub fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Re
     Ok(())
 }
 
+/// Detect org/repo from git remote origin.
+///
+/// Returns `None` if the remote cannot be detected (e.g., no remote, non-GitHub).
+fn detect_target_from_git_remote(repo_path: &Path) -> Option<(String, String)> {
+    use std::process::Command;
+
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repo_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let url = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    parse_github_owner_repo(&url).ok()
+}
+
 /// Create a new overlay from files in a repository.
 ///
 /// # Modes
@@ -890,6 +910,15 @@ pub fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Re
 /// - **Discovery mode** (no `--include`): Scans repository for candidate files
 ///   (AI configs, gitignored, untracked) and presents interactive selection
 /// - **Explicit mode** (`--include` flags): Copies specified files directly
+///
+/// # Output Directory Resolution
+///
+/// When `output` is `None`, the output directory is determined as follows:
+/// 1. If an overlay repo is configured (`init-repo` was run), the overlay is
+///    created directly in the overlay repo at `<org>/<repo>/<name>/`, where
+///    org/repo is detected from the source repository's git remote origin.
+/// 2. If no overlay repo is configured (or git remote detection fails), falls
+///    back to `~/.local/share/repoverlay/overlays/<repo-name>`.
 ///
 /// # Workflow
 ///
@@ -915,17 +944,57 @@ pub fn create_overlay(
     }
 
     // Determine output directory
+    // Priority: explicit --output > overlay repo (if configured) > local fallback
     let output_dir = match &output {
         Some(p) => p.clone(),
         None => {
-            // Default to ~/.local/share/repoverlay/overlays/<repo-name>
-            let repo_name = source
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("overlay");
-            let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
-                .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-            proj_dirs.data_dir().join("overlays").join(repo_name)
+            // Check if overlay repo is configured
+            let config = config::load_config(None).ok();
+            let overlay_repo_config = config.as_ref().and_then(|c| c.overlay_repo.as_ref());
+
+            if let Some(repo_config) = overlay_repo_config {
+                // Try to detect org/repo from git remote
+                if let Some((org, repo)) = detect_target_from_git_remote(source) {
+                    // Determine overlay name
+                    let overlay_name = name.clone().unwrap_or_else(|| {
+                        source
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("overlay")
+                            .to_string()
+                    });
+
+                    // Use overlay repo path: <repo_path>/<org>/<repo>/<name>
+                    let manager = overlay_repo::OverlayRepoManager::new(repo_config.clone())
+                        .expect("Failed to create overlay repo manager");
+                    manager
+                        .ensure_cloned()
+                        .expect("Failed to ensure overlay repo is cloned");
+                    manager.path().join(&org).join(&repo).join(&overlay_name)
+                } else {
+                    // Couldn't detect target, fall back to local
+                    eprintln!(
+                        "{} Could not detect target from git remote, using local storage.",
+                        "Warning:".yellow()
+                    );
+                    let repo_name = source
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("overlay");
+                    let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
+                        .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
+                    proj_dirs.data_dir().join("overlays").join(repo_name)
+                }
+            } else {
+                // No overlay repo configured, use local fallback
+                let repo_name = source
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("overlay");
+                let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
+                proj_dirs.data_dir().join("overlays").join(repo_name)
+            }
         }
     };
 
