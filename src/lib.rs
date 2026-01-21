@@ -883,7 +883,6 @@ pub fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Re
     Ok(())
 }
 
-
 /// Detect org/repo from git remote origin.
 ///
 /// Returns `None` if the remote cannot be detected (e.g., no remote, non-GitHub).
@@ -968,7 +967,9 @@ pub fn create_overlay(
                     // Use overlay repo path: <repo_path>/<org>/<repo>/<name>
                     let manager = overlay_repo::OverlayRepoManager::new(repo_config.clone())
                         .expect("Failed to create overlay repo manager");
-                    manager.ensure_cloned().expect("Failed to ensure overlay repo is cloned");
+                    manager
+                        .ensure_cloned()
+                        .expect("Failed to ensure overlay repo is cloned");
                     manager.path().join(&org).join(&repo).join(&overlay_name)
                 } else {
                     // Couldn't detect target, fall back to local
