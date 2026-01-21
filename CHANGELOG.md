@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/tylerbutler/repoverlay/compare/v0.1.4...v0.1.5) - 2026-01-21
+
+### Other
+
+- simplify state format using sickle's improved serde support ([#11](https://github.com/tylerbutler/repoverlay/pull/11))
+- improve documentation structure and clarity ([#10](https://github.com/tylerbutler/repoverlay/pull/10))
+- document decision to use git CLI over git library
+- extract library crate and reorganize tests ([#8](https://github.com/tylerbutler/repoverlay/pull/8))
+
 ## [0.1.4](https://github.com/tylerbutler/repoverlay/compare/v0.1.3...v0.1.4) - 2026-01-15
 
 ### Added
