@@ -9,6 +9,14 @@ homepage = "https://github.com/tylerbutler/repoverlay"
 keywords = ["git", "overlay", "config", "symlink"]
 categories = ["command-line-utilities", "development-tools"]
 
+[lib]
+name = "repoverlay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "repoverlay"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

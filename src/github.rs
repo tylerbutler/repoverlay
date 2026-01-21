@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::PathBuf;
+use std::str::FromStr;
 use url::Url;
 
 /// Parsed GitHub URL components.
@@ -70,7 +71,7 @@ impl GitHubSource {
                     None
                 };
 
-                (GitRef::from_str(ref_str), subpath)
+                (ref_str.parse().unwrap(), subpath)
             } else if segments[2] == "blob" {
                 // User pasted a file URL instead of tree URL
                 bail!(
@@ -129,28 +130,32 @@ impl GitHubSource {
     /// Apply a ref override from CLI.
     pub fn with_ref_override(mut self, ref_override: Option<&str>) -> Self {
         if let Some(ref_str) = ref_override {
-            self.git_ref = GitRef::from_str(ref_str);
+            self.git_ref = ref_str.parse().unwrap();
         }
         self
     }
 }
 
-impl GitRef {
+impl FromStr for GitRef {
+    type Err = std::convert::Infallible;
+
     /// Parse a ref string into the appropriate type.
     ///
     /// Heuristics:
     /// - 40 hex chars = commit SHA
     /// - Otherwise = branch name (can't distinguish branch from tag at parse time)
-    pub fn from_str(s: &str) -> Self {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-            GitRef::Commit(s.to_string())
+            Ok(GitRef::Commit(s.to_string()))
         } else {
             // Cannot distinguish branch from tag at parse time
             // Git will resolve it during clone/checkout
-            GitRef::Branch(s.to_string())
+            Ok(GitRef::Branch(s.to_string()))
         }
     }
+}
 
+impl GitRef {
     /// Get the ref as a string for display and storage.
     pub fn as_str(&self) -> &str {
         match self {
@@ -429,31 +434,31 @@ mod tests {
     #[test]
     fn test_git_ref_from_str_branch() {
         // Non-40 hex char string should be parsed as branch
-        let git_ref = GitRef::from_str("main");
+        let git_ref: GitRef = "main".parse().unwrap();
         assert_eq!(git_ref, GitRef::Branch("main".to_string()));
 
-        let git_ref = GitRef::from_str("feature-branch");
+        let git_ref: GitRef = "feature-branch".parse().unwrap();
         assert_eq!(git_ref, GitRef::Branch("feature-branch".to_string()));
     }
 
     #[test]
     fn test_git_ref_from_str_commit() {
         // Exactly 40 hex chars should be parsed as commit
-        let git_ref = GitRef::from_str("abcd1234abcd1234abcd1234abcd1234abcd1234");
+        let git_ref: GitRef = "abcd1234abcd1234abcd1234abcd1234abcd1234".parse().unwrap();
         assert!(matches!(git_ref, GitRef::Commit(_)));
     }
 
     #[test]
     fn test_git_ref_from_str_not_commit_wrong_length() {
         // Less than 40 chars should not be commit
-        let git_ref = GitRef::from_str("abc123");
+        let git_ref: GitRef = "abc123".parse().unwrap();
         assert!(matches!(git_ref, GitRef::Branch(_)));
     }
 
     #[test]
     fn test_git_ref_from_str_not_commit_non_hex() {
         // 40 chars but not all hex should not be commit
-        let git_ref = GitRef::from_str("ghijklmnopqrstuvwxyz1234567890abcdefghij");
+        let git_ref: GitRef = "ghijklmnopqrstuvwxyz1234567890abcdefghij".parse().unwrap();
         assert!(matches!(git_ref, GitRef::Branch(_)));
     }
 
