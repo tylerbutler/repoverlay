@@ -27,40 +27,12 @@ cargo test apply::applies_single_file  # Run specific test module::test_name
 
 ## Architecture Overview
 
-repoverlay is a CLI tool that overlays config files into git repositories without committing them. It supports both local overlays and GitHub repository overlays.
-
-### Module Structure
-
-- **`src/main.rs`** - CLI entry point using clap. Contains the core command handlers (`apply_overlay`, `remove_overlay`, `show_status`, `restore_overlays`, `update_overlays`, `create_overlay`, `switch_overlay`) and git exclude file management.
-
-- **`src/state.rs`** - State persistence layer. Manages overlay state in two locations:
-  - In-repo: `.repoverlay/overlays/<name>.toml` - tracks applied overlays
-  - External: `~/.local/share/repoverlay/applied/` - backup for recovery after `git clean`
-
-- **`src/github.rs`** - GitHub URL parsing. Handles URL formats like `https://github.com/owner/repo/tree/branch/subpath` and extracts owner, repo, ref, and subpath components.
-
-- **`src/cache.rs`** - GitHub repository caching. Manages cloned repos in `~/.cache/repoverlay/github/owner/repo/`. Supports shallow clones and update checking.
-
-### Key Data Flow
-
-1. **Apply**: Source (local path or GitHub URL) -> `resolve_source()` -> files walked -> symlinks/copies created -> state saved -> git exclude updated
-2. **Remove**: Load state -> remove files -> clean empty dirs -> update git exclude -> remove state
-3. **Restore**: Load external state backup -> re-apply overlays (for recovery after `git clean`)
-4. **Create**: Source repo -> validate include paths -> copy files to output dir -> generate `repoverlay.toml`
-5. **Switch**: Remove all existing overlays -> apply new overlay (atomic replacement)
-
-### State File Format
-
-Overlay state is stored as TOML with source information (local path or GitHub metadata), applied timestamp, and file entries (source path, target path, link type).
-
-### Git Integration
-
-Overlay files are excluded from git tracking via `.git/info/exclude` using named sections:
-```
-# repoverlay:<overlay-name> start
-.envrc
-# repoverlay:<overlay-name> end
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation including:
+- Module structure and responsibilities
+- Data flow diagrams for each operation
+- State file format
+- Git integration details
+- Caching strategy
 
 ## Testing
 

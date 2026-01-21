@@ -1,8 +1,21 @@
 # repoverlay
 
-Overlay config files into git repositories without committing them.
+Apply configuration files to git repositories without committing them.
 
-repoverlay creates symlinks (or copies) of configuration files from an overlay source into your git repository, automatically excluding them from version control. This lets you maintain personal configuration (editor settings, environment files, local scripts) that stays out of the project history.
+Files are symlinked (or copied with `--copy`) from overlay sources and automatically excluded from git tracking via `.git/info/exclude`.
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Apply overlay | `repoverlay apply <source>` |
+| Check status | `repoverlay status` |
+| Remove overlay | `repoverlay remove <name>` |
+| Remove all | `repoverlay remove --all` |
+| Update from GitHub | `repoverlay update` |
+| Restore after git clean | `repoverlay restore` |
+| Create overlay | `repoverlay create --include <path> --output <dir>` |
+| Switch overlays | `repoverlay switch <source>` |
 
 ## Installation
 
@@ -38,31 +51,6 @@ cd repoverlay
 cargo install --path .
 ```
 
-## Quick Start
-
-```bash
-# Apply a local overlay directory
-repoverlay apply ./my-overlay
-
-# Apply from a GitHub repository
-repoverlay apply https://github.com/owner/repo
-
-# Apply from a subdirectory of a GitHub repo
-repoverlay apply https://github.com/owner/repo/tree/main/overlays/rust
-
-# Check status
-repoverlay status
-
-# Remove an overlay
-repoverlay remove my-overlay
-
-# Create an overlay from files in current repo
-repoverlay create --include .claude/ --output ~/overlays/my-ai-config
-
-# Switch to a different overlay (removes existing, applies new)
-repoverlay switch ~/overlays/other-config
-```
-
 ## Usage
 
 ### Apply an overlay
@@ -81,109 +69,67 @@ repoverlay apply https://github.com/owner/repo --ref develop
 # From a subdirectory within a repo
 repoverlay apply https://github.com/owner/repo/tree/main/overlays/rust
 
-# Apply to a specific target directory
-repoverlay apply ./overlay --target /path/to/repo
-
-# Use copy mode instead of symlinks
-repoverlay apply ./overlay --copy
-
-# Give the overlay a custom name
-repoverlay apply ./overlay --name my-config
+# Options
+repoverlay apply ./overlay --target /path/to/repo  # Apply to specific directory
+repoverlay apply ./overlay --copy                   # Copy instead of symlink
+repoverlay apply ./overlay --name my-config         # Custom overlay name
 ```
 
 ### Remove overlays
 
 ```bash
-# Interactive removal (lists applied overlays)
-repoverlay remove
-
-# Remove a specific overlay by name
-repoverlay remove my-overlay
-
-# Remove all overlays
-repoverlay remove --all
+repoverlay remove              # Interactive (lists applied overlays)
+repoverlay remove my-overlay   # Remove specific overlay
+repoverlay remove --all        # Remove all overlays
 ```
 
 ### Check status
 
 ```bash
-# Show all applied overlays
-repoverlay status
-
-# Show a specific overlay
-repoverlay status --name my-overlay
+repoverlay status                  # Show all applied overlays
+repoverlay status --name my-overlay # Show specific overlay
 ```
 
 ### Update GitHub overlays
 
 ```bash
-# Check for and apply updates to all GitHub overlays
-repoverlay update
-
-# Check without applying
-repoverlay update --dry-run
-
-# Update a specific overlay
-repoverlay update my-overlay
+repoverlay update              # Check and apply updates to all GitHub overlays
+repoverlay update --dry-run    # Check without applying
+repoverlay update my-overlay   # Update specific overlay
 ```
 
 ### Restore after git clean
 
-If you run `git clean -fdx` and lose your overlay files, restore them:
-
 ```bash
-repoverlay restore
-
-# Preview what would be restored
-repoverlay restore --dry-run
+repoverlay restore             # Restore overlays from external backup
+repoverlay restore --dry-run   # Preview what would be restored
 ```
 
 ### Create overlays from existing repos
 
-Extract files from an existing repository to create a new overlay:
-
 ```bash
-# Create an overlay with specific files
 repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-ai-config
-
-# Preview what would be created
-repoverlay create --include .claude/ --output ~/overlays/test --dry-run
-
-# Specify a custom overlay name
 repoverlay create --include .envrc --output ~/overlays/env --name my-env-config
+repoverlay create --include .claude/ --output ~/overlays/test --dry-run  # Preview
 ```
 
 ### Switch overlays
 
-Replace all existing overlays with a new one (useful for switching between AI agent configurations):
+Replace all existing overlays with a new one:
 
 ```bash
-# Switch to a different overlay (removes all existing, applies new)
 repoverlay switch ~/overlays/typescript-ai
-
-# Switch to a GitHub-hosted overlay
 repoverlay switch https://github.com/user/ai-configs/tree/main/rust
-
-# Switch with custom name
 repoverlay switch ~/overlays/new-config --name my-config
 ```
 
 ### Manage cache
 
-GitHub repositories are cached locally to avoid repeated downloads:
-
 ```bash
-# List cached repositories
-repoverlay cache list
-
-# Show cache location
-repoverlay cache path
-
-# Clear entire cache
-repoverlay cache clear
-
-# Remove a specific cached repo
-repoverlay cache remove owner/repo
+repoverlay cache list           # List cached repositories
+repoverlay cache path           # Show cache location
+repoverlay cache clear          # Clear entire cache
+repoverlay cache remove owner/repo  # Remove specific cached repo
 ```
 
 ## Overlay Configuration
@@ -202,28 +148,6 @@ description = "Personal development configuration"
 ```
 
 Without a config file, all files in the overlay directory are symlinked with the same relative path.
-
-## How It Works
-
-1. **Symlinks (default)**: Files are symlinked from the overlay source to the target repository. Changes to the source are immediately reflected.
-
-2. **Copies (`--copy`)**: Files are copied instead. Useful when the source might move or on systems without symlink support.
-
-3. **Git exclusion**: Applied files are automatically added to `.git/info/exclude`, keeping them out of version control without modifying `.gitignore`.
-
-4. **State tracking**: Overlay state is stored in `.repoverlay/` within the repository and backed up externally for recovery.
-
-## Multiple Overlays
-
-You can apply multiple overlays to the same repository:
-
-```bash
-repoverlay apply ./editor-config --name editor
-repoverlay apply ./env-files --name env
-repoverlay apply https://github.com/team/shared-config --name team
-```
-
-Each overlay's files must be unique - conflicts between overlays or with existing files will be rejected.
 
 ## License
 
