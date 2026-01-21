@@ -8,9 +8,33 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use crate::github::{GitHubSource, GitRef};
+
+/// Execute a git command in a directory and return the output.
+fn git_in_dir(repo_path: &Path, args: &[&str]) -> Result<Output> {
+    Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        .output()
+        .with_context(|| format!("Failed to execute git {}", args.first().unwrap_or(&"")))
+}
+
+/// Execute a git command in a directory and check for success.
+fn git_run(repo_path: &Path, args: &[&str]) -> Result<()> {
+    let output = git_in_dir(repo_path, args)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "git {} failed: {}",
+            args.first().unwrap_or(&""),
+            stderr.trim()
+        )
+    }
+}
 
 /// Metadata about a cached repository.
 #[derive(Debug, Deserialize, Serialize)]
@@ -170,18 +194,7 @@ impl CacheManager {
 
     /// Update an existing cached repository.
     fn update_repo(&self, repo_path: &Path) -> Result<()> {
-        let output = Command::new("git")
-            .args(["fetch", "--depth", "1", "origin"])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to execute git fetch")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to fetch updates: {}", stderr.trim());
-        }
-
-        Ok(())
+        git_run(repo_path, &["fetch", "--depth", "1", "origin"]).context("Failed to fetch updates")
     }
 
     /// Checkout a specific ref.
@@ -206,90 +219,36 @@ impl CacheManager {
 
     /// Check if a ref exists in the repository.
     fn ref_exists(&self, repo_path: &Path, ref_spec: &str) -> Result<bool> {
-        let output = Command::new("git")
-            .args(["rev-parse", "--verify", ref_spec])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to execute git rev-parse")?;
-
+        let output = git_in_dir(repo_path, &["rev-parse", "--verify", ref_spec])?;
         Ok(output.status.success())
     }
 
     /// Perform the actual checkout.
     fn do_checkout(&self, repo_path: &Path, ref_spec: &str) -> Result<()> {
-        let output = Command::new("git")
-            .args(["checkout", ref_spec])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to execute git checkout")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to checkout {}: {}", ref_spec, stderr.trim());
-        }
-
-        Ok(())
+        git_run(repo_path, &["checkout", ref_spec])
+            .with_context(|| format!("Failed to checkout {}", ref_spec))
     }
 
     /// Fetch a specific commit.
     fn fetch_commit(&self, repo_path: &Path, sha: &str) -> Result<()> {
-        // First, unshallow if needed to access the commit
-        let output = Command::new("git")
-            .args(["fetch", "--unshallow", "origin"])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to execute git fetch --unshallow")?;
-
-        // Ignore errors from unshallow (might already be complete)
-        let _ = output;
+        // First, unshallow if needed to access the commit (ignore errors - might already be complete)
+        let _ = git_in_dir(repo_path, &["fetch", "--unshallow", "origin"]);
 
         // Fetch the specific commit
-        let output = Command::new("git")
-            .args(["fetch", "origin", sha])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to execute git fetch")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!(
-                "Failed to fetch commit {}: {}",
-                &sha[..12.min(sha.len())],
-                stderr.trim()
-            );
-        }
+        git_run(repo_path, &["fetch", "origin", sha])
+            .with_context(|| format!("Failed to fetch commit {}", &sha[..12.min(sha.len())]))?;
 
         // Checkout the commit
-        let output = Command::new("git")
-            .args(["checkout", sha])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to execute git checkout")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!(
-                "Failed to checkout commit {}: {}",
-                &sha[..12.min(sha.len())],
-                stderr.trim()
-            );
-        }
-
-        Ok(())
+        git_run(repo_path, &["checkout", sha])
+            .with_context(|| format!("Failed to checkout commit {}", &sha[..12.min(sha.len())]))
     }
 
     /// Get the current commit SHA.
     fn get_current_commit(&self, repo_path: &Path) -> Result<String> {
-        let output = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(repo_path)
-            .output()
-            .context("Failed to execute git rev-parse")?;
-
+        let output = git_in_dir(repo_path, &["rev-parse", "HEAD"])?;
         if !output.status.success() {
             bail!("Failed to get current commit");
         }
-
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
     }
 
@@ -409,32 +368,22 @@ impl CacheManager {
         let current_commit = self.get_current_commit(&repo_path)?;
 
         // Fetch latest
-        let output = Command::new("git")
-            .args(["fetch", "--depth", "1", "origin"])
-            .current_dir(&repo_path)
-            .output()
-            .context("Failed to fetch")?;
-
+        let output = git_in_dir(&repo_path, &["fetch", "--depth", "1", "origin"])?;
         if !output.status.success() {
             return Ok(None);
         }
 
         // Get the remote HEAD commit
         let ref_spec = match &source.git_ref {
-            GitRef::Default => "origin/HEAD",
-            GitRef::Branch(b) => &format!("origin/{}", b),
+            GitRef::Default => "origin/HEAD".to_string(),
+            GitRef::Branch(b) => format!("origin/{}", b),
             GitRef::Tag(_) | GitRef::Commit(_) => {
                 // Tags and commits don't have "updates"
                 return Ok(None);
             }
         };
 
-        let output = Command::new("git")
-            .args(["rev-parse", ref_spec])
-            .current_dir(&repo_path)
-            .output()
-            .context("Failed to get remote commit")?;
-
+        let output = git_in_dir(&repo_path, &["rev-parse", &ref_spec])?;
         if !output.status.success() {
             return Ok(None);
         }
