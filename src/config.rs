@@ -5,7 +5,6 @@
 //! Per-repo config: `.repoverlay/config.ccl`
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,12 +30,18 @@ pub struct OverlayRepoConfig {
 
 /// Get the global config directory path.
 ///
-/// Returns `~/.config/repoverlay/` on Linux/macOS.
+/// Returns `~/.config/repoverlay/` on all Unix-like systems.
+/// Respects `XDG_CONFIG_HOME` if set.
 pub fn config_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("", "", "repoverlay")
-        .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+    let base = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg)
+    } else {
+        dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?
+            .join(".config")
+    };
 
-    Ok(proj_dirs.config_dir().to_path_buf())
+    Ok(base.join("repoverlay"))
 }
 
 /// Get the path to the global config file.
