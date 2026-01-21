@@ -170,10 +170,13 @@ mod tests {
     fn test_load_global_config_missing() {
         // Should return default config when file doesn't exist
         // This test relies on the config file not existing in the test environment
+        // Skip assertion if a user's config already exists, as it may have overlay_repo set
         let config = load_global_config();
-        // May fail if config exists, but that's okay
         if let Ok(cfg) = config {
-            assert!(cfg.overlay_repo.is_none());
+            // Only assert if no global config file exists (i.e., we got defaults)
+            if !global_config_path().is_ok_and(|p| p.exists()) {
+                assert!(cfg.overlay_repo.is_none());
+            }
         }
     }
 
