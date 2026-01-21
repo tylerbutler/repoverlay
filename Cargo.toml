@@ -1,6 +1,6 @@
 [package]
 name = "repoverlay"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "Overlay config files into git repositories without committing them"
 license = "MIT"
