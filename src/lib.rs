@@ -1085,10 +1085,7 @@ pub fn create_overlay(
                     .iter()
                     .map(|f| format!("--include {}", f.path.display()))
                     .collect();
-                println!(
-                    "  repoverlay create my-overlay {}",
-                    includes.join(" ")
-                );
+                println!("  repoverlay create my-overlay {}", includes.join(" "));
             }
             return Ok(());
         }
