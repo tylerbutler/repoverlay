@@ -1471,3 +1471,376 @@ pub fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
         bail!("Could not parse git remote URL: {}", url)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    // Helper to create a test git repository
+    fn create_test_repo() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .expect("Failed to init git repo");
+        dir
+    }
+
+    // Tests for parse_github_owner_repo
+    mod parse_github_owner_repo_tests {
+        use super::*;
+
+        #[test]
+        fn parses_https_url() {
+            let result = parse_github_owner_repo("https://github.com/owner/repo").unwrap();
+            assert_eq!(result, ("owner".to_string(), "repo".to_string()));
+        }
+
+        #[test]
+        fn parses_https_url_with_git_suffix() {
+            let result = parse_github_owner_repo("https://github.com/owner/repo.git").unwrap();
+            assert_eq!(result, ("owner".to_string(), "repo".to_string()));
+        }
+
+        #[test]
+        fn parses_ssh_url() {
+            let result = parse_github_owner_repo("git@github.com:owner/repo").unwrap();
+            assert_eq!(result, ("owner".to_string(), "repo".to_string()));
+        }
+
+        #[test]
+        fn parses_ssh_url_with_git_suffix() {
+            let result = parse_github_owner_repo("git@github.com:owner/repo.git").unwrap();
+            assert_eq!(result, ("owner".to_string(), "repo".to_string()));
+        }
+
+        #[test]
+        fn parses_http_url() {
+            let result = parse_github_owner_repo("http://github.com/owner/repo").unwrap();
+            assert_eq!(result, ("owner".to_string(), "repo".to_string()));
+        }
+
+        #[test]
+        fn handles_url_with_extra_path() {
+            let result =
+                parse_github_owner_repo("https://github.com/owner/repo/tree/main/path").unwrap();
+            assert_eq!(result, ("owner".to_string(), "repo".to_string()));
+        }
+
+        #[test]
+        fn fails_on_non_github_url() {
+            let result = parse_github_owner_repo("https://gitlab.com/owner/repo");
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Non-GitHub"));
+        }
+
+        #[test]
+        fn fails_on_empty_owner() {
+            let result = parse_github_owner_repo("https://github.com//repo");
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn fails_on_empty_repo() {
+            let result = parse_github_owner_repo("https://github.com/owner/");
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn fails_on_malformed_url() {
+            let result = parse_github_owner_repo("https://github.com/onlyowner");
+            assert!(result.is_err());
+        }
+    }
+
+    // Tests for any_overlay_sections_remain
+    mod any_overlay_sections_remain_tests {
+        use super::*;
+
+        #[test]
+        fn returns_false_for_empty_content() {
+            assert!(!any_overlay_sections_remain(""));
+        }
+
+        #[test]
+        fn returns_false_for_no_sections() {
+            let content = "*.log\n.DS_Store\n";
+            assert!(!any_overlay_sections_remain(content));
+        }
+
+        #[test]
+        fn returns_false_for_only_managed_section() {
+            let content =
+                "# repoverlay:managed start\n.repoverlay\n# repoverlay:managed end\n";
+            assert!(!any_overlay_sections_remain(content));
+        }
+
+        #[test]
+        fn returns_true_for_overlay_section() {
+            let content =
+                "# repoverlay:my-overlay start\n.envrc\n# repoverlay:my-overlay end\n";
+            assert!(any_overlay_sections_remain(content));
+        }
+
+        #[test]
+        fn returns_true_for_overlay_plus_managed_section() {
+            let content = "# repoverlay:my-overlay start\n.envrc\n# repoverlay:my-overlay end\n\
+                           # repoverlay:managed start\n.repoverlay\n# repoverlay:managed end\n";
+            assert!(any_overlay_sections_remain(content));
+        }
+
+        #[test]
+        fn returns_true_for_multiple_overlay_sections() {
+            let content = "# repoverlay:overlay-a start\n.envrc\n# repoverlay:overlay-a end\n\
+                           # repoverlay:overlay-b start\n.env\n# repoverlay:overlay-b end\n";
+            assert!(any_overlay_sections_remain(content));
+        }
+
+        #[test]
+        fn ignores_partial_markers() {
+            // Line that starts with "# repoverlay:" but doesn't end with " start"
+            let content = "# repoverlay:something else\n";
+            assert!(!any_overlay_sections_remain(content));
+        }
+    }
+
+    // Tests for update_git_exclude
+    mod update_git_exclude_tests {
+        use super::*;
+
+        #[test]
+        fn creates_exclude_file_if_missing() {
+            let repo = create_test_repo();
+            let entries = vec![".envrc".to_string()];
+
+            update_git_exclude(repo.path(), "test-overlay", &entries, true).unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            assert!(exclude_path.exists());
+
+            let content = fs::read_to_string(&exclude_path).unwrap();
+            assert!(content.contains("# repoverlay:test-overlay start"));
+            assert!(content.contains(".envrc"));
+            assert!(content.contains("# repoverlay:test-overlay end"));
+        }
+
+        #[test]
+        fn appends_to_existing_exclude_file() {
+            let repo = create_test_repo();
+
+            // Create existing exclude content
+            let exclude_path = repo.path().join(".git/info/exclude");
+            fs::create_dir_all(exclude_path.parent().unwrap()).unwrap();
+            fs::write(&exclude_path, "*.log\n").unwrap();
+
+            let entries = vec![".envrc".to_string()];
+            update_git_exclude(repo.path(), "test-overlay", &entries, true).unwrap();
+
+            let content = fs::read_to_string(&exclude_path).unwrap();
+            assert!(content.contains("*.log"));
+            assert!(content.contains("# repoverlay:test-overlay start"));
+        }
+
+        #[test]
+        fn removes_section_when_add_is_false() {
+            let repo = create_test_repo();
+
+            // First add a section
+            let entries = vec![".envrc".to_string()];
+            update_git_exclude(repo.path(), "test-overlay", &entries, true).unwrap();
+
+            // Then remove it
+            update_git_exclude(repo.path(), "test-overlay", &entries, false).unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content = fs::read_to_string(&exclude_path).unwrap();
+            assert!(!content.contains("# repoverlay:test-overlay"));
+        }
+
+        #[test]
+        fn adds_managed_section_with_first_overlay() {
+            let repo = create_test_repo();
+            let entries = vec![".envrc".to_string()];
+
+            update_git_exclude(repo.path(), "test-overlay", &entries, true).unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content = fs::read_to_string(&exclude_path).unwrap();
+            assert!(content.contains("# repoverlay:managed start"));
+            assert!(content.contains(".repoverlay"));
+        }
+
+        #[test]
+        fn removes_managed_section_when_last_overlay_removed() {
+            let repo = create_test_repo();
+
+            // Add an overlay
+            let entries = vec![".envrc".to_string()];
+            update_git_exclude(repo.path(), "test-overlay", &entries, true).unwrap();
+
+            // Remove it
+            update_git_exclude(repo.path(), "test-overlay", &entries, false).unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content = fs::read_to_string(&exclude_path).unwrap();
+            assert!(!content.contains("# repoverlay:managed"));
+        }
+    }
+
+    // Tests for validate_git_repo
+    mod validate_git_repo_tests {
+        use super::*;
+
+        #[test]
+        fn succeeds_on_git_repo() {
+            let repo = create_test_repo();
+            assert!(validate_git_repo(repo.path()).is_ok());
+        }
+
+        #[test]
+        fn fails_on_non_git_directory() {
+            let dir = TempDir::new().unwrap();
+            let result = validate_git_repo(dir.path());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("not a git repository"));
+        }
+    }
+
+    // Tests for canonicalize_path
+    mod canonicalize_path_tests {
+        use super::*;
+
+        #[test]
+        fn succeeds_on_existing_path() {
+            let dir = TempDir::new().unwrap();
+            let result = canonicalize_path(dir.path(), "Test directory");
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn fails_on_nonexistent_path() {
+            let result = canonicalize_path(Path::new("/nonexistent/path/12345"), "Test path");
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("not found"));
+        }
+    }
+
+    // Tests for copy_files_to_overlay
+    mod copy_files_to_overlay_tests {
+        use super::*;
+
+        #[test]
+        fn copies_single_file() {
+            let source = TempDir::new().unwrap();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join("file.txt"), "content").unwrap();
+
+            let copied = copy_files_to_overlay(
+                source.path(),
+                output.path(),
+                &[PathBuf::from("file.txt")],
+            )
+            .unwrap();
+
+            assert_eq!(copied.len(), 1);
+            assert!(output.path().join("file.txt").exists());
+        }
+
+        #[test]
+        fn copies_directory_recursively() {
+            let source = TempDir::new().unwrap();
+            let output = TempDir::new().unwrap();
+
+            fs::create_dir_all(source.path().join("dir/subdir")).unwrap();
+            fs::write(source.path().join("dir/file1.txt"), "content1").unwrap();
+            fs::write(source.path().join("dir/subdir/file2.txt"), "content2").unwrap();
+
+            let copied = copy_files_to_overlay(
+                source.path(),
+                output.path(),
+                &[PathBuf::from("dir")],
+            )
+            .unwrap();
+
+            assert_eq!(copied.len(), 2);
+            assert!(output.path().join("dir/file1.txt").exists());
+            assert!(output.path().join("dir/subdir/file2.txt").exists());
+        }
+
+        #[test]
+        fn creates_parent_directories() {
+            let source = TempDir::new().unwrap();
+            let output = TempDir::new().unwrap();
+
+            fs::create_dir_all(source.path().join("deep/nested")).unwrap();
+            fs::write(source.path().join("deep/nested/file.txt"), "content").unwrap();
+
+            copy_files_to_overlay(
+                source.path(),
+                output.path(),
+                &[PathBuf::from("deep/nested/file.txt")],
+            )
+            .unwrap();
+
+            assert!(output.path().join("deep/nested/file.txt").exists());
+        }
+    }
+
+    // Tests for generate_overlay_config
+    mod generate_overlay_config_tests {
+        use super::*;
+
+        #[test]
+        fn includes_overlay_name() {
+            let config = generate_overlay_config("my-overlay");
+            assert!(config.contains("name = my-overlay"));
+        }
+
+        #[test]
+        fn includes_commented_mappings() {
+            let config = generate_overlay_config("test");
+            assert!(config.contains("/= mappings"));
+        }
+
+        #[test]
+        fn generates_valid_ccl() {
+            let config = generate_overlay_config("test-name");
+            // Basic structure check
+            assert!(config.contains("overlay ="));
+        }
+    }
+
+    // Tests for remove_overlay_section (additional edge cases)
+    mod remove_overlay_section_additional_tests {
+        use super::*;
+
+        #[test]
+        fn handles_windows_line_endings() {
+            let content = "*.log\r\n# repoverlay:test start\r\n.envrc\r\n# repoverlay:test end\r\n.DS_Store\r\n";
+            let result = remove_overlay_section(content, "test");
+            // Should still work even though line endings differ
+            assert!(!result.contains("repoverlay:test"));
+        }
+
+        #[test]
+        fn handles_whitespace_around_markers() {
+            let content = "  # repoverlay:test start  \n.envrc\n  # repoverlay:test end  \n";
+            let result = remove_overlay_section(content, "test");
+            assert!(!result.contains(".envrc"));
+        }
+
+        #[test]
+        fn preserves_content_before_and_after() {
+            let content = "before\n# repoverlay:test start\n.envrc\n# repoverlay:test end\nafter\n";
+            let result = remove_overlay_section(content, "test");
+            assert!(result.contains("before"));
+            assert!(result.contains("after"));
+            assert!(!result.contains(".envrc"));
+        }
+    }
+}

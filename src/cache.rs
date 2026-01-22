@@ -644,4 +644,367 @@ mod tests {
         assert_eq!(repos.len(), 1);
         assert_eq!(repos[0].owner, "owner");
     }
+
+    #[test]
+    fn test_check_for_updates_nonexistent_repo() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+        let result = manager.check_for_updates(&source).unwrap();
+
+        // Should return None for non-existent repo
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_check_for_updates_tag_returns_none() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a fake cached repo
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        // Initialize as git repo
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Configure git user for commit
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Create an initial commit
+        fs::write(repo_path.join("file.txt"), "content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Parse as tag source - tags don't have "updates"
+        let source = GitHubSource {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            git_ref: GitRef::Tag("v1.0.0".to_string()),
+            subpath: None,
+        };
+
+        let result = manager.check_for_updates(&source).unwrap();
+        // Tags don't have updates, should return None
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_check_for_updates_commit_returns_none() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a fake cached repo
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        // Initialize as git repo
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Configure git user for commit
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Create an initial commit
+        fs::write(repo_path.join("file.txt"), "content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Parse as commit source - commits don't have "updates"
+        let source = GitHubSource {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            git_ref: GitRef::Commit("abc123def456".to_string()),
+            subpath: None,
+        };
+
+        let result = manager.check_for_updates(&source).unwrap();
+        // Commits don't have updates, should return None
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_meta_returns_none_for_missing_file() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a repo directory without metadata
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let meta = manager.load_meta(&repo_path);
+        assert!(meta.is_none());
+    }
+
+    #[test]
+    fn test_load_meta_returns_none_for_invalid_content() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a repo directory with invalid metadata
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+        fs::write(
+            repo_path.join(".repoverlay-cache-meta.ccl"),
+            "invalid { not valid ccl",
+        )
+        .unwrap();
+
+        let meta = manager.load_meta(&repo_path);
+        assert!(meta.is_none());
+    }
+
+    #[test]
+    fn test_save_and_load_meta_roundtrip() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a repo directory
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let source = GitHubSource {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            git_ref: GitRef::Branch("main".to_string()),
+            subpath: None,
+        };
+
+        // Save metadata
+        manager
+            .save_meta(&repo_path, &source, "abc123def456")
+            .unwrap();
+
+        // Load and verify
+        let meta = manager.load_meta(&repo_path).unwrap();
+        assert_eq!(meta.commit, "abc123def456");
+        assert_eq!(meta.requested_ref, "main");
+        assert!(meta.clone_url.contains("github.com"));
+    }
+
+    #[test]
+    fn test_get_current_commit_fails_on_non_git_dir() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a directory that is not a git repo
+        let non_git_path = temp.path().join("not-a-repo");
+        fs::create_dir_all(&non_git_path).unwrap();
+
+        let result = manager.get_current_commit(&non_git_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_current_commit_succeeds_on_git_repo() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a git repo with a commit
+        let repo_path = temp.path().join("repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        fs::write(repo_path.join("file.txt"), "content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        let result = manager.get_current_commit(&repo_path);
+        assert!(result.is_ok());
+        let commit = result.unwrap();
+        assert_eq!(commit.len(), 40); // SHA-1 hash is 40 hex chars
+    }
+
+    #[test]
+    fn test_ref_exists_returns_true_for_existing_ref() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a git repo with a commit
+        let repo_path = temp.path().join("repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        fs::write(repo_path.join("file.txt"), "content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // HEAD should exist
+        let result = manager.ref_exists(&repo_path, "HEAD").unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn test_ref_exists_returns_false_for_nonexistent_ref() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a git repo with a commit
+        let repo_path = temp.path().join("repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        fs::write(repo_path.join("file.txt"), "content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // This branch doesn't exist
+        let result = manager.ref_exists(&repo_path, "origin/nonexistent-branch").unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_list_cached_skips_files_in_owner_directory() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create owner directory with a file instead of repo dir
+        let owner_dir = temp.path().join("github/owner");
+        fs::create_dir_all(&owner_dir).unwrap();
+        fs::write(owner_dir.join("not-a-repo.txt"), "content").unwrap();
+
+        // Also create a real repo
+        let repo_path = temp.path().join("github/owner/real-repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let repos = manager.list_cached().unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].repo, "real-repo");
+    }
 }

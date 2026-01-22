@@ -2386,6 +2386,194 @@ mod tests {
         }
     }
 
+    // Unit tests for parse_overlay_name_arg
+    mod parse_overlay_name_arg_tests {
+        use super::*;
+
+        #[test]
+        fn parses_full_form_org_repo_name() {
+            let source = create_test_repo();
+
+            // Add a git remote so we have a valid git repo
+            Command::new("git")
+                .args(["config", "user.email", "test@test.com"])
+                .current_dir(source.path())
+                .output()
+                .unwrap();
+            Command::new("git")
+                .args(["config", "user.name", "Test"])
+                .current_dir(source.path())
+                .output()
+                .unwrap();
+
+            let result = parse_overlay_name_arg("myorg/myrepo/my-overlay", source.path());
+            assert!(result.is_ok());
+            let (org, repo, name) = result.unwrap();
+            assert_eq!(org, "myorg");
+            assert_eq!(repo, "myrepo");
+            assert_eq!(name, "my-overlay");
+        }
+
+        #[test]
+        fn fails_on_invalid_single_slash() {
+            let source = create_test_repo();
+            let result = parse_overlay_name_arg("org/name", source.path());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Invalid"));
+        }
+
+        #[test]
+        fn fails_on_too_many_slashes() {
+            let source = create_test_repo();
+            let result = parse_overlay_name_arg("a/b/c/d", source.path());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Invalid"));
+        }
+
+        #[test]
+        fn fails_on_empty_parts_in_full_form() {
+            let source = create_test_repo();
+
+            // Empty org
+            let result = parse_overlay_name_arg("/repo/name", source.path());
+            assert!(result.is_err());
+
+            // Empty repo
+            let result = parse_overlay_name_arg("org//name", source.path());
+            assert!(result.is_err());
+
+            // Empty name
+            let result = parse_overlay_name_arg("org/repo/", source.path());
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn short_form_requires_git_remote() {
+            let source = create_test_repo();
+            // No remote configured, should fail
+            let result = parse_overlay_name_arg("my-overlay", source.path());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Could not detect"));
+        }
+
+        #[test]
+        fn short_form_works_with_github_remote() {
+            let source = create_test_repo();
+
+            // Configure git
+            Command::new("git")
+                .args(["config", "user.email", "test@test.com"])
+                .current_dir(source.path())
+                .output()
+                .unwrap();
+            Command::new("git")
+                .args(["config", "user.name", "Test"])
+                .current_dir(source.path())
+                .output()
+                .unwrap();
+
+            // Add a GitHub remote
+            Command::new("git")
+                .args(["remote", "add", "origin", "https://github.com/testorg/testrepo.git"])
+                .current_dir(source.path())
+                .output()
+                .unwrap();
+
+            let result = parse_overlay_name_arg("my-overlay", source.path());
+            assert!(result.is_ok());
+            let (org, repo, name) = result.unwrap();
+            assert_eq!(org, "testorg");
+            assert_eq!(repo, "testrepo");
+            assert_eq!(name, "my-overlay");
+        }
+    }
+
+    // Unit tests for detect_target_repo
+    mod detect_target_repo_tests {
+        use super::*;
+
+        #[test]
+        fn fails_without_remote() {
+            let repo = create_test_repo();
+            let result = detect_target_repo(repo.path());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Could not detect"));
+        }
+
+        #[test]
+        fn detects_https_github_remote() {
+            let repo = create_test_repo();
+
+            Command::new("git")
+                .args(["remote", "add", "origin", "https://github.com/owner/repo.git"])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_repo(repo.path());
+            assert!(result.is_ok());
+            let (org, name) = result.unwrap();
+            assert_eq!(org, "owner");
+            assert_eq!(name, "repo");
+        }
+
+        #[test]
+        fn detects_ssh_github_remote() {
+            let repo = create_test_repo();
+
+            Command::new("git")
+                .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_repo(repo.path());
+            assert!(result.is_ok());
+            let (org, name) = result.unwrap();
+            assert_eq!(org, "owner");
+            assert_eq!(name, "repo");
+        }
+
+        #[test]
+        fn fails_for_non_github_remote() {
+            let repo = create_test_repo();
+
+            Command::new("git")
+                .args(["remote", "add", "origin", "https://gitlab.com/owner/repo.git"])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_repo(repo.path());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Non-GitHub"));
+        }
+    }
+
+    // Unit tests for handle_cache_command edge cases
+    mod cache_command_tests {
+        use super::*;
+
+        #[test]
+        fn cache_remove_fails_on_invalid_format() {
+            // Invalid format (no slash)
+            let result = handle_cache_command(CacheCommand::Remove {
+                repo: "invalid".to_string(),
+            });
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Invalid repository format"));
+        }
+
+        #[test]
+        fn cache_remove_fails_on_too_many_slashes() {
+            let result = handle_cache_command(CacheCommand::Remove {
+                repo: "a/b/c".to_string(),
+            });
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Invalid repository format"));
+        }
+    }
+
     // Integration tests for switch command
     mod switch {
         use super::*;
