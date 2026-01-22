@@ -14,7 +14,8 @@ Files are symlinked (or copied with `--copy`) from overlay sources and automatic
 | Remove all | `repoverlay remove --all` |
 | Update from GitHub | `repoverlay update` |
 | Restore after git clean | `repoverlay restore` |
-| Create overlay | `repoverlay create --include <path> --output <dir>` |
+| Create overlay | `repoverlay create <name>` |
+| Sync changes back | `repoverlay sync <name>` |
 | Switch overlays | `repoverlay switch <source>` |
 
 ## Installation
@@ -69,6 +70,9 @@ repoverlay apply https://github.com/owner/repo --ref develop
 # From a subdirectory within a repo
 repoverlay apply https://github.com/owner/repo/tree/main/overlays/rust
 
+# From overlay repository
+repoverlay apply org/repo/overlay-name
+
 # Options
 repoverlay apply ./overlay --target /path/to/repo  # Apply to specific directory
 repoverlay apply ./overlay --copy                   # Copy instead of symlink
@@ -105,13 +109,41 @@ repoverlay restore             # Restore overlays from external backup
 repoverlay restore --dry-run   # Preview what would be restored
 ```
 
-### Create overlays from existing repos
+### Create overlays
+
+Create overlays and store them in the overlay repository:
 
 ```bash
-repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-ai-config
-repoverlay create --include .envrc --output ~/overlays/env --name my-env-config
-repoverlay create --include .claude/ --output ~/overlays/test --dry-run  # Preview
+# Short form: detect org/repo from git remote
+repoverlay create my-overlay                    # Creates org/repo/my-overlay
+
+# Explicit form: specify full path
+repoverlay create microsoft/vscode/ai-config   # Creates microsoft/vscode/ai-config
+
+# Include specific files
+repoverlay create my-overlay --include .claude/ --include CLAUDE.md
+
+# Local output (no overlay repo)
+repoverlay create --local ./output --include .envrc
+
+# Preview what would be created
+repoverlay create my-overlay --dry-run
+
+# Overwrite existing overlay
+repoverlay create my-overlay --force
 ```
+
+### Sync changes back
+
+After modifying files in an applied overlay, sync changes back to the overlay repo:
+
+```bash
+repoverlay sync my-overlay          # Sync changes from applied overlay
+repoverlay sync org/repo/my-overlay # Explicit path
+repoverlay sync my-overlay --dry-run # Preview what would be synced
+```
+
+Both `create` and `sync` automatically commit and push to the remote overlay repo.
 
 ### Switch overlays
 
@@ -134,17 +166,16 @@ repoverlay cache remove owner/repo  # Remove specific cached repo
 
 ## Overlay Configuration
 
-Create a `repoverlay.toml` in your overlay directory to configure it:
+Create a `repoverlay.ccl` in your overlay directory to configure it:
 
-```toml
-[overlay]
-name = "my-config"
-description = "Personal development configuration"
+```
+overlay =
+  name = my-config
 
-[mappings]
-# Rename files when applying
-".envrc.template" = ".envrc"
-"vscode-settings.json" = ".vscode/settings.json"
+mappings =
+  /= Rename files when applying
+  .envrc.template = .envrc
+  vscode-settings.json = .vscode/settings.json
 ```
 
 Without a config file, all files in the overlay directory are symlinked with the same relative path.
