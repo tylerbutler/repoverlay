@@ -18,14 +18,17 @@ use repoverlay::{
 static VERSION: LazyLock<String> = LazyLock::new(|| {
     let version = env!("CARGO_PKG_VERSION");
 
-    // Get short SHA and dirty status
+    // Get short SHA, branch, and dirty status
     let sha = option_env!("VERGEN_GIT_SHA").map(|s| &s[..7.min(s.len())]);
+    let branch = option_env!("VERGEN_GIT_BRANCH").filter(|b| *b != "main" && *b != "master");
     let dirty = option_env!("VERGEN_GIT_DIRTY") == Some("true");
 
-    match (sha, dirty) {
-        (Some(sha), true) => format!("{version} ({sha}-dirty)"),
-        (Some(sha), false) => format!("{version} ({sha})"),
-        (None, _) => version.to_string(),
+    match (sha, branch, dirty) {
+        (Some(sha), Some(branch), true) => format!("{version} ({branch} {sha}-dirty)"),
+        (Some(sha), Some(branch), false) => format!("{version} ({branch} {sha})"),
+        (Some(sha), None, true) => format!("{version} ({sha}-dirty)"),
+        (Some(sha), None, false) => format!("{version} ({sha})"),
+        (None, _, _) => version.to_string(),
     }
 });
 
