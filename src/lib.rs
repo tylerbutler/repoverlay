@@ -975,16 +975,23 @@ pub fn create_overlay(
                             .expect("Failed to ensure overlay repo is cloned");
                         let repo_root = manager.path().to_path_buf();
                         let full_path = repo_root.join(&org).join(&repo).join(&overlay_name);
-                        (
-                            full_path,
-                            Some((repo_root, org, repo, overlay_name)),
-                        )
+                        (full_path, Some((repo_root, org, repo, overlay_name)))
+                    } else {
+                        // Couldn't detect target, fall back to local
+                        eprintln!(
+                            "{} Could not detect target from git remote, using local storage.",
+                            "Warning:".yellow()
+                        );
+                        let repo_name = source
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("overlay");
+                        let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
+                            .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
+                        (proj_dirs.data_dir().join("overlays").join(repo_name), None)
+                    }
                 } else {
-                    // Couldn't detect target, fall back to local
-                    eprintln!(
-                        "{} Could not detect target from git remote, using local storage.",
-                        "Warning:".yellow()
-                    );
+                    // No overlay repo configured, use local fallback
                     let repo_name = source
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -993,31 +1000,33 @@ pub fn create_overlay(
                         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
                     (proj_dirs.data_dir().join("overlays").join(repo_name), None)
                 }
-            } else {
-                // No overlay repo configured, use local fallback
-                let repo_name = source
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("overlay");
-                let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
-                    .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-                (proj_dirs.data_dir().join("overlays").join(repo_name), None)
             }
-        }
-    };
+        };
 
     // If no includes specified, run discovery mode
     if include.is_empty() {
         // Discover files in the repository
-        print!("{} Scanning for overlay candidates...", "Discovery:".cyan().bold());
+        print!(
+            "{} Scanning for overlay candidates...",
+            "Discovery:".cyan().bold()
+        );
         std::io::Write::flush(&mut std::io::stdout())?;
 
         let discovered = detection::discover_files(source);
 
         // Show discovery summary
-        let ai_count = discovered.iter().filter(|f| f.category == detection::FileCategory::AiConfig).count();
-        let gi_count = discovered.iter().filter(|f| f.category == detection::FileCategory::Gitignored).count();
-        let ut_count = discovered.iter().filter(|f| f.category == detection::FileCategory::Untracked).count();
+        let ai_count = discovered
+            .iter()
+            .filter(|f| f.category == detection::FileCategory::AiConfig)
+            .count();
+        let gi_count = discovered
+            .iter()
+            .filter(|f| f.category == detection::FileCategory::Gitignored)
+            .count();
+        let ut_count = discovered
+            .iter()
+            .filter(|f| f.category == detection::FileCategory::Untracked)
+            .count();
         println!(
             " found {} AI, {} gitignored, {} untracked",
             selection::humanize_count(ai_count).green(),
@@ -1105,12 +1114,7 @@ pub fn create_overlay(
 
                 if let Some((repo_root, org, repo, default_name)) = &overlay_repo_info {
                     // Show overlay repo context
-                    println!(
-                        "{} {}/{}",
-                        "Target:".bold(),
-                        org.cyan(),
-                        repo.cyan()
-                    );
+                    println!("{} {}/{}", "Target:".bold(), org.cyan(), repo.cyan());
 
                     let overlay_name: String = Input::new()
                         .with_prompt("Overlay name")

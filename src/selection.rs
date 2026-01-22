@@ -672,7 +672,10 @@ fn render_file_list(stdout: &mut io::Stdout, state: &SelectionState) -> io::Resu
         execute!(
             stdout,
             SetForegroundColor(Color::DarkGrey),
-            Print(format!("  ↑ {} more above\r\n", humanize_count(state.scroll_offset))),
+            Print(format!(
+                "  ↑ {} more above\r\n",
+                humanize_count(state.scroll_offset)
+            )),
             ResetColor
         )?;
     }
