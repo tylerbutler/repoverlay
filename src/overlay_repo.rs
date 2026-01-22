@@ -608,4 +608,247 @@ mod tests {
 
         assert_eq!(result, repo_path.join("org/repo/overlay-name"));
     }
+
+    #[test]
+    fn test_overlay_repo_manager_path_getter() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path.clone()),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        assert_eq!(manager.path(), repo_path);
+    }
+
+    #[test]
+    fn test_ensure_cloned_when_already_cloned() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        // Should succeed without attempting to clone
+        assert!(manager.ensure_cloned().is_ok());
+    }
+
+    #[test]
+    fn test_list_overlays_not_cloned() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(temp.path().join("nonexistent")),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let result = manager.list_overlays();
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not cloned"));
+    }
+
+    #[test]
+    fn test_list_overlays_empty_repo() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager.list_overlays().unwrap();
+
+        assert!(overlays.is_empty());
+    }
+
+    #[test]
+    fn test_list_overlays_with_overlays() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        // Create overlay directories
+        fs::create_dir_all(repo_path.join("microsoft/FluidFramework/claude-config")).unwrap();
+        fs::create_dir_all(repo_path.join("microsoft/FluidFramework/copilot-config")).unwrap();
+        fs::create_dir_all(repo_path.join("other-org/other-repo/test-overlay")).unwrap();
+
+        // Add a config file to one overlay
+        fs::write(
+            repo_path.join("microsoft/FluidFramework/claude-config/repoverlay.ccl"),
+            "# config",
+        )
+        .unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager.list_overlays().unwrap();
+
+        assert_eq!(overlays.len(), 3);
+
+        // Should be sorted
+        assert_eq!(overlays[0].org, "microsoft");
+        assert_eq!(overlays[0].repo, "FluidFramework");
+        assert_eq!(overlays[0].name, "claude-config");
+        assert!(overlays[0].has_config);
+
+        assert_eq!(overlays[1].org, "microsoft");
+        assert_eq!(overlays[1].repo, "FluidFramework");
+        assert_eq!(overlays[1].name, "copilot-config");
+        assert!(!overlays[1].has_config);
+
+        assert_eq!(overlays[2].org, "other-org");
+        assert_eq!(overlays[2].repo, "other-repo");
+        assert_eq!(overlays[2].name, "test-overlay");
+    }
+
+    #[test]
+    fn test_list_overlays_skips_hidden_dirs() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        // Create a normal overlay and hidden directories at various levels
+        fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+        fs::create_dir_all(repo_path.join(".hidden-org/repo/overlay")).unwrap();
+        fs::create_dir_all(repo_path.join("org/.hidden-repo/overlay")).unwrap();
+        fs::create_dir_all(repo_path.join("org/repo/.hidden-overlay")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager.list_overlays().unwrap();
+
+        // Only the non-hidden overlay should be found
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0].org, "org");
+        assert_eq!(overlays[0].repo, "repo");
+        assert_eq!(overlays[0].name, "overlay");
+    }
+
+    #[test]
+    fn test_list_overlays_skips_files() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        // Create a normal overlay
+        fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+
+        // Create files at various levels that should be skipped
+        fs::write(repo_path.join("README.md"), "readme").unwrap();
+        fs::write(repo_path.join("org/README.md"), "readme").unwrap();
+        fs::write(repo_path.join("org/repo/README.md"), "readme").unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager.list_overlays().unwrap();
+
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0].name, "overlay");
+    }
+
+    #[test]
+    fn test_list_overlays_for_repo_filters_correctly() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        fs::create_dir_all(repo_path.join("microsoft/FluidFramework/claude-config")).unwrap();
+        fs::create_dir_all(repo_path.join("microsoft/FluidFramework/copilot-config")).unwrap();
+        fs::create_dir_all(repo_path.join("other-org/other-repo/test-overlay")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager
+            .list_overlays_for_repo("microsoft", "FluidFramework")
+            .unwrap();
+
+        assert_eq!(overlays.len(), 2);
+        assert!(overlays.iter().all(|o| o.org == "microsoft"));
+        assert!(overlays.iter().all(|o| o.repo == "FluidFramework"));
+    }
+
+    #[test]
+    fn test_list_overlays_for_repo_case_insensitive() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        fs::create_dir_all(repo_path.join("Microsoft/FluidFramework/overlay")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        // Search with different casing
+        let overlays = manager
+            .list_overlays_for_repo("microsoft", "fluidframework")
+            .unwrap();
+
+        assert_eq!(overlays.len(), 1);
+    }
+
+    #[test]
+    fn test_list_overlays_for_repo_no_matches() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager
+            .list_overlays_for_repo("nonexistent", "repo")
+            .unwrap();
+
+        assert!(overlays.is_empty());
+    }
+
+    #[test]
+    fn test_pull_not_cloned() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(temp.path().join("nonexistent")),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let result = manager.pull();
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not cloned"));
+    }
 }
