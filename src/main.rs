@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use repoverlay::{
     CONFIG_FILE, CacheManager, OVERLAYS_DIR, STATE_DIR, apply_overlay, canonicalize_path,
-    list_applied_overlays, parse_github_owner_repo, remove_overlay,
-    remove_single_overlay, restore_overlays, show_status, switch_overlay, update_overlays,
+    list_applied_overlays, parse_github_owner_repo, remove_overlay, remove_single_overlay,
+    restore_overlays, show_status, switch_overlay, update_overlays,
 };
 
 /// Overlay config files into git repositories without committing them
@@ -358,7 +358,9 @@ fn main() -> Result<()> {
                 "{} 'repoverlay publish' is deprecated and will be removed in a future version.",
                 "Warning:".yellow().bold()
             );
-            eprintln!("         Use 'repoverlay create <name>' instead to create overlays in the overlay repo.");
+            eprintln!(
+                "         Use 'repoverlay create <name>' instead to create overlays in the overlay repo."
+            );
             eprintln!();
 
             publish_overlay(
@@ -977,8 +979,7 @@ fn create_overlay_command(
     }
 
     // Copy files and create overlay
-    let copied_files =
-        repoverlay::copy_files_to_overlay(source, &output_path, include)?;
+    let copied_files = repoverlay::copy_files_to_overlay(source, &output_path, include)?;
 
     // Generate config
     fs::write(
@@ -1020,10 +1021,7 @@ fn auto_commit_overlay(
 
     // Check again if there are staged changes
     if !manager.has_staged_changes()? {
-        println!(
-            "{} No changes to commit.",
-            "Note:".yellow()
-        );
+        println!("{} No changes to commit.", "Note:".yellow());
         return Ok(());
     }
 
@@ -1040,14 +1038,8 @@ fn auto_commit_overlay(
         repo,
         name
     );
-    println!(
-        "\nTo push to remote: {}",
-        "repoverlay push".cyan()
-    );
-    println!(
-        "To apply: repoverlay apply {}/{}/{}",
-        org, repo, name
-    );
+    println!("\nTo push to remote: {}", "repoverlay push".cyan());
+    println!("To apply: repoverlay apply {}/{}/{}", org, repo, name);
 
     Ok(())
 }
@@ -1137,7 +1129,12 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
             let target_file = target.join(&entry.target);
 
             if target_file.exists() {
-                println!("  {} {} -> {}", "→".cyan(), entry.target.display(), entry.source.display());
+                println!(
+                    "  {} {} -> {}",
+                    "→".cyan(),
+                    entry.target.display(),
+                    entry.source.display()
+                );
             }
         }
 
