@@ -32,6 +32,9 @@ crossterm = "0.29.0"
 sickle = { version = "0.1.2", features = ["serde"] }
 dirs = "6.0.0"
 
+[build-dependencies]
+vergen = { version = "9", features = ["build"] }
+
 [dev-dependencies]
 tempfile = "3"
 assert_cmd = "2"
