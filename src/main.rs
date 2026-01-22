@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use repoverlay::{
     CONFIG_FILE, CacheManager, OVERLAYS_DIR, STATE_DIR, apply_overlay, canonicalize_path,
-    create_overlay, list_applied_overlays, parse_github_owner_repo, remove_overlay,
+    list_applied_overlays, parse_github_owner_repo, remove_overlay,
     remove_single_overlay, restore_overlays, show_status, switch_overlay, update_overlays,
 };
 
@@ -106,22 +106,30 @@ enum Commands {
     },
 
     /// Create a new overlay from files in a repository
+    ///
+    /// Examples:
+    ///   repoverlay create my-overlay          # Detects org/repo from git remote
+    ///   repoverlay create org/repo/my-overlay # Explicit target
+    ///   repoverlay create --local ./output    # Write to local directory only
     Create {
-        /// Source repository to extract files from (defaults to current directory)
-        #[arg(short, long)]
-        source: Option<PathBuf>,
-
-        /// Output directory for the new overlay
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        /// Overlay name or full path (org/repo/name)
+        ///
+        /// Short form: `my-overlay` - detects org/repo from git remote
+        /// Full form: `org/repo/name` - uses explicit target
+        /// Omit to use interactive mode or --local for local output
+        name: Option<String>,
 
         /// Include specific files or directories (can be specified multiple times)
         #[arg(short, long)]
         include: Vec<PathBuf>,
 
-        /// Overlay name (defaults to output directory name)
+        /// Write to local directory instead of overlay repo
+        #[arg(short, long, conflicts_with = "name")]
+        local: Option<PathBuf>,
+
+        /// Source repository to extract files from (defaults to current directory)
         #[arg(short, long)]
-        name: Option<String>,
+        source: Option<PathBuf>,
 
         /// Show what would be created without creating files
         #[arg(long)]
@@ -130,6 +138,10 @@ enum Commands {
         /// Skip interactive prompts, use defaults
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Force overwrite if overlay already exists
+        #[arg(short, long)]
+        force: bool,
     },
 
     /// Switch to a different overlay (removes all existing overlays first)
@@ -182,7 +194,32 @@ enum Commands {
         update: bool,
     },
 
+    /// Sync changes from an applied overlay back to the overlay repo
+    ///
+    /// Examples:
+    ///   repoverlay sync my-overlay          # Detects org/repo from git remote
+    ///   repoverlay sync org/repo/my-overlay # Explicit target
+    Sync {
+        /// Overlay name or full path (org/repo/name)
+        ///
+        /// Short form: `my-overlay` - detects org/repo from git remote
+        /// Full form: `org/repo/name` - uses explicit values
+        name: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Show what would be synced without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Push all pending commits in the overlay repo to remote
+    Push,
+
     /// Publish an overlay to the overlay repository
+    #[command(hide = true)] // Hidden: deprecated, use create instead
     Publish {
         /// Path to the overlay source directory
         source: PathBuf,
@@ -268,15 +305,16 @@ fn main() -> Result<()> {
             update_overlays(&target, name, dry_run)?;
         }
         Commands::Create {
-            source,
-            output,
-            include,
             name,
+            include,
+            local,
+            source,
             dry_run,
             yes,
+            force,
         } => {
             let source = source.unwrap_or_else(|| PathBuf::from("."));
-            create_overlay(&source, output, &include, name, dry_run, yes)?;
+            create_overlay_command(&source, name, local, &include, dry_run, yes, force)?;
         }
         Commands::Switch {
             source,
@@ -297,6 +335,17 @@ fn main() -> Result<()> {
         Commands::List { target, update } => {
             list_overlays(target.as_deref(), update)?;
         }
+        Commands::Sync {
+            name,
+            target,
+            dry_run,
+        } => {
+            let target = target.unwrap_or_else(|| PathBuf::from("."));
+            sync_overlay(&name, &target, dry_run)?;
+        }
+        Commands::Push => {
+            push_overlay_repo()?;
+        }
         Commands::Publish {
             source,
             target,
@@ -305,6 +354,13 @@ fn main() -> Result<()> {
             no_push,
             dry_run,
         } => {
+            eprintln!(
+                "{} 'repoverlay publish' is deprecated and will be removed in a future version.",
+                "Warning:".yellow().bold()
+            );
+            eprintln!("         Use 'repoverlay create <name>' instead to create overlays in the overlay repo.");
+            eprintln!();
+
             publish_overlay(
                 &source,
                 target.as_deref(),
@@ -735,7 +791,7 @@ fn detect_target_repo(path: &std::path::Path) -> Result<(String, String)> {
     if !output.status.success() {
         bail!(
             "Could not detect target repository from git remote.\n\
-             Please specify --target org/repo"
+             Please specify explicitly: repoverlay create org/repo/name"
         );
     }
 
@@ -743,9 +799,418 @@ fn detect_target_repo(path: &std::path::Path) -> Result<(String, String)> {
     parse_github_owner_repo(&url)
 }
 
+/// Parse an overlay name argument.
+///
+/// Returns (org, repo, name) tuple.
+/// - If the argument contains 2 slashes, parses as org/repo/name
+/// - If no slashes, detects org/repo from git remote
+/// - If 1 slash, returns an error (invalid format)
+fn parse_overlay_name_arg(
+    name_arg: &str,
+    source_path: &std::path::Path,
+) -> Result<(String, String, String)> {
+    let slash_count = name_arg.chars().filter(|c| *c == '/').count();
+
+    match slash_count {
+        0 => {
+            // Short form: just the overlay name
+            let (org, repo) = detect_target_repo(source_path)?;
+            Ok((org, repo, name_arg.to_string()))
+        }
+        2 => {
+            // Full form: org/repo/name
+            let parts: Vec<&str> = name_arg.split('/').collect();
+            if parts.iter().any(|p| p.is_empty()) {
+                bail!(
+                    "Invalid overlay path format: {}\n\n\
+                     Use one of:\n  \
+                     - my-overlay (detects org/repo from git remote)\n  \
+                     - org/repo/my-overlay (explicit)",
+                    name_arg
+                );
+            }
+            Ok((
+                parts[0].to_string(),
+                parts[1].to_string(),
+                parts[2].to_string(),
+            ))
+        }
+        _ => {
+            bail!(
+                "Invalid overlay path format: {}\n\n\
+                 Use one of:\n  \
+                 - my-overlay (detects org/repo from git remote)\n  \
+                 - org/repo/my-overlay (explicit)",
+                name_arg
+            );
+        }
+    }
+}
+
+/// Handle the create command with the new argument structure.
+///
+/// This function handles:
+/// - `create <name>` - create in overlay repo, auto-detect org/repo
+/// - `create org/repo/name` - create in overlay repo at explicit path
+/// - `create --local ./output` - create in local directory only
+fn create_overlay_command(
+    source: &std::path::Path,
+    name_arg: Option<String>,
+    local: Option<PathBuf>,
+    include: &[PathBuf],
+    dry_run: bool,
+    yes: bool,
+    force: bool,
+) -> Result<()> {
+    use repoverlay::config::load_config;
+    use repoverlay::overlay_repo::OverlayRepoManager;
+
+    // Validate source is a git repo
+    if !source.join(".git").exists() {
+        bail!(
+            "Source directory is not a git repository: {}",
+            source.display()
+        );
+    }
+
+    // Handle --local mode (write to local directory)
+    if let Some(local_path) = local {
+        // Use existing create_overlay function for local mode
+        return repoverlay::create_overlay(
+            source,
+            Some(local_path),
+            include,
+            None, // name derived from directory
+            dry_run,
+            yes,
+        );
+    }
+
+    // For overlay repo mode, we need the name argument
+    let name_arg = name_arg.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Missing overlay name.\n\n\
+             Usage:\n  \
+             repoverlay create my-overlay          # Detects org/repo from git remote\n  \
+             repoverlay create org/repo/my-overlay # Explicit target\n  \
+             repoverlay create --local ./output    # Write to local directory"
+        )
+    })?;
+
+    // Parse the name argument
+    let (org, repo, overlay_name) = parse_overlay_name_arg(&name_arg, source)?;
+
+    // Load overlay repo config
+    let config = load_config(None)?;
+    let overlay_config = config.overlay_repo.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Overlay repository not configured.\n\n\
+             Run 'repoverlay init-repo <url>' to set up an overlay repository.\n\
+             Or use --local to write to a local directory."
+        )
+    })?;
+
+    // Create manager and ensure cloned
+    let manager = OverlayRepoManager::new(overlay_config)?;
+    manager.ensure_cloned()?;
+
+    // Determine output path in overlay repo
+    let output_path = manager.path().join(&org).join(&repo).join(&overlay_name);
+
+    // Check if overlay already exists
+    if output_path.exists() && !force {
+        bail!(
+            "Overlay '{}/{}/{}' already exists.\n\n\
+             To update an applied overlay, use: repoverlay sync {}\n\
+             To overwrite, use: repoverlay create {} --force",
+            org,
+            repo,
+            overlay_name,
+            overlay_name,
+            name_arg
+        );
+    }
+
+    println!(
+        "{} Creating overlay: {}/{}/{}",
+        "Create".blue().bold(),
+        org,
+        repo,
+        overlay_name
+    );
+
+    if dry_run {
+        println!("  Source:  {}", source.display());
+        println!("  Target:  {}", output_path.display());
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // If includes not specified, use discovery/interactive mode
+    if include.is_empty() {
+        // Use the existing discovery logic from create_overlay
+        return repoverlay::create_overlay(
+            source,
+            Some(output_path),
+            include,
+            Some(overlay_name.clone()),
+            dry_run,
+            yes,
+        )
+        .and_then(|_| {
+            // Auto-commit after creating
+            auto_commit_overlay(&manager, &org, &repo, &overlay_name, true)
+        });
+    }
+
+    // Validate all include paths exist
+    for path in include {
+        let full_path = source.join(path);
+        if !full_path.exists() {
+            bail!("Include path does not exist: {}", path.display());
+        }
+    }
+
+    // If force and exists, remove existing first
+    if output_path.exists() && force {
+        fs::remove_dir_all(&output_path)?;
+    }
+
+    // Copy files and create overlay
+    let copied_files =
+        repoverlay::copy_files_to_overlay(source, &output_path, include)?;
+
+    // Generate config
+    fs::write(
+        output_path.join("repoverlay.ccl"),
+        repoverlay::generate_overlay_config(&overlay_name),
+    )?;
+
+    repoverlay::print_overlay_created(&output_path, &copied_files);
+
+    // Auto-commit
+    auto_commit_overlay(&manager, &org, &repo, &overlay_name, true)?;
+
+    Ok(())
+}
+
+/// Auto-commit changes to an overlay in the overlay repo.
+fn auto_commit_overlay(
+    manager: &repoverlay::overlay_repo::OverlayRepoManager,
+    org: &str,
+    repo: &str,
+    name: &str,
+    is_new: bool,
+) -> Result<()> {
+    // Check if there are changes to commit
+    if !manager.has_staged_changes()? {
+        // Stage all changes
+        use std::process::Command;
+        let output = Command::new("git")
+            .args(["add", "."])
+            .current_dir(manager.path())
+            .output()
+            .context("Failed to stage changes")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to stage changes: {}", stderr.trim());
+        }
+    }
+
+    // Check again if there are staged changes
+    if !manager.has_staged_changes()? {
+        println!(
+            "{} No changes to commit.",
+            "Note:".yellow()
+        );
+        return Ok(());
+    }
+
+    let action = if is_new { "Add" } else { "Update" };
+    let commit_msg = format!("{} overlay: {}/{}/{}", action, org, repo, name);
+
+    println!("{} changes...", "Committing".blue().bold());
+    manager.commit(&commit_msg)?;
+
+    println!(
+        "\n{} Overlay created: {}/{}/{}",
+        "✓".green().bold(),
+        org,
+        repo,
+        name
+    );
+    println!(
+        "\nTo push to remote: {}",
+        "repoverlay push".cyan()
+    );
+    println!(
+        "To apply: repoverlay apply {}/{}/{}",
+        org, repo, name
+    );
+
+    Ok(())
+}
+
+/// Sync changes from an applied overlay back to the overlay repo.
+///
+/// This copies changed files from the target repository back to the overlay repo
+/// and auto-commits the changes.
+fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
+    use repoverlay::config::load_config;
+    use repoverlay::overlay_repo::OverlayRepoManager;
+    use repoverlay::{load_overlay_state, normalize_overlay_name};
+
+    // Validate target is a git repo
+    let target = canonicalize_path(target, "Target directory")?;
+    if !target.join(".git").exists() {
+        bail!(
+            "Target directory is not a git repository: {}",
+            target.display()
+        );
+    }
+
+    // Parse the name argument to get org/repo/name
+    let (org, repo, overlay_name) = parse_overlay_name_arg(name_arg, &target)?;
+
+    // Verify the overlay is currently applied
+    let normalized_name = normalize_overlay_name(&overlay_name)?;
+    let applied_overlays = list_applied_overlays(&target)?;
+
+    if !applied_overlays.contains(&normalized_name) {
+        bail!(
+            "Overlay '{}' is not currently applied.\n\n\
+             To apply it first: repoverlay apply {}/{}/{}",
+            overlay_name,
+            org,
+            repo,
+            overlay_name
+        );
+    }
+
+    // Load overlay state to get file mappings
+    let state = load_overlay_state(&target, &normalized_name)?;
+
+    // Load overlay repo config
+    let config = load_config(None)?;
+    let overlay_config = config.overlay_repo.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Overlay repository not configured.\n\n\
+             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+        )
+    })?;
+
+    // Create manager and ensure cloned
+    let manager = OverlayRepoManager::new(overlay_config)?;
+    manager.ensure_cloned()?;
+
+    // Get the overlay path in the overlay repo
+    let overlay_repo_path = manager.path().join(&org).join(&repo).join(&overlay_name);
+
+    if !overlay_repo_path.exists() {
+        bail!(
+            "Overlay '{}/{}/{}' does not exist in overlay repo.\n\n\
+             Did you mean to use 'repoverlay create {}' instead?",
+            org,
+            repo,
+            overlay_name,
+            name_arg
+        );
+    }
+
+    println!(
+        "{} overlay: {}/{}/{}",
+        "Syncing".blue().bold(),
+        org,
+        repo,
+        overlay_name
+    );
+
+    if dry_run {
+        println!("  Target: {}", target.display());
+        println!("  Repo:   {}", overlay_repo_path.display());
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+
+        // Show what would be synced
+        println!("\nFiles that would be synced:");
+        for entry in state.file_entries() {
+            let target_file = target.join(&entry.target);
+
+            if target_file.exists() {
+                println!("  {} {} -> {}", "→".cyan(), entry.target.display(), entry.source.display());
+            }
+        }
+
+        return Ok(());
+    }
+
+    // Copy files from target back to overlay repo
+    let mut synced_count = 0;
+    for entry in state.file_entries() {
+        let target_file = target.join(&entry.target);
+        let overlay_file = overlay_repo_path.join(&entry.source);
+
+        if target_file.exists() {
+            // Ensure parent directory exists
+            if let Some(parent) = overlay_file.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            // Copy file
+            fs::copy(&target_file, &overlay_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    target_file.display(),
+                    overlay_file.display()
+                )
+            })?;
+
+            println!("  {} {}", "→".green(), entry.source.display());
+            synced_count += 1;
+        }
+    }
+
+    if synced_count == 0 {
+        println!("{} No files to sync.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // Auto-commit
+    auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
+
+    Ok(())
+}
+
+/// Push all pending commits in the overlay repo to remote.
+fn push_overlay_repo() -> Result<()> {
+    use repoverlay::config::load_config;
+    use repoverlay::overlay_repo::OverlayRepoManager;
+
+    // Load overlay repo config
+    let config = load_config(None)?;
+    let overlay_config = config.overlay_repo.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Overlay repository not configured.\n\n\
+             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+        )
+    })?;
+
+    // Create manager and ensure cloned
+    let manager = OverlayRepoManager::new(overlay_config)?;
+    manager.ensure_cloned()?;
+
+    println!("{} to remote...", "Pushing".blue().bold());
+    manager.push()?;
+
+    println!("{} Pushed successfully.", "✓".green().bold());
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repoverlay::create_overlay;
     use std::process::Command;
     use tempfile::TempDir;
 
