@@ -1012,4 +1012,368 @@ mod tests {
         state.toggle_category(FileCategory::Untracked);
         assert!(state.has_active_filters());
     }
+
+    #[test]
+    fn test_humanize_count_small_numbers() {
+        assert_eq!(humanize_count(0), "0");
+        assert_eq!(humanize_count(1), "1");
+        assert_eq!(humanize_count(42), "42");
+        assert_eq!(humanize_count(999), "999");
+    }
+
+    #[test]
+    fn test_humanize_count_thousands() {
+        assert_eq!(humanize_count(1000), "1.0K");
+        assert_eq!(humanize_count(1500), "1.5K");
+        assert_eq!(humanize_count(12345), "12.3K");
+        assert_eq!(humanize_count(999999), "1000.0K");
+    }
+
+    #[test]
+    fn test_humanize_count_millions() {
+        assert_eq!(humanize_count(1_000_000), "1.0M");
+        assert_eq!(humanize_count(2_500_000), "2.5M");
+        assert_eq!(humanize_count(10_000_000), "10.0M");
+    }
+
+    #[test]
+    fn test_selection_config_default() {
+        let config = SelectionConfig::default();
+
+        assert_eq!(config.prompt, "Select files to include in overlay");
+        assert!(
+            config
+                .default_hidden_categories
+                .contains(&FileCategory::Gitignored)
+        );
+        assert!(
+            !config
+                .default_hidden_categories
+                .contains(&FileCategory::AiConfig)
+        );
+        assert!(
+            !config
+                .default_hidden_categories
+                .contains(&FileCategory::Untracked)
+        );
+    }
+
+    #[test]
+    fn test_toggle_current() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Clear preselections for clean test
+        state.selections.clear();
+
+        // Toggle current (first file)
+        state.toggle_current();
+        assert!(state.selections.contains(Path::new("CLAUDE.md")));
+
+        // Toggle again to deselect
+        state.toggle_current();
+        assert!(!state.selections.contains(Path::new("CLAUDE.md")));
+    }
+
+    #[test]
+    fn test_toggle_current_moves_with_cursor() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        state.selections.clear();
+
+        // Move to second file and toggle
+        state.cursor_down();
+        state.toggle_current();
+
+        assert!(!state.selections.contains(Path::new("CLAUDE.md")));
+        assert!(
+            state
+                .selections
+                .contains(Path::new(".claude/settings.json"))
+        );
+    }
+
+    #[test]
+    fn test_toggle_current_empty_visible_list() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Filter to show nothing by searching for nonexistent file
+        state.set_search("nonexistent_file_xyz");
+        assert!(state.visible_files().is_empty());
+
+        // Toggle current should do nothing (not crash)
+        state.toggle_current();
+        // No assertions needed - just verifying it doesn't panic
+    }
+
+    #[test]
+    fn test_select_all() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        state.selections.clear();
+
+        // Hide some categories
+        state.toggle_category(FileCategory::Untracked);
+
+        // Select all (should select all files regardless of visibility)
+        state.select_all();
+
+        assert_eq!(state.selections.len(), 5);
+        assert!(state.selections.contains(Path::new("CLAUDE.md")));
+        assert!(
+            state
+                .selections
+                .contains(Path::new(".claude/settings.json"))
+        );
+        assert!(state.selections.contains(Path::new(".envrc")));
+        assert!(state.selections.contains(Path::new(".env.local")));
+        assert!(state.selections.contains(Path::new("scratch.txt")));
+    }
+
+    #[test]
+    fn test_deselect_all_visible() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Start with AI configs preselected
+        assert!(state.selections.contains(Path::new("CLAUDE.md")));
+        assert!(
+            state
+                .selections
+                .contains(Path::new(".claude/settings.json"))
+        );
+
+        // Add selection to gitignored file
+        state.toggle_selection(Path::new(".envrc"));
+
+        // Hide gitignored category
+        state.toggle_category(FileCategory::Gitignored);
+
+        // Deselect all visible (should only deselect AI configs and untracked)
+        state.deselect_all_visible();
+
+        // AI configs should be deselected
+        assert!(!state.selections.contains(Path::new("CLAUDE.md")));
+        assert!(
+            !state
+                .selections
+                .contains(Path::new(".claude/settings.json"))
+        );
+
+        // Hidden gitignored file should still be selected
+        assert!(state.selections.contains(Path::new(".envrc")));
+    }
+
+    #[test]
+    fn test_all_visible_selected_empty() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Filter to show nothing
+        state.set_search("nonexistent_file_xyz");
+        assert!(state.visible_files().is_empty());
+
+        // Empty visible list returns false
+        assert!(!state.all_visible_selected());
+    }
+
+    #[test]
+    fn test_all_visible_selected_partial() {
+        let files = make_test_files();
+        let state = SelectionState::new(files, HashSet::new());
+
+        // AI configs are preselected, but gitignored and untracked are not
+        assert!(!state.all_visible_selected());
+    }
+
+    #[test]
+    fn test_all_visible_selected_all() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Select everything
+        state.select_all();
+
+        assert!(state.all_visible_selected());
+    }
+
+    #[test]
+    fn test_all_visible_selected_with_filter() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // AI configs are preselected
+        // Hide everything except AI configs
+        state.toggle_category(FileCategory::Gitignored);
+        state.toggle_category(FileCategory::Untracked);
+
+        // Now all visible (AI configs only) are selected
+        assert!(state.all_visible_selected());
+    }
+
+    #[test]
+    fn test_scroll_offset_adjustment_down() {
+        // Create more files to trigger scrolling
+        let mut files = Vec::new();
+        for i in 0..20 {
+            files.push(DetectedFile {
+                path: PathBuf::from(format!("file{}.txt", i)),
+                category: FileCategory::Untracked,
+                preselected: false,
+            });
+        }
+
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Initially at top
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.scroll_offset, 0);
+
+        // Move down past visible area (max_visible = 15)
+        for _ in 0..16 {
+            state.cursor_down();
+        }
+
+        // Cursor should be at 16, scroll_offset should have adjusted
+        assert_eq!(state.cursor, 16);
+        assert!(state.scroll_offset > 0);
+    }
+
+    #[test]
+    fn test_scroll_offset_adjustment_up() {
+        // Create more files to trigger scrolling
+        let mut files = Vec::new();
+        for i in 0..20 {
+            files.push(DetectedFile {
+                path: PathBuf::from(format!("file{}.txt", i)),
+                category: FileCategory::Untracked,
+                preselected: false,
+            });
+        }
+
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Move to bottom
+        for _ in 0..19 {
+            state.cursor_down();
+        }
+
+        // Scroll offset should be > 0
+        let scroll_after_down = state.scroll_offset;
+        assert!(scroll_after_down > 0);
+
+        // Move back up
+        for _ in 0..19 {
+            state.cursor_up();
+        }
+
+        // Should be back at top
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_clamp_cursor_when_filter_reduces_list() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Move cursor to last file (index 4)
+        for _ in 0..4 {
+            state.cursor_down();
+        }
+        assert_eq!(state.cursor, 4);
+
+        // Hide all but AI configs (2 files) - this calls clamp_cursor internally
+        state.toggle_category(FileCategory::Gitignored);
+        state.toggle_category(FileCategory::Untracked);
+
+        // Cursor should be clamped to valid range (less than 2 visible files)
+        assert!(state.cursor < 2);
+    }
+
+    #[test]
+    fn test_clamp_cursor_empty_list() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        state.cursor_down();
+        assert_eq!(state.cursor, 1);
+
+        // Filter to nothing
+        state.set_search("nonexistent_file_xyz");
+
+        // Cursor should be 0 for empty list
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_selection_state_default_hidden_categories() {
+        let files = make_test_files();
+        let mut hidden = HashSet::new();
+        hidden.insert(FileCategory::Gitignored);
+
+        let state = SelectionState::new(files, hidden);
+
+        // Gitignored should be hidden
+        assert!(!state.visible_categories.contains(&FileCategory::Gitignored));
+        // Others should be visible
+        assert!(state.visible_categories.contains(&FileCategory::AiConfig));
+        assert!(state.visible_categories.contains(&FileCategory::Untracked));
+    }
+
+    #[test]
+    fn test_visible_files_respects_category_and_search() {
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Hide untracked
+        state.toggle_category(FileCategory::Untracked);
+
+        // Search for "env"
+        state.set_search("env");
+
+        let visible = state.visible_files();
+
+        // Should only show gitignored files matching "env"
+        assert_eq!(visible.len(), 2);
+        assert!(
+            visible
+                .iter()
+                .all(|f| f.path.to_string_lossy().to_lowercase().contains("env"))
+        );
+        assert!(
+            visible
+                .iter()
+                .all(|f| f.category != FileCategory::Untracked)
+        );
+    }
+
+    #[test]
+    fn test_mode_enum_equality() {
+        assert_eq!(Mode::Selection, Mode::Selection);
+        assert_eq!(Mode::Search, Mode::Search);
+        assert_ne!(Mode::Selection, Mode::Search);
+    }
+
+    #[test]
+    fn test_selection_result_fields() {
+        let result = SelectionResult {
+            selected_files: vec![PathBuf::from("test.txt")],
+            cancelled: false,
+        };
+
+        assert_eq!(result.selected_files.len(), 1);
+        assert!(!result.cancelled);
+
+        let cancelled_result = SelectionResult {
+            selected_files: Vec::new(),
+            cancelled: true,
+        };
+
+        assert!(cancelled_result.selected_files.is_empty());
+        assert!(cancelled_result.cancelled);
+    }
 }
