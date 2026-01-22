@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/tylerbutler/repoverlay/compare/v0.1.5...v0.1.6) - 2026-01-22
+
+### Added
+
+- simplify overlay publishing workflow ([#16](https://github.com/tylerbutler/repoverlay/pull/16))
+- *(create)* add interactive file selection UI with category filters ([#17](https://github.com/tylerbutler/repoverlay/pull/17))
+- use ~/.config for config and default create to overlay repo ([#12](https://github.com/tylerbutler/repoverlay/pull/12))
+
+### Fixed
+
+- improve terminal interactivity detection
+- use output_dir for create command default path ([#15](https://github.com/tylerbutler/repoverlay/pull/15))
+
+### Other
+
+- improve code coverage for overlay_repo and selection modules ([#21](https://github.com/tylerbutler/repoverlay/pull/21))
+- improve code coverage for cache, lib, and main modules ([#20](https://github.com/tylerbutler/repoverlay/pull/20))
+- *(deps)* upgrade dependencies ([#19](https://github.com/tylerbutler/repoverlay/pull/19))
+
 ## [0.1.5](https://github.com/tylerbutler/repoverlay/compare/v0.1.4...v0.1.5) - 2026-01-21
 
 ### Other
