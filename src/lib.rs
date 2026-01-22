@@ -945,7 +945,7 @@ pub fn create_overlay(
     }
 
     // Determine output directory
-    // Priority: explicit --output > overlay repo (if configured) > local fallback
+    // Priority: explicit --local > overlay repo (if configured) > local fallback
     // Also track overlay repo info for better prompts: (repo_root, org, repo, overlay_name)
     let (output_dir, overlay_repo_info): (PathBuf, Option<(PathBuf, String, String, String)>) =
         match &output {
@@ -1038,7 +1038,7 @@ pub fn create_overlay(
             bail!(
                 "No files discovered and none specified.\n\n\
                  Use --include to specify files to include in the overlay.\n\
-                 Example:\n  repoverlay create --include .claude/ --include CLAUDE.md --output ~/overlays/my-config"
+                 Example:\n  repoverlay create my-overlay --include .claude/ --include CLAUDE.md"
             );
         }
 
@@ -1086,7 +1086,7 @@ pub fn create_overlay(
                     .map(|f| format!("--include {}", f.path.display()))
                     .collect();
                 println!(
-                    "  repoverlay create {} --output ~/overlays/my-config",
+                    "  repoverlay create my-overlay {}",
                     includes.join(" ")
                 );
             }
@@ -1154,7 +1154,7 @@ pub fn create_overlay(
         if preselected.is_empty() {
             bail!(
                 "No files specified and no AI configs found to auto-select.\n\n\
-                 Use --include to specify files:\n  repoverlay create --include .envrc --output ~/overlays/my-config"
+                 Use --include to specify files:\n  repoverlay create my-overlay --include .envrc"
             );
         }
 
