@@ -329,10 +329,44 @@ pub fn select_files(
     result
 }
 
-/// Check if stdin is interactive (TTY).
+/// Check if the terminal is interactive.
+///
+/// Returns false in these cases:
+/// - stdin or stdout is not a TTY
+/// - Running in a CI environment (CI env var is set)
+/// - Running as a cargo test binary (executable in target/*/deps/)
+/// - TERM is unset or "dumb"
+/// - REPOVERLAY_NON_INTERACTIVE env var is set
 fn atty_is_interactive() -> bool {
     use std::io::IsTerminal;
-    io::stdin().is_terminal()
+
+    // Explicit non-interactive override
+    if std::env::var("REPOVERLAY_NON_INTERACTIVE").is_ok() {
+        return false;
+    }
+
+    // CI environments are never interactive
+    if std::env::var("CI").is_ok() {
+        return false;
+    }
+
+    // Detect cargo test environment by checking executable path
+    // Test binaries live in target/debug/deps/ or target/release/deps/
+    if let Ok(exe) = std::env::current_exe() {
+        let exe_str = exe.to_string_lossy();
+        if exe_str.contains("target") && exe_str.contains("deps") {
+            return false;
+        }
+    }
+
+    // Check TERM - if not set or "dumb", assume non-interactive
+    match std::env::var("TERM") {
+        Ok(term) if !term.is_empty() && term != "dumb" => {}
+        _ => return false,
+    }
+
+    // Check if both stdin and stdout are terminals
+    io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
 /// Main selection loop.
