@@ -16,7 +16,6 @@ Files are symlinked (or copied with `--copy`) from overlay sources and automatic
 | Restore after git clean | `repoverlay restore` |
 | Create overlay | `repoverlay create <name>` |
 | Sync changes back | `repoverlay sync <name>` |
-| Push to remote | `repoverlay push` |
 | Switch overlays | `repoverlay switch <source>` |
 
 ## Installation
@@ -144,13 +143,7 @@ repoverlay sync org/repo/my-overlay # Explicit path
 repoverlay sync my-overlay --dry-run # Preview what would be synced
 ```
 
-### Push to remote
-
-Push all pending commits in the overlay repo to the remote:
-
-```bash
-repoverlay push
-```
+Both `create` and `sync` automatically commit and push to the remote overlay repo.
 
 ### Switch overlays
 

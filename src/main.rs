@@ -216,6 +216,7 @@ enum Commands {
     },
 
     /// Push all pending commits in the overlay repo to remote
+    #[command(hide = true)] // Hidden: auto-push is done after create/sync
     Push,
 
     /// Publish an overlay to the overlay repository
@@ -1003,10 +1004,44 @@ fn auto_commit_overlay(
     name: &str,
     is_new: bool,
 ) -> Result<()> {
+    use std::process::Command;
+
+    // Fetch latest from remote before committing to avoid divergence
+    println!("{} overlay repo...", "Syncing".blue().bold());
+    let fetch_output = Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(manager.path())
+        .output()
+        .context("Failed to fetch from remote")?;
+
+    if !fetch_output.status.success() {
+        // Fetch failed, but continue - might be offline
+        eprintln!(
+            "{} Could not fetch from remote (offline?), continuing...",
+            "Warning:".yellow()
+        );
+    } else {
+        // Try to pull/rebase to incorporate remote changes
+        let pull_output = Command::new("git")
+            .args(["pull", "--rebase", "--autostash"])
+            .current_dir(manager.path())
+            .output()
+            .context("Failed to pull from remote")?;
+
+        if !pull_output.status.success() {
+            let stderr = String::from_utf8_lossy(&pull_output.stderr);
+            // If pull fails due to conflicts, warn but continue
+            eprintln!(
+                "{} Could not pull latest changes: {}",
+                "Warning:".yellow(),
+                stderr.trim()
+            );
+        }
+    }
+
     // Check if there are changes to commit
     if !manager.has_staged_changes()? {
         // Stage all changes
-        use std::process::Command;
         let output = Command::new("git")
             .args(["add", "."])
             .current_dir(manager.path())
@@ -1031,14 +1066,29 @@ fn auto_commit_overlay(
     println!("{} changes...", "Committing".blue().bold());
     manager.commit(&commit_msg)?;
 
-    println!(
-        "\n{} Overlay created: {}/{}/{}",
-        "✓".green().bold(),
-        org,
-        repo,
-        name
-    );
-    println!("\nTo push to remote: {}", "repoverlay push".cyan());
+    // Auto-push to remote
+    println!("{} to remote...", "Pushing".blue().bold());
+    match manager.push() {
+        Ok(()) => {
+            println!(
+                "\n{} Overlay {}: {}/{}/{}",
+                "✓".green().bold(),
+                if is_new { "created" } else { "updated" },
+                org,
+                repo,
+                name
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "\n{} Committed locally but failed to push: {}",
+                "Warning:".yellow(),
+                e
+            );
+            eprintln!("Run 'repoverlay push' to push manually when online.");
+        }
+    }
+
     println!("To apply: repoverlay apply {}/{}/{}", org, repo, name);
 
     Ok(())
