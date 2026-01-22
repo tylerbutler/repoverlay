@@ -1125,20 +1125,13 @@ pub fn create_overlay(
                 .collect();
 
             // Get output directory from user if not specified
+            // Use output_dir (which respects overlay repo config) as default
             let final_output = if output.is_none() {
                 use dialoguer::Input;
 
-                let default_name = source
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("overlay");
-                let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
-                    .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-                let default_path = proj_dirs.data_dir().join("overlays").join(default_name);
-
                 let path_str: String = Input::new()
                     .with_prompt("Output directory")
-                    .default(default_path.display().to_string())
+                    .default(output_dir.display().to_string())
                     .interact_text()?;
 
                 PathBuf::from(path_str)
