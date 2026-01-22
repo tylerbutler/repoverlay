@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Categories of detected files for overlay creation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileCategory {
     /// AI agent configuration files (Claude, Cursor, Copilot, etc.)
     AiConfig,

@@ -179,3 +179,51 @@ fn fails_on_non_git_source() {
             .contains("not a git repository")
     );
 }
+
+#[test]
+fn non_tty_fallback_uses_preselected_ai_configs() {
+    // In a non-TTY environment (like test runner), when no --include is specified
+    // and --yes is not set, the selection UI should fall back to preselected files
+    // (AI configs) without requiring interactive input.
+    let source = create_test_repo();
+    let output = TempDir::new().unwrap();
+
+    // Create AI config files (these should be preselected)
+    fs::write(source.path().join("CLAUDE.md"), "# Claude config").unwrap();
+    fs::create_dir_all(source.path().join(".claude")).unwrap();
+    fs::write(source.path().join(".claude/settings.json"), "{}").unwrap();
+
+    // Create a non-AI file (should not be included in fallback)
+    fs::write(source.path().join(".gitignore"), ".envrc").unwrap();
+    fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+    // Run with yes=false (interactive mode), no includes specified
+    // In non-TTY, this should use preselected AI configs
+    let result = create_overlay(
+        source.path(),
+        Some(output.path().join("test-overlay")),
+        &[], // no explicit includes
+        None,
+        false, // not dry-run
+        false, // not --yes (would trigger interactive mode, falls back in non-TTY)
+    );
+
+    assert!(result.is_ok(), "create_overlay failed: {:?}", result);
+
+    // Verify AI configs were included
+    let overlay_dir = output.path().join("test-overlay");
+    assert!(
+        overlay_dir.join("CLAUDE.md").exists(),
+        "CLAUDE.md should be included"
+    );
+    assert!(
+        overlay_dir.join(".claude/settings.json").exists(),
+        ".claude/settings.json should be included"
+    );
+
+    // Verify non-preselected files were NOT included
+    assert!(
+        !overlay_dir.join(".envrc").exists(),
+        ".envrc should NOT be included (not preselected)"
+    );
+}

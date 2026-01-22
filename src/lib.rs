@@ -8,6 +8,7 @@ pub mod config;
 pub mod detection;
 pub mod github;
 pub mod overlay_repo;
+pub mod selection;
 pub mod state;
 
 use anyhow::{Context, Result, bail};
@@ -945,32 +946,39 @@ pub fn create_overlay(
 
     // Determine output directory
     // Priority: explicit --output > overlay repo (if configured) > local fallback
-    let output_dir = match &output {
-        Some(p) => p.clone(),
-        None => {
-            // Check if overlay repo is configured
-            let config = config::load_config(None).ok();
-            let overlay_repo_config = config.as_ref().and_then(|c| c.overlay_repo.as_ref());
+    // Also track overlay repo info for better prompts: (repo_root, org, repo, overlay_name)
+    let (output_dir, overlay_repo_info): (PathBuf, Option<(PathBuf, String, String, String)>) =
+        match &output {
+            Some(p) => (p.clone(), None),
+            None => {
+                // Check if overlay repo is configured
+                let config = config::load_config(None).ok();
+                let overlay_repo_config = config.as_ref().and_then(|c| c.overlay_repo.as_ref());
 
-            if let Some(repo_config) = overlay_repo_config {
-                // Try to detect org/repo from git remote
-                if let Some((org, repo)) = detect_target_from_git_remote(source) {
-                    // Determine overlay name
-                    let overlay_name = name.clone().unwrap_or_else(|| {
-                        source
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("overlay")
-                            .to_string()
-                    });
+                if let Some(repo_config) = overlay_repo_config {
+                    // Try to detect org/repo from git remote
+                    if let Some((org, repo)) = detect_target_from_git_remote(source) {
+                        // Determine overlay name
+                        let overlay_name = name.clone().unwrap_or_else(|| {
+                            source
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("overlay")
+                                .to_string()
+                        });
 
-                    // Use overlay repo path: <repo_path>/<org>/<repo>/<name>
-                    let manager = overlay_repo::OverlayRepoManager::new(repo_config.clone())
-                        .expect("Failed to create overlay repo manager");
-                    manager
-                        .ensure_cloned()
-                        .expect("Failed to ensure overlay repo is cloned");
-                    manager.path().join(&org).join(&repo).join(&overlay_name)
+                        // Use overlay repo path: <repo_path>/<org>/<repo>/<name>
+                        let manager = overlay_repo::OverlayRepoManager::new(repo_config.clone())
+                            .expect("Failed to create overlay repo manager");
+                        manager
+                            .ensure_cloned()
+                            .expect("Failed to ensure overlay repo is cloned");
+                        let repo_root = manager.path().to_path_buf();
+                        let full_path = repo_root.join(&org).join(&repo).join(&overlay_name);
+                        (
+                            full_path,
+                            Some((repo_root, org, repo, overlay_name)),
+                        )
                 } else {
                     // Couldn't detect target, fall back to local
                     eprintln!(
@@ -983,7 +991,7 @@ pub fn create_overlay(
                         .unwrap_or("overlay");
                     let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
                         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-                    proj_dirs.data_dir().join("overlays").join(repo_name)
+                    (proj_dirs.data_dir().join("overlays").join(repo_name), None)
                 }
             } else {
                 // No overlay repo configured, use local fallback
@@ -993,7 +1001,7 @@ pub fn create_overlay(
                     .unwrap_or("overlay");
                 let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
                     .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-                proj_dirs.data_dir().join("overlays").join(repo_name)
+                (proj_dirs.data_dir().join("overlays").join(repo_name), None)
             }
         }
     };
@@ -1001,7 +1009,21 @@ pub fn create_overlay(
     // If no includes specified, run discovery mode
     if include.is_empty() {
         // Discover files in the repository
+        print!("{} Scanning for overlay candidates...", "Discovery:".cyan().bold());
+        std::io::Write::flush(&mut std::io::stdout())?;
+
         let discovered = detection::discover_files(source);
+
+        // Show discovery summary
+        let ai_count = discovered.iter().filter(|f| f.category == detection::FileCategory::AiConfig).count();
+        let gi_count = discovered.iter().filter(|f| f.category == detection::FileCategory::Gitignored).count();
+        let ut_count = discovered.iter().filter(|f| f.category == detection::FileCategory::Untracked).count();
+        println!(
+            " found {} AI, {} gitignored, {} untracked",
+            selection::humanize_count(ai_count).green(),
+            selection::humanize_count(gi_count).yellow(),
+            selection::humanize_count(ut_count).blue()
+        );
 
         if discovered.is_empty() {
             bail!(
@@ -1064,90 +1086,58 @@ pub fn create_overlay(
 
         // Interactive mode: let user select files
         if !yes {
-            use dialoguer::MultiSelect;
+            use selection::{SelectionConfig, select_files};
 
-            println!(
-                "{} Discovered files in: {}",
-                "Discovery:".cyan().bold(),
-                source.display()
-            );
-            println!();
+            let config = SelectionConfig::default();
+            let result = select_files(&discovered, config)?;
 
-            // Build selection items with category headers
-            let mut items: Vec<String> = Vec::new();
-            let mut defaults: Vec<bool> = Vec::new();
-            let mut file_indices: Vec<usize> = Vec::new(); // Maps selection index to discovered file index
-
-            let groups = detection::group_by_category(&discovered);
-            for (_category, files) in &groups {
-                // Add items with category prefix for context
-                for file in files.iter() {
-                    let prefix = match file.category {
-                        detection::FileCategory::AiConfig => "[AI] ",
-                        detection::FileCategory::Gitignored => "[GI] ",
-                        detection::FileCategory::Untracked => "[UT] ",
-                    };
-                    items.push(format!("{}{}", prefix, file.path.display()));
-                    defaults.push(file.preselected);
-                    // Find the index in discovered
-                    if let Some(idx) = discovered.iter().position(|f| f.path == file.path) {
-                        file_indices.push(idx);
-                    }
-                }
+            if result.cancelled {
+                bail!("Selection cancelled.");
             }
 
-            if items.is_empty() {
-                bail!("No files to select");
-            }
-
-            println!(
-                "{}: AI config, {}: Gitignored, {}: Untracked",
-                "[AI]".green(),
-                "[GI]".yellow(),
-                "[UT]".blue()
-            );
-            println!();
-
-            let selections = MultiSelect::new()
-                .with_prompt("Select files to include (Space to toggle, Enter to confirm)")
-                .items(&items)
-                .defaults(&defaults)
-                .interact()?;
-
-            if selections.is_empty() {
+            if result.selected_files.is_empty() {
                 bail!("No files selected. Aborting.");
             }
-
-            // Convert selections to include paths
-            let selected_paths: Vec<PathBuf> = selections
-                .iter()
-                .map(|&idx| discovered[file_indices[idx]].path.clone())
-                .collect();
 
             // Get output directory from user if not specified
             let final_output = if output.is_none() {
                 use dialoguer::Input;
 
-                let default_name = source
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("overlay");
-                let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
-                    .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-                let default_path = proj_dirs.data_dir().join("overlays").join(default_name);
+                if let Some((repo_root, org, repo, default_name)) = &overlay_repo_info {
+                    // Show overlay repo context
+                    println!(
+                        "{} {}/{}",
+                        "Target:".bold(),
+                        org.cyan(),
+                        repo.cyan()
+                    );
 
-                let path_str: String = Input::new()
-                    .with_prompt("Output directory")
-                    .default(default_path.display().to_string())
-                    .interact_text()?;
+                    let overlay_name: String = Input::new()
+                        .with_prompt("Overlay name")
+                        .default(default_name.clone())
+                        .interact_text()?;
 
-                PathBuf::from(path_str)
+                    repo_root.join(org).join(repo).join(overlay_name)
+                } else {
+                    // Local storage - show full path
+                    println!(
+                        "Where should the overlay be created?\n\
+                         (This directory will contain the overlay files and config)"
+                    );
+
+                    let path_str: String = Input::new()
+                        .with_prompt("Overlay directory")
+                        .default(output_dir.display().to_string())
+                        .interact_text()?;
+
+                    PathBuf::from(path_str)
+                }
             } else {
                 output_dir.clone()
             };
 
             // Now create the overlay with selected files
-            return create_overlay_with_files(source, &final_output, &selected_paths, name);
+            return create_overlay_with_files(source, &final_output, &result.selected_files, name);
         }
 
         // With --yes flag but no includes, use pre-selected files (AI configs)
