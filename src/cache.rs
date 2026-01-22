@@ -983,7 +983,9 @@ mod tests {
             .unwrap();
 
         // This branch doesn't exist
-        let result = manager.ref_exists(&repo_path, "origin/nonexistent-branch").unwrap();
+        let result = manager
+            .ref_exists(&repo_path, "origin/nonexistent-branch")
+            .unwrap();
         assert!(!result);
     }
 

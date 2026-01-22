@@ -1574,15 +1574,13 @@ mod tests {
 
         #[test]
         fn returns_false_for_only_managed_section() {
-            let content =
-                "# repoverlay:managed start\n.repoverlay\n# repoverlay:managed end\n";
+            let content = "# repoverlay:managed start\n.repoverlay\n# repoverlay:managed end\n";
             assert!(!any_overlay_sections_remain(content));
         }
 
         #[test]
         fn returns_true_for_overlay_section() {
-            let content =
-                "# repoverlay:my-overlay start\n.envrc\n# repoverlay:my-overlay end\n";
+            let content = "# repoverlay:my-overlay start\n.envrc\n# repoverlay:my-overlay end\n";
             assert!(any_overlay_sections_remain(content));
         }
 
@@ -1706,7 +1704,12 @@ mod tests {
             let dir = TempDir::new().unwrap();
             let result = validate_git_repo(dir.path());
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("not a git repository"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not a git repository")
+            );
         }
     }
 
@@ -1740,12 +1743,9 @@ mod tests {
 
             fs::write(source.path().join("file.txt"), "content").unwrap();
 
-            let copied = copy_files_to_overlay(
-                source.path(),
-                output.path(),
-                &[PathBuf::from("file.txt")],
-            )
-            .unwrap();
+            let copied =
+                copy_files_to_overlay(source.path(), output.path(), &[PathBuf::from("file.txt")])
+                    .unwrap();
 
             assert_eq!(copied.len(), 1);
             assert!(output.path().join("file.txt").exists());
@@ -1760,12 +1760,9 @@ mod tests {
             fs::write(source.path().join("dir/file1.txt"), "content1").unwrap();
             fs::write(source.path().join("dir/subdir/file2.txt"), "content2").unwrap();
 
-            let copied = copy_files_to_overlay(
-                source.path(),
-                output.path(),
-                &[PathBuf::from("dir")],
-            )
-            .unwrap();
+            let copied =
+                copy_files_to_overlay(source.path(), output.path(), &[PathBuf::from("dir")])
+                    .unwrap();
 
             assert_eq!(copied.len(), 2);
             assert!(output.path().join("dir/file1.txt").exists());

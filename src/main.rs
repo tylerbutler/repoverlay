@@ -2474,7 +2474,12 @@ mod tests {
 
             // Add a GitHub remote
             Command::new("git")
-                .args(["remote", "add", "origin", "https://github.com/testorg/testrepo.git"])
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/testorg/testrepo.git",
+                ])
                 .current_dir(source.path())
                 .output()
                 .unwrap();
@@ -2505,7 +2510,12 @@ mod tests {
             let repo = create_test_repo();
 
             Command::new("git")
-                .args(["remote", "add", "origin", "https://github.com/owner/repo.git"])
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/owner/repo.git",
+                ])
                 .current_dir(repo.path())
                 .output()
                 .unwrap();
@@ -2539,7 +2549,12 @@ mod tests {
             let repo = create_test_repo();
 
             Command::new("git")
-                .args(["remote", "add", "origin", "https://gitlab.com/owner/repo.git"])
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://gitlab.com/owner/repo.git",
+                ])
                 .current_dir(repo.path())
                 .output()
                 .unwrap();
@@ -2561,7 +2576,12 @@ mod tests {
                 repo: "invalid".to_string(),
             });
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Invalid repository format"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid repository format")
+            );
         }
 
         #[test]
@@ -2570,7 +2590,12 @@ mod tests {
                 repo: "a/b/c".to_string(),
             });
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Invalid repository format"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid repository format")
+            );
         }
     }
 
