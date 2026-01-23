@@ -1,10 +1,16 @@
 {
   "permissions": {
-    "allow": [],
+    "allow": [
+      "Bash(cargo:*)",
+      "Bash(just:*)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:crates.io)"
+    ],
     "deny": [],
     "ask": []
   },
   "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": true
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "context7@claude-plugins-official": true
   }
 }
