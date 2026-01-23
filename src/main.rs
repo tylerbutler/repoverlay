@@ -6,6 +6,7 @@ use colored::Colorize;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use repoverlay::{
     CONFIG_FILE, CacheManager, OVERLAYS_DIR, STATE_DIR, apply_overlay, canonicalize_path,
@@ -13,10 +14,32 @@ use repoverlay::{
     restore_overlays, show_status, switch_overlay, update_overlays,
 };
 
+/// Build version string with git info for local builds
+static VERSION: LazyLock<String> = LazyLock::new(|| {
+    let version = env!("CARGO_PKG_VERSION");
+
+    // Get short SHA, branch, and dirty status
+    let sha = option_env!("VERGEN_GIT_SHA").map(|s| &s[..7.min(s.len())]);
+    let branch = option_env!("VERGEN_GIT_BRANCH").filter(|b| *b != "main" && *b != "master");
+    let dirty = option_env!("VERGEN_GIT_DIRTY") == Some("true");
+
+    match (sha, branch, dirty) {
+        (Some(sha), Some(branch), true) => format!("{version} ({branch} {sha}-dirty)"),
+        (Some(sha), Some(branch), false) => format!("{version} ({branch} {sha})"),
+        (Some(sha), None, true) => format!("{version} ({sha}-dirty)"),
+        (Some(sha), None, false) => format!("{version} ({sha})"),
+        (None, _, _) => version.to_string(),
+    }
+});
+
+fn version_string() -> &'static str {
+    &VERSION
+}
+
 /// Overlay config files into git repositories without committing them
 #[derive(Parser)]
 #[command(name = "repoverlay")]
-#[command(version, about, long_about = None)]
+#[command(version = version_string(), about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
