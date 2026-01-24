@@ -268,3 +268,123 @@ fn fails_on_nonexistent_source() {
     let result = apply_overlay("/nonexistent/path", repo.path(), false, None, None, false);
     assert!(result.is_err());
 }
+
+#[test]
+fn skips_repoverlay_ccl_config_file() {
+    let overlay = create_test_overlay(&[
+        (".envrc", "export FOO=bar"),
+        ("repoverlay.ccl", "overlay =\n  name = test\n"),
+    ]);
+    let ctx = TestContext::new();
+
+    apply_overlay(
+        overlay.path().to_str().unwrap(),
+        ctx.repo_path(),
+        false,
+        None,
+        None,
+        false,
+    )
+    .unwrap();
+
+    // repoverlay.ccl should NOT be copied to target
+    assert!(!ctx.file_exists("repoverlay.ccl"));
+    // But .envrc should be
+    assert!(ctx.file_exists(".envrc"));
+}
+
+#[test]
+fn skips_git_directory_in_overlay() {
+    let ctx = TestContext::new();
+
+    // Create an overlay that contains a .git directory with unique files (shouldn't be copied)
+    let overlay = TempDir::new().unwrap();
+    std::fs::create_dir_all(overlay.path().join(".git/overlay-test-marker")).unwrap();
+    std::fs::write(
+        overlay.path().join(".git/overlay-test-marker/unique.txt"),
+        "from overlay",
+    )
+    .unwrap();
+    std::fs::write(overlay.path().join(".envrc"), "export FOO=bar").unwrap();
+
+    apply_overlay(
+        overlay.path().to_str().unwrap(),
+        ctx.repo_path(),
+        false,
+        Some("test".to_string()),
+        None,
+        false,
+    )
+    .unwrap();
+
+    // The unique file from overlay's .git should NOT be copied
+    assert!(!ctx.file_exists(".git/overlay-test-marker/unique.txt"));
+    // But .envrc should be
+    assert!(ctx.file_exists(".envrc"));
+}
+
+#[test]
+fn creates_state_directory_structure() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    apply_overlay(
+        ctx.overlay_source(),
+        ctx.repo_path(),
+        false,
+        Some("test".to_string()),
+        None,
+        false,
+    )
+    .unwrap();
+
+    // Check the full state directory structure
+    assert!(ctx.repo_path().join(".repoverlay").exists());
+    assert!(ctx.repo_path().join(".repoverlay/overlays").exists());
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/overlays/test.ccl")
+            .exists()
+    );
+    assert!(ctx.repo_path().join(".repoverlay/meta.ccl").exists());
+}
+
+#[test]
+fn normalizes_overlay_name() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    apply_overlay(
+        ctx.overlay_source(),
+        ctx.repo_path(),
+        false,
+        Some("My Test Overlay".to_string()),
+        None,
+        false,
+    )
+    .unwrap();
+
+    // Name should be normalized to lowercase with hyphens
+    assert!(ctx.overlay_state_exists("my-test-overlay"));
+}
+
+#[test]
+fn applies_overlay_with_deeply_nested_files() {
+    let overlay = create_test_overlay(&[
+        ("a/b/c/d/deep.txt", "deep content"),
+        ("x/y/z/another.txt", "another content"),
+    ]);
+    let ctx = TestContext::new();
+
+    apply_overlay(
+        overlay.path().to_str().unwrap(),
+        ctx.repo_path(),
+        false,
+        Some("deep-test".to_string()),
+        None,
+        false,
+    )
+    .unwrap();
+
+    assert!(ctx.file_exists("a/b/c/d/deep.txt"));
+    assert!(ctx.file_exists("x/y/z/another.txt"));
+    assert_eq!(ctx.read_file("a/b/c/d/deep.txt"), "deep content");
+}

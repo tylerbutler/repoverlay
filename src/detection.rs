@@ -385,4 +385,154 @@ mod tests {
         assert_eq!(groups[1].0, FileCategory::Gitignored);
         assert_eq!(groups[2].0, FileCategory::Untracked);
     }
+
+    #[test]
+    fn test_group_by_category_empty() {
+        let files: Vec<DetectedFile> = vec![];
+        let groups = group_by_category(&files);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn test_group_by_category_single_category() {
+        let files = vec![
+            DetectedFile {
+                path: PathBuf::from(".claude"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+            },
+            DetectedFile {
+                path: PathBuf::from("CLAUDE.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+            },
+        ];
+
+        let groups = group_by_category(&files);
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, FileCategory::AiConfig);
+        assert_eq!(groups[0].1.len(), 2);
+    }
+
+    #[test]
+    fn test_is_ai_config_github_copilot() {
+        assert!(is_ai_config(Path::new(".github/copilot-instructions.md")));
+    }
+
+    #[test]
+    fn test_is_ai_config_windsurf() {
+        assert!(is_ai_config(Path::new(".windsurfrules")));
+    }
+
+    #[test]
+    fn test_is_ai_config_aider() {
+        assert!(is_ai_config(Path::new(".aider")));
+        assert!(is_ai_config(Path::new(".aiderignore")));
+    }
+
+    #[test]
+    fn test_is_ai_config_continue() {
+        assert!(is_ai_config(Path::new(".continue")));
+        assert!(is_ai_config(Path::new(".continue/config.json")));
+    }
+
+    #[test]
+    fn test_is_ai_config_cody() {
+        assert!(is_ai_config(Path::new(".cody")));
+        assert!(is_ai_config(Path::new("cody.json")));
+    }
+
+    #[test]
+    fn test_is_ai_config_generic() {
+        assert!(is_ai_config(Path::new(".ai")));
+        assert!(is_ai_config(Path::new("ai-instructions.md")));
+    }
+
+    #[test]
+    fn test_detect_ai_configs_empty_repo() {
+        let repo = create_test_repo();
+        let configs = detect_ai_configs(repo.path());
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn test_detect_gitignored_excludes_ai_configs() {
+        let repo = create_test_repo();
+
+        // Create gitignore that includes an AI config pattern
+        fs::write(repo.path().join(".gitignore"), ".claude\n.envrc").unwrap();
+
+        // Create both AI config and regular ignored file
+        fs::create_dir_all(repo.path().join(".claude")).unwrap();
+        fs::write(repo.path().join(".claude/settings.json"), "{}").unwrap();
+        fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
+
+        Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let ignored = detect_gitignored_files(repo.path());
+
+        // Should NOT include .claude/settings.json (it's an AI config)
+        assert!(!ignored.iter().any(|f| f.path.starts_with(".claude")));
+        // Should include .envrc
+        assert!(ignored.iter().any(|f| f.path == Path::new(".envrc")));
+    }
+
+    #[test]
+    fn test_detect_untracked_excludes_ai_configs() {
+        let repo = create_test_repo();
+
+        // Create AI config file and regular file
+        fs::write(repo.path().join("CLAUDE.md"), "# Claude").unwrap();
+        fs::write(repo.path().join("notes.txt"), "notes").unwrap();
+
+        let untracked = detect_untracked_files(repo.path());
+
+        // Should NOT include CLAUDE.md
+        assert!(!untracked.iter().any(|f| f.path == Path::new("CLAUDE.md")));
+        // Should include notes.txt
+        assert!(untracked.iter().any(|f| f.path == Path::new("notes.txt")));
+    }
+
+    #[test]
+    fn test_discover_files_deduplicates() {
+        let repo = create_test_repo();
+
+        // Create a file that might appear in both gitignored and untracked
+        fs::write(repo.path().join("test.txt"), "test").unwrap();
+
+        let all_files = discover_files(repo.path());
+
+        // Count how many times test.txt appears
+        let count = all_files
+            .iter()
+            .filter(|f| f.path == Path::new("test.txt"))
+            .count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_file_category_equality() {
+        assert_eq!(FileCategory::AiConfig, FileCategory::AiConfig);
+        assert_eq!(FileCategory::Gitignored, FileCategory::Gitignored);
+        assert_eq!(FileCategory::Untracked, FileCategory::Untracked);
+        assert_ne!(FileCategory::AiConfig, FileCategory::Gitignored);
+    }
+
+    #[test]
+    fn test_detected_file_clone() {
+        let file = DetectedFile {
+            path: PathBuf::from("test.txt"),
+            category: FileCategory::AiConfig,
+            preselected: true,
+        };
+        let cloned = file.clone();
+        assert_eq!(cloned.path, file.path);
+        assert_eq!(cloned.category, file.category);
+        assert_eq!(cloned.preselected, file.preselected);
+    }
 }

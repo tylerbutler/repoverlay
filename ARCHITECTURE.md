@@ -13,6 +13,7 @@ src/
 ├── cache.rs       # GitHub repository cache management
 ├── config.rs      # Global and per-repo configuration (CCL format)
 ├── overlay_repo.rs # Shared overlay repository integration
+├── upstream.rs    # Upstream repository detection for fork inheritance
 └── detection.rs   # File discovery for overlay creation
 ```
 
@@ -32,7 +33,9 @@ src/
 
 - **config.rs** - Configuration management using CCL format. Handles global config (`~/.config/repoverlay/config.ccl`) and per-overlay config (`repoverlay.ccl`).
 
-- **overlay_repo.rs** - Shared overlay repository support. Allows overlays to be referenced as `org/repo/name` from a centrally managed repository.
+- **overlay_repo.rs** - Shared overlay repository support. Allows overlays to be referenced as `org/repo/name` from a centrally managed repository. Supports fallback resolution for fork inheritance.
+
+- **upstream.rs** - Upstream repository detection. Scans git remotes to identify parent repositories (forks), enabling automatic overlay inheritance from upstream.
 
 - **detection.rs** - File discovery for the `create` command. Identifies AI configs, gitignored files, and untracked files that might be candidates for overlay creation.
 
@@ -155,6 +158,47 @@ The `resolve_source()` function determines the overlay source type:
 1. **GitHub URL** (`https://github.com/...`) - Downloads to cache, returns cached path
 2. **Local path** (`./path` or `/path`) - Returns path directly after validation
 3. **Overlay repo reference** (`org/repo/name`) - Resolves from configured shared repository
+
+## Fork Inheritance
+
+When applying overlays from a shared repository to a forked repo, repoverlay automatically inherits overlays from the upstream (parent) repository.
+
+### Resolution Order
+
+1. **Direct match** - Look for `fork-org/fork-repo/overlay-name`
+2. **Upstream fallback** - If not found and upstream exists, look for `upstream-org/upstream-repo/overlay-name`
+
+### Upstream Detection
+
+The upstream repository is detected by scanning git remotes:
+
+1. Check for a remote named `upstream` (standard fork convention)
+2. Parse the remote URL (supports both HTTPS and SSH formats)
+3. Extract org/repo for fallback resolution
+
+Example:
+```bash
+# Fork setup
+git remote -v
+# origin    git@github.com:tylerbutler/FluidFramework.git (fetch)
+# upstream  git@github.com:microsoft/FluidFramework.git (fetch)
+
+# Apply overlay - will fallback to microsoft/FluidFramework if needed
+repoverlay apply microsoft/FluidFramework/claude-config
+```
+
+### State Tracking
+
+The `ResolvedVia` enum tracks how an overlay was resolved:
+- `Direct` - Exact match in overlay repository
+- `Upstream` - Resolved via upstream fallback
+
+This is stored in the overlay state and displayed in `repoverlay status`:
+```
+Overlay: claude-config
+  Source:  microsoft/FluidFramework/claude-config (via upstream) (overlay repo)
+  Commit:  abc123def456
+```
 
 ## Caching Strategy
 

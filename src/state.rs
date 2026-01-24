@@ -20,6 +20,16 @@ pub const CONFIG_FILE: &str = "repoverlay.ccl";
 pub const GIT_EXCLUDE: &str = ".git/info/exclude";
 pub const MANAGED_SECTION_NAME: &str = "managed";
 
+/// How an overlay was resolved from a reference.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResolvedVia {
+    /// Resolved directly (exact org/repo match)
+    Direct,
+    /// Resolved via upstream fallback
+    Upstream,
+}
+
 /// Source of an overlay - can be local, from GitHub, or from a shared overlay repository.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
@@ -57,6 +67,9 @@ pub enum OverlaySource {
         name: String,
         /// Commit SHA at time of apply
         commit: String,
+        /// How this overlay was resolved (direct match or upstream fallback)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolved_via: Option<ResolvedVia>,
     },
 }
 
@@ -93,6 +106,24 @@ impl OverlaySource {
             repo,
             name,
             commit,
+            resolved_via: None,
+        }
+    }
+
+    /// Create a new overlay repository source with resolution info.
+    pub fn overlay_repo_with_resolution(
+        org: String,
+        repo: String,
+        name: String,
+        commit: String,
+        resolved_via: ResolvedVia,
+    ) -> Self {
+        OverlaySource::OverlayRepo {
+            org,
+            repo,
+            name,
+            commit,
+            resolved_via: Some(resolved_via),
         }
     }
 
@@ -114,12 +145,18 @@ impl OverlaySource {
                 repo,
                 name,
                 commit,
+                resolved_via,
             } => {
+                let via = match resolved_via {
+                    Some(ResolvedVia::Upstream) => " via upstream",
+                    _ => "",
+                };
                 format!(
-                    "{}/{}/{} (@{})",
+                    "{}/{}/{}{} (@{})",
                     org,
                     repo,
                     name,
+                    via,
                     &commit[..12.min(commit.len())]
                 )
             }
@@ -589,5 +626,335 @@ mod tests {
     fn test_exclude_markers() {
         assert_eq!(exclude_marker_start("test"), "# repoverlay:test start");
         assert_eq!(exclude_marker_end("test"), "# repoverlay:test end");
+    }
+
+    #[test]
+    fn test_overlay_source_overlay_repo_with_resolved_via() {
+        let source = OverlaySource::OverlayRepo {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "claude-config".to_string(),
+            commit: "abc123".to_string(),
+            resolved_via: Some(ResolvedVia::Upstream),
+        };
+
+        let serialized = sickle::to_string(&source).unwrap();
+        let deserialized: OverlaySource = sickle::from_str(&serialized).unwrap();
+
+        match deserialized {
+            OverlaySource::OverlayRepo { resolved_via, .. } => {
+                assert_eq!(resolved_via, Some(ResolvedVia::Upstream));
+            }
+            _ => panic!("Expected OverlayRepo"),
+        }
+    }
+
+    #[test]
+    fn test_resolved_via_direct_is_default() {
+        let source = OverlaySource::OverlayRepo {
+            org: "tylerbutler".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "claude-config".to_string(),
+            commit: "abc123".to_string(),
+            resolved_via: None,
+        };
+
+        let serialized = sickle::to_string(&source).unwrap();
+        // Should work without resolved_via field
+        assert!(!serialized.contains("resolved_via") || serialized.contains("resolved_via = "));
+    }
+
+    #[test]
+    fn test_overlay_source_overlay_repo() {
+        let source = OverlaySource::overlay_repo(
+            "microsoft".to_string(),
+            "FluidFramework".to_string(),
+            "claude-config".to_string(),
+            "abc123def456".to_string(),
+        );
+        assert!(source.is_overlay_repo());
+        assert!(!source.is_github());
+        assert_eq!(source.local_path(), None);
+        assert!(
+            source
+                .display()
+                .contains("microsoft/FluidFramework/claude-config")
+        );
+    }
+
+    #[test]
+    fn test_overlay_source_display_github_short_commit() {
+        let source = OverlaySource::github(
+            "https://github.com/owner/repo".to_string(),
+            "owner".to_string(),
+            "repo".to_string(),
+            "main".to_string(),
+            "abc".to_string(), // Short commit
+            None,
+        );
+        let display = source.display();
+        assert!(display.contains("abc")); // Should handle short commits gracefully
+    }
+
+    #[test]
+    fn test_overlay_source_display_overlay_repo_via_upstream() {
+        let source = OverlaySource::OverlayRepo {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "claude-config".to_string(),
+            commit: "abc123def456".to_string(),
+            resolved_via: Some(ResolvedVia::Upstream),
+        };
+        let display = source.display();
+        assert!(display.contains("via upstream"));
+    }
+
+    #[test]
+    fn test_overlay_state_methods() {
+        let mut state = OverlayState::new(
+            "test".to_string(),
+            OverlaySource::local(PathBuf::from("/path")),
+        );
+
+        assert_eq!(state.file_count(), 0);
+        assert!(state.file_entries().is_empty());
+
+        state.add_file(FileEntry {
+            source: PathBuf::from("a.txt"),
+            target: PathBuf::from("a.txt"),
+            link_type: LinkType::Symlink,
+        });
+
+        assert_eq!(state.file_count(), 1);
+        assert_eq!(state.file_entries().len(), 1);
+    }
+
+    #[test]
+    fn test_global_meta_default() {
+        let meta = GlobalMeta::default();
+        assert_eq!(meta.version, 1);
+    }
+
+    #[test]
+    fn test_list_applied_overlays_empty() {
+        let temp = TempDir::new().unwrap();
+        let overlays = list_applied_overlays(temp.path()).unwrap();
+        assert!(overlays.is_empty());
+    }
+
+    #[test]
+    fn test_list_applied_overlays_with_overlays() {
+        let temp = TempDir::new().unwrap();
+        let overlays_dir = temp.path().join(STATE_DIR).join(OVERLAYS_DIR);
+        fs::create_dir_all(&overlays_dir).unwrap();
+
+        // Create some overlay state files
+        fs::write(overlays_dir.join("alpha.ccl"), "name = alpha").unwrap();
+        fs::write(overlays_dir.join("beta.ccl"), "name = beta").unwrap();
+        fs::write(overlays_dir.join("gamma.ccl"), "name = gamma").unwrap();
+
+        let overlays = list_applied_overlays(temp.path()).unwrap();
+        assert_eq!(overlays.len(), 3);
+        // Should be sorted
+        assert_eq!(overlays[0], "alpha");
+        assert_eq!(overlays[1], "beta");
+        assert_eq!(overlays[2], "gamma");
+    }
+
+    #[test]
+    fn test_list_applied_overlays_ignores_non_ccl_files() {
+        let temp = TempDir::new().unwrap();
+        let overlays_dir = temp.path().join(STATE_DIR).join(OVERLAYS_DIR);
+        fs::create_dir_all(&overlays_dir).unwrap();
+
+        fs::write(overlays_dir.join("overlay.ccl"), "name = overlay").unwrap();
+        fs::write(overlays_dir.join("readme.txt"), "not an overlay").unwrap();
+        fs::write(overlays_dir.join("meta.json"), "{}").unwrap();
+
+        let overlays = list_applied_overlays(temp.path()).unwrap();
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0], "overlay");
+    }
+
+    #[test]
+    fn test_load_all_overlay_targets_empty() {
+        let temp = TempDir::new().unwrap();
+        let targets = load_all_overlay_targets(temp.path()).unwrap();
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn test_load_all_overlay_targets_with_files() {
+        let temp = TempDir::new().unwrap();
+        let overlays_dir = temp.path().join(STATE_DIR).join(OVERLAYS_DIR);
+        fs::create_dir_all(&overlays_dir).unwrap();
+
+        // Create a proper overlay state
+        let state = OverlayState {
+            name: "test-overlay".to_string(),
+            applied_at: Utc::now(),
+            source: OverlaySource::local(PathBuf::from("/path")),
+            files: vec![
+                FileEntry {
+                    source: PathBuf::from(".envrc"),
+                    target: PathBuf::from(".envrc"),
+                    link_type: LinkType::Symlink,
+                },
+                FileEntry {
+                    source: PathBuf::from("config.json"),
+                    target: PathBuf::from(".config/app.json"),
+                    link_type: LinkType::Copy,
+                },
+            ],
+        };
+        let content = sickle::to_string(&state).unwrap();
+        fs::write(overlays_dir.join("test-overlay.ccl"), content).unwrap();
+
+        let targets = load_all_overlay_targets(temp.path()).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.get(".envrc"), Some(&"test-overlay".to_string()));
+        assert_eq!(
+            targets.get(".config/app.json"),
+            Some(&"test-overlay".to_string())
+        );
+    }
+
+    #[test]
+    fn test_save_and_load_overlay_state() {
+        let temp = TempDir::new().unwrap();
+
+        let mut state = OverlayState::new(
+            "my-overlay".to_string(),
+            OverlaySource::local(PathBuf::from("/source/path")),
+        );
+        state.add_file(FileEntry {
+            source: PathBuf::from(".envrc"),
+            target: PathBuf::from(".envrc"),
+            link_type: LinkType::Symlink,
+        });
+
+        // Save
+        save_overlay_state(temp.path(), &state).unwrap();
+
+        // Verify file exists
+        let state_file = temp
+            .path()
+            .join(STATE_DIR)
+            .join(OVERLAYS_DIR)
+            .join("my-overlay.ccl");
+        assert!(state_file.exists());
+
+        // Load
+        let loaded = load_overlay_state(temp.path(), "my-overlay").unwrap();
+        assert_eq!(loaded.name, "my-overlay");
+        assert_eq!(loaded.files.len(), 1);
+    }
+
+    #[test]
+    fn test_load_overlay_state_not_found() {
+        let temp = TempDir::new().unwrap();
+        let result = load_overlay_state(temp.path(), "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_normalize_overlay_name_special_chars() {
+        assert_eq!(normalize_overlay_name("my overlay!").unwrap(), "my-overlay");
+        assert_eq!(normalize_overlay_name("Test@123").unwrap(), "test123");
+        assert_eq!(normalize_overlay_name("  spaces  ").unwrap(), "--spaces--");
+    }
+
+    #[test]
+    fn test_normalize_overlay_name_preserves_underscores() {
+        assert_eq!(
+            normalize_overlay_name("my_overlay_name").unwrap(),
+            "my_overlay_name"
+        );
+    }
+
+    #[test]
+    fn test_external_state_multiple_overlays() {
+        let temp_target = TempDir::new().unwrap();
+        let target_path = temp_target.path();
+
+        // Save multiple overlays
+        let state1 = OverlayState::new(
+            "overlay-a".to_string(),
+            OverlaySource::local(PathBuf::from("/source/a")),
+        );
+        let state2 = OverlayState::new(
+            "overlay-b".to_string(),
+            OverlaySource::local(PathBuf::from("/source/b")),
+        );
+
+        save_external_state(target_path, "overlay-a", &state1).unwrap();
+        save_external_state(target_path, "overlay-b", &state2).unwrap();
+
+        // Load all
+        let loaded = load_external_states(target_path).unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        // Remove one
+        remove_external_state(target_path, "overlay-a").unwrap();
+        let after = load_external_states(target_path).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].name, "overlay-b");
+    }
+
+    #[test]
+    fn test_remove_external_state_nonexistent() {
+        let temp_target = TempDir::new().unwrap();
+        // Should not error when removing nonexistent state
+        let result = remove_external_state(temp_target.path(), "nonexistent");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_link_type_serde() {
+        // Test Symlink
+        let entry = FileEntry {
+            source: PathBuf::from("src"),
+            target: PathBuf::from("dst"),
+            link_type: LinkType::Symlink,
+        };
+        let s = sickle::to_string(&entry).unwrap();
+        assert!(s.contains("symlink"));
+
+        // Test Copy
+        let entry2 = FileEntry {
+            source: PathBuf::from("src"),
+            target: PathBuf::from("dst"),
+            link_type: LinkType::Copy,
+        };
+        let s2 = sickle::to_string(&entry2).unwrap();
+        assert!(s2.contains("copy"));
+    }
+
+    #[test]
+    fn test_resolved_via_serde() {
+        let direct = ResolvedVia::Direct;
+        let upstream = ResolvedVia::Upstream;
+
+        // Create sources with each resolution type
+        let source_direct = OverlaySource::overlay_repo_with_resolution(
+            "org".to_string(),
+            "repo".to_string(),
+            "name".to_string(),
+            "abc123".to_string(),
+            direct,
+        );
+        let source_upstream = OverlaySource::overlay_repo_with_resolution(
+            "org".to_string(),
+            "repo".to_string(),
+            "name".to_string(),
+            "abc123".to_string(),
+            upstream,
+        );
+
+        let s1 = sickle::to_string(&source_direct).unwrap();
+        let s2 = sickle::to_string(&source_upstream).unwrap();
+
+        assert!(s1.contains("direct"));
+        assert!(s2.contains("upstream"));
     }
 }

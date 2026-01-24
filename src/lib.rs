@@ -10,6 +10,7 @@ pub mod github;
 pub mod overlay_repo;
 pub mod selection;
 pub mod state;
+pub mod upstream;
 
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
@@ -27,6 +28,7 @@ pub use state::{
     load_overlay_state, normalize_overlay_name, remove_external_state, save_external_state,
     save_overlay_state,
 };
+pub use upstream::{UpstreamInfo, detect_upstream};
 
 /// Canonicalize a path and return an error with a descriptive message if it fails.
 pub fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf> {
@@ -56,6 +58,8 @@ pub struct ResolvedSource {
 /// 1. GitHub URL (`https://github.com/...`) - downloads to cache, returns cached path
 /// 2. Local path (`./path` or `/path`) - returns path directly after validation
 /// 3. Overlay repo reference (`org/repo/name`) - resolves from configured shared repository
+///    - First tries exact match (org/repo/name)
+///    - Falls back to upstream if target_path has an upstream remote
 ///
 /// # Errors
 ///
@@ -68,6 +72,7 @@ pub fn resolve_source(
     source_str: &str,
     ref_override: Option<&str>,
     update: bool,
+    target_path: Option<&Path>,
 ) -> Result<ResolvedSource> {
     // Try to parse as GitHub URL
     if GitHubSource::is_github_url(source_str) {
@@ -139,20 +144,45 @@ pub fn resolve_source(
             manager.pull()?;
         }
 
-        let overlay_path = manager.get_overlay_path(&org, &repo, &name)?;
+        // Detect upstream for fallback resolution
+        let upstream = target_path.and_then(|p| detect_upstream(p).ok()).flatten();
+
+        // Try to resolve with fallback
+        let (overlay_path, resolved_via) =
+            manager.get_overlay_path_with_fallback(&org, &repo, &name, upstream.as_ref())?;
+
         let commit = manager.get_current_commit()?;
 
+        // Determine actual org/repo for state tracking
+        let via_upstream = resolved_via == state::ResolvedVia::Upstream;
+        let (actual_org, actual_repo) = match (&upstream, via_upstream) {
+            (Some(up), true) => (up.org.clone(), up.repo.clone()),
+            _ => (org.clone(), repo.clone()),
+        };
+
+        let via_suffix = if via_upstream {
+            " (via upstream)".dimmed().to_string()
+        } else {
+            String::new()
+        };
         println!(
-            "{} overlay: {}/{}/{}",
+            "{} overlay: {}/{}/{}{}",
             "Resolving".blue().bold(),
-            org,
-            repo,
-            name
+            actual_org,
+            actual_repo,
+            name,
+            via_suffix
         );
 
         return Ok(ResolvedSource {
             path: overlay_path,
-            source_info: OverlaySource::overlay_repo(org, repo, name, commit),
+            source_info: OverlaySource::overlay_repo_with_resolution(
+                actual_org,
+                actual_repo,
+                name,
+                commit,
+                resolved_via,
+            ),
         });
     }
 
@@ -198,7 +228,8 @@ pub fn apply_overlay(
     update_cache: bool,
 ) -> Result<()> {
     // Resolve source (handles GitHub URLs and local paths)
-    let resolved = resolve_source(source_str, ref_override, update_cache)?;
+    // Pass target to enable upstream detection for fork inheritance
+    let resolved = resolve_source(source_str, ref_override, update_cache, Some(target))?;
     let source = &resolved.path;
 
     // Validate target exists and is a git repo
@@ -599,12 +630,20 @@ pub fn show_single_overlay_status(target: &Path, name: &str) -> Result<()> {
             repo,
             name: overlay_name,
             commit,
+            resolved_via,
         } => {
+            let via_upstream = matches!(resolved_via, Some(state::ResolvedVia::Upstream));
+            let via_str = if via_upstream {
+                format!(" {}", "(via upstream)".yellow())
+            } else {
+                String::new()
+            };
             println!(
-                "    Source:  {}/{}/{} {}",
+                "    Source:  {}/{}/{}{} {}",
                 org,
                 repo,
                 overlay_name,
+                via_str,
                 "(overlay repo)".dimmed()
             );
             println!("    Commit:  {}", &commit[..12.min(commit.len())]);
@@ -1449,27 +1488,17 @@ pub fn any_overlay_sections_remain(content: &str) -> bool {
 
 /// Parse owner/repo from a GitHub URL (HTTPS or SSH format).
 pub fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
-    if !url.contains("github.com") {
-        bail!(
-            "Could not detect target repository from git remote.\n\
-             Non-GitHub remotes are not supported for auto-detection.\n\
-             Please specify --target org/repo"
-        );
-    }
-
-    // Normalize URL: strip prefix and .git suffix, then split by /
-    let path_part = url
-        .trim_start_matches("git@github.com:")
-        .trim_start_matches("https://github.com/")
-        .trim_start_matches("http://github.com/")
-        .trim_end_matches(".git");
-
-    let parts: Vec<&str> = path_part.split('/').collect();
-    if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-        Ok((parts[0].to_string(), parts[1].to_string()))
-    } else {
-        bail!("Could not parse git remote URL: {}", url)
-    }
+    github::parse_remote_url(url).ok_or_else(|| {
+        if url.contains("github.com") {
+            anyhow::anyhow!("Could not parse git remote URL: {}", url)
+        } else {
+            anyhow::anyhow!(
+                "Could not detect target repository from git remote.\n\
+                 Non-GitHub remotes are not supported for auto-detection.\n\
+                 Please specify --target org/repo"
+            )
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1838,6 +1867,242 @@ mod tests {
             assert!(result.contains("before"));
             assert!(result.contains("after"));
             assert!(!result.contains(".envrc"));
+        }
+
+        #[test]
+        fn handles_empty_section() {
+            let content = "# repoverlay:empty start\n# repoverlay:empty end\n";
+            let result = remove_overlay_section(content, "empty");
+            assert!(!result.contains("repoverlay:empty"));
+        }
+
+        #[test]
+        fn removes_only_specified_overlay() {
+            let content = "# repoverlay:a start\n.a\n# repoverlay:a end\n\
+                          # repoverlay:b start\n.b\n# repoverlay:b end\n";
+            let result = remove_overlay_section(content, "a");
+            assert!(!result.contains(".a"));
+            assert!(result.contains(".b"));
+            assert!(result.contains("# repoverlay:b"));
+        }
+
+        #[test]
+        fn handles_similar_named_overlays() {
+            let content = "# repoverlay:test start\n.test\n# repoverlay:test end\n\
+                          # repoverlay:test-extended start\n.extended\n# repoverlay:test-extended end\n";
+            let result = remove_overlay_section(content, "test");
+            assert!(!result.contains(".test\n"));
+            assert!(result.contains(".extended"));
+        }
+    }
+
+    // Tests for update_git_exclude with multiple overlays
+    mod update_git_exclude_multiple_tests {
+        use super::*;
+
+        #[test]
+        fn handles_multiple_overlays() {
+            let repo = create_test_repo();
+
+            // Add first overlay
+            update_git_exclude(repo.path(), "overlay-a", &[".envrc".to_string()], true).unwrap();
+
+            // Add second overlay
+            update_git_exclude(repo.path(), "overlay-b", &[".env.local".to_string()], true)
+                .unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content = fs::read_to_string(&exclude_path).unwrap();
+
+            assert!(content.contains("# repoverlay:overlay-a start"));
+            assert!(content.contains(".envrc"));
+            assert!(content.contains("# repoverlay:overlay-b start"));
+            assert!(content.contains(".env.local"));
+        }
+
+        #[test]
+        fn keeps_managed_section_when_one_overlay_remains() {
+            let repo = create_test_repo();
+
+            // Add two overlays
+            update_git_exclude(repo.path(), "overlay-a", &[".envrc".to_string()], true).unwrap();
+            update_git_exclude(repo.path(), "overlay-b", &[".env".to_string()], true).unwrap();
+
+            // Remove one overlay
+            update_git_exclude(repo.path(), "overlay-a", &[".envrc".to_string()], false).unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content = fs::read_to_string(&exclude_path).unwrap();
+
+            // Managed section should remain because overlay-b is still there
+            assert!(content.contains("# repoverlay:managed start"));
+            assert!(content.contains("# repoverlay:overlay-b start"));
+            assert!(!content.contains("# repoverlay:overlay-a"));
+        }
+
+        #[test]
+        fn updates_existing_overlay_section() {
+            let repo = create_test_repo();
+
+            // Add overlay with one file
+            update_git_exclude(repo.path(), "test", &[".envrc".to_string()], true).unwrap();
+
+            // "Update" same overlay with different files (add=true replaces)
+            update_git_exclude(
+                repo.path(),
+                "test",
+                &[".env".to_string(), ".env.local".to_string()],
+                true,
+            )
+            .unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content = fs::read_to_string(&exclude_path).unwrap();
+
+            // Should have new entries, old should be gone
+            assert!(content.contains(".env"));
+            assert!(content.contains(".env.local"));
+            // Should only have one test section
+            assert_eq!(content.matches("# repoverlay:test start").count(), 1);
+        }
+
+        #[test]
+        fn handles_multiple_entries_per_overlay() {
+            let repo = create_test_repo();
+
+            update_git_exclude(
+                repo.path(),
+                "test",
+                &[
+                    ".envrc".to_string(),
+                    ".env.local".to_string(),
+                    ".vscode/settings.json".to_string(),
+                ],
+                true,
+            )
+            .unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content = fs::read_to_string(&exclude_path).unwrap();
+
+            assert!(content.contains(".envrc"));
+            assert!(content.contains(".env.local"));
+            assert!(content.contains(".vscode/settings.json"));
+        }
+    }
+
+    // Tests for copy_files_to_overlay additional cases
+    mod copy_files_to_overlay_additional_tests {
+        use super::*;
+
+        #[test]
+        fn copies_multiple_files() {
+            let source = TempDir::new().unwrap();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join("a.txt"), "a").unwrap();
+            fs::write(source.path().join("b.txt"), "b").unwrap();
+            fs::write(source.path().join("c.txt"), "c").unwrap();
+
+            let copied = copy_files_to_overlay(
+                source.path(),
+                output.path(),
+                &[
+                    PathBuf::from("a.txt"),
+                    PathBuf::from("b.txt"),
+                    PathBuf::from("c.txt"),
+                ],
+            )
+            .unwrap();
+
+            assert_eq!(copied.len(), 3);
+            assert_eq!(
+                fs::read_to_string(output.path().join("a.txt")).unwrap(),
+                "a"
+            );
+            assert_eq!(
+                fs::read_to_string(output.path().join("b.txt")).unwrap(),
+                "b"
+            );
+            assert_eq!(
+                fs::read_to_string(output.path().join("c.txt")).unwrap(),
+                "c"
+            );
+        }
+
+        #[test]
+        fn creates_output_dir_if_missing() {
+            let source = TempDir::new().unwrap();
+            let temp = TempDir::new().unwrap();
+            let output = temp.path().join("nested/output/dir");
+
+            fs::write(source.path().join("file.txt"), "content").unwrap();
+
+            let copied =
+                copy_files_to_overlay(source.path(), &output, &[PathBuf::from("file.txt")])
+                    .unwrap();
+
+            assert_eq!(copied.len(), 1);
+            assert!(output.join("file.txt").exists());
+        }
+
+        #[test]
+        fn preserves_file_content() {
+            let source = TempDir::new().unwrap();
+            let output = TempDir::new().unwrap();
+
+            let content = "line1\nline2\nline3\n特殊字符\n";
+            fs::write(source.path().join("file.txt"), content).unwrap();
+
+            copy_files_to_overlay(source.path(), output.path(), &[PathBuf::from("file.txt")])
+                .unwrap();
+
+            let read_content = fs::read_to_string(output.path().join("file.txt")).unwrap();
+            assert_eq!(read_content, content);
+        }
+    }
+
+    // Tests for generate_overlay_config additional cases
+    mod generate_overlay_config_additional_tests {
+        use super::*;
+
+        #[test]
+        fn handles_special_characters_in_name() {
+            let config = generate_overlay_config("test-overlay_123");
+            assert!(config.contains("name = test-overlay_123"));
+        }
+
+        #[test]
+        fn includes_comment_header() {
+            let config = generate_overlay_config("test");
+            assert!(config.contains("/= Overlay configuration file"));
+        }
+
+        #[test]
+        fn includes_mappings_example() {
+            let config = generate_overlay_config("test");
+            assert!(config.contains(".envrc.template = .envrc"));
+        }
+    }
+
+    // Tests for ResolvedSource
+    mod resolved_source_tests {
+        use super::*;
+
+        #[test]
+        fn resolved_source_struct_fields() {
+            let source = ResolvedSource {
+                path: PathBuf::from("/some/path"),
+                source_info: OverlaySource::local(PathBuf::from("/origin")),
+            };
+
+            assert_eq!(source.path, PathBuf::from("/some/path"));
+            match source.source_info {
+                OverlaySource::Local { path } => {
+                    assert_eq!(path, PathBuf::from("/origin"));
+                }
+                _ => panic!("Expected Local source"),
+            }
         }
     }
 }

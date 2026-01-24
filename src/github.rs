@@ -182,6 +182,39 @@ impl std::fmt::Display for GitRef {
     }
 }
 
+/// Parse owner/repo from a git remote URL (HTTPS or SSH format).
+///
+/// Returns `None` if the URL is not a GitHub URL or cannot be parsed.
+pub fn parse_remote_url(url: &str) -> Option<(String, String)> {
+    // Must be a GitHub URL
+    if !url.contains("github.com") {
+        return None;
+    }
+
+    // Handle SSH format: git@github.com:owner/repo.git
+    if let Some(path) = url.strip_prefix("git@github.com:") {
+        let path = path.trim_end_matches(".git");
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+            return Some((parts[0].to_string(), parts[1].to_string()));
+        }
+        return None;
+    }
+
+    // Handle HTTPS format: https://github.com/owner/repo.git
+    let path = url
+        .trim_start_matches("https://github.com/")
+        .trim_start_matches("http://github.com/")
+        .trim_end_matches(".git");
+
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+        return Some((parts[0].to_string(), parts[1].to_string()));
+    }
+
+    None
+}
+
 /// Sanitize a string for use in a filesystem path.
 #[allow(dead_code)]
 fn sanitize_for_path(s: &str) -> String {
@@ -478,5 +511,29 @@ mod tests {
         assert_eq!(GitRef::Branch("main".to_string()).as_str(), "main");
         assert_eq!(GitRef::Tag("v1.0".to_string()).as_str(), "v1.0");
         assert_eq!(GitRef::Commit("abc123".to_string()).as_str(), "abc123");
+    }
+
+    #[test]
+    fn test_parse_remote_url_ssh() {
+        let result = parse_remote_url("git@github.com:owner/repo.git");
+        assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+    }
+
+    #[test]
+    fn test_parse_remote_url_ssh_no_suffix() {
+        let result = parse_remote_url("git@github.com:owner/repo");
+        assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+    }
+
+    #[test]
+    fn test_parse_remote_url_https() {
+        let result = parse_remote_url("https://github.com/owner/repo.git");
+        assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+    }
+
+    #[test]
+    fn test_parse_remote_url_non_github() {
+        let result = parse_remote_url("git@gitlab.com:owner/repo.git");
+        assert_eq!(result, None);
     }
 }
