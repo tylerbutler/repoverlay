@@ -601,6 +601,7 @@ pub fn show_single_overlay_status(target: &Path, name: &str) -> Result<()> {
             repo,
             name: overlay_name,
             commit,
+            ..
         } => {
             println!(
                 "    Source:  {}/{}/{} {}",

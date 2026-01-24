@@ -20,6 +20,16 @@ pub const CONFIG_FILE: &str = "repoverlay.ccl";
 pub const GIT_EXCLUDE: &str = ".git/info/exclude";
 pub const MANAGED_SECTION_NAME: &str = "managed";
 
+/// How an overlay was resolved from a reference.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResolvedVia {
+    /// Resolved directly (exact org/repo match)
+    Direct,
+    /// Resolved via upstream fallback
+    Upstream,
+}
+
 /// Source of an overlay - can be local, from GitHub, or from a shared overlay repository.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
@@ -57,6 +67,9 @@ pub enum OverlaySource {
         name: String,
         /// Commit SHA at time of apply
         commit: String,
+        /// How this overlay was resolved (direct match or upstream fallback)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolved_via: Option<ResolvedVia>,
     },
 }
 
@@ -93,6 +106,24 @@ impl OverlaySource {
             repo,
             name,
             commit,
+            resolved_via: None,
+        }
+    }
+
+    /// Create a new overlay repository source with resolution info.
+    pub fn overlay_repo_with_resolution(
+        org: String,
+        repo: String,
+        name: String,
+        commit: String,
+        resolved_via: ResolvedVia,
+    ) -> Self {
+        OverlaySource::OverlayRepo {
+            org,
+            repo,
+            name,
+            commit,
+            resolved_via: Some(resolved_via),
         }
     }
 
@@ -114,12 +145,18 @@ impl OverlaySource {
                 repo,
                 name,
                 commit,
+                resolved_via,
             } => {
+                let via = match resolved_via {
+                    Some(ResolvedVia::Upstream) => " via upstream",
+                    _ => "",
+                };
                 format!(
-                    "{}/{}/{} (@{})",
+                    "{}/{}/{}{} (@{})",
                     org,
                     repo,
                     name,
+                    via,
                     &commit[..12.min(commit.len())]
                 )
             }
@@ -589,5 +626,41 @@ mod tests {
     fn test_exclude_markers() {
         assert_eq!(exclude_marker_start("test"), "# repoverlay:test start");
         assert_eq!(exclude_marker_end("test"), "# repoverlay:test end");
+    }
+
+    #[test]
+    fn test_overlay_source_overlay_repo_with_resolved_via() {
+        let source = OverlaySource::OverlayRepo {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "claude-config".to_string(),
+            commit: "abc123".to_string(),
+            resolved_via: Some(ResolvedVia::Upstream),
+        };
+
+        let serialized = sickle::to_string(&source).unwrap();
+        let deserialized: OverlaySource = sickle::from_str(&serialized).unwrap();
+
+        match deserialized {
+            OverlaySource::OverlayRepo { resolved_via, .. } => {
+                assert_eq!(resolved_via, Some(ResolvedVia::Upstream));
+            }
+            _ => panic!("Expected OverlayRepo"),
+        }
+    }
+
+    #[test]
+    fn test_resolved_via_direct_is_default() {
+        let source = OverlaySource::OverlayRepo {
+            org: "tylerbutler".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "claude-config".to_string(),
+            commit: "abc123".to_string(),
+            resolved_via: None,
+        };
+
+        let serialized = sickle::to_string(&source).unwrap();
+        // Should work without resolved_via field
+        assert!(!serialized.contains("resolved_via") || serialized.contains("resolved_via = "));
     }
 }
