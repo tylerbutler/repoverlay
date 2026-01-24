@@ -10,6 +10,7 @@ pub mod github;
 pub mod overlay_repo;
 pub mod selection;
 pub mod state;
+pub mod upstream;
 
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
@@ -20,6 +21,7 @@ use walkdir::WalkDir;
 
 pub use cache::CacheManager;
 pub use github::GitHubSource;
+pub use upstream::{UpstreamInfo, detect_upstream};
 pub use state::{
     CONFIG_FILE, FileEntry, GIT_EXCLUDE, GlobalMeta, LinkType, MANAGED_SECTION_NAME, META_FILE,
     OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, exclude_marker_end,
