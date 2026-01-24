@@ -58,6 +58,8 @@ pub struct ResolvedSource {
 /// 1. GitHub URL (`https://github.com/...`) - downloads to cache, returns cached path
 /// 2. Local path (`./path` or `/path`) - returns path directly after validation
 /// 3. Overlay repo reference (`org/repo/name`) - resolves from configured shared repository
+///    - First tries exact match (org/repo/name)
+///    - Falls back to upstream if target_path has an upstream remote
 ///
 /// # Errors
 ///
@@ -70,6 +72,7 @@ pub fn resolve_source(
     source_str: &str,
     ref_override: Option<&str>,
     update: bool,
+    target_path: Option<&Path>,
 ) -> Result<ResolvedSource> {
     // Try to parse as GitHub URL
     if GitHubSource::is_github_url(source_str) {
@@ -141,20 +144,47 @@ pub fn resolve_source(
             manager.pull()?;
         }
 
-        let overlay_path = manager.get_overlay_path(&org, &repo, &name)?;
+        // Detect upstream for fallback resolution
+        let upstream = target_path
+            .and_then(|p| detect_upstream(p).ok())
+            .flatten();
+
+        // Try to resolve with fallback
+        let (overlay_path, resolved_via) = manager.get_overlay_path_with_fallback(
+            &org, &repo, &name, upstream.as_ref(),
+        )?;
+
         let commit = manager.get_current_commit()?;
 
+        // Determine actual org/repo for state tracking
+        let (actual_org, actual_repo) = if resolved_via == state::ResolvedVia::Upstream {
+            if let Some(ref up) = upstream {
+                (up.org.clone(), up.repo.clone())
+            } else {
+                (org.clone(), repo.clone())
+            }
+        } else {
+            (org.clone(), repo.clone())
+        };
+
         println!(
-            "{} overlay: {}/{}/{}",
+            "{} overlay: {}/{}/{}{}",
             "Resolving".blue().bold(),
-            org,
-            repo,
-            name
+            actual_org,
+            actual_repo,
+            name,
+            if resolved_via == state::ResolvedVia::Upstream {
+                " (via upstream)".dimmed().to_string()
+            } else {
+                String::new()
+            }
         );
 
         return Ok(ResolvedSource {
             path: overlay_path,
-            source_info: OverlaySource::overlay_repo(org, repo, name, commit),
+            source_info: OverlaySource::overlay_repo_with_resolution(
+                actual_org, actual_repo, name, commit, resolved_via,
+            ),
         });
     }
 
@@ -200,7 +230,8 @@ pub fn apply_overlay(
     update_cache: bool,
 ) -> Result<()> {
     // Resolve source (handles GitHub URLs and local paths)
-    let resolved = resolve_source(source_str, ref_override, update_cache)?;
+    // Pass target to enable upstream detection for fork inheritance
+    let resolved = resolve_source(source_str, ref_override, update_cache, Some(target))?;
     let source = &resolved.path;
 
     // Validate target exists and is a git repo

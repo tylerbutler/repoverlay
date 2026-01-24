@@ -5,3 +5,4 @@ mod create;
 mod remove;
 mod status;
 mod switch;
+mod upstream;
