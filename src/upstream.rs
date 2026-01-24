@@ -31,9 +31,7 @@ fn get_remote_url(repo_path: &Path, remote_name: &str) -> Result<Option<String>>
         return Ok(None);
     }
 
-    let url = String::from_utf8(output.stdout)?
-        .trim()
-        .to_string();
+    let url = String::from_utf8(output.stdout)?.trim().to_string();
 
     if url.is_empty() {
         Ok(None)
@@ -51,14 +49,14 @@ fn get_remote_url(repo_path: &Path, remote_name: &str) -> Result<Option<String>>
 /// Returns `None` if no upstream can be detected.
 pub fn detect_upstream(repo_path: &Path) -> Result<Option<UpstreamInfo>> {
     // First, try the "upstream" remote
-    if let Some(url) = get_remote_url(repo_path, "upstream")? {
-        if let Some((org, repo)) = parse_remote_url(&url) {
-            return Ok(Some(UpstreamInfo {
-                org,
-                repo,
-                remote_name: "upstream".to_string(),
-            }));
-        }
+    if let Some(url) = get_remote_url(repo_path, "upstream")?
+        && let Some((org, repo)) = parse_remote_url(&url)
+    {
+        return Ok(Some(UpstreamInfo {
+            org,
+            repo,
+            remote_name: "upstream".to_string(),
+        }));
     }
 
     // No upstream detected
@@ -87,7 +85,10 @@ mod tests {
 
     #[test]
     fn detects_upstream_remote() {
-        let repo = create_git_repo_with_remote("upstream", "https://github.com/microsoft/FluidFramework.git");
+        let repo = create_git_repo_with_remote(
+            "upstream",
+            "https://github.com/microsoft/FluidFramework.git",
+        );
 
         let result = detect_upstream(repo.path()).unwrap();
 
@@ -100,7 +101,10 @@ mod tests {
 
     #[test]
     fn returns_none_when_no_upstream() {
-        let repo = create_git_repo_with_remote("origin", "https://github.com/tylerbutler/FluidFramework.git");
+        let repo = create_git_repo_with_remote(
+            "origin",
+            "https://github.com/tylerbutler/FluidFramework.git",
+        );
 
         let result = detect_upstream(repo.path()).unwrap();
 
@@ -110,7 +114,8 @@ mod tests {
 
     #[test]
     fn handles_ssh_remote_url() {
-        let repo = create_git_repo_with_remote("upstream", "git@github.com:microsoft/FluidFramework.git");
+        let repo =
+            create_git_repo_with_remote("upstream", "git@github.com:microsoft/FluidFramework.git");
 
         let result = detect_upstream(repo.path()).unwrap();
 

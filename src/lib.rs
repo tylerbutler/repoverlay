@@ -21,7 +21,6 @@ use walkdir::WalkDir;
 
 pub use cache::CacheManager;
 pub use github::GitHubSource;
-pub use upstream::{UpstreamInfo, detect_upstream};
 pub use state::{
     CONFIG_FILE, FileEntry, GIT_EXCLUDE, GlobalMeta, LinkType, MANAGED_SECTION_NAME, META_FILE,
     OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, exclude_marker_end,
@@ -29,6 +28,7 @@ pub use state::{
     load_overlay_state, normalize_overlay_name, remove_external_state, save_external_state,
     save_overlay_state,
 };
+pub use upstream::{UpstreamInfo, detect_upstream};
 
 /// Canonicalize a path and return an error with a descriptive message if it fails.
 pub fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf> {
@@ -145,14 +145,11 @@ pub fn resolve_source(
         }
 
         // Detect upstream for fallback resolution
-        let upstream = target_path
-            .and_then(|p| detect_upstream(p).ok())
-            .flatten();
+        let upstream = target_path.and_then(|p| detect_upstream(p).ok()).flatten();
 
         // Try to resolve with fallback
-        let (overlay_path, resolved_via) = manager.get_overlay_path_with_fallback(
-            &org, &repo, &name, upstream.as_ref(),
-        )?;
+        let (overlay_path, resolved_via) =
+            manager.get_overlay_path_with_fallback(&org, &repo, &name, upstream.as_ref())?;
 
         let commit = manager.get_current_commit()?;
 
@@ -183,7 +180,11 @@ pub fn resolve_source(
         return Ok(ResolvedSource {
             path: overlay_path,
             source_info: OverlaySource::overlay_repo_with_resolution(
-                actual_org, actual_repo, name, commit, resolved_via,
+                actual_org,
+                actual_repo,
+                name,
+                commit,
+                resolved_via,
             ),
         });
     }

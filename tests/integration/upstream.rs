@@ -18,14 +18,24 @@ fn create_fork_repo() -> (TempDir, String, String) {
 
     // Add origin (the fork)
     Command::new("git")
-        .args(["remote", "add", "origin", "https://github.com/tylerbutler/FluidFramework.git"])
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/tylerbutler/FluidFramework.git",
+        ])
         .current_dir(dir.path())
         .output()
         .unwrap();
 
     // Add upstream (the parent repo)
     Command::new("git")
-        .args(["remote", "add", "upstream", "https://github.com/microsoft/FluidFramework.git"])
+        .args([
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/microsoft/FluidFramework.git",
+        ])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -52,13 +62,17 @@ fn no_upstream_when_only_origin() {
 
     // Add only origin remote
     Command::new("git")
-        .args(["remote", "add", "origin", "https://github.com/tylerbutler/FluidFramework.git"])
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/tylerbutler/FluidFramework.git",
+        ])
         .current_dir(ctx.repo_path())
         .output()
         .unwrap();
 
-    let upstream = repoverlay::detect_upstream(ctx.repo_path())
-        .expect("detection should not fail");
+    let upstream = repoverlay::detect_upstream(ctx.repo_path()).expect("detection should not fail");
 
     assert!(upstream.is_none());
 }
@@ -74,7 +88,12 @@ fn upstream_detection_with_ssh_url() {
         .unwrap();
 
     Command::new("git")
-        .args(["remote", "add", "upstream", "git@github.com:microsoft/FluidFramework.git"])
+        .args([
+            "remote",
+            "add",
+            "upstream",
+            "git@github.com:microsoft/FluidFramework.git",
+        ])
         .current_dir(dir.path())
         .output()
         .unwrap();

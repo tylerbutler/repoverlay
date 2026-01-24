@@ -913,7 +913,12 @@ mod tests {
         });
 
         let (path, resolved_via) = manager
-            .get_overlay_path_with_fallback("tylerbutler", "FluidFramework", "claude-config", upstream.as_ref())
+            .get_overlay_path_with_fallback(
+                "tylerbutler",
+                "FluidFramework",
+                "claude-config",
+                upstream.as_ref(),
+            )
             .unwrap();
 
         assert!(path.ends_with("tylerbutler/FluidFramework/claude-config"));
@@ -941,7 +946,12 @@ mod tests {
         });
 
         let (path, resolved_via) = manager
-            .get_overlay_path_with_fallback("tylerbutler", "FluidFramework", "claude-config", upstream.as_ref())
+            .get_overlay_path_with_fallback(
+                "tylerbutler",
+                "FluidFramework",
+                "claude-config",
+                upstream.as_ref(),
+            )
             .unwrap();
 
         assert!(path.ends_with("microsoft/FluidFramework/claude-config"));
@@ -963,7 +973,10 @@ mod tests {
         let manager = OverlayRepoManager::new(config).unwrap();
 
         let result = manager.get_overlay_path_with_fallback(
-            "tylerbutler", "FluidFramework", "claude-config", None,
+            "tylerbutler",
+            "FluidFramework",
+            "claude-config",
+            None,
         );
 
         assert!(result.is_err());
