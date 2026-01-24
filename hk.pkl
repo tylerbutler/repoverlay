@@ -1,0 +1,37 @@
+amends "package://github.com/jdx/hk/releases/download/v1.28.0/hk@1.28.0#/Config.pkl"
+
+local cargo_fmt = new Step {
+    glob = List("*.rs")
+    check = "cargo fmt -- --check"
+    fix = "cargo fmt"
+}
+
+local cargo_clippy = new Step {
+    glob = List("*.rs")
+    check = "cargo clippy --all-targets --all-features -- -D warnings"
+}
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stage = true
+        steps {
+            ["cargo-fmt"] = cargo_fmt
+            ["cargo-clippy"] = cargo_clippy
+        }
+    }
+    ["fix"] {
+        fix = true
+        steps {
+            ["cargo-fmt"] = cargo_fmt
+            ["cargo-clippy"] = cargo_clippy
+        }
+    }
+    ["check"] {
+        fix = false
+        steps {
+            ["cargo-fmt"] = cargo_fmt
+            ["cargo-clippy"] = cargo_clippy
+        }
+    }
+}
