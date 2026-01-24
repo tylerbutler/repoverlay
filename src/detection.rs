@@ -417,9 +417,7 @@ mod tests {
 
     #[test]
     fn test_is_ai_config_github_copilot() {
-        assert!(is_ai_config(Path::new(
-            ".github/copilot-instructions.md"
-        )));
+        assert!(is_ai_config(Path::new(".github/copilot-instructions.md")));
     }
 
     #[test]

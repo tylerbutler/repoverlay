@@ -340,7 +340,11 @@ fn creates_state_directory_structure() {
     // Check the full state directory structure
     assert!(ctx.repo_path().join(".repoverlay").exists());
     assert!(ctx.repo_path().join(".repoverlay/overlays").exists());
-    assert!(ctx.repo_path().join(".repoverlay/overlays/test.ccl").exists());
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/overlays/test.ccl")
+            .exists()
+    );
     assert!(ctx.repo_path().join(".repoverlay/meta.ccl").exists());
 }
 

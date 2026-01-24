@@ -1905,22 +1905,11 @@ mod tests {
             let repo = create_test_repo();
 
             // Add first overlay
-            update_git_exclude(
-                repo.path(),
-                "overlay-a",
-                &[".envrc".to_string()],
-                true,
-            )
-            .unwrap();
+            update_git_exclude(repo.path(), "overlay-a", &[".envrc".to_string()], true).unwrap();
 
             // Add second overlay
-            update_git_exclude(
-                repo.path(),
-                "overlay-b",
-                &[".env.local".to_string()],
-                true,
-            )
-            .unwrap();
+            update_git_exclude(repo.path(), "overlay-b", &[".env.local".to_string()], true)
+                .unwrap();
 
             let exclude_path = repo.path().join(".git/info/exclude");
             let content = fs::read_to_string(&exclude_path).unwrap();
@@ -1936,29 +1925,11 @@ mod tests {
             let repo = create_test_repo();
 
             // Add two overlays
-            update_git_exclude(
-                repo.path(),
-                "overlay-a",
-                &[".envrc".to_string()],
-                true,
-            )
-            .unwrap();
-            update_git_exclude(
-                repo.path(),
-                "overlay-b",
-                &[".env".to_string()],
-                true,
-            )
-            .unwrap();
+            update_git_exclude(repo.path(), "overlay-a", &[".envrc".to_string()], true).unwrap();
+            update_git_exclude(repo.path(), "overlay-b", &[".env".to_string()], true).unwrap();
 
             // Remove one overlay
-            update_git_exclude(
-                repo.path(),
-                "overlay-a",
-                &[".envrc".to_string()],
-                false,
-            )
-            .unwrap();
+            update_git_exclude(repo.path(), "overlay-a", &[".envrc".to_string()], false).unwrap();
 
             let exclude_path = repo.path().join(".git/info/exclude");
             let content = fs::read_to_string(&exclude_path).unwrap();
@@ -1974,13 +1945,7 @@ mod tests {
             let repo = create_test_repo();
 
             // Add overlay with one file
-            update_git_exclude(
-                repo.path(),
-                "test",
-                &[".envrc".to_string()],
-                true,
-            )
-            .unwrap();
+            update_git_exclude(repo.path(), "test", &[".envrc".to_string()], true).unwrap();
 
             // "Update" same overlay with different files (add=true replaces)
             update_git_exclude(
@@ -1998,10 +1963,7 @@ mod tests {
             assert!(content.contains(".env"));
             assert!(content.contains(".env.local"));
             // Should only have one test section
-            assert_eq!(
-                content.matches("# repoverlay:test start").count(),
-                1
-            );
+            assert_eq!(content.matches("# repoverlay:test start").count(), 1);
         }
 
         #[test]
@@ -2076,12 +2038,9 @@ mod tests {
 
             fs::write(source.path().join("file.txt"), "content").unwrap();
 
-            let copied = copy_files_to_overlay(
-                source.path(),
-                &output,
-                &[PathBuf::from("file.txt")],
-            )
-            .unwrap();
+            let copied =
+                copy_files_to_overlay(source.path(), &output, &[PathBuf::from("file.txt")])
+                    .unwrap();
 
             assert_eq!(copied.len(), 1);
             assert!(output.join("file.txt").exists());
@@ -2095,12 +2054,8 @@ mod tests {
             let content = "line1\nline2\nline3\n特殊字符\n";
             fs::write(source.path().join("file.txt"), content).unwrap();
 
-            copy_files_to_overlay(
-                source.path(),
-                output.path(),
-                &[PathBuf::from("file.txt")],
-            )
-            .unwrap();
+            copy_files_to_overlay(source.path(), output.path(), &[PathBuf::from("file.txt")])
+                .unwrap();
 
             let read_content = fs::read_to_string(output.path().join("file.txt")).unwrap();
             assert_eq!(read_content, content);

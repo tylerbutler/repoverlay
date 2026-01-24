@@ -675,7 +675,11 @@ mod tests {
         assert!(source.is_overlay_repo());
         assert!(!source.is_github());
         assert_eq!(source.local_path(), None);
-        assert!(source.display().contains("microsoft/FluidFramework/claude-config"));
+        assert!(
+            source
+                .display()
+                .contains("microsoft/FluidFramework/claude-config")
+        );
     }
 
     #[test]
@@ -855,15 +859,9 @@ mod tests {
 
     #[test]
     fn test_normalize_overlay_name_special_chars() {
-        assert_eq!(
-            normalize_overlay_name("my overlay!").unwrap(),
-            "my-overlay"
-        );
+        assert_eq!(normalize_overlay_name("my overlay!").unwrap(), "my-overlay");
         assert_eq!(normalize_overlay_name("Test@123").unwrap(), "test123");
-        assert_eq!(
-            normalize_overlay_name("  spaces  ").unwrap(),
-            "--spaces--"
-        );
+        assert_eq!(normalize_overlay_name("  spaces  ").unwrap(), "--spaces--");
     }
 
     #[test]
