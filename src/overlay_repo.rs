@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::OverlayRepoConfig;
+use crate::state::ResolvedVia;
+use crate::upstream::UpstreamInfo;
 
 /// Default subdirectory name for the overlay repo clone.
 const OVERLAY_REPO_DIR: &str = "overlay-repo";
@@ -236,6 +238,45 @@ impl OverlayRepoManager {
         }
 
         Ok(path)
+    }
+
+    /// Get the path to a specific overlay with upstream fallback.
+    ///
+    /// Resolution order:
+    /// 1. Try exact match: `org/repo/name`
+    /// 2. If upstream provided, try: `upstream.org/upstream.repo/name`
+    ///
+    /// Returns the path and how it was resolved.
+    pub fn get_overlay_path_with_fallback(
+        &self,
+        org: &str,
+        repo: &str,
+        name: &str,
+        upstream: Option<&UpstreamInfo>,
+    ) -> Result<(PathBuf, ResolvedVia)> {
+        // Try exact match first
+        let direct_path = self.repo_path.join(org).join(repo).join(name);
+        if direct_path.exists() {
+            return Ok((direct_path, ResolvedVia::Direct));
+        }
+
+        // Try upstream fallback if available
+        if let Some(up) = upstream {
+            let upstream_path = self.repo_path.join(&up.org).join(&up.repo).join(name);
+            if upstream_path.exists() {
+                return Ok((upstream_path, ResolvedVia::Upstream));
+            }
+        }
+
+        // Nothing found - provide helpful error
+        let mut msg = format!("Overlay not found: {}/{}/{}", org, repo, name);
+        if let Some(up) = upstream {
+            msg.push_str(&format!(
+                "\nAlso checked upstream: {}/{}/{}",
+                up.org, up.repo, name
+            ));
+        }
+        bail!("{}", msg);
     }
 
     /// Stage an overlay for publishing.
@@ -850,5 +891,81 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not cloned"));
+    }
+
+    #[test]
+    fn test_get_overlay_path_with_fallback_direct_match() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        fs::create_dir_all(repo_path.join("tylerbutler/FluidFramework/claude-config")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let upstream = Some(crate::upstream::UpstreamInfo {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            remote_name: "upstream".to_string(),
+        });
+
+        let (path, resolved_via) = manager
+            .get_overlay_path_with_fallback("tylerbutler", "FluidFramework", "claude-config", upstream.as_ref())
+            .unwrap();
+
+        assert!(path.ends_with("tylerbutler/FluidFramework/claude-config"));
+        assert_eq!(resolved_via, crate::state::ResolvedVia::Direct);
+    }
+
+    #[test]
+    fn test_get_overlay_path_with_fallback_uses_upstream() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        // Only upstream overlay exists, not fork-specific
+        fs::create_dir_all(repo_path.join("microsoft/FluidFramework/claude-config")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let upstream = Some(crate::upstream::UpstreamInfo {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            remote_name: "upstream".to_string(),
+        });
+
+        let (path, resolved_via) = manager
+            .get_overlay_path_with_fallback("tylerbutler", "FluidFramework", "claude-config", upstream.as_ref())
+            .unwrap();
+
+        assert!(path.ends_with("microsoft/FluidFramework/claude-config"));
+        assert_eq!(resolved_via, crate::state::ResolvedVia::Upstream);
+    }
+
+    #[test]
+    fn test_get_overlay_path_with_fallback_no_upstream_fails() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        // No overlays exist
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        let result = manager.get_overlay_path_with_fallback(
+            "tylerbutler", "FluidFramework", "claude-config", None,
+        );
+
+        assert!(result.is_err());
     }
 }
