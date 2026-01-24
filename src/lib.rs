@@ -154,27 +154,24 @@ pub fn resolve_source(
         let commit = manager.get_current_commit()?;
 
         // Determine actual org/repo for state tracking
-        let (actual_org, actual_repo) = if resolved_via == state::ResolvedVia::Upstream {
-            if let Some(ref up) = upstream {
-                (up.org.clone(), up.repo.clone())
-            } else {
-                (org.clone(), repo.clone())
-            }
-        } else {
-            (org.clone(), repo.clone())
+        let via_upstream = resolved_via == state::ResolvedVia::Upstream;
+        let (actual_org, actual_repo) = match (&upstream, via_upstream) {
+            (Some(up), true) => (up.org.clone(), up.repo.clone()),
+            _ => (org.clone(), repo.clone()),
         };
 
+        let via_suffix = if via_upstream {
+            " (via upstream)".dimmed().to_string()
+        } else {
+            String::new()
+        };
         println!(
             "{} overlay: {}/{}/{}{}",
             "Resolving".blue().bold(),
             actual_org,
             actual_repo,
             name,
-            if resolved_via == state::ResolvedVia::Upstream {
-                " (via upstream)".dimmed().to_string()
-            } else {
-                String::new()
-            }
+            via_suffix
         );
 
         return Ok(ResolvedSource {
@@ -635,9 +632,11 @@ pub fn show_single_overlay_status(target: &Path, name: &str) -> Result<()> {
             commit,
             resolved_via,
         } => {
-            let via_str = match resolved_via {
-                Some(state::ResolvedVia::Upstream) => format!(" {}", "(via upstream)".yellow()),
-                _ => String::new(),
+            let via_upstream = matches!(resolved_via, Some(state::ResolvedVia::Upstream));
+            let via_str = if via_upstream {
+                format!(" {}", "(via upstream)".yellow())
+            } else {
+                String::new()
             };
             println!(
                 "    Source:  {}/{}/{}{} {}",
@@ -1489,27 +1488,17 @@ pub fn any_overlay_sections_remain(content: &str) -> bool {
 
 /// Parse owner/repo from a GitHub URL (HTTPS or SSH format).
 pub fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
-    if !url.contains("github.com") {
-        bail!(
-            "Could not detect target repository from git remote.\n\
-             Non-GitHub remotes are not supported for auto-detection.\n\
-             Please specify --target org/repo"
-        );
-    }
-
-    // Normalize URL: strip prefix and .git suffix, then split by /
-    let path_part = url
-        .trim_start_matches("git@github.com:")
-        .trim_start_matches("https://github.com/")
-        .trim_start_matches("http://github.com/")
-        .trim_end_matches(".git");
-
-    let parts: Vec<&str> = path_part.split('/').collect();
-    if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-        Ok((parts[0].to_string(), parts[1].to_string()))
-    } else {
-        bail!("Could not parse git remote URL: {}", url)
-    }
+    github::parse_remote_url(url).ok_or_else(|| {
+        if url.contains("github.com") {
+            anyhow::anyhow!("Could not parse git remote URL: {}", url)
+        } else {
+            anyhow::anyhow!(
+                "Could not detect target repository from git remote.\n\
+                 Non-GitHub remotes are not supported for auto-detection.\n\
+                 Please specify --target org/repo"
+            )
+        }
+    })
 }
 
 #[cfg(test)]

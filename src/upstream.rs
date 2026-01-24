@@ -32,12 +32,7 @@ fn get_remote_url(repo_path: &Path, remote_name: &str) -> Result<Option<String>>
     }
 
     let url = String::from_utf8(output.stdout)?.trim().to_string();
-
-    if url.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(url))
-    }
+    Ok((!url.is_empty()).then_some(url))
 }
 
 /// Detect the upstream repository from git remotes.
