@@ -632,13 +632,18 @@ pub fn show_single_overlay_status(target: &Path, name: &str) -> Result<()> {
             repo,
             name: overlay_name,
             commit,
-            ..
+            resolved_via,
         } => {
+            let via_str = match resolved_via {
+                Some(state::ResolvedVia::Upstream) => format!(" {}", "(via upstream)".yellow()),
+                _ => String::new(),
+            };
             println!(
-                "    Source:  {}/{}/{} {}",
+                "    Source:  {}/{}/{}{} {}",
                 org,
                 repo,
                 overlay_name,
+                via_str,
                 "(overlay repo)".dimmed()
             );
             println!("    Commit:  {}", &commit[..12.min(commit.len())]);
