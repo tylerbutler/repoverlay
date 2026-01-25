@@ -230,6 +230,7 @@ impl OverlayRepoManager {
     }
 
     /// Get the path to a specific overlay.
+    #[allow(dead_code)]
     pub fn get_overlay_path(&self, org: &str, repo: &str, name: &str) -> Result<PathBuf> {
         let path = self.repo_path.join(org).join(repo).join(name);
 

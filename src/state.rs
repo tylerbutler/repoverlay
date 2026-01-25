@@ -100,6 +100,7 @@ impl OverlaySource {
     }
 
     /// Create a new overlay repository source.
+    #[allow(dead_code)]
     pub fn overlay_repo(org: String, repo: String, name: String, commit: String) -> Self {
         OverlaySource::OverlayRepo {
             org,
