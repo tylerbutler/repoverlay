@@ -330,6 +330,50 @@ pub(crate) fn apply_overlay(
         let source_file = entry.path().to_path_buf();
         let target_file = target.join(&target_rel);
 
+        // Validate that the target file is within the target directory (prevent path traversal)
+        // We need to resolve the path to handle .. components, but the file doesn't exist yet.
+        // So we create parent dirs first (if needed) and then check the canonical path.
+        // Alternative: check if the path contains .. that escapes the target.
+        {
+            // Normalize the path by iterating through components
+            let mut normalized = target.clone();
+            for component in target_rel.components() {
+                use std::path::Component;
+                match component {
+                    Component::ParentDir => {
+                        // Check if going up would escape the target directory
+                        if !normalized.starts_with(&target) || normalized == target {
+                            bail!(
+                                "Path traversal detected: mapping '{}' -> '{}' would escape target directory",
+                                rel_str,
+                                target_rel.display()
+                            );
+                        }
+                        normalized.pop();
+                    }
+                    Component::Normal(c) => {
+                        normalized.push(c);
+                    }
+                    Component::CurDir => {} // Skip . components
+                    Component::RootDir | Component::Prefix(_) => {
+                        bail!(
+                            "Absolute paths not allowed in mappings: '{}' -> '{}'",
+                            rel_str,
+                            target_rel.display()
+                        );
+                    }
+                }
+            }
+            // After processing, ensure we're still within target
+            if !normalized.starts_with(&target) {
+                bail!(
+                    "Path traversal detected: mapping '{}' -> '{}' would escape target directory",
+                    rel_str,
+                    target_rel.display()
+                );
+            }
+        }
+
         // Check for conflicts with existing overlays
         if let Some(conflicting_overlay) = existing_targets.get(&target_rel_str) {
             bail!(

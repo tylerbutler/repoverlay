@@ -738,29 +738,47 @@ fn cache_remove_help() {
 
 #[test]
 fn apply_rejects_path_traversal_attempt() {
-    // Create an overlay with a file that has path traversal in the mapping config
-    let ctx = TestContext::new().with_overlay(&[
-        (".envrc", "export FOO=bar"),
-        (
-            "repoverlay.ccl",
-            r#"mappings =
-  .envrc = ../../../tmp/malicious
+    // Create a controlled directory structure where we can verify path traversal behavior.
+    // We create a parent dir containing both the repo and an "escape target" sibling.
+    let parent_dir = tempfile::TempDir::new().expect("Failed to create parent dir");
+    let repo_dir = parent_dir.path().join("repo");
+    let escape_target = parent_dir.path().join("escape-target");
+
+    // Create the directories
+    std::fs::create_dir_all(&repo_dir).expect("Failed to create repo dir");
+    std::fs::create_dir_all(&escape_target).expect("Failed to create escape target");
+
+    // Initialize git repo
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_dir)
+        .output()
+        .expect("Failed to init git repo");
+
+    // Create an overlay with a mapping that tries to escape to the sibling directory
+    let overlay = tempfile::TempDir::new().expect("Failed to create overlay dir");
+    std::fs::write(overlay.path().join(".envrc"), "export FOO=bar")
+        .expect("Failed to write .envrc");
+    std::fs::write(
+        overlay.path().join("repoverlay.ccl"),
+        r#"mappings =
+  .envrc = ../escape-target/malicious
 "#,
-        ),
-    ]);
+    )
+    .expect("Failed to write config");
 
     // The apply should either fail or safely ignore the path traversal
     let result = cargo_bin_cmd!("repoverlay")
-        .args(["apply", ctx.overlay_source()])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["apply", overlay.path().to_str().unwrap()])
+        .args(["--target", repo_dir.to_str().unwrap()])
         .output()
         .expect("failed to execute command");
 
     // Either it fails, or if it succeeds, the file should be within the repo
     if result.status.success() {
-        // If success, the traversal should have been sanitized
+        // If success, verify no file was created in the escape target
         assert!(
-            !std::path::Path::new("/tmp/malicious").exists(),
+            !escape_target.join("malicious").exists(),
             "path traversal should not create files outside repo"
         );
     }
