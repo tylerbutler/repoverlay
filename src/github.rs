@@ -536,4 +536,30 @@ mod tests {
         let result = parse_remote_url("git@gitlab.com:owner/repo.git");
         assert_eq!(result, None);
     }
+
+    #[test]
+    fn test_parse_remote_url_ssh_invalid_format() {
+        // SSH URL with empty owner
+        let result = parse_remote_url("git@github.com:/repo");
+        assert_eq!(result, None);
+
+        // SSH URL with empty repo
+        let result = parse_remote_url("git@github.com:owner/");
+        assert_eq!(result, None);
+
+        // SSH URL with just owner, no repo
+        let result = parse_remote_url("git@github.com:owner");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_remote_url_https_invalid_format() {
+        // HTTPS URL with empty owner
+        let result = parse_remote_url("https://github.com//repo");
+        assert_eq!(result, None);
+
+        // HTTPS URL with empty repo
+        let result = parse_remote_url("https://github.com/owner/");
+        assert_eq!(result, None);
+    }
 }

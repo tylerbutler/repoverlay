@@ -8,7 +8,7 @@ use predicates::prelude::*;
 use std::fs;
 
 mod common;
-use common::{envrc_overlay, TestContext};
+use common::{TestContext, envrc_overlay};
 
 #[test]
 fn help_displays() {
@@ -365,7 +365,10 @@ fn apply_respects_path_mappings() {
         .success();
 
     // File should be mapped to .env, not .envrc
-    assert!(ctx.file_exists(".env"), ".env should exist (mapped from .envrc)");
+    assert!(
+        ctx.file_exists(".env"),
+        ".env should exist (mapped from .envrc)"
+    );
     assert!(
         !ctx.file_exists(".envrc"),
         ".envrc should not exist (was mapped)"
@@ -397,7 +400,10 @@ fn remove_by_name() {
         .assert()
         .success();
 
-    assert!(!ctx.file_exists(".envrc"), "overlay files should be removed");
+    assert!(
+        !ctx.file_exists(".envrc"),
+        "overlay files should be removed"
+    );
 }
 
 #[test]

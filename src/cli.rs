@@ -2994,8 +2994,7 @@ mod tests {
 
         #[test]
         fn cache_remove_parses_repo() {
-            let cli =
-                Cli::try_parse_from(["repoverlay", "cache", "remove", "owner/repo"]).unwrap();
+            let cli = Cli::try_parse_from(["repoverlay", "cache", "remove", "owner/repo"]).unwrap();
 
             match cli.command {
                 Commands::Cache { command } => match command {
