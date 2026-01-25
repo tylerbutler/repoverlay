@@ -88,7 +88,8 @@ test-coverage:
     source <(cargo llvm-cov show-env --export-prefix)
     cargo llvm-cov clean --workspace
     cargo build --all-features
-    cargo test --all-features
+    # Run tests serially to avoid env var race conditions in config tests
+    cargo test --all-features -- --test-threads=1
     cargo llvm-cov report --lcov --output-path lcov.info
 
 alias tc := test-coverage
