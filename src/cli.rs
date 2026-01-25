@@ -2754,4 +2754,313 @@ mod tests {
             assert!(repo.path().join(".env.prod").exists());
         }
     }
+
+    // CLI structure and parsing tests using clap's try_parse_from()
+    // These tests validate CLI behavior without running the binary.
+    mod cli_parsing {
+        use super::*;
+        use clap::CommandFactory;
+
+        #[test]
+        fn cli_structure_is_valid() {
+            // Validate CLI structure - will panic if structure is invalid
+            Cli::command().debug_assert();
+        }
+
+        #[test]
+        fn apply_parses_source_argument() {
+            let cli = Cli::try_parse_from(["repoverlay", "apply", "./my-overlay"]).unwrap();
+
+            match cli.command {
+                Commands::Apply { source, .. } => {
+                    assert_eq!(source, "./my-overlay");
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_parses_all_options() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "apply",
+                "./overlay",
+                "--target",
+                "/path/to/repo",
+                "--copy",
+                "--name",
+                "my-name",
+                "--ref",
+                "main",
+                "--update",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Commands::Apply {
+                    source,
+                    target,
+                    copy,
+                    name,
+                    r#ref,
+                    update,
+                } => {
+                    assert_eq!(source, "./overlay");
+                    assert_eq!(target, Some(PathBuf::from("/path/to/repo")));
+                    assert!(copy);
+                    assert_eq!(name, Some("my-name".to_string()));
+                    assert_eq!(r#ref, Some("main".to_string()));
+                    assert!(update);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_requires_source() {
+            let result = Cli::try_parse_from(["repoverlay", "apply"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn remove_parses_name_argument() {
+            let cli = Cli::try_parse_from(["repoverlay", "remove", "my-overlay"]).unwrap();
+
+            match cli.command {
+                Commands::Remove { name, all, .. } => {
+                    assert_eq!(name, Some("my-overlay".to_string()));
+                    assert!(!all);
+                }
+                _ => panic!("Expected Remove command"),
+            }
+        }
+
+        #[test]
+        fn remove_parses_all_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "remove", "--all"]).unwrap();
+
+            match cli.command {
+                Commands::Remove { name, all, .. } => {
+                    assert!(name.is_none());
+                    assert!(all);
+                }
+                _ => panic!("Expected Remove command"),
+            }
+        }
+
+        #[test]
+        fn status_parses_without_arguments() {
+            let cli = Cli::try_parse_from(["repoverlay", "status"]).unwrap();
+
+            match cli.command {
+                Commands::Status { target, name } => {
+                    assert!(target.is_none());
+                    assert!(name.is_none());
+                }
+                _ => panic!("Expected Status command"),
+            }
+        }
+
+        #[test]
+        fn status_parses_name_filter() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "status", "--name", "my-overlay"]).unwrap();
+
+            match cli.command {
+                Commands::Status { name, .. } => {
+                    assert_eq!(name, Some("my-overlay".to_string()));
+                }
+                _ => panic!("Expected Status command"),
+            }
+        }
+
+        #[test]
+        fn restore_parses_dry_run() {
+            let cli = Cli::try_parse_from(["repoverlay", "restore", "--dry-run"]).unwrap();
+
+            match cli.command {
+                Commands::Restore { dry_run, .. } => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Restore command"),
+            }
+        }
+
+        #[test]
+        fn update_parses_overlay_name() {
+            let cli = Cli::try_parse_from(["repoverlay", "update", "my-overlay"]).unwrap();
+
+            match cli.command {
+                Commands::Update { name, dry_run, .. } => {
+                    assert_eq!(name, Some("my-overlay".to_string()));
+                    assert!(!dry_run);
+                }
+                _ => panic!("Expected Update command"),
+            }
+        }
+
+        #[test]
+        fn create_parses_options() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "create",
+                "my-overlay",
+                "--include",
+                ".envrc",
+                "--include",
+                ".vscode",
+                "--force",
+                "--yes",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Commands::Create {
+                    name,
+                    include,
+                    force,
+                    yes,
+                    ..
+                } => {
+                    assert_eq!(name, Some("my-overlay".to_string()));
+                    assert_eq!(include.len(), 2);
+                    assert!(force);
+                    assert!(yes);
+                }
+                _ => panic!("Expected Create command"),
+            }
+        }
+
+        #[test]
+        fn switch_parses_source() {
+            let cli = Cli::try_parse_from(["repoverlay", "switch", "./new-overlay"]).unwrap();
+
+            match cli.command {
+                Commands::Switch { source, .. } => {
+                    assert_eq!(source, "./new-overlay");
+                }
+                _ => panic!("Expected Switch command"),
+            }
+        }
+
+        #[test]
+        fn cache_list_subcommand() {
+            let cli = Cli::try_parse_from(["repoverlay", "cache", "list"]).unwrap();
+
+            match cli.command {
+                Commands::Cache { command } => match command {
+                    CacheCommand::List => {}
+                    _ => panic!("Expected Cache List subcommand"),
+                },
+                _ => panic!("Expected Cache command"),
+            }
+        }
+
+        #[test]
+        fn cache_clear_subcommand() {
+            let cli = Cli::try_parse_from(["repoverlay", "cache", "clear"]).unwrap();
+
+            match cli.command {
+                Commands::Cache { command } => match command {
+                    CacheCommand::Clear { yes } => {
+                        assert!(!yes, "default yes should be false");
+                    }
+                    _ => panic!("Expected Cache Clear subcommand"),
+                },
+                _ => panic!("Expected Cache command"),
+            }
+        }
+
+        #[test]
+        fn cache_clear_with_yes_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "cache", "clear", "--yes"]).unwrap();
+
+            match cli.command {
+                Commands::Cache { command } => match command {
+                    CacheCommand::Clear { yes } => {
+                        assert!(yes, "yes flag should be true");
+                    }
+                    _ => panic!("Expected Cache Clear subcommand"),
+                },
+                _ => panic!("Expected Cache command"),
+            }
+        }
+
+        #[test]
+        fn cache_remove_requires_repo() {
+            let result = Cli::try_parse_from(["repoverlay", "cache", "remove"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn cache_remove_parses_repo() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "cache", "remove", "owner/repo"]).unwrap();
+
+            match cli.command {
+                Commands::Cache { command } => match command {
+                    CacheCommand::Remove { repo } => {
+                        assert_eq!(repo, "owner/repo");
+                    }
+                    _ => panic!("Expected Cache Remove subcommand"),
+                },
+                _ => panic!("Expected Cache command"),
+            }
+        }
+
+        #[test]
+        fn cache_path_subcommand() {
+            let cli = Cli::try_parse_from(["repoverlay", "cache", "path"]).unwrap();
+
+            match cli.command {
+                Commands::Cache { command } => match command {
+                    CacheCommand::Path => {}
+                    _ => panic!("Expected Cache Path subcommand"),
+                },
+                _ => panic!("Expected Cache command"),
+            }
+        }
+
+        #[test]
+        fn invalid_command_rejected() {
+            let result = Cli::try_parse_from(["repoverlay", "nonexistent"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn unknown_flag_rejected() {
+            let result = Cli::try_parse_from(["repoverlay", "apply", "--unknown-flag", "source"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn short_flags_work() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "apply",
+                "./overlay",
+                "-t",
+                "/repo",
+                "-n",
+                "name",
+                "-r",
+                "main",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Commands::Apply {
+                    target,
+                    name,
+                    r#ref,
+                    ..
+                } => {
+                    assert_eq!(target, Some(PathBuf::from("/repo")));
+                    assert_eq!(name, Some("name".to_string()));
+                    assert_eq!(r#ref, Some("main".to_string()));
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+    }
 }

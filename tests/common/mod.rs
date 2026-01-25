@@ -41,6 +41,15 @@ impl TestContext {
         self
     }
 
+    /// Create a file in the test repository.
+    pub fn create_repo_file(&self, path: &str, content: &str) {
+        let file_path = self.repo.path().join(path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).expect("Failed to create parent dirs");
+        }
+        fs::write(file_path, content).expect("Failed to write file");
+    }
+
     pub fn file_exists(&self, path: &str) -> bool {
         self.repo.path().join(path).exists()
     }
@@ -49,12 +58,41 @@ impl TestContext {
         self.repo.path().join(path).is_symlink()
     }
 
+    /// Read file content from the test repository.
+    pub fn read_file(&self, path: &str) -> String {
+        fs::read_to_string(self.repo.path().join(path)).expect("Failed to read file")
+    }
+
+    /// Get the content of .git/info/exclude.
+    pub fn git_exclude_content(&self) -> String {
+        let exclude_path = self.repo.path().join(".git/info/exclude");
+        if exclude_path.exists() {
+            fs::read_to_string(exclude_path).expect("Failed to read exclude")
+        } else {
+            String::new()
+        }
+    }
+
+    /// Check if the .repoverlay state directory exists.
+    pub fn state_dir_exists(&self) -> bool {
+        self.repo.path().join(".repoverlay").exists()
+    }
+
+    /// Check if an overlay state file exists.
+    pub fn overlay_state_exists(&self, name: &str) -> bool {
+        self.repo
+            .path()
+            .join(format!(".repoverlay/overlays/{}.ccl", name))
+            .exists()
+    }
+
     pub fn overlay_source(&self) -> &str {
         self.overlay_path().to_str().expect("Invalid overlay path")
     }
 }
 
-fn create_overlay_dir(files: &[(&str, &str)]) -> TempDir {
+/// Create a test overlay directory with the given files.
+pub fn create_overlay_dir(files: &[(&str, &str)]) -> TempDir {
     let dir = TempDir::new().expect("Failed to create temp dir");
     for (path, content) in files {
         let file_path = dir.path().join(path);
