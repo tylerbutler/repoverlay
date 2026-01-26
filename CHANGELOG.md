@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/tylerbutler/repoverlay/compare/v0.1.6...v0.2.0) - 2026-01-26
+
+### Added
+
+- add fork inheritance for overlay resolution ([#24](https://github.com/tylerbutler/repoverlay/pull/24))
+- add hk git hooks for lint and format ([#25](https://github.com/tylerbutler/repoverlay/pull/25))
+
+### Other
+
+- remove public library API ([#27](https://github.com/tylerbutler/repoverlay/pull/27))
+- add license
+- add Claude Code configuration and skills ([#22](https://github.com/tylerbutler/repoverlay/pull/22))
+
 ## [0.1.6](https://github.com/tylerbutler/repoverlay/compare/v0.1.5...v0.1.6) - 2026-01-22
 
 ### Added
