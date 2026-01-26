@@ -312,4 +312,101 @@ overlay_repo =
         let config = RepoverlayConfig::default();
         assert!(config.overlay_repo.is_none());
     }
+
+    #[test]
+    fn test_config_dir_with_xdg_config_home() {
+        // Save original value
+        let original = std::env::var("XDG_CONFIG_HOME").ok();
+
+        // Set custom XDG_CONFIG_HOME
+        let temp = TempDir::new().unwrap();
+        // SAFETY: Tests are run serially with cargo test, and we restore the value after
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", temp.path());
+        }
+
+        let dir = config_dir().unwrap();
+        assert!(dir.starts_with(temp.path()));
+        assert!(dir.ends_with("repoverlay"));
+
+        // Restore original value
+        // SAFETY: Tests are run serially with cargo test
+        unsafe {
+            match original {
+                Some(val) => std::env::set_var("XDG_CONFIG_HOME", val),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_save_global_config_with_comments() {
+        // Save original XDG_CONFIG_HOME and set to temp dir
+        let original = std::env::var("XDG_CONFIG_HOME").ok();
+        let temp = TempDir::new().unwrap();
+        // SAFETY: Tests are run serially with cargo test, and we restore the value after
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", temp.path());
+        }
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/test/repo-overlays".to_string(),
+            local_path: None,
+        };
+
+        let result = save_global_config_with_comments(&config);
+        assert!(result.is_ok());
+
+        // Verify file was created
+        let config_path = temp.path().join("repoverlay").join("config.ccl");
+        assert!(config_path.exists());
+
+        // Verify content
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("overlay_repo ="));
+        assert!(content.contains("url = https://github.com/test/repo-overlays"));
+        assert!(content.contains("/= repoverlay global configuration"));
+
+        // Restore original value
+        // SAFETY: Tests are run serially with cargo test
+        unsafe {
+            match original {
+                Some(val) => std::env::set_var("XDG_CONFIG_HOME", val),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_save_global_config_with_local_path() {
+        // Save original XDG_CONFIG_HOME and set to temp dir
+        let original = std::env::var("XDG_CONFIG_HOME").ok();
+        let temp = TempDir::new().unwrap();
+        // SAFETY: Tests are run serially with cargo test, and we restore the value after
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", temp.path());
+        }
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/test/repo-overlays".to_string(),
+            local_path: Some(PathBuf::from("/custom/clone/path")),
+        };
+
+        let result = save_global_config_with_comments(&config);
+        assert!(result.is_ok());
+
+        // Verify content includes local_path
+        let config_path = temp.path().join("repoverlay").join("config.ccl");
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("local_path = /custom/clone/path"));
+
+        // Restore original value
+        // SAFETY: Tests are run serially with cargo test
+        unsafe {
+            match original {
+                Some(val) => std::env::set_var("XDG_CONFIG_HOME", val),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
 }
