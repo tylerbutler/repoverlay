@@ -31,12 +31,13 @@ use walkdir::WalkDir;
 
 use cache::CacheManager;
 use github::GitHubSource;
+use overlay_repo::copy_dir_recursive;
 use state::{
-    CONFIG_FILE, FileEntry, GIT_EXCLUDE, GlobalMeta, LinkType, MANAGED_SECTION_NAME, META_FILE,
-    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, exclude_marker_end,
-    exclude_marker_start, list_applied_overlays, load_all_overlay_targets, load_external_states,
-    load_overlay_state, normalize_overlay_name, remove_external_state, save_external_state,
-    save_overlay_state,
+    CONFIG_FILE, EntryType, FileEntry, GIT_EXCLUDE, GlobalMeta, LinkType, MANAGED_SECTION_NAME,
+    META_FILE, OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR,
+    exclude_marker_end, exclude_marker_start, list_applied_overlays, load_all_overlay_targets,
+    load_external_states, load_overlay_state, normalize_overlay_name, remove_external_state,
+    save_external_state, save_overlay_state,
 };
 use upstream::detect_upstream;
 
@@ -295,6 +296,105 @@ pub(crate) fn apply_overlay(
     let mut state = OverlayState::new(overlay_name.clone(), resolved.source_info);
     let mut exclude_entries: Vec<String> = Vec::new();
 
+    // Build set of directories to symlink as units
+    let dir_set: std::collections::HashSet<PathBuf> =
+        config.directories.iter().map(PathBuf::from).collect();
+
+    // Process directories first (symlink as units)
+    for dir_name in &config.directories {
+        let dir_path = PathBuf::from(dir_name);
+        let source_dir = source.join(&dir_path);
+
+        // Check if directory exists
+        if !source_dir.exists() {
+            eprintln!(
+                "  {} Directory not found, skipping: {}",
+                "Warning:".yellow(),
+                dir_name
+            );
+            continue;
+        }
+
+        if !source_dir.is_dir() {
+            eprintln!(
+                "  {} Path is not a directory, skipping: {}",
+                "Warning:".yellow(),
+                dir_name
+            );
+            continue;
+        }
+
+        // Check for conflicts with existing overlays
+        let dir_rel_str = dir_path.to_string_lossy().to_string();
+        if let Some(conflicting_overlay) = existing_targets.get(&dir_rel_str) {
+            bail!(
+                "Conflict: directory '{}' is already managed by overlay '{}'\n\
+                 Remove that overlay first or use different file mappings.",
+                dir_path.display(),
+                conflicting_overlay
+            );
+        }
+
+        let target_dir = target.join(&dir_path);
+
+        // Check for conflicts with existing files/dirs in repo
+        if target_dir.exists() {
+            bail!(
+                "Conflict: target path already exists: {}\n\
+                 Remove it first to apply the overlay.",
+                target_dir.display()
+            );
+        }
+
+        // Create parent directories if needed
+        if let Some(parent) = target_dir.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+
+        // Create directory symlink or copy
+        match link_type {
+            LinkType::Symlink => {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&source_dir, &target_dir).with_context(|| {
+                    format!(
+                        "Failed to create directory symlink: {}",
+                        target_dir.display()
+                    )
+                })?;
+                #[cfg(windows)]
+                std::os::windows::fs::symlink_dir(&source_dir, &target_dir).with_context(|| {
+                    format!(
+                        "Failed to create directory symlink: {}",
+                        target_dir.display()
+                    )
+                })?;
+            }
+            LinkType::Copy => {
+                // For copy mode, create the target directory and recursively copy contents
+                fs::create_dir_all(&target_dir).with_context(|| {
+                    format!("Failed to create directory: {}", target_dir.display())
+                })?;
+                copy_dir_recursive(&source_dir, &target_dir).with_context(|| {
+                    format!("Failed to copy directory: {}", target_dir.display())
+                })?;
+            }
+        }
+
+        println!("  {} {}/", "+".green(), dir_path.display());
+
+        state.add_file(FileEntry {
+            source: dir_path.clone(),
+            target: dir_path.clone(),
+            link_type,
+            entry_type: EntryType::Directory,
+        });
+
+        // Add to exclude list with trailing slash for directories
+        let exclude_path = format!("{}/", dir_path.to_string_lossy().replace('\\', "/"));
+        exclude_entries.push(exclude_path);
+    }
+
     for entry in WalkDir::new(source)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -314,6 +414,18 @@ pub(crate) fn apply_overlay(
             || rel_str_check == ".git"
             || rel_str_check == ".repoverlay-cache-meta.ccl"
         {
+            continue;
+        }
+
+        // Skip files that are within directories being symlinked as units
+        let mut skip_file = false;
+        for dir in &dir_set {
+            if rel_path.starts_with(dir) {
+                skip_file = true;
+                break;
+            }
+        }
+        if skip_file {
             continue;
         }
 
@@ -423,6 +535,7 @@ pub(crate) fn apply_overlay(
             source: rel_path.to_path_buf(),
             target: target_rel.clone(),
             link_type,
+            entry_type: EntryType::File,
         });
 
         // Add to exclude list (use forward slashes for git)
@@ -546,14 +659,44 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
 
     println!("{} overlay: {}", "Removing".red().bold(), state.name);
 
-    // Remove files
+    // Remove files and directories
     for entry in state.file_entries() {
         let file_path = target.join(&entry.target);
 
         if file_path.exists() || file_path.is_symlink() {
-            fs::remove_file(&file_path)
-                .with_context(|| format!("Failed to remove: {}", file_path.display()))?;
-            println!("  {} {}", "-".red(), entry.target.display());
+            match entry.entry_type {
+                EntryType::Directory => {
+                    // For directory entries, check if it's a symlink or a real directory
+                    if file_path.is_symlink() {
+                        // Remove symlink (use remove_file on Unix, remove_dir on Windows for dir symlinks)
+                        #[cfg(unix)]
+                        fs::remove_file(&file_path).with_context(|| {
+                            format!(
+                                "Failed to remove directory symlink: {}",
+                                file_path.display()
+                            )
+                        })?;
+                        #[cfg(windows)]
+                        fs::remove_dir(&file_path).with_context(|| {
+                            format!(
+                                "Failed to remove directory symlink: {}",
+                                file_path.display()
+                            )
+                        })?;
+                    } else {
+                        // It's a copied directory, remove recursively
+                        fs::remove_dir_all(&file_path).with_context(|| {
+                            format!("Failed to remove directory: {}", file_path.display())
+                        })?;
+                    }
+                    println!("  {} {}/", "-".red(), entry.target.display());
+                }
+                EntryType::File => {
+                    fs::remove_file(&file_path)
+                        .with_context(|| format!("Failed to remove: {}", file_path.display()))?;
+                    println!("  {} {}", "-".red(), entry.target.display());
+                }
+            }
 
             // Remove empty parent directories (but not the target itself)
             let mut parent = file_path.parent();
@@ -579,7 +722,14 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
     let exclude_entries: Vec<String> = state
         .file_entries()
         .iter()
-        .map(|e| e.target.to_string_lossy().replace('\\', "/"))
+        .map(|e| {
+            let path = e.target.to_string_lossy().replace('\\', "/");
+            // Add trailing slash for directories in git exclude
+            match e.entry_type {
+                EntryType::Directory => format!("{}/", path),
+                EntryType::File => path,
+            }
+        })
         .collect();
     update_git_exclude(target, name, &exclude_entries, false)?;
 
@@ -723,10 +873,17 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
             LinkType::Copy => "copy",
         };
 
+        // Add trailing slash and [dir] marker for directories
+        let (path_display, dir_marker) = match entry.entry_type {
+            EntryType::Directory => (format!("{}/", entry.target.display()), " [dir]"),
+            EntryType::File => (entry.target.display().to_string(), ""),
+        };
+
         println!(
-            "      {} {} ({})",
+            "      {} {}{} ({})",
             status,
-            entry.target.display(),
+            path_display,
+            dir_marker.magenta(),
             type_str.dimmed()
         );
     }
@@ -1148,6 +1305,7 @@ pub(crate) fn create_overlay(
             for (category, files) in groups {
                 let category_name = match category {
                     detection::FileCategory::AiConfig => "AI Configurations".green(),
+                    detection::FileCategory::AiConfigDirectory => "AI Config Directories".magenta(),
                     detection::FileCategory::Gitignored => "Gitignored".yellow(),
                     detection::FileCategory::Untracked => "Untracked".blue(),
                 };

@@ -241,6 +241,10 @@ pub struct FileEntry {
     pub source: PathBuf,
     pub target: PathBuf,
     pub link_type: LinkType,
+    /// Type of entry - File (default) or Directory.
+    /// Backwards compatible: missing field defaults to File.
+    #[serde(default)]
+    pub entry_type: EntryType,
 }
 
 /// Type of file link.
@@ -249,6 +253,15 @@ pub struct FileEntry {
 pub enum LinkType {
     Symlink,
     Copy,
+}
+
+/// Type of entry (file or directory).
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EntryType {
+    #[default]
+    File,
+    Directory,
 }
 
 /// Configuration file for an overlay source (repoverlay.ccl).
@@ -260,6 +273,11 @@ pub struct OverlayConfig {
     pub overlay: OverlayConfigMeta,
     #[serde(default)]
     pub mappings: std::collections::HashMap<String, String>,
+    /// Directories to symlink as a unit (not walk their contents).
+    /// These directories will be symlinked directly instead of having
+    /// their individual files symlinked.
+    #[serde(default)]
+    pub directories: Vec<String>,
 }
 
 /// Metadata section of overlay config.
@@ -563,11 +581,13 @@ mod tests {
             source: PathBuf::from(".envrc"),
             target: PathBuf::from(".envrc"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         });
         state.add_file(FileEntry {
             source: PathBuf::from("config.json"),
             target: PathBuf::from(".config/app/config.json"),
             link_type: LinkType::Copy,
+            entry_type: EntryType::File,
         });
 
         let serialized = sickle::to_string(&state).unwrap();
@@ -607,6 +627,7 @@ mod tests {
             source: PathBuf::from(".envrc"),
             target: PathBuf::from(".envrc"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         });
 
         // Save
@@ -724,6 +745,7 @@ mod tests {
             source: PathBuf::from("a.txt"),
             target: PathBuf::from("a.txt"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         });
 
         assert_eq!(state.file_count(), 1);
@@ -800,11 +822,13 @@ mod tests {
                     source: PathBuf::from(".envrc"),
                     target: PathBuf::from(".envrc"),
                     link_type: LinkType::Symlink,
+                    entry_type: EntryType::File,
                 },
                 FileEntry {
                     source: PathBuf::from("config.json"),
                     target: PathBuf::from(".config/app.json"),
                     link_type: LinkType::Copy,
+                    entry_type: EntryType::File,
                 },
             ],
         };
@@ -832,6 +856,7 @@ mod tests {
             source: PathBuf::from(".envrc"),
             target: PathBuf::from(".envrc"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         });
 
         // Save
@@ -917,6 +942,7 @@ mod tests {
             source: PathBuf::from("src"),
             target: PathBuf::from("dst"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         };
         let s = sickle::to_string(&entry).unwrap();
         assert!(s.contains("symlink"));
@@ -926,6 +952,7 @@ mod tests {
             source: PathBuf::from("src"),
             target: PathBuf::from("dst"),
             link_type: LinkType::Copy,
+            entry_type: EntryType::File,
         };
         let s2 = sickle::to_string(&entry2).unwrap();
         assert!(s2.contains("copy"));

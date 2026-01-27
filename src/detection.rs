@@ -11,6 +11,8 @@ use std::process::Command;
 pub enum FileCategory {
     /// AI agent configuration files (Claude, Cursor, Copilot, etc.)
     AiConfig,
+    /// AI agent configuration directories (like .claude/)
+    AiConfigDirectory,
     /// Files that are gitignored but exist on disk
     Gitignored,
     /// Files that are untracked (not in git, not ignored)
@@ -56,6 +58,14 @@ pub const AI_CONFIG_PATTERNS: &[&str] = &[
     "ai-instructions.md",
 ];
 
+/// AI configuration directories that should be symlinked as units.
+///
+/// These are directories containing AI agent configuration that should
+/// be linked as a whole rather than having their contents walked.
+#[allow(dead_code)] // Will be used for directory detection in create command
+pub const AI_CONFIG_DIRECTORIES: &[&str] =
+    &[".claude", ".cursor", ".continue", ".cody", ".aider", ".ai"];
+
 /// Check if a path matches any AI config pattern.
 pub fn is_ai_config(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
@@ -92,6 +102,27 @@ pub fn detect_ai_configs(repo_path: &Path) -> Vec<DetectedFile> {
                 path: PathBuf::from(pattern),
                 category: FileCategory::AiConfig,
                 preselected: true, // AI configs are pre-selected by default
+            });
+        }
+    }
+
+    results
+}
+
+/// Detect AI configuration directories in a repository.
+///
+/// Returns directories that should be symlinked as units.
+#[allow(dead_code)] // Will be used for directory detection in create command
+pub fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile> {
+    let mut results = Vec::new();
+
+    for dir_name in AI_CONFIG_DIRECTORIES {
+        let full_path = repo_path.join(dir_name);
+        if full_path.exists() && full_path.is_dir() {
+            results.push(DetectedFile {
+                path: PathBuf::from(dir_name),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true, // AI config directories are pre-selected by default
             });
         }
     }
@@ -185,12 +216,14 @@ pub fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
 /// Group detected files by category for display.
 pub fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Vec<&DetectedFile>)> {
     let mut ai_configs: Vec<&DetectedFile> = Vec::new();
+    let mut ai_config_dirs: Vec<&DetectedFile> = Vec::new();
     let mut gitignored: Vec<&DetectedFile> = Vec::new();
     let mut untracked: Vec<&DetectedFile> = Vec::new();
 
     for file in files {
         match file.category {
             FileCategory::AiConfig => ai_configs.push(file),
+            FileCategory::AiConfigDirectory => ai_config_dirs.push(file),
             FileCategory::Gitignored => gitignored.push(file),
             FileCategory::Untracked => untracked.push(file),
         }
@@ -199,6 +232,9 @@ pub fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Vec<&Dete
     let mut groups = Vec::new();
     if !ai_configs.is_empty() {
         groups.push((FileCategory::AiConfig, ai_configs));
+    }
+    if !ai_config_dirs.is_empty() {
+        groups.push((FileCategory::AiConfigDirectory, ai_config_dirs));
     }
     if !gitignored.is_empty() {
         groups.push((FileCategory::Gitignored, gitignored));
@@ -534,5 +570,88 @@ mod tests {
         assert_eq!(cloned.path, file.path);
         assert_eq!(cloned.category, file.category);
         assert_eq!(cloned.preselected, file.preselected);
+    }
+
+    #[test]
+    fn test_detect_ai_config_directories() {
+        let repo = create_test_repo();
+
+        // Create AI config directories
+        fs::create_dir_all(repo.path().join(".claude")).unwrap();
+        fs::write(repo.path().join(".claude/settings.json"), "{}").unwrap();
+        fs::create_dir_all(repo.path().join(".cursor")).unwrap();
+        fs::write(repo.path().join(".cursor/rules.md"), "# Rules").unwrap();
+
+        let dirs = detect_ai_config_directories(repo.path());
+
+        assert!(dirs.iter().any(|f| f.path == Path::new(".claude")));
+        assert!(dirs.iter().any(|f| f.path == Path::new(".cursor")));
+        assert!(
+            dirs.iter()
+                .all(|f| f.category == FileCategory::AiConfigDirectory)
+        );
+        assert!(dirs.iter().all(|f| f.preselected));
+    }
+
+    #[test]
+    fn test_detect_ai_config_directories_empty_repo() {
+        let repo = create_test_repo();
+        let dirs = detect_ai_config_directories(repo.path());
+        assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn test_detect_ai_config_directories_skips_files() {
+        let repo = create_test_repo();
+
+        // Create a file that matches a directory pattern name but is not a directory
+        fs::write(repo.path().join(".claude"), "not a directory").unwrap();
+
+        let dirs = detect_ai_config_directories(repo.path());
+
+        // Should not detect .claude as a directory since it's a file
+        assert!(!dirs.iter().any(|f| f.path == Path::new(".claude")));
+    }
+
+    #[test]
+    fn test_ai_config_directory_category_equality() {
+        assert_eq!(
+            FileCategory::AiConfigDirectory,
+            FileCategory::AiConfigDirectory
+        );
+        assert_ne!(FileCategory::AiConfigDirectory, FileCategory::AiConfig);
+    }
+
+    #[test]
+    fn test_group_by_category_with_directories() {
+        let files = vec![
+            DetectedFile {
+                path: PathBuf::from(".claude"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+            },
+            DetectedFile {
+                path: PathBuf::from("CLAUDE.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+            },
+            DetectedFile {
+                path: PathBuf::from(".envrc"),
+                category: FileCategory::Gitignored,
+                preselected: false,
+            },
+        ];
+
+        let groups = group_by_category(&files);
+
+        // Should have 3 groups (AiConfig, AiConfigDirectory, Gitignored)
+        assert_eq!(groups.len(), 3);
+
+        // Find the AiConfigDirectory group
+        let dir_group = groups
+            .iter()
+            .find(|(cat, _)| *cat == FileCategory::AiConfigDirectory);
+        assert!(dir_group.is_some());
+        assert_eq!(dir_group.unwrap().1.len(), 1);
     }
 }
