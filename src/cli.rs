@@ -3381,5 +3381,73 @@ mod tests {
                 _ => panic!("Expected Add command"),
             }
         }
+
+        #[test]
+        fn add_accepts_multiple_files() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "add",
+                "my-overlay",
+                "file1.txt",
+                "file2.txt",
+                "dir/file3.txt",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Commands::Add { files, .. } => {
+                    assert_eq!(files.len(), 3);
+                    assert_eq!(files[0], PathBuf::from("file1.txt"));
+                    assert_eq!(files[1], PathBuf::from("file2.txt"));
+                    assert_eq!(files[2], PathBuf::from("dir/file3.txt"));
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_accepts_files_with_special_characters() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "add",
+                "my-overlay",
+                "file with spaces.txt",
+                ".hidden-file",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Commands::Add { files, .. } => {
+                    assert_eq!(files.len(), 2);
+                    assert_eq!(files[0], PathBuf::from("file with spaces.txt"));
+                    assert_eq!(files[1], PathBuf::from(".hidden-file"));
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_dry_run_defaults_to_false() {
+            let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
+
+            match cli.command {
+                Commands::Add { dry_run, .. } => {
+                    assert!(!dry_run);
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_target_defaults_to_none() {
+            let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
+
+            match cli.command {
+                Commands::Add { target, .. } => {
+                    assert!(target.is_none());
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
     }
 }
