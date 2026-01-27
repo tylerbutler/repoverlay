@@ -857,3 +857,45 @@ fn workflow_apply_delete_restore() {
         .assert()
         .success();
 }
+
+// ============================================================================
+// Add Command Tests
+// ============================================================================
+
+#[test]
+fn add_help_displays() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Add files to an existing applied overlay",
+        ));
+}
+
+#[test]
+fn add_fails_when_overlay_not_applied() {
+    let ctx = TestContext::new();
+
+    // Try to add a file to an overlay that isn't applied
+    // Use full org/repo/name format to bypass git remote detection
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "org/repo/nonexistent-overlay", "some-file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not currently applied"));
+}
+
+#[test]
+fn add_fails_when_no_files_specified() {
+    let ctx = TestContext::new();
+
+    // Try to run add without any files
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "my-overlay"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No files specified"));
+}
