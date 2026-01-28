@@ -371,7 +371,7 @@ pub fn default_overlay_repo_path() -> Result<PathBuf> {
 }
 
 /// Copy a directory recursively.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     if !src.is_dir() {
         bail!("Source is not a directory: {}", src.display());
     }

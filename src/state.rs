@@ -241,6 +241,10 @@ pub struct FileEntry {
     pub source: PathBuf,
     pub target: PathBuf,
     pub link_type: LinkType,
+    /// Type of entry - File (default) or Directory.
+    /// Backwards compatible: missing field defaults to File.
+    #[serde(default)]
+    pub entry_type: EntryType,
 }
 
 /// Type of file link.
@@ -249,6 +253,15 @@ pub struct FileEntry {
 pub enum LinkType {
     Symlink,
     Copy,
+}
+
+/// Type of entry (file or directory).
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EntryType {
+    #[default]
+    File,
+    Directory,
 }
 
 /// Configuration file for an overlay source (repoverlay.ccl).
@@ -260,6 +273,11 @@ pub struct OverlayConfig {
     pub overlay: OverlayConfigMeta,
     #[serde(default)]
     pub mappings: std::collections::HashMap<String, String>,
+    /// Directories to symlink as a unit (not walk their contents).
+    /// These directories will be symlinked directly instead of having
+    /// their individual files symlinked.
+    #[serde(default)]
+    pub directories: Vec<String>,
 }
 
 /// Metadata section of overlay config.
@@ -563,11 +581,13 @@ mod tests {
             source: PathBuf::from(".envrc"),
             target: PathBuf::from(".envrc"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         });
         state.add_file(FileEntry {
             source: PathBuf::from("config.json"),
             target: PathBuf::from(".config/app/config.json"),
             link_type: LinkType::Copy,
+            entry_type: EntryType::File,
         });
 
         let serialized = sickle::to_string(&state).unwrap();
@@ -607,6 +627,7 @@ mod tests {
             source: PathBuf::from(".envrc"),
             target: PathBuf::from(".envrc"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         });
 
         // Save
@@ -724,6 +745,7 @@ mod tests {
             source: PathBuf::from("a.txt"),
             target: PathBuf::from("a.txt"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         });
 
         assert_eq!(state.file_count(), 1);
@@ -800,11 +822,13 @@ mod tests {
                     source: PathBuf::from(".envrc"),
                     target: PathBuf::from(".envrc"),
                     link_type: LinkType::Symlink,
+                    entry_type: EntryType::File,
                 },
                 FileEntry {
                     source: PathBuf::from("config.json"),
                     target: PathBuf::from(".config/app.json"),
                     link_type: LinkType::Copy,
+                    entry_type: EntryType::File,
                 },
             ],
         };
@@ -832,6 +856,7 @@ mod tests {
             source: PathBuf::from(".envrc"),
             target: PathBuf::from(".envrc"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         });
 
         // Save
@@ -917,6 +942,7 @@ mod tests {
             source: PathBuf::from("src"),
             target: PathBuf::from("dst"),
             link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
         };
         let s = sickle::to_string(&entry).unwrap();
         assert!(s.contains("symlink"));
@@ -926,6 +952,7 @@ mod tests {
             source: PathBuf::from("src"),
             target: PathBuf::from("dst"),
             link_type: LinkType::Copy,
+            entry_type: EntryType::File,
         };
         let s2 = sickle::to_string(&entry2).unwrap();
         assert!(s2.contains("copy"));
@@ -957,5 +984,135 @@ mod tests {
 
         assert!(s1.contains("direct"));
         assert!(s2.contains("upstream"));
+    }
+
+    #[test]
+    fn test_entry_type_serde() {
+        // Test File entry type
+        let entry_file = FileEntry {
+            source: PathBuf::from("src"),
+            target: PathBuf::from("dst"),
+            link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
+        };
+        let s = sickle::to_string(&entry_file).unwrap();
+        assert!(s.contains("file"));
+
+        // Test Directory entry type
+        let entry_dir = FileEntry {
+            source: PathBuf::from("scratch"),
+            target: PathBuf::from("scratch"),
+            link_type: LinkType::Symlink,
+            entry_type: EntryType::Directory,
+        };
+        let s2 = sickle::to_string(&entry_dir).unwrap();
+        assert!(s2.contains("directory"));
+    }
+
+    #[test]
+    fn test_entry_type_default() {
+        // EntryType should default to File
+        assert_eq!(EntryType::default(), EntryType::File);
+    }
+
+    #[test]
+    fn test_entry_type_equality() {
+        assert_eq!(EntryType::File, EntryType::File);
+        assert_eq!(EntryType::Directory, EntryType::Directory);
+        assert_ne!(EntryType::File, EntryType::Directory);
+    }
+
+    #[test]
+    fn test_overlay_config_with_directories() {
+        let config_str = r#"
+overlay =
+  name = test-overlay
+
+directories =
+  = scratch
+  = .claude
+"#;
+        let config: OverlayConfig = sickle::from_str(config_str).unwrap();
+        assert_eq!(config.overlay.name, Some("test-overlay".to_string()));
+        assert_eq!(config.directories.len(), 2);
+        assert!(config.directories.contains(&"scratch".to_string()));
+        assert!(config.directories.contains(&".claude".to_string()));
+    }
+
+    #[test]
+    fn test_overlay_config_empty_directories() {
+        let config_str = r#"
+overlay =
+  name = test-overlay
+"#;
+        let config: OverlayConfig = sickle::from_str(config_str).unwrap();
+        assert!(config.directories.is_empty());
+    }
+
+    #[test]
+    fn test_load_all_overlay_targets_with_directories() {
+        let temp = TempDir::new().unwrap();
+
+        // Create .repoverlay/overlays directory
+        let overlays_dir = temp.path().join(STATE_DIR).join(OVERLAYS_DIR);
+        fs::create_dir_all(&overlays_dir).unwrap();
+
+        // Create a state file with directory entry
+        let state = OverlayState {
+            name: "test-overlay".to_string(),
+            source: OverlaySource::local(PathBuf::from("/source")),
+            applied_at: chrono::Utc::now(),
+            files: vec![
+                FileEntry {
+                    source: PathBuf::from(".envrc"),
+                    target: PathBuf::from(".envrc"),
+                    link_type: LinkType::Symlink,
+                    entry_type: EntryType::File,
+                },
+                FileEntry {
+                    source: PathBuf::from("scratch"),
+                    target: PathBuf::from("scratch"),
+                    link_type: LinkType::Symlink,
+                    entry_type: EntryType::Directory,
+                },
+            ],
+        };
+        let content = sickle::to_string(&state).unwrap();
+        fs::write(overlays_dir.join("test-overlay.ccl"), content).unwrap();
+
+        let targets = load_all_overlay_targets(temp.path()).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.get(".envrc"), Some(&"test-overlay".to_string()));
+        assert_eq!(targets.get("scratch"), Some(&"test-overlay".to_string()));
+    }
+
+    #[test]
+    fn test_file_entry_with_directory_roundtrip() {
+        let entry = FileEntry {
+            source: PathBuf::from("scratch"),
+            target: PathBuf::from("scratch"),
+            link_type: LinkType::Symlink,
+            entry_type: EntryType::Directory,
+        };
+
+        let serialized = sickle::to_string(&entry).unwrap();
+        let deserialized: FileEntry = sickle::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.source, entry.source);
+        assert_eq!(deserialized.target, entry.target);
+        assert_eq!(deserialized.link_type, entry.link_type);
+        assert_eq!(deserialized.entry_type, entry.entry_type);
+    }
+
+    #[test]
+    fn test_backwards_compatible_entry_type() {
+        // Old state files without entry_type should default to File
+        let old_format = r#"
+source = /some/path
+target = /some/target
+link_type = symlink
+"#;
+        let entry: FileEntry = sickle::from_str(old_format).unwrap();
+        assert_eq!(entry.entry_type, EntryType::File);
     }
 }

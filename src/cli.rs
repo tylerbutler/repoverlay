@@ -1295,7 +1295,7 @@ fn add_files_to_overlay(
 ) -> Result<()> {
     use crate::config::load_config;
     use crate::overlay_repo::OverlayRepoManager;
-    use crate::state::{FileEntry, LinkType};
+    use crate::state::{EntryType, FileEntry, LinkType};
     use crate::{
         load_all_overlay_targets, load_overlay_state, normalize_overlay_name, save_external_state,
         save_overlay_state, update_git_exclude,
@@ -1458,6 +1458,7 @@ fn add_files_to_overlay(
             source: file.clone(),
             target: file.clone(),
             link_type,
+            entry_type: EntryType::File,
         });
 
         // Add to exclude list
@@ -1914,6 +1915,296 @@ mod tests {
             let result = apply_overlay("/nonexistent/path", repo.path(), false, None, None, false);
             assert!(result.is_err());
         }
+
+        #[test]
+        fn applies_directory_symlink() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create a directory with files inside
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(overlay.path().join("scratch/todo.md"), "# TODO").unwrap();
+
+            // Create config with directories list
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+
+            // Check directory symlink was created
+            let target_dir = repo.path().join("scratch");
+            assert!(target_dir.exists(), "scratch should exist");
+            assert!(
+                target_dir.is_symlink(),
+                "scratch should be a symlink to directory"
+            );
+
+            // Check files inside are accessible
+            assert!(target_dir.join("notes.txt").exists());
+            assert!(target_dir.join("todo.md").exists());
+
+            // Check content is correct
+            let content = fs::read_to_string(target_dir.join("notes.txt")).unwrap();
+            assert_eq!(content, "notes");
+        }
+
+        #[test]
+        fn applies_directory_with_copy_mode() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create a directory with files inside
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+
+            // Create config with directories list
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true, // copy mode
+                None,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+
+            // Check directory was copied (not symlinked)
+            let target_dir = repo.path().join("scratch");
+            assert!(target_dir.exists(), "scratch should exist");
+            assert!(
+                !target_dir.is_symlink(),
+                "scratch should NOT be a symlink in copy mode"
+            );
+            assert!(target_dir.is_dir(), "scratch should be a directory");
+
+            // Check files inside are accessible
+            assert!(target_dir.join("notes.txt").exists());
+        }
+
+        #[test]
+        fn directory_symlink_skips_files_inside() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create a directory with files and a standalone file
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(overlay.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            // Create config with directories list
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+
+            // Check directory symlink was created
+            let target_dir = repo.path().join("scratch");
+            assert!(target_dir.is_symlink(), "scratch should be a symlink");
+
+            // Check standalone file was also symlinked
+            let envrc = repo.path().join(".envrc");
+            assert!(envrc.is_symlink(), ".envrc should be a symlink");
+        }
+
+        #[test]
+        fn directory_symlink_warns_on_nonexistent() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create a regular file so overlay isn't empty
+            fs::write(overlay.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            // Create config with directories list including non-existent directory
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = nonexistent\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            );
+            // Should succeed (just warns about missing directory)
+            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+
+            // Check regular file was still symlinked
+            assert!(repo.path().join(".envrc").is_symlink());
+
+            // Non-existent directory should not be created
+            assert!(!repo.path().join("nonexistent").exists());
+        }
+
+        #[test]
+        fn directory_conflict_with_existing_path() {
+            let repo = create_test_repo();
+
+            // Create a directory in the repo that conflicts
+            fs::create_dir_all(repo.path().join("scratch")).unwrap();
+            fs::write(repo.path().join("scratch/existing.txt"), "existing").unwrap();
+
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            );
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("already exists"));
+        }
+
+        #[test]
+        fn directory_conflict_with_existing_overlay() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with a directory
+            let overlay1 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay1.path().join("scratch")).unwrap();
+            fs::write(overlay1.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay1.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-a\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Try to apply second overlay with same directory
+            let overlay2 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay2.path().join("scratch")).unwrap();
+            fs::write(overlay2.path().join("scratch/other.txt"), "other").unwrap();
+            fs::write(
+                overlay2.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-b\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            );
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("already managed"));
+        }
+
+        #[test]
+        fn directory_symlink_updates_git_exclude_with_trailing_slash() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content = fs::read_to_string(&exclude_path).unwrap();
+
+            // Directory should have trailing slash in exclude
+            assert!(content.contains("scratch/"));
+        }
+
+        #[test]
+        fn directory_path_not_a_directory_warning() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create a file (not directory) that matches the directory name
+            fs::write(overlay.path().join("scratch"), "this is a file").unwrap();
+            fs::write(overlay.path().join(".envrc"), "export FOO=bar").unwrap();
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            // Should succeed (just warns about scratch not being a directory)
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            );
+            assert!(result.is_ok());
+
+            // Regular file should still be symlinked
+            assert!(repo.path().join(".envrc").is_symlink());
+            // scratch as a directory symlink should not exist (it was a file in overlay)
+            assert!(!repo.path().join("scratch").is_symlink());
+        }
     }
 
     // Integration tests for remove command
@@ -2135,6 +2426,82 @@ mod tests {
             // Remove should still succeed
             let result = remove_overlay(repo.path(), Some("test".to_string()), false);
             assert!(result.is_ok());
+        }
+
+        #[test]
+        fn removes_directory_symlink() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create a directory with files inside
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+
+            // Create config with directories list
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Verify directory symlink exists
+            assert!(repo.path().join("scratch").is_symlink());
+
+            // Remove overlay
+            remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
+
+            // Verify directory symlink was removed
+            assert!(!repo.path().join("scratch").exists());
+            assert!(!repo.path().join(".repoverlay").exists());
+        }
+
+        #[test]
+        fn removes_copied_directory() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create a directory with files inside
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+
+            // Create config with directories list
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true, // copy mode
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Verify directory was copied (not symlink)
+            let target_dir = repo.path().join("scratch");
+            assert!(!target_dir.is_symlink());
+            assert!(target_dir.is_dir());
+
+            // Remove overlay
+            remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
+
+            // Verify directory was removed
+            assert!(!repo.path().join("scratch").exists());
+            assert!(!repo.path().join(".repoverlay").exists());
         }
     }
 

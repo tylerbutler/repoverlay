@@ -88,6 +88,7 @@ impl SelectionState {
         // Start with all categories visible except those explicitly hidden
         let mut visible = HashSet::new();
         visible.insert(FileCategory::AiConfig);
+        visible.insert(FileCategory::AiConfigDirectory);
         visible.insert(FileCategory::Gitignored);
         visible.insert(FileCategory::Untracked);
 
@@ -133,7 +134,7 @@ impl SelectionState {
 
     /// Check if any filters are active.
     fn has_active_filters(&self) -> bool {
-        !self.search_query.is_empty() || self.visible_categories.len() < 3 // Not all categories visible
+        !self.search_query.is_empty() || self.visible_categories.len() < 4 // Not all categories visible
     }
 
     /// Toggle visibility of a category.
@@ -211,6 +212,7 @@ impl SelectionState {
 
         for cat in &[
             FileCategory::AiConfig,
+            FileCategory::AiConfigDirectory,
             FileCategory::Gitignored,
             FileCategory::Untracked,
         ] {
@@ -435,8 +437,9 @@ fn handle_selection_key(state: &mut SelectionState, key: KeyEvent) -> SelectionA
 
         // Category toggles
         KeyCode::Char('1') => state.toggle_category(FileCategory::AiConfig),
-        KeyCode::Char('2') => state.toggle_category(FileCategory::Gitignored),
-        KeyCode::Char('3') => state.toggle_category(FileCategory::Untracked),
+        KeyCode::Char('2') => state.toggle_category(FileCategory::AiConfigDirectory),
+        KeyCode::Char('3') => state.toggle_category(FileCategory::Gitignored),
+        KeyCode::Char('4') => state.toggle_category(FileCategory::Untracked),
 
         // Search
         KeyCode::Char('/') => return SelectionAction::EnterSearch,
@@ -552,12 +555,31 @@ fn render_category_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::
 
     execute!(stdout, Print(" "))?;
 
+    // AI Config Directories
+    let aid_visible = state
+        .visible_categories
+        .contains(&FileCategory::AiConfigDirectory);
+    let (aid_sel, aid_total) = counts
+        .get(&FileCategory::AiConfigDirectory)
+        .unwrap_or(&(0, 0));
+    render_category_toggle(
+        stdout,
+        "2",
+        "DIR",
+        *aid_sel,
+        *aid_total,
+        aid_visible,
+        Color::Magenta,
+    )?;
+
+    execute!(stdout, Print(" "))?;
+
     // Gitignored
     let gi_visible = state.visible_categories.contains(&FileCategory::Gitignored);
     let (gi_sel, gi_total) = counts.get(&FileCategory::Gitignored).unwrap_or(&(0, 0));
     render_category_toggle(
         stdout,
-        "2",
+        "3",
         "GI",
         *gi_sel,
         *gi_total,
@@ -572,7 +594,7 @@ fn render_category_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::
     let (ut_sel, ut_total) = counts.get(&FileCategory::Untracked).unwrap_or(&(0, 0));
     render_category_toggle(
         stdout,
-        "3",
+        "4",
         "UT",
         *ut_sel,
         *ut_total,
@@ -666,6 +688,7 @@ fn render_selection_summary(stdout: &mut io::Stdout, state: &SelectionState) -> 
     } else {
         let parts: Vec<String> = [
             (FileCategory::AiConfig, "AI", Color::Green),
+            (FileCategory::AiConfigDirectory, "DIR", Color::Magenta),
             (FileCategory::Gitignored, "GI", Color::Yellow),
             (FileCategory::Untracked, "UT", Color::Blue),
         ]
@@ -745,12 +768,18 @@ fn render_file_list(stdout: &mut io::Stdout, state: &SelectionState) -> io::Resu
         // Category indicator
         let cat_color = match file.category {
             FileCategory::AiConfig => Color::Green,
+            FileCategory::AiConfigDirectory => Color::Magenta,
             FileCategory::Gitignored => Color::Yellow,
             FileCategory::Untracked => Color::Blue,
         };
 
         // File path (highlight search match if any)
-        let path_str = file.path.to_string_lossy();
+        // Add trailing slash for directories
+        let path_str = if file.category == FileCategory::AiConfigDirectory {
+            format!("{}/", file.path.to_string_lossy())
+        } else {
+            file.path.to_string_lossy().to_string()
+        };
         if is_cursor {
             execute!(
                 stdout,
@@ -824,7 +853,7 @@ fn render_help_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Resu
         render_key_hint(stdout, "Space", "toggle")?;
         render_key_hint(stdout, "Enter", "confirm")?;
         render_key_hint(stdout, "a", "all")?;
-        render_key_hint(stdout, "1-3", "filter")?;
+        render_key_hint(stdout, "1-4", "filter")?;
         render_key_hint(stdout, "/", "search")?;
         render_key_hint(stdout, "Esc", "cancel")?;
         Ok(())
@@ -1207,6 +1236,7 @@ mod tests {
 
         // AI configs are preselected
         // Hide everything except AI configs
+        state.toggle_category(FileCategory::AiConfigDirectory);
         state.toggle_category(FileCategory::Gitignored);
         state.toggle_category(FileCategory::Untracked);
 
@@ -1287,6 +1317,7 @@ mod tests {
         assert_eq!(state.cursor, 4);
 
         // Hide all but AI configs (2 files) - this calls clamp_cursor internally
+        state.toggle_category(FileCategory::AiConfigDirectory);
         state.toggle_category(FileCategory::Gitignored);
         state.toggle_category(FileCategory::Untracked);
 
@@ -1375,5 +1406,135 @@ mod tests {
 
         assert!(cancelled_result.selected_files.is_empty());
         assert!(cancelled_result.cancelled);
+    }
+
+    fn make_test_files_with_directories() -> Vec<DetectedFile> {
+        vec![
+            DetectedFile {
+                path: PathBuf::from("CLAUDE.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+            },
+            DetectedFile {
+                path: PathBuf::from(".cursor"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+            },
+            DetectedFile {
+                path: PathBuf::from(".envrc"),
+                category: FileCategory::Gitignored,
+                preselected: false,
+            },
+            DetectedFile {
+                path: PathBuf::from("notes.txt"),
+                category: FileCategory::Untracked,
+                preselected: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_toggle_ai_config_directory_category() {
+        let files = make_test_files_with_directories();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Initially visible
+        assert!(
+            state
+                .visible_categories
+                .contains(&FileCategory::AiConfigDirectory)
+        );
+
+        // Count visible files
+        let initial_count = state.visible_files().len();
+        assert_eq!(initial_count, 5);
+
+        // Toggle off
+        state.toggle_category(FileCategory::AiConfigDirectory);
+        assert!(
+            !state
+                .visible_categories
+                .contains(&FileCategory::AiConfigDirectory)
+        );
+
+        // Should have 2 fewer files (the directory entries)
+        let after_toggle_count = state.visible_files().len();
+        assert_eq!(after_toggle_count, 3);
+
+        // Toggle back on
+        state.toggle_category(FileCategory::AiConfigDirectory);
+        assert!(
+            state
+                .visible_categories
+                .contains(&FileCategory::AiConfigDirectory)
+        );
+        assert_eq!(state.visible_files().len(), 5);
+    }
+
+    #[test]
+    fn test_selection_counts_includes_directories() {
+        let files = make_test_files_with_directories();
+        let state = SelectionState::new(files, HashSet::new());
+
+        let counts = state.selection_counts();
+
+        // Check AiConfigDirectory count
+        let (selected, total) = counts
+            .get(&FileCategory::AiConfigDirectory)
+            .unwrap_or(&(0, 0));
+        assert_eq!(*total, 2); // .claude and .cursor
+        assert_eq!(*selected, 2); // Both preselected
+    }
+
+    #[test]
+    fn test_has_active_filters_with_four_categories() {
+        let files = make_test_files_with_directories();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // No filters active (all 4 categories visible, no search)
+        assert!(!state.has_active_filters());
+
+        // Hide one category
+        state.toggle_category(FileCategory::AiConfigDirectory);
+        assert!(state.has_active_filters());
+
+        // Restore it
+        state.toggle_category(FileCategory::AiConfigDirectory);
+        assert!(!state.has_active_filters());
+
+        // Add search filter
+        state.set_search("claude");
+        assert!(state.has_active_filters());
+    }
+
+    #[test]
+    fn test_directory_preselection() {
+        let files = make_test_files_with_directories();
+        let state = SelectionState::new(files, HashSet::new());
+
+        // AiConfigDirectory entries should be preselected
+        assert!(state.selections.contains(&PathBuf::from(".claude")));
+        assert!(state.selections.contains(&PathBuf::from(".cursor")));
+    }
+
+    #[test]
+    fn test_visible_categories_includes_directory_by_default() {
+        let files = make_test_files_with_directories();
+        let state = SelectionState::new(files, HashSet::new());
+
+        assert!(state.visible_categories.contains(&FileCategory::AiConfig));
+        assert!(
+            state
+                .visible_categories
+                .contains(&FileCategory::AiConfigDirectory)
+        );
+        assert!(state.visible_categories.contains(&FileCategory::Gitignored));
+        assert!(state.visible_categories.contains(&FileCategory::Untracked));
+        assert_eq!(state.visible_categories.len(), 4);
     }
 }
