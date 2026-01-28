@@ -38,6 +38,12 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tylerbutler/repoverlay/
 irm https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.ps1 | iex
 ```
 
+### Cargo binstall
+
+```bash
+cargo binstall repoverlay
+```
+
 ### Cargo
 
 ```bash
