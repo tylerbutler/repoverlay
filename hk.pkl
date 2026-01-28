@@ -4,6 +4,7 @@ local cargo_fmt = new Step {
     glob = List("*.rs")
     check = "cargo fmt -- --check"
     fix = "cargo fmt"
+    stage = List("*.rs")
 }
 
 local cargo_clippy = new Step {
