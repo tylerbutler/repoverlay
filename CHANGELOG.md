@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/tylerbutler/repoverlay/compare/v0.2.0...v0.2.1) - 2026-01-28
+
+### Added
+
+- *(overlay)* add directory symlink support ([#31](https://github.com/tylerbutler/repoverlay/pull/31))
+- *(cli)* add subcommand to add files to existing overlays ([#30](https://github.com/tylerbutler/repoverlay/pull/30))
+
 ## [0.2.0](https://github.com/tylerbutler/repoverlay/compare/v0.1.6...v0.2.0) - 2026-01-26
 
 ### Added
