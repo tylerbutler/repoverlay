@@ -2205,6 +2205,95 @@ mod tests {
             // scratch as a directory symlink should not exist (it was a file in overlay)
             assert!(!repo.path().join("scratch").is_symlink());
         }
+
+        // TODO: Enable once tylerbutler/santa#71 is fixed
+        // Forward slashes in map keys currently cause parsing errors in sickle
+        #[test]
+        #[ignore]
+        fn mapping_supports_nested_paths_in_key_and_value() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create nested source file
+            fs::create_dir_all(overlay.path().join("config")).unwrap();
+            fs::write(overlay.path().join("config/settings.json"), "{}").unwrap();
+
+            // Map nested source path to nested destination path (forward slashes in both)
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                r#"mappings =
+  config/settings.json = .vscode/settings.json
+"#,
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+
+            // Check that mapping was applied (file at nested destination)
+            assert!(
+                repo.path().join(".vscode/settings.json").exists(),
+                "mapped target should exist at nested path"
+            );
+            assert!(
+                !repo.path().join("config/settings.json").exists(),
+                "original path should not exist when mapped"
+            );
+        }
+
+        #[test]
+        fn nested_directory_symlinks_use_forward_slashes() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create nested directory structure
+            fs::create_dir_all(overlay.path().join("config/editors")).unwrap();
+            fs::write(
+                overlay.path().join("config/editors/vscode.json"),
+                r#"{"editor": "vscode"}"#,
+            )
+            .unwrap();
+
+            // Use forward slashes in directories list (portable across platforms)
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                r#"overlay =
+  name = test-overlay
+
+directories =
+  = config/editors
+"#,
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+
+            // Check directory symlink was created
+            let target_dir = repo.path().join("config/editors");
+            assert!(target_dir.exists(), "config/editors should exist");
+            assert!(
+                target_dir.is_symlink(),
+                "config/editors should be a symlink"
+            );
+
+            // Check files inside are accessible
+            assert!(target_dir.join("vscode.json").exists());
+        }
     }
 
     // Integration tests for remove command

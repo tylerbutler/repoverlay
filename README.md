@@ -15,6 +15,7 @@ Files are symlinked (or copied with `--copy`) from overlay sources and automatic
 | Update from GitHub | `repoverlay update` |
 | Restore after git clean | `repoverlay restore` |
 | Create overlay | `repoverlay create <name>` |
+| Add files to overlay | `repoverlay add <name> <files>` |
 | Sync changes back | `repoverlay sync <name>` |
 | Switch overlays | `repoverlay switch <source>` |
 
@@ -139,6 +140,19 @@ repoverlay create my-overlay --dry-run
 repoverlay create my-overlay --force
 ```
 
+### Add files to an existing overlay
+
+Add files to an overlay that's already applied:
+
+```bash
+repoverlay add my-overlay newfile.txt              # Add single file
+repoverlay add my-overlay file1.txt file2.txt      # Add multiple files
+repoverlay add org/repo/my-overlay path/to/file    # Explicit overlay path
+repoverlay add my-overlay config.json --dry-run    # Preview without changes
+```
+
+This copies files to the overlay repo, replaces the originals with symlinks, and automatically commits/pushes the changes.
+
 ### Sync changes back
 
 After modifying files in an applied overlay, sync changes back to the overlay repo:
@@ -149,7 +163,7 @@ repoverlay sync org/repo/my-overlay # Explicit path
 repoverlay sync my-overlay --dry-run # Preview what would be synced
 ```
 
-Both `create` and `sync` automatically commit and push to the remote overlay repo.
+The `create`, `add`, and `sync` commands automatically commit and push to the remote overlay repo.
 
 ### Switch overlays
 
@@ -178,11 +192,25 @@ Create a `repoverlay.ccl` in your overlay directory to configure it:
 overlay =
   name = my-config
 
+/= Rename files when applying
 mappings =
-  /= Rename files when applying
   .envrc.template = .envrc
   vscode-settings.json = .vscode/settings.json
+
+/= Symlink entire directories as a unit
+directories =
+  = .claude
+  = scratch
 ```
+
+### Configuration Options
+
+**`overlay`** - Overlay metadata
+- `name` - Custom name for the overlay
+
+**`mappings`** - Rename files when applying (source = destination)
+
+**`directories`** - List of directories to symlink as a unit rather than walking individual files. Useful for directories like `.claude/` or `scratch/` that should be managed atomically. In copy mode (`--copy`), directories are recursively copied instead of symlinked.
 
 Without a config file, all files in the overlay directory are symlinked with the same relative path.
 

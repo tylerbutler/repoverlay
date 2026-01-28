@@ -1054,6 +1054,31 @@ overlay =
         assert!(config.directories.is_empty());
     }
 
+    // TODO: Enable once tylerbutler/santa#71 is fixed
+    // Forward slashes in map keys currently cause parsing errors in sickle
+    #[test]
+    #[ignore]
+    fn test_overlay_config_mappings_with_forward_slashes() {
+        let config_str = r#"
+overlay =
+  name = test-overlay
+
+mappings =
+  config/settings.json = .vscode/settings.json
+  src/template.env = .env
+"#;
+        let config: OverlayConfig = sickle::from_str(config_str).unwrap();
+        assert_eq!(config.mappings.len(), 2);
+        assert_eq!(
+            config.mappings.get("config/settings.json"),
+            Some(&".vscode/settings.json".to_string())
+        );
+        assert_eq!(
+            config.mappings.get("src/template.env"),
+            Some(&".env".to_string())
+        );
+    }
+
     #[test]
     fn test_load_all_overlay_targets_with_directories() {
         let temp = TempDir::new().unwrap();
