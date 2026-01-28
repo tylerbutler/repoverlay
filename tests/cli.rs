@@ -985,3 +985,156 @@ fn add_fails_when_file_already_in_overlay() {
         .failure()
         .stderr(predicate::str::contains("already managed"));
 }
+
+// ============================================================================
+// Edge Case Tests
+// ============================================================================
+
+#[test]
+fn apply_with_empty_file_in_overlay() {
+    // Test applying an overlay that contains an empty file
+    let ctx = TestContext::new().with_overlay(&[(".empty", "")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "empty-file-test"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".empty"));
+    assert_eq!(ctx.read_file(".empty"), "");
+}
+
+#[test]
+fn apply_with_nested_directory_structure() {
+    // Test applying an overlay with deeply nested files
+    let ctx = TestContext::new().with_overlay(&[
+        ("a/b/c/deep.txt", "deep content"),
+        ("x/y/shallow.txt", "shallow content"),
+    ]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists("a/b/c/deep.txt"));
+    assert!(ctx.file_exists("x/y/shallow.txt"));
+    assert_eq!(ctx.read_file("a/b/c/deep.txt"), "deep content");
+}
+
+#[test]
+fn status_when_no_overlay_applied() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["status"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No overlay"));
+}
+
+#[test]
+fn apply_same_overlay_twice_fails() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply first time
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "duplicate-test"])
+        .assert()
+        .success();
+
+    // Apply second time with same name should fail
+    let overlay2 = common::create_overlay_dir(&[(".tool-versions", "nodejs 20.0.0")]);
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay2.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "duplicate-test"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("already applied").or(predicate::str::contains("duplicate")),
+        );
+}
+
+#[test]
+fn apply_creates_repoverlay_state_directory() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Initially no .repoverlay directory
+    assert!(!ctx.state_dir_exists());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "state-test"])
+        .assert()
+        .success();
+
+    // After apply, .repoverlay directory should exist
+    assert!(ctx.state_dir_exists());
+    assert!(ctx.overlay_state_exists("state-test"));
+}
+
+#[test]
+fn remove_deletes_state_directory_when_last_overlay_removed() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "cleanup-test"])
+        .assert()
+        .success();
+
+    assert!(ctx.state_dir_exists());
+
+    // Remove
+    cargo_bin_cmd!("repoverlay")
+        .args(["remove", "cleanup-test"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // After removing last overlay, .repoverlay directory should be cleaned up
+    assert!(!ctx.state_dir_exists());
+}
+
+#[test]
+fn apply_with_special_characters_in_filename() {
+    // Test files with special characters (spaces, etc. that are valid on most filesystems)
+    let ctx = TestContext::new().with_overlay(&[("file with spaces.txt", "content")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "special-chars"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists("file with spaces.txt"));
+}
+
+#[test]
+fn cache_list_runs_without_error() {
+    // Just test that cache list command runs without crashing
+    cargo_bin_cmd!("repoverlay")
+        .args(["cache", "list"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn cache_path_shows_directory() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["cache", "path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("repoverlay"));
+}

@@ -562,4 +562,101 @@ mod tests {
         let result = parse_remote_url("https://github.com/owner/");
         assert_eq!(result, None);
     }
+
+    // Edge case tests for URL parsing
+    #[test]
+    fn test_parse_remote_url_with_trailing_whitespace() {
+        // URLs from git remote often have trailing newlines
+        // The function does NOT trim - callers are expected to trim first
+        // Test that untrimmed URLs don't work (to document current behavior)
+        let result = parse_remote_url("https://github.com/owner/repo.git\n");
+        // Trailing newline becomes part of the repo name (broken behavior, caller must trim)
+        assert!(result.is_some()); // Parses but with wrong data
+
+        // Test that pre-trimmed URLs work correctly
+        let result = parse_remote_url("https://github.com/owner/repo.git".trim());
+        assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+
+        let result = parse_remote_url("git@github.com:owner/repo.git".trim());
+        assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+    }
+
+    #[test]
+    fn test_parse_remote_url_with_trailing_slash() {
+        let result = parse_remote_url("https://github.com/owner/repo/");
+        assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+    }
+
+    #[test]
+    fn test_is_github_url_case_sensitivity() {
+        // HTTP(S) URLs are case-insensitive for the host
+        assert!(GitHubSource::is_github_url("https://github.com/owner/repo"));
+        assert!(GitHubSource::is_github_url("http://github.com/owner/repo"));
+        // But our simple check is case-sensitive (only lowercase matches)
+        assert!(!GitHubSource::is_github_url(
+            "https://GitHub.com/owner/repo"
+        ));
+        assert!(!GitHubSource::is_github_url(
+            "https://GITHUB.COM/owner/repo"
+        ));
+    }
+
+    #[test]
+    fn test_is_github_url_with_trailing_slash() {
+        assert!(GitHubSource::is_github_url("https://github.com/"));
+        assert!(GitHubSource::is_github_url("https://github.com/owner/"));
+    }
+
+    #[test]
+    fn test_parse_github_url_with_hyphens_and_underscores() {
+        let source = GitHubSource::parse("https://github.com/my-org/my_repo").unwrap();
+        assert_eq!(source.owner, "my-org");
+        assert_eq!(source.repo, "my_repo");
+    }
+
+    #[test]
+    fn test_parse_github_url_with_dots_in_repo_name() {
+        let source = GitHubSource::parse("https://github.com/owner/repo.js").unwrap();
+        assert_eq!(source.repo, "repo.js");
+
+        // With .git suffix, should strip it
+        let source = GitHubSource::parse("https://github.com/owner/repo.js.git").unwrap();
+        assert_eq!(source.repo, "repo.js");
+    }
+
+    #[test]
+    fn test_parse_github_url_with_numbers() {
+        let source = GitHubSource::parse("https://github.com/org123/repo456").unwrap();
+        assert_eq!(source.owner, "org123");
+        assert_eq!(source.repo, "repo456");
+    }
+
+    #[test]
+    fn test_git_ref_parse_almost_commit_sha() {
+        // 39 chars (not 40) should be a branch
+        let git_ref: GitRef = "abcdef1234567890abcdef1234567890abcdef1".parse().unwrap();
+        assert!(matches!(git_ref, GitRef::Branch(_)));
+
+        // 41 chars should be a branch
+        let git_ref: GitRef = "abcdef1234567890abcdef1234567890abcdef123".parse().unwrap();
+        assert!(matches!(git_ref, GitRef::Branch(_)));
+    }
+
+    #[test]
+    fn test_parse_github_url_with_ref_containing_slashes() {
+        // Branch names can contain slashes (e.g., feature/my-feature)
+        let source =
+            GitHubSource::parse("https://github.com/owner/repo/tree/feature/my-feature").unwrap();
+        // The first segment after /tree/ is the ref
+        assert_eq!(source.git_ref, GitRef::Branch("feature".to_string()));
+        // Remaining segments are the subpath
+        assert_eq!(source.subpath, Some(std::path::PathBuf::from("my-feature")));
+    }
+
+    #[test]
+    fn test_parse_remote_url_with_extra_path_segments() {
+        // GitHub URLs with extra path segments should still parse owner/repo
+        let result = parse_remote_url("https://github.com/owner/repo/tree/main/subdir");
+        assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+    }
 }

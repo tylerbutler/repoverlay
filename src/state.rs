@@ -1145,4 +1145,172 @@ link_type = symlink
         let entry: FileEntry = sickle::from_str(old_format).unwrap();
         assert_eq!(entry.entry_type, EntryType::File);
     }
+
+    // Additional configuration parsing edge case tests
+    #[test]
+    fn test_overlay_config_missing_optional_sections() {
+        // Config with only overlay section - mappings and directories should be empty
+        let config_str = r#"
+overlay =
+  name = test
+"#;
+        let config: OverlayConfig = sickle::from_str(config_str).unwrap();
+        assert!(config.mappings.is_empty());
+        assert!(config.directories.is_empty());
+    }
+
+    #[test]
+    fn test_overlay_config_minimal() {
+        // Completely minimal config - just empty
+        let config_str = "";
+        let config: OverlayConfig = sickle::from_str(config_str).unwrap();
+        assert!(config.mappings.is_empty());
+        assert!(config.directories.is_empty());
+        assert!(config.overlay.name.is_none());
+    }
+
+    #[test]
+    fn test_overlay_config_with_all_fields() {
+        let config_str = r#"
+overlay =
+  name = my-overlay
+
+mappings =
+  .envrc.template = .envrc
+  settings.json = .vscode/settings.json
+
+directories =
+  = .claude
+  = scratch
+"#;
+        let config: OverlayConfig = sickle::from_str(config_str).unwrap();
+        assert_eq!(config.overlay.name, Some("my-overlay".to_string()));
+        assert_eq!(config.mappings.len(), 2);
+        assert_eq!(config.directories.len(), 2);
+    }
+
+    #[test]
+    fn test_overlay_state_with_github_source() {
+        let source = OverlaySource::github(
+            "https://github.com/owner/repo.git".to_string(),
+            "owner".to_string(),
+            "repo".to_string(),
+            "main".to_string(),
+            "abc123def456".to_string(),
+            Some("subdir".to_string()),
+        );
+
+        let state = OverlayState {
+            name: "test".to_string(),
+            source,
+            applied_at: chrono::Utc::now(),
+            files: vec![],
+        };
+
+        let serialized = sickle::to_string(&state).unwrap();
+        let deserialized: OverlayState = sickle::from_str(&serialized).unwrap();
+
+        match &deserialized.source {
+            OverlaySource::GitHub {
+                owner,
+                repo,
+                git_ref,
+                subpath,
+                ..
+            } => {
+                assert_eq!(owner, "owner");
+                assert_eq!(repo, "repo");
+                assert_eq!(git_ref, "main");
+                assert_eq!(subpath, &Some("subdir".to_string()));
+            }
+            _ => panic!("Expected GitHub source"),
+        }
+    }
+
+    #[test]
+    fn test_overlay_state_with_overlay_repo_source() {
+        let source = OverlaySource::overlay_repo(
+            "microsoft".to_string(),
+            "FluidFramework".to_string(),
+            "claude-config".to_string(),
+            "abc123".to_string(),
+        );
+
+        let state = OverlayState {
+            name: "test".to_string(),
+            source,
+            applied_at: chrono::Utc::now(),
+            files: vec![],
+        };
+
+        let serialized = sickle::to_string(&state).unwrap();
+        let deserialized: OverlayState = sickle::from_str(&serialized).unwrap();
+
+        match &deserialized.source {
+            OverlaySource::OverlayRepo {
+                org,
+                repo,
+                name,
+                resolved_via,
+                ..
+            } => {
+                assert_eq!(org, "microsoft");
+                assert_eq!(repo, "FluidFramework");
+                assert_eq!(name, "claude-config");
+                assert!(resolved_via.is_none());
+            }
+            _ => panic!("Expected OverlayRepo source"),
+        }
+    }
+
+    #[test]
+    fn test_load_external_states_skips_invalid_files() {
+        let temp = TempDir::new().unwrap();
+
+        // Create external state directory
+        let ext_dir = external_state_dir_for_target(temp.path()).unwrap();
+        fs::create_dir_all(&ext_dir).unwrap();
+
+        // Create a valid state file
+        let valid_state = OverlayState {
+            name: "valid".to_string(),
+            source: OverlaySource::local(PathBuf::from("/source")),
+            applied_at: chrono::Utc::now(),
+            files: vec![],
+        };
+        fs::write(
+            ext_dir.join("valid.ccl"),
+            sickle::to_string(&valid_state).unwrap(),
+        )
+        .unwrap();
+
+        // Create an invalid state file
+        fs::write(ext_dir.join("invalid.ccl"), "not valid { ccl content").unwrap();
+
+        // Should load the valid state and skip the invalid one
+        let states = load_external_states(temp.path()).unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].name, "valid");
+    }
+
+    #[test]
+    fn test_normalize_overlay_name_with_special_characters() {
+        // Names with hyphens and underscores should be preserved
+        assert_eq!(normalize_overlay_name("my-overlay").unwrap(), "my-overlay");
+        assert_eq!(normalize_overlay_name("my_overlay").unwrap(), "my_overlay");
+        assert_eq!(
+            normalize_overlay_name("my-overlay_123").unwrap(),
+            "my-overlay_123"
+        );
+    }
+
+    #[test]
+    fn test_external_state_dir_deterministic() {
+        let temp = TempDir::new().unwrap();
+
+        // Same path should always produce same hash
+        let dir1 = external_state_dir_for_target(temp.path()).unwrap();
+        let dir2 = external_state_dir_for_target(temp.path()).unwrap();
+        assert_eq!(dir1, dir2);
+    }
 }

@@ -2370,4 +2370,141 @@ mod tests {
             }
         }
     }
+
+    // Additional edge case tests for line ending handling
+    mod line_ending_edge_cases {
+        use super::*;
+
+        #[test]
+        fn remove_overlay_section_with_mixed_line_endings() {
+            // Mix of LF and CRLF within the same file
+            let content =
+                "before\n# repoverlay:test start\r\n.envrc\n# repoverlay:test end\r\nafter\n";
+            let result = remove_overlay_section(content, "test");
+            assert!(result.contains("before"));
+            assert!(result.contains("after"));
+            assert!(!result.contains(".envrc"));
+        }
+
+        #[test]
+        fn remove_overlay_section_with_only_crlf() {
+            let content = "*.log\r\n# repoverlay:test start\r\n.envrc\r\n# repoverlay:test end\r\n";
+            let result = remove_overlay_section(content, "test");
+            assert!(result.contains("*.log"));
+            assert!(!result.contains(".envrc"));
+        }
+
+        #[test]
+        fn remove_overlay_section_preserves_trailing_newline() {
+            let content = "before\n# repoverlay:test start\n.envrc\n# repoverlay:test end\n";
+            let result = remove_overlay_section(content, "test");
+            assert!(result.ends_with('\n'));
+        }
+
+        #[test]
+        fn remove_overlay_section_with_no_trailing_newline() {
+            let content = "# repoverlay:test start\n.envrc\n# repoverlay:test end";
+            let result = remove_overlay_section(content, "test");
+            // Should handle content without trailing newline
+            assert!(!result.contains(".envrc"));
+        }
+
+        #[test]
+        fn update_git_exclude_with_existing_crlf_content() {
+            let repo = create_test_repo();
+            let exclude_path = repo.path().join(".git/info/exclude");
+
+            // Create exclude file with CRLF line endings
+            fs::create_dir_all(exclude_path.parent().unwrap()).unwrap();
+            fs::write(&exclude_path, "*.log\r\n.DS_Store\r\n").unwrap();
+
+            update_git_exclude(repo.path(), "test", &[".envrc".to_string()], true).unwrap();
+
+            let content = fs::read_to_string(&exclude_path).unwrap();
+            assert!(content.contains(".envrc"));
+            assert!(content.contains("# repoverlay:test start"));
+        }
+    }
+
+    // Tests for duplicate/malformed section markers
+    mod malformed_section_tests {
+        use super::*;
+
+        #[test]
+        fn remove_overlay_section_with_duplicate_start_markers() {
+            // Two start markers, only one end marker
+            let content =
+                "# repoverlay:test start\n# repoverlay:test start\n.envrc\n# repoverlay:test end\n";
+            let result = remove_overlay_section(content, "test");
+            // Should remove everything between first start and end
+            assert!(!result.contains(".envrc"));
+        }
+
+        #[test]
+        fn remove_overlay_section_with_unclosed_section() {
+            // Start marker but no end marker
+            let content = "before\n# repoverlay:test start\n.envrc\nafter\n";
+            let result = remove_overlay_section(content, "test");
+            // Content after start should be removed (no end marker means section continues)
+            assert!(result.contains("before"));
+            assert!(!result.contains(".envrc"));
+            assert!(!result.contains("after"));
+        }
+
+        #[test]
+        fn remove_overlay_section_with_nested_markers() {
+            // Nested markers (shouldn't happen, but test robustness)
+            let content = "# repoverlay:outer start\n# repoverlay:inner start\n.envrc\n# repoverlay:inner end\n# repoverlay:outer end\n";
+            let result = remove_overlay_section(content, "outer");
+            assert!(!result.contains(".envrc"));
+            assert!(!result.contains("repoverlay:inner"));
+        }
+
+        #[test]
+        fn any_overlay_sections_remain_with_malformed_marker() {
+            // Marker with only "start" but not in correct format
+            let content = "# repoverlay start\n.envrc\n";
+            assert!(!any_overlay_sections_remain(content));
+        }
+
+        #[test]
+        fn any_overlay_sections_remain_with_extra_spaces() {
+            // Extra spaces in marker
+            let content = "#  repoverlay:test  start\n.envrc\n# repoverlay:test end\n";
+            // Should not match due to different spacing
+            assert!(!any_overlay_sections_remain(content));
+        }
+    }
+
+    // Tests for path validation edge cases
+    mod path_validation_tests {
+        use super::*;
+
+        #[test]
+        fn canonicalize_path_with_nonexistent_path() {
+            let result = canonicalize_path(Path::new("/nonexistent/path/xyz"), "Test");
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("not found"));
+        }
+
+        #[test]
+        fn validate_git_repo_fails_on_non_git_directory() {
+            let temp = TempDir::new().unwrap();
+            let result = validate_git_repo(temp.path());
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not a git repository")
+            );
+        }
+
+        #[test]
+        fn validate_git_repo_succeeds_on_git_directory() {
+            let repo = create_test_repo();
+            let result = validate_git_repo(repo.path());
+            assert!(result.is_ok());
+        }
+    }
 }

@@ -409,4 +409,73 @@ overlay_repo =
             }
         }
     }
+
+    // Additional edge case tests for config parsing
+    #[test]
+    fn test_load_repo_config_ignores_unknown_keys() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        // Config with extra/unknown keys
+        let config_content = r#"
+overlay_repo =
+  url = https://github.com/org/overlays
+  unknown_field = some_value
+
+some_other_section =
+  foo = bar
+"#;
+        fs::write(config_dir.join("config.ccl"), config_content).unwrap();
+
+        // Should still parse successfully, ignoring unknown keys
+        let config = load_repo_config(temp.path()).unwrap();
+        assert!(config.is_some());
+        let config = config.unwrap();
+        assert!(config.overlay_repo.is_some());
+    }
+
+    #[test]
+    fn test_empty_config_file() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        // Empty config file
+        fs::write(config_dir.join("config.ccl"), "").unwrap();
+
+        let config = load_repo_config(temp.path()).unwrap();
+        assert!(config.is_some());
+        let config = config.unwrap();
+        // overlay_repo should be None since not specified
+        assert!(config.overlay_repo.is_none());
+    }
+
+    #[test]
+    fn test_whitespace_only_config_file() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        // Whitespace-only config file
+        fs::write(config_dir.join("config.ccl"), "   \n\n   \n").unwrap();
+
+        let config = load_repo_config(temp.path()).unwrap();
+        assert!(config.is_some());
+        let config = config.unwrap();
+        assert!(config.overlay_repo.is_none());
+    }
+
+    #[test]
+    fn test_generate_config_ccl_includes_comments() {
+        let config = OverlayRepoConfig {
+            url: "https://github.com/user/repo-overlays".to_string(),
+            local_path: None,
+        };
+        let ccl = generate_config_ccl(&config);
+
+        // Should include helpful comments
+        assert!(ccl.contains("/= repoverlay global configuration"));
+        assert!(ccl.contains("/= url:"));
+    }
 }
