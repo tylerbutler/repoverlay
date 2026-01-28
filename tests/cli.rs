@@ -857,3 +857,131 @@ fn workflow_apply_delete_restore() {
         .assert()
         .success();
 }
+
+// ============================================================================
+// Add Command Tests
+// ============================================================================
+
+#[test]
+fn add_help_displays() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Add files to an existing applied overlay",
+        ));
+}
+
+#[test]
+fn add_fails_when_overlay_not_applied() {
+    let ctx = TestContext::new();
+
+    // Try to add a file to an overlay that isn't applied
+    // Use full org/repo/name format to bypass git remote detection
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "org/repo/nonexistent-overlay", "some-file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not currently applied"));
+}
+
+#[test]
+fn add_fails_when_no_files_specified() {
+    let ctx = TestContext::new();
+
+    // Try to run add without any files
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "my-overlay"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No files specified"));
+}
+
+#[test]
+fn add_fails_when_target_not_git_repo() {
+    let non_git_dir = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "org/repo/my-overlay", "file.txt"])
+        .args(["--target", non_git_dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a git repository"));
+}
+
+#[test]
+fn add_fails_when_file_does_not_exist() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Try to add a file that doesn't exist
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "org/repo/test-overlay", "nonexistent-file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("File does not exist"));
+}
+
+#[test]
+fn add_dry_run_shows_files_without_changes() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Create a file to add
+    ctx.create_repo_file("newfile.txt", "new content");
+
+    // Run add with --dry-run
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "org/repo/test-overlay", "newfile.txt", "--dry-run"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"))
+        .stdout(predicate::str::contains("newfile.txt"));
+
+    // File should still exist as regular file, not symlink
+    assert!(ctx.file_exists("newfile.txt"));
+    assert!(
+        !ctx.is_symlink("newfile.txt"),
+        "File should not be converted to symlink in dry-run mode"
+    );
+}
+
+#[test]
+fn add_fails_when_file_already_in_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Try to add a file that's already managed by the overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "org/repo/test-overlay", ".envrc"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already managed"));
+}

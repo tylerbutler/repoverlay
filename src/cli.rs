@@ -238,6 +238,31 @@ enum Commands {
         dry_run: bool,
     },
 
+    /// Add files to an existing applied overlay
+    ///
+    /// Examples:
+    ///   repoverlay add my-overlay newfile.txt
+    ///   repoverlay add my-overlay file1.txt file2.txt
+    ///   repoverlay add org/repo/my-overlay path/to/file.txt
+    Add {
+        /// Overlay name or full path (org/repo/name)
+        ///
+        /// Short form: `my-overlay` - detects org/repo from git remote
+        /// Full form: `org/repo/name` - uses explicit values
+        name: String,
+
+        /// Files to add (relative paths from target repo)
+        files: Vec<PathBuf>,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Show what would be added without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Push all pending commits in the overlay repo to remote
     #[command(hide = true)] // Hidden: auto-push is done after create/sync
     Push,
@@ -366,6 +391,15 @@ pub fn run() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             sync_overlay(&name, &target, dry_run)?;
+        }
+        Commands::Add {
+            name,
+            files,
+            target,
+            dry_run,
+        } => {
+            let target = target.unwrap_or_else(|| PathBuf::from("."));
+            add_files_to_overlay(&name, &target, &files, dry_run)?;
         }
         Commands::Push => {
             push_overlay_repo()?;
@@ -1244,6 +1278,219 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
     }
 
     // Auto-commit
+    auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
+
+    Ok(())
+}
+
+/// Add files to an existing applied overlay.
+///
+/// This adds new files to an overlay that is already applied to the target repository.
+/// The files are linked to the overlay repo and the overlay state is updated.
+fn add_files_to_overlay(
+    name_arg: &str,
+    target: &std::path::Path,
+    files: &[PathBuf],
+    dry_run: bool,
+) -> Result<()> {
+    use crate::config::load_config;
+    use crate::overlay_repo::OverlayRepoManager;
+    use crate::state::{FileEntry, LinkType};
+    use crate::{
+        load_all_overlay_targets, load_overlay_state, normalize_overlay_name, save_external_state,
+        save_overlay_state, update_git_exclude,
+    };
+
+    // Validate target is a git repo
+    let target = canonicalize_path(target, "Target directory")?;
+    if !target.join(".git").exists() {
+        bail!(
+            "Target directory is not a git repository: {}",
+            target.display()
+        );
+    }
+
+    // Check that files were provided
+    if files.is_empty() {
+        bail!(
+            "No files specified.\n\n\
+             Usage: repoverlay add <overlay-name> <file> [<file>...]"
+        );
+    }
+
+    // Parse the name argument to get org/repo/name
+    let (org, repo, overlay_name) = parse_overlay_name_arg(name_arg, &target)?;
+
+    // Verify the overlay is currently applied
+    let normalized_name = normalize_overlay_name(&overlay_name)?;
+    let applied_overlays = list_applied_overlays(&target)?;
+
+    if !applied_overlays.contains(&normalized_name) {
+        bail!(
+            "Overlay '{}' is not currently applied.\n\n\
+             To apply it first: repoverlay apply {}/{}/{}",
+            overlay_name,
+            org,
+            repo,
+            overlay_name
+        );
+    }
+
+    // Load existing overlay state
+    let mut state = load_overlay_state(&target, &normalized_name)?;
+
+    // Validate all files exist
+    for file in files {
+        let full_path = target.join(file);
+        if !full_path.exists() {
+            bail!(
+                "File does not exist: {}\n\n\
+                 Create the file first, then add it to the overlay.",
+                file.display()
+            );
+        }
+    }
+
+    // Load all existing overlay targets to check for conflicts
+    let existing_targets = load_all_overlay_targets(&target)?;
+
+    // Check that files aren't already managed by an overlay
+    for file in files {
+        let file_str = file.to_string_lossy().replace('\\', "/");
+        if let Some(other_overlay) = existing_targets.get(&file_str) {
+            bail!(
+                "File '{}' is already managed by overlay '{}'.\n\
+                 Remove it from that overlay first.",
+                file.display(),
+                other_overlay
+            );
+        }
+    }
+
+    println!(
+        "{} files to overlay: {}",
+        "Adding".blue().bold(),
+        overlay_name
+    );
+
+    if dry_run {
+        println!("  Target: {}", target.display());
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+        println!("\nFiles that would be added:");
+        for file in files {
+            println!("  {} {}", "+".green(), file.display());
+        }
+        return Ok(());
+    }
+
+    // Load overlay repo config
+    let config = load_config(None)?;
+    let overlay_config = config.overlay_repo.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Overlay repository not configured.\n\n\
+             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+        )
+    })?;
+
+    // Create manager and ensure cloned
+    let manager = OverlayRepoManager::new(overlay_config)?;
+    manager.ensure_cloned()?;
+
+    // Get the overlay path in the overlay repo
+    let overlay_repo_path = manager.path().join(&org).join(&repo).join(&overlay_name);
+
+    if !overlay_repo_path.exists() {
+        bail!(
+            "Overlay '{}/{}/{}' does not exist in overlay repo.\n\n\
+             Did you mean to use 'repoverlay create {}' instead?",
+            org,
+            repo,
+            overlay_name,
+            name_arg
+        );
+    }
+
+    // Determine link type (symlink unless on Windows)
+    let link_type = if cfg!(windows) {
+        LinkType::Copy
+    } else {
+        LinkType::Symlink
+    };
+
+    let mut exclude_entries: Vec<String> = Vec::new();
+    let mut added_count = 0;
+
+    for file in files {
+        let target_file = target.join(file);
+        let overlay_file = overlay_repo_path.join(file);
+
+        // Copy file to overlay repo
+        if let Some(parent) = overlay_file.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&target_file, &overlay_file)
+            .with_context(|| format!("Failed to copy {} to overlay repo", target_file.display()))?;
+
+        // Remove original file (we'll replace it with symlink)
+        fs::remove_file(&target_file)
+            .with_context(|| format!("Failed to remove {} for linking", target_file.display()))?;
+
+        // Create symlink/copy from overlay repo to target
+        match link_type {
+            LinkType::Symlink => {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(|| {
+                    format!("Failed to create symlink: {}", target_file.display())
+                })?;
+                #[cfg(windows)]
+                std::os::windows::fs::symlink_file(&overlay_file, &target_file).with_context(
+                    || format!("Failed to create symlink: {}", target_file.display()),
+                )?;
+            }
+            LinkType::Copy => {
+                fs::copy(&overlay_file, &target_file)
+                    .with_context(|| format!("Failed to copy file: {}", target_file.display()))?;
+            }
+        }
+
+        // Add to state
+        state.add_file(FileEntry {
+            source: file.clone(),
+            target: file.clone(),
+            link_type,
+        });
+
+        // Add to exclude list
+        let exclude_path = file.to_string_lossy().replace('\\', "/");
+        exclude_entries.push(exclude_path);
+
+        println!("  {} {}", "+".green(), file.display());
+        added_count += 1;
+    }
+
+    // Update git exclude with new entries
+    update_git_exclude(&target, &normalized_name, &exclude_entries, true)?;
+
+    // Save updated overlay state
+    save_overlay_state(&target, &state)?;
+
+    // Save external backup
+    if let Err(e) = save_external_state(&target, &normalized_name, &state) {
+        eprintln!(
+            "  {} Could not save external backup: {}",
+            "Warning:".yellow(),
+            e
+        );
+    }
+
+    println!(
+        "\n{} Added {} file(s) to overlay '{}'",
+        "✓".green().bold(),
+        added_count,
+        overlay_name
+    );
+
+    // Auto-commit to overlay repo
     auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
 
     Ok(())
@@ -3059,6 +3306,147 @@ mod tests {
                     assert_eq!(r#ref, Some("main".to_string()));
                 }
                 _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn add_requires_name() {
+            let result = Cli::try_parse_from(["repoverlay", "add"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn add_parses_name_and_files() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file1.txt", "file2.txt"])
+                    .unwrap();
+
+            match cli.command {
+                Commands::Add {
+                    name,
+                    files,
+                    target,
+                    dry_run,
+                } => {
+                    assert_eq!(name, "my-overlay");
+                    assert_eq!(files.len(), 2);
+                    assert_eq!(files[0], PathBuf::from("file1.txt"));
+                    assert_eq!(files[1], PathBuf::from("file2.txt"));
+                    assert!(target.is_none());
+                    assert!(!dry_run);
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_parses_all_options() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "add",
+                "org/repo/my-overlay",
+                "newfile.txt",
+                "--target",
+                "/repo",
+                "--dry-run",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Commands::Add {
+                    name,
+                    files,
+                    target,
+                    dry_run,
+                } => {
+                    assert_eq!(name, "org/repo/my-overlay");
+                    assert_eq!(files, vec![PathBuf::from("newfile.txt")]);
+                    assert_eq!(target, Some(PathBuf::from("/repo")));
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_accepts_short_target_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt", "-t", "/repo"])
+                    .unwrap();
+
+            match cli.command {
+                Commands::Add { target, .. } => {
+                    assert_eq!(target, Some(PathBuf::from("/repo")));
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_accepts_multiple_files() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "add",
+                "my-overlay",
+                "file1.txt",
+                "file2.txt",
+                "dir/file3.txt",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Commands::Add { files, .. } => {
+                    assert_eq!(files.len(), 3);
+                    assert_eq!(files[0], PathBuf::from("file1.txt"));
+                    assert_eq!(files[1], PathBuf::from("file2.txt"));
+                    assert_eq!(files[2], PathBuf::from("dir/file3.txt"));
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_accepts_files_with_special_characters() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "add",
+                "my-overlay",
+                "file with spaces.txt",
+                ".hidden-file",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Commands::Add { files, .. } => {
+                    assert_eq!(files.len(), 2);
+                    assert_eq!(files[0], PathBuf::from("file with spaces.txt"));
+                    assert_eq!(files[1], PathBuf::from(".hidden-file"));
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_dry_run_defaults_to_false() {
+            let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
+
+            match cli.command {
+                Commands::Add { dry_run, .. } => {
+                    assert!(!dry_run);
+                }
+                _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn add_target_defaults_to_none() {
+            let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
+
+            match cli.command {
+                Commands::Add { target, .. } => {
+                    assert!(target.is_none());
+                }
+                _ => panic!("Expected Add command"),
             }
         }
     }
