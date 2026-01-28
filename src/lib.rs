@@ -24,6 +24,7 @@ pub fn run() -> anyhow::Result<()> {
 // Internal imports for use within the crate
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
+use log::{debug, trace};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,8 +86,14 @@ pub(crate) fn resolve_source(
     update: bool,
     target_path: Option<&Path>,
 ) -> Result<ResolvedSource> {
+    debug!(
+        "resolve_source: {} (ref_override={:?}, update={})",
+        source_str, ref_override, update
+    );
+
     // Try to parse as GitHub URL
     if GitHubSource::is_github_url(source_str) {
+        debug!("detected GitHub URL");
         let mut github_source = GitHubSource::parse(source_str)?;
 
         // Apply ref override if provided
@@ -124,6 +131,7 @@ pub(crate) fn resolve_source(
     // Try to parse as local path first
     let path = PathBuf::from(source_str);
     if path.exists() {
+        debug!("resolved as local path: {}", path.display());
         let canonical = path
             .canonicalize()
             .with_context(|| format!("Overlay source not found: {}", source_str))?;
@@ -136,6 +144,10 @@ pub(crate) fn resolve_source(
 
     // Try to parse as overlay repo reference (org/repo/name)
     if let Some((org, repo, name)) = overlay_repo::parse_overlay_reference(source_str) {
+        debug!(
+            "parsed as overlay repo reference: {}/{}/{}",
+            org, repo, name
+        );
         // Load config and create overlay repo manager
         let config = config::load_config(None)?;
         let overlay_config = config.overlay_repo.ok_or_else(|| {
@@ -238,10 +250,19 @@ pub(crate) fn apply_overlay(
     ref_override: Option<&str>,
     update_cache: bool,
 ) -> Result<()> {
+    debug!(
+        "apply_overlay: source={}, target={}, force_copy={}, name_override={:?}",
+        source_str,
+        target.display(),
+        force_copy,
+        name_override
+    );
+
     // Resolve source (handles GitHub URLs and local paths)
     // Pass target to enable upstream detection for fork inheritance
     let resolved = resolve_source(source_str, ref_override, update_cache, Some(target))?;
     let source = &resolved.path;
+    debug!("resolved source path: {}", source.display());
 
     // Validate target exists and is a git repo
     let target = canonicalize_path(target, "Target directory")?;
@@ -512,6 +533,12 @@ pub(crate) fn apply_overlay(
         }
 
         // Create symlink or copy
+        trace!(
+            "linking {} -> {} ({:?})",
+            source_file.display(),
+            target_file.display(),
+            link_type
+        );
         match link_type {
             LinkType::Symlink => {
                 #[cfg(unix)]
@@ -596,6 +623,12 @@ pub(crate) fn apply_overlay(
 /// 6. Remove external backup
 /// 7. If no overlays remain, remove `.repoverlay/` directory
 pub(crate) fn remove_overlay(target: &Path, name: Option<String>, remove_all: bool) -> Result<()> {
+    debug!(
+        "remove_overlay: target={}, name={:?}, remove_all={}",
+        target.display(),
+        name,
+        remove_all
+    );
     let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
 
@@ -638,6 +671,7 @@ pub(crate) fn remove_overlay(target: &Path, name: Option<String>, remove_all: bo
 
 /// Remove a single overlay by name.
 pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &str) -> Result<()> {
+    debug!("remove_single_overlay: {}", name);
     let state_file = overlays_dir.join(format!("{}.ccl", name));
 
     if !state_file.exists() {
@@ -662,6 +696,7 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
     // Remove files and directories
     for entry in state.file_entries() {
         let file_path = target.join(&entry.target);
+        trace!("removing: {}", file_path.display());
 
         if file_path.exists() || file_path.is_symlink() {
             match entry.entry_type {
@@ -901,11 +936,17 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
 /// 1. Load external state backup for the target repository
 /// 2. For each saved overlay state, re-apply using original source
 pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
+    debug!(
+        "restore_overlays: target={}, dry_run={}",
+        target.display(),
+        dry_run
+    );
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
 
     // Load external state
     let external_states = load_external_states(&target)?;
+    debug!("found {} external states to restore", external_states.len());
 
     if external_states.is_empty() {
         println!("{} No overlays to restore.", "Status:".bold());
@@ -1004,6 +1045,12 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
 /// 3. Report available updates
 /// 4. If not dry-run, remove and re-apply each overlay with updated cache
 pub(crate) fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result<()> {
+    debug!(
+        "update_overlays: target={}, name={:?}, dry_run={}",
+        target.display(),
+        name,
+        dry_run
+    );
     let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
 
@@ -1601,6 +1648,12 @@ pub(crate) fn update_git_exclude(
     entries: &[String],
     add: bool,
 ) -> Result<()> {
+    debug!(
+        "update_git_exclude: overlay={}, add={}, entries={}",
+        overlay_name,
+        add,
+        entries.len()
+    );
     let exclude_path = target.join(GIT_EXCLUDE);
 
     // Ensure the .git/info directory exists

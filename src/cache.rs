@@ -5,6 +5,7 @@
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
+use log::{debug, trace, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ use crate::github::{GitHubSource, GitRef};
 
 /// Execute a git command in a directory and return the output.
 fn git_in_dir(repo_path: &Path, args: &[&str]) -> Result<Output> {
+    trace!("git {} in {}", args.join(" "), repo_path.display());
     Command::new("git")
         .args(args)
         .current_dir(repo_path)
@@ -96,13 +98,22 @@ impl CacheManager {
     /// Returns the path to the overlay files.
     pub fn ensure_cached(&self, source: &GitHubSource, update: bool) -> Result<CachedOverlay> {
         let repo_path = self.repo_path(source);
+        debug!(
+            "ensure_cached: {}/{} at {} (update={})",
+            source.owner,
+            source.repo,
+            source.git_ref.as_str(),
+            update
+        );
 
         if repo_path.exists() {
+            debug!("cache hit: {}", repo_path.display());
             if update {
                 self.update_repo(&repo_path)?;
             }
             self.checkout_ref(&repo_path, source)?;
         } else {
+            debug!("cache miss, cloning to {}", repo_path.display());
             self.clone_repo(source, &repo_path)?;
         }
 
@@ -145,6 +156,13 @@ impl CacheManager {
 
     /// Clone a repository.
     fn clone_repo(&self, source: &GitHubSource, target: &Path) -> Result<()> {
+        debug!(
+            "cloning {}/{} to {}",
+            source.owner,
+            source.repo,
+            target.display()
+        );
+
         // Create parent directories
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
@@ -194,20 +212,24 @@ impl CacheManager {
 
     /// Update an existing cached repository.
     fn update_repo(&self, repo_path: &Path) -> Result<()> {
+        debug!("fetching updates for {}", repo_path.display());
         git_run(repo_path, &["fetch", "--depth", "1", "origin"]).context("Failed to fetch updates")
     }
 
     /// Checkout a specific ref.
     fn checkout_ref(&self, repo_path: &Path, source: &GitHubSource) -> Result<()> {
+        debug!("checkout_ref: {}", source.git_ref.as_str());
         let ref_spec = match &source.git_ref {
             GitRef::Default => "origin/HEAD",
             GitRef::Branch(b) => {
                 // For branches, try origin/branch first
                 let origin_ref = format!("origin/{}", b);
                 if self.ref_exists(repo_path, &origin_ref)? {
+                    debug!("using remote ref: {}", origin_ref);
                     return self.do_checkout(repo_path, &origin_ref);
                 }
                 // Fall back to local ref
+                debug!("remote ref not found, falling back to local: {}", b);
                 b.as_str()
             }
             GitRef::Tag(t) => t.as_str(),
@@ -270,10 +292,18 @@ impl CacheManager {
     /// Load cache metadata.
     fn load_meta(&self, repo_path: &Path) -> Option<CacheMeta> {
         let meta_path = repo_path.join(".repoverlay-cache-meta.ccl");
-        if meta_path.exists()
-            && let Ok(content) = fs::read_to_string(&meta_path)
-        {
-            return sickle::from_str(&content).ok();
+        if meta_path.exists() {
+            match fs::read_to_string(&meta_path) {
+                Ok(content) => match sickle::from_str(&content) {
+                    Ok(meta) => return Some(meta),
+                    Err(e) => {
+                        warn!("failed to parse cache meta {}: {}", meta_path.display(), e);
+                    }
+                },
+                Err(e) => {
+                    warn!("failed to read cache meta {}: {}", meta_path.display(), e);
+                }
+            }
         }
         None
     }

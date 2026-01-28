@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -309,6 +310,7 @@ pub fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
 
 /// Save overlay state to the external backup location.
 pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlayState) -> Result<()> {
+    debug!("save_external_state: {}", overlay_name);
     let dir = external_state_dir_for_target(target)?;
     fs::create_dir_all(&dir)?;
 
@@ -351,9 +353,11 @@ pub fn remove_external_state(target: &Path, overlay_name: &str) -> Result<()> {
 
 /// Load all overlay states from the external backup location for a target.
 pub fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
+    debug!("load_external_states: {}", target.display());
     let dir = external_state_dir_for_target(target)?;
 
     if !dir.exists() {
+        debug!("no external state directory found");
         return Ok(Vec::new());
     }
 
@@ -467,6 +471,7 @@ pub fn list_applied_overlays(target: &Path) -> Result<Vec<String>> {
 
 /// Load an overlay state from the in-repo state file.
 pub fn load_overlay_state(target: &Path, name: &str) -> Result<OverlayState> {
+    debug!("load_overlay_state: {}", name);
     let state_file = target
         .join(STATE_DIR)
         .join(OVERLAYS_DIR)
