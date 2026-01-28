@@ -1295,7 +1295,7 @@ fn add_files_to_overlay(
 ) -> Result<()> {
     use crate::config::load_config;
     use crate::overlay_repo::OverlayRepoManager;
-    use crate::state::{FileEntry, LinkType};
+    use crate::state::{EntryType, FileEntry, LinkType};
     use crate::{
         load_all_overlay_targets, load_overlay_state, normalize_overlay_name, save_external_state,
         save_overlay_state, update_git_exclude,
@@ -1458,6 +1458,7 @@ fn add_files_to_overlay(
             source: file.clone(),
             target: file.clone(),
             link_type,
+            entry_type: EntryType::File,
         });
 
         // Add to exclude list
