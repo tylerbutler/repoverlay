@@ -998,7 +998,7 @@ fn create_overlay_command(
             dry_run,
             yes,
         )
-        .and_then(|_| {
+        .and_then(|()| {
             // Auto-commit after creating
             auto_commit_overlay(&manager, &org, &repo, &overlay_name, true)
         });
@@ -1052,13 +1052,7 @@ fn auto_commit_overlay(
         .output()
         .context("Failed to fetch from remote")?;
 
-    if !fetch_output.status.success() {
-        // Fetch failed, but continue - might be offline
-        eprintln!(
-            "{} Could not fetch from remote (offline?), continuing...",
-            "Warning:".yellow()
-        );
-    } else {
+    if fetch_output.status.success() {
         // Try to pull/rebase to incorporate remote changes
         let pull_output = Command::new("git")
             .args(["pull", "--rebase", "--autostash"])
@@ -1075,6 +1069,12 @@ fn auto_commit_overlay(
                 stderr.trim()
             );
         }
+    } else {
+        // Fetch failed, but continue - might be offline
+        eprintln!(
+            "{} Could not fetch from remote (offline?), continuing...",
+            "Warning:".yellow()
+        );
     }
 
     // Check if there are changes to commit
@@ -1673,9 +1673,9 @@ mod tests {
                 (".envrc", "export FOO=bar"),
                 (
                     "repoverlay.ccl",
-                    r#"mappings =
+                    r"mappings =
   .envrc = .env
-"#,
+",
                 ),
             ]);
 
@@ -1703,9 +1703,9 @@ mod tests {
                 (".envrc", "export FOO=bar"),
                 (
                     "repoverlay.ccl",
-                    r#"overlay =
+                    r"overlay =
   name = my-custom-overlay
-"#,
+",
                 ),
             ]);
 
@@ -2157,10 +2157,8 @@ mod tests {
             assert!(!repo.path().join("scratch").is_symlink());
         }
 
-        // TODO: Enable once tylerbutler/santa#71 is fixed
-        // Forward slashes in map keys currently cause parsing errors in sickle
         #[test]
-        #[ignore]
+        #[ignore = "tylerbutler/santa#71: forward slashes in map keys cause parsing errors in sickle"]
         fn mapping_supports_nested_paths_in_key_and_value() {
             let repo = create_test_repo();
             let overlay = TempDir::new().unwrap();
@@ -2172,9 +2170,9 @@ mod tests {
             // Map nested source path to nested destination path (forward slashes in both)
             fs::write(
                 overlay.path().join("repoverlay.ccl"),
-                r#"mappings =
+                r"mappings =
   config/settings.json = .vscode/settings.json
-"#,
+",
             )
             .unwrap();
 
@@ -2215,12 +2213,12 @@ mod tests {
             // Use forward slashes in directories list (portable across platforms)
             fs::write(
                 overlay.path().join("repoverlay.ccl"),
-                r#"overlay =
+                r"overlay =
   name = test-overlay
 
 directories =
   = config/editors
-"#,
+",
             )
             .unwrap();
 

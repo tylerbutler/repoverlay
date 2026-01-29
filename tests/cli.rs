@@ -1,4 +1,4 @@
-//! CLI integration tests using assert_cmd.
+//! CLI integration tests using `assert_cmd`.
 //!
 //! These tests verify CLI behavior by running the compiled binary.
 //! Organized into logical sections covering each command's functionality.
@@ -352,9 +352,9 @@ fn apply_respects_path_mappings() {
         (".envrc", "export FOO=bar"),
         (
             "repoverlay.ccl",
-            r#"mappings =
+            r"mappings =
   .envrc = .env
-"#,
+",
         ),
     ]);
 
@@ -761,9 +761,9 @@ fn apply_rejects_path_traversal_attempt() {
         .expect("Failed to write .envrc");
     std::fs::write(
         overlay.path().join("repoverlay.ccl"),
-        r#"mappings =
+        r"mappings =
   .envrc = ../escape-target/malicious
-"#,
+",
     )
     .expect("Failed to write config");
 

@@ -18,6 +18,7 @@ use crossterm::{
 use crate::detection::{DetectedFile, FileCategory};
 
 /// Format a number in a human-readable way (e.g., 1.2K, 3.5M).
+#[allow(clippy::cast_precision_loss)]
 pub fn humanize_count(n: usize) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
@@ -257,6 +258,7 @@ impl SelectionState {
     }
 
     /// Adjust scroll offset to keep cursor visible.
+    #[allow(clippy::missing_const_for_fn)]
     fn adjust_scroll(&mut self) {
         let max_visible = 15; // Max files to show at once
         if self.cursor < self.scroll_offset {
@@ -338,7 +340,7 @@ pub fn select_files(
 /// - Running in a CI environment (CI env var is set)
 /// - Running as a cargo test binary (executable in target/*/deps/)
 /// - TERM is unset or "dumb"
-/// - REPOVERLAY_NON_INTERACTIVE env var is set
+/// - `REPOVERLAY_NON_INTERACTIVE` env var is set
 fn atty_is_interactive() -> bool {
     use std::io::IsTerminal;
 
@@ -1055,7 +1057,7 @@ mod tests {
         assert_eq!(humanize_count(1000), "1.0K");
         assert_eq!(humanize_count(1500), "1.5K");
         assert_eq!(humanize_count(12345), "12.3K");
-        assert_eq!(humanize_count(999999), "1000.0K");
+        assert_eq!(humanize_count(999_999), "1000.0K");
     }
 
     #[test]

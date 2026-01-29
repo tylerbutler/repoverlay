@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -111,11 +112,11 @@ pub fn generate_config_ccl(config: &OverlayRepoConfig) -> String {
     output.push_str("  /= url: The Git URL of the shared overlay repository.\n");
     output.push_str("  /= This is where overlays are stored and retrieved from.\n");
     output.push_str("  /= Supports HTTPS and SSH URLs.\n");
-    output.push_str(&format!("  url = {}\n", config.url));
+    let _ = writeln!(output, "  url = {}", config.url);
 
     if let Some(ref local_path) = config.local_path {
         output.push_str("\n  /= local_path: Override the default clone location.\n");
-        output.push_str(&format!("  local_path = {}\n", local_path.display()));
+        let _ = writeln!(output, "  local_path = {}", local_path.display());
     } else {
         output.push_str("\n  /= local_path (optional): Override the default clone location.\n");
         output.push_str(
@@ -236,10 +237,10 @@ mod tests {
         let config_dir = temp.path().join(".repoverlay");
         fs::create_dir_all(&config_dir).unwrap();
 
-        let config_content = r#"
+        let config_content = r"
 overlay_repo =
   url = https://github.com/org/overlays
-"#;
+";
         fs::write(config_dir.join("config.ccl"), config_content).unwrap();
 
         let config = load_repo_config(temp.path()).unwrap();
@@ -267,10 +268,10 @@ overlay_repo =
         let config_dir = temp.path().join(".repoverlay");
         fs::create_dir_all(&config_dir).unwrap();
 
-        let repo_config_content = r#"
+        let repo_config_content = r"
 overlay_repo =
   url = https://github.com/repo/specific
-"#;
+";
         fs::write(config_dir.join("config.ccl"), repo_config_content).unwrap();
 
         // The repo config should be used when present
@@ -314,6 +315,7 @@ overlay_repo =
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_config_dir_with_xdg_config_home() {
         // Save original value
         let original = std::env::var("XDG_CONFIG_HOME").ok();
@@ -340,6 +342,7 @@ overlay_repo =
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_save_global_config_with_comments() {
         // Save original XDG_CONFIG_HOME and set to temp dir
         let original = std::env::var("XDG_CONFIG_HOME").ok();
@@ -378,6 +381,7 @@ overlay_repo =
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_save_global_config_with_local_path() {
         // Save original XDG_CONFIG_HOME and set to temp dir
         let original = std::env::var("XDG_CONFIG_HOME").ok();
@@ -418,14 +422,14 @@ overlay_repo =
         fs::create_dir_all(&config_dir).unwrap();
 
         // Config with extra/unknown keys
-        let config_content = r#"
+        let config_content = r"
 overlay_repo =
   url = https://github.com/org/overlays
   unknown_field = some_value
 
 some_other_section =
   foo = bar
-"#;
+";
         fs::write(config_dir.join("config.ccl"), config_content).unwrap();
 
         // Should still parse successfully, ignoring unknown keys
