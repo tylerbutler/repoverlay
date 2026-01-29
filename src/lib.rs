@@ -71,7 +71,7 @@ pub(crate) struct ResolvedSource {
 /// 2. Local path (`./path` or `/path`) - returns path directly after validation
 /// 3. Overlay repo reference (`org/repo/name`) - resolves from configured shared repository
 ///    - First tries exact match (org/repo/name)
-///    - Falls back to upstream if target_path has an upstream remote
+///    - Falls back to upstream if `target_path` has an upstream remote
 ///
 /// # Errors
 ///
@@ -174,7 +174,7 @@ pub(crate) fn resolve_source(
         let via_upstream = resolved_via == state::ResolvedVia::Upstream;
         let (actual_org, actual_repo) = match (&upstream, via_upstream) {
             (Some(up), true) => (up.org.clone(), up.repo.clone()),
-            _ => (org.clone(), repo.clone()),
+            _ => (org, repo),
         };
 
         let via_suffix = if via_upstream {
@@ -281,12 +281,12 @@ pub(crate) fn apply_overlay(
 
     // Determine overlay name (priority: CLI override > config > directory name)
     let overlay_name = name_override
-        .or(config.overlay.name.clone())
+        .or_else(|| config.overlay.name.clone())
         .unwrap_or_else(|| {
-            source
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unnamed".to_string())
+            source.file_name().map_or_else(
+                || "unnamed".to_string(),
+                |n| n.to_string_lossy().to_string(),
+            )
         });
     let normalized_name = normalize_overlay_name(&overlay_name)?;
 
@@ -409,7 +409,7 @@ pub(crate) fn apply_overlay(
 
     for entry in WalkDir::new(source)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().is_file())
     {
         let rel_path = entry.path().strip_prefix(source)?;
@@ -447,8 +447,7 @@ pub(crate) fn apply_overlay(
         let target_rel = config
             .mappings
             .get(&rel_str)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| rel_path.to_path_buf());
+            .map_or_else(|| rel_path.to_path_buf(), PathBuf::from);
 
         let target_rel_str = target_rel.to_string_lossy().to_string();
         let source_file = entry.path().to_path_buf();
@@ -671,13 +670,12 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
 
         if available.is_empty() {
             bail!("No overlays are currently applied");
-        } else {
-            bail!(
-                "Overlay '{}' not found. Available overlays: {}",
-                name,
-                available.join(", ")
-            );
         }
+        bail!(
+            "Overlay '{}' not found. Available overlays: {}",
+            name,
+            available.join(", ")
+        );
     }
 
     let state = load_overlay_state(target, name)?;
@@ -1033,6 +1031,7 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
 /// 2. For each GitHub overlay, check remote for new commits
 /// 3. Report available updates
 /// 4. If not dry-run, remove and re-apply each overlay with updated cache
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result<()> {
     debug!(
         "update_overlays: target={}, name={:?}, dry_run={}",
@@ -1214,6 +1213,7 @@ fn detect_target_from_git_remote(repo_path: &Path) -> Option<(String, String)> {
 /// 3. Interactive selection or use pre-selected AI configs (with `--yes`)
 /// 4. Copy selected files to output directory
 /// 5. Generate `repoverlay.ccl` config file
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn create_overlay(
     source: &Path,
     output: Option<PathBuf>,
@@ -1234,50 +1234,40 @@ pub(crate) fn create_overlay(
     // Priority: explicit --local > overlay repo (if configured) > local fallback
     // Also track overlay repo info for better prompts: (repo_root, org, repo, overlay_name)
     let (output_dir, overlay_repo_info): (PathBuf, Option<(PathBuf, String, String, String)>) =
-        match &output {
-            Some(p) => (p.clone(), None),
-            None => {
-                // Check if overlay repo is configured
-                let config = config::load_config(None).ok();
-                let overlay_repo_config = config.as_ref().and_then(|c| c.overlay_repo.as_ref());
+        if let Some(p) = &output {
+            (p.clone(), None)
+        } else {
+            // Check if overlay repo is configured
+            let config = config::load_config(None).ok();
+            let overlay_repo_config = config.as_ref().and_then(|c| c.overlay_repo.as_ref());
 
-                if let Some(repo_config) = overlay_repo_config {
-                    // Try to detect org/repo from git remote
-                    if let Some((org, repo)) = detect_target_from_git_remote(source) {
-                        // Determine overlay name
-                        let overlay_name = name.clone().unwrap_or_else(|| {
-                            source
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("overlay")
-                                .to_string()
-                        });
-
-                        // Use overlay repo path: <repo_path>/<org>/<repo>/<name>
-                        let manager = overlay_repo::OverlayRepoManager::new(repo_config.clone())
-                            .expect("Failed to create overlay repo manager");
-                        manager
-                            .ensure_cloned()
-                            .expect("Failed to ensure overlay repo is cloned");
-                        let repo_root = manager.path().to_path_buf();
-                        let full_path = repo_root.join(&org).join(&repo).join(&overlay_name);
-                        (full_path, Some((repo_root, org, repo, overlay_name)))
-                    } else {
-                        // Couldn't detect target, fall back to local
-                        eprintln!(
-                            "{} Could not detect target from git remote, using local storage.",
-                            "Warning:".yellow()
-                        );
-                        let repo_name = source
+            if let Some(repo_config) = overlay_repo_config {
+                // Try to detect org/repo from git remote
+                if let Some((org, repo)) = detect_target_from_git_remote(source) {
+                    // Determine overlay name
+                    let overlay_name = name.clone().unwrap_or_else(|| {
+                        source
                             .file_name()
                             .and_then(|n| n.to_str())
-                            .unwrap_or("overlay");
-                        let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
-                            .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-                        (proj_dirs.data_dir().join("overlays").join(repo_name), None)
-                    }
+                            .unwrap_or("overlay")
+                            .to_string()
+                    });
+
+                    // Use overlay repo path: <repo_path>/<org>/<repo>/<name>
+                    let manager = overlay_repo::OverlayRepoManager::new(repo_config.clone())
+                        .expect("Failed to create overlay repo manager");
+                    manager
+                        .ensure_cloned()
+                        .expect("Failed to ensure overlay repo is cloned");
+                    let repo_root = manager.path().to_path_buf();
+                    let full_path = repo_root.join(&org).join(&repo).join(&overlay_name);
+                    (full_path, Some((repo_root, org, repo, overlay_name)))
                 } else {
-                    // No overlay repo configured, use local fallback
+                    // Couldn't detect target, fall back to local
+                    eprintln!(
+                        "{} Could not detect target from git remote, using local storage.",
+                        "Warning:".yellow()
+                    );
                     let repo_name = source
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -1286,6 +1276,15 @@ pub(crate) fn create_overlay(
                         .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
                     (proj_dirs.data_dir().join("overlays").join(repo_name), None)
                 }
+            } else {
+                // No overlay repo configured, use local fallback
+                let repo_name = source
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("overlay");
+                let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
+                (proj_dirs.data_dir().join("overlays").join(repo_name), None)
             }
         };
 
@@ -1421,7 +1420,7 @@ pub(crate) fn create_overlay(
                     PathBuf::from(path_str)
                 }
             } else {
-                output_dir.clone()
+                output_dir
             };
 
             // Now create the overlay with selected files
@@ -1472,10 +1471,13 @@ pub(crate) fn create_overlay(
             if full_path.is_dir() {
                 for entry in walkdir::WalkDir::new(&full_path)
                     .into_iter()
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                     .filter(|e| e.file_type().is_file())
                 {
-                    let rel = entry.path().strip_prefix(source).unwrap_or(entry.path());
+                    let rel = entry
+                        .path()
+                        .strip_prefix(source)
+                        .unwrap_or_else(|_| entry.path());
                     println!("  + {}", rel.display());
                 }
             } else {
@@ -1503,7 +1505,7 @@ pub(crate) fn copy_files_to_overlay(
         if src_path.is_dir() {
             for entry in walkdir::WalkDir::new(&src_path)
                 .into_iter()
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
                 .filter(|e| e.file_type().is_file())
             {
                 let rel_path = entry.path().strip_prefix(source)?;
@@ -1530,7 +1532,7 @@ pub(crate) fn copy_files_to_overlay(
 /// Generate overlay config file content.
 pub(crate) fn generate_overlay_config(name: &str) -> String {
     format!(
-        r#"/= Overlay configuration file.
+        r"/= Overlay configuration file.
 /= This file describes an overlay and how it should be applied.
 
 overlay =
@@ -1543,7 +1545,7 @@ overlay =
 /= Use this to rename files or place them in different locations.
 /= mappings =
 /=   .envrc.template = .envrc
-"#
+"
     )
 }
 
@@ -2461,6 +2463,33 @@ mod tests {
             let content = "#  repoverlay:test  start\n.envrc\n# repoverlay:test end\n";
             // Should not match due to different spacing
             assert!(!any_overlay_sections_remain(content));
+        }
+
+        #[test]
+        fn remove_overlay_section_cleans_multiple_trailing_newlines() {
+            // Content with empty line before section creates multiple trailing newlines after removal
+            let content = "line1\n\n# repoverlay:test start\n.envrc\n# repoverlay:test end\n";
+            let result = remove_overlay_section(content, "test");
+            // Should clean up the double newline at the end
+            assert!(result.contains("line1"));
+            assert!(!result.contains(".envrc"));
+            assert!(
+                !result.ends_with("\n\n"),
+                "Should not end with double newline"
+            );
+            assert!(result.ends_with('\n'), "Should end with single newline");
+        }
+
+        #[test]
+        fn remove_overlay_section_cleans_many_trailing_newlines() {
+            // Multiple empty lines before section
+            let content = "line1\n\n\n# repoverlay:test start\n.envrc\n# repoverlay:test end\n";
+            let result = remove_overlay_section(content, "test");
+            // Should clean up all excess trailing newlines
+            assert!(
+                !result.ends_with("\n\n"),
+                "Should not end with double newline"
+            );
         }
     }
 

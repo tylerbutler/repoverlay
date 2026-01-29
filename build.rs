@@ -29,9 +29,7 @@ fn emit_git_info() {
     }
 
     // Check if dirty
-    let dirty = git_command(&["status", "--porcelain"])
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
+    let dirty = git_command(&["status", "--porcelain"]).is_some_and(|s| !s.is_empty());
     println!("cargo:rustc-env=VERGEN_GIT_DIRTY={dirty}");
 
     // Rerun if git HEAD changes

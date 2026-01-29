@@ -79,6 +79,7 @@ pub struct CacheManager {
     cache_dir: PathBuf,
 }
 
+#[allow(clippy::unused_self)]
 impl CacheManager {
     /// Create a new cache manager.
     pub fn new() -> Result<Self> {
@@ -101,15 +102,14 @@ impl CacheManager {
         let git_ref = source.git_ref.as_str();
         debug!("ensure_cached: {owner}/{repo} at {git_ref} (update={update})");
 
+        let path = repo_path.display();
         if repo_path.exists() {
-            let path = repo_path.display();
             debug!("cache hit: {path}");
             if update {
                 self.update_repo(&repo_path)?;
             }
             self.checkout_ref(&repo_path, source)?;
         } else {
-            let path = repo_path.display();
             debug!("cache miss, cloning to {path}");
             self.clone_repo(source, &repo_path)?;
         }
@@ -417,10 +417,10 @@ impl CacheManager {
 
         let remote_commit = String::from_utf8(output.stdout)?.trim().to_string();
 
-        if remote_commit != current_commit {
-            Ok(Some(remote_commit))
-        } else {
+        if remote_commit == current_commit {
             Ok(None)
+        } else {
+            Ok(Some(remote_commit))
         }
     }
 }
