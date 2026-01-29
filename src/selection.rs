@@ -627,13 +627,13 @@ fn render_category_toggle(
             SetForegroundColor(color),
             Print(label),
             ResetColor,
-            Print(format!(" {}", count_str))
+            Print(format!(" {count_str}"))
         )
     } else {
         execute!(
             stdout,
             SetForegroundColor(Color::DarkGrey),
-            Print(format!("[{}] {} {}", key, label, count_str)),
+            Print(format!("[{key}] {label} {count_str}")),
             ResetColor
         )
     }
@@ -696,7 +696,7 @@ fn render_selection_summary(stdout: &mut io::Stdout, state: &SelectionState) -> 
         .filter_map(|(cat, label, _color)| {
             let (selected, _) = counts.get(cat).unwrap_or(&(0, 0));
             if *selected > 0 {
-                Some(format!("{} {}", selected, label))
+                Some(format!("{selected} {label}"))
             } else {
                 None
             }
@@ -817,7 +817,7 @@ fn render_key_hint(stdout: &mut io::Stdout, key: &str, action: &str) -> io::Resu
         SetForegroundColor(Color::Cyan),
         Print(key),
         SetForegroundColor(Color::DarkGrey),
-        Print(format!(" {} ", action)),
+        Print(format!(" {action} ")),
         ResetColor
     )
 }
@@ -1250,7 +1250,7 @@ mod tests {
         let mut files = Vec::new();
         for i in 0..20 {
             files.push(DetectedFile {
-                path: PathBuf::from(format!("file{}.txt", i)),
+                path: PathBuf::from(format!("file{i}.txt")),
                 category: FileCategory::Untracked,
                 preselected: false,
             });
@@ -1278,7 +1278,7 @@ mod tests {
         let mut files = Vec::new();
         for i in 0..20 {
             files.push(DetectedFile {
-                path: PathBuf::from(format!("file{}.txt", i)),
+                path: PathBuf::from(format!("file{i}.txt")),
                 category: FileCategory::Untracked,
                 preselected: false,
             });
