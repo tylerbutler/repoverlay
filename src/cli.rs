@@ -490,7 +490,7 @@ fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: boo
                 fs::remove_dir_all(target.join(STATE_DIR))?;
             }
         } else {
-            bail!("Invalid selection: {}", selection);
+            bail!("Invalid selection: {selection}");
         }
     } else if input.eq_ignore_ascii_case("all") {
         for overlay_name in &applied_overlays {
@@ -499,7 +499,7 @@ fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: boo
         fs::remove_dir_all(target.join(STATE_DIR))?;
         println!("\n{} Removed all overlays", "✓".green().bold());
     } else {
-        bail!("Invalid selection: {}", input);
+        bail!("Invalid selection: {input}");
     }
 
     Ok(())
@@ -573,7 +573,7 @@ fn handle_cache_command(command: CacheCommand) -> Result<()> {
                     repo_name
                 );
             } else {
-                println!("{}/{} is not cached.", owner, repo_name);
+                println!("{owner}/{repo_name} is not cached.");
             }
         }
 
@@ -771,12 +771,12 @@ fn publish_overlay(
 
     println!("{} Publishing overlay:", "Publish".blue().bold());
     println!("  Source:  {}", source.display());
-    println!("  Target:  {}/{}", org, repo);
-    println!("  Name:    {}", overlay_name);
+    println!("  Target:  {org}/{repo}");
+    println!("  Name:    {overlay_name}");
 
     if dry_run {
         println!("\n{} Dry run - no changes made.", "Note:".yellow());
-        println!("\nWould publish to: {}/{}/{}", org, repo, overlay_name);
+        println!("\nWould publish to: {org}/{repo}/{overlay_name}");
         return Ok(());
     }
 
@@ -789,7 +789,8 @@ fn publish_overlay(
     manager.pull()?;
 
     // Stage the overlay
-    println!("{} overlay files...", "Copying".blue().bold());
+    let copying = "Copying".blue().bold();
+    println!("{copying} overlay files...");
     let dest = manager.stage_overlay(&org, &repo, &overlay_name, &source)?;
     println!("  Copied to: {}", dest.display());
 
@@ -801,10 +802,7 @@ fn publish_overlay(
 
     // Commit
     let commit_msg = message
-        .unwrap_or(&format!(
-            "Update overlay: {}/{}/{}",
-            org, repo, overlay_name
-        ))
+        .unwrap_or(&format!("Update overlay: {org}/{repo}/{overlay_name}"))
         .to_string();
 
     println!("{} changes...", "Committing".blue().bold());
@@ -819,19 +817,11 @@ fn publish_overlay(
     } else {
         println!("{} to remote...", "Pushing".blue().bold());
         manager.push()?;
-        println!(
-            "\n{} Overlay published: {}/{}/{}",
-            "✓".green().bold(),
-            org,
-            repo,
-            overlay_name
-        );
+        let check = "✓".green().bold();
+        println!("\n{check} Overlay published: {org}/{repo}/{overlay_name}");
     }
 
-    println!(
-        "\nTo apply: repoverlay apply {}/{}/{}",
-        org, repo, overlay_name
-    );
+    println!("\nTo apply: repoverlay apply {org}/{repo}/{overlay_name}");
 
     Ok(())
 }
@@ -880,11 +870,10 @@ fn parse_overlay_name_arg(
             let parts: Vec<&str> = name_arg.split('/').collect();
             if parts.iter().any(|p| p.is_empty()) {
                 bail!(
-                    "Invalid overlay path format: {}\n\n\
+                    "Invalid overlay path format: {name_arg}\n\n\
                      Use one of:\n  \
                      - my-overlay (detects org/repo from git remote)\n  \
-                     - org/repo/my-overlay (explicit)",
-                    name_arg
+                     - org/repo/my-overlay (explicit)"
                 );
             }
             Ok((
@@ -895,11 +884,10 @@ fn parse_overlay_name_arg(
         }
         _ => {
             bail!(
-                "Invalid overlay path format: {}\n\n\
+                "Invalid overlay path format: {name_arg}\n\n\
                  Use one of:\n  \
                  - my-overlay (detects org/repo from git remote)\n  \
-                 - org/repo/my-overlay (explicit)",
-                name_arg
+                 - org/repo/my-overlay (explicit)"
             );
         }
     }
@@ -978,14 +966,9 @@ fn create_overlay_command(
     // Check if overlay already exists
     if output_path.exists() && !force {
         bail!(
-            "Overlay '{}/{}/{}' already exists.\n\n\
-             To update an applied overlay, use: repoverlay sync {}\n\
-             To overwrite, use: repoverlay create {} --force",
-            org,
-            repo,
-            overlay_name,
-            overlay_name,
-            name_arg
+            "Overlay '{org}/{repo}/{overlay_name}' already exists.\n\n\
+             To update an applied overlay, use: repoverlay sync {overlay_name}\n\
+             To overwrite, use: repoverlay create {name_arg} --force"
         );
     }
 
@@ -1105,7 +1088,8 @@ fn auto_commit_overlay(
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to stage changes: {}", stderr.trim());
+            let msg = stderr.trim();
+            bail!("Failed to stage changes: {msg}");
         }
     }
 
@@ -1116,7 +1100,7 @@ fn auto_commit_overlay(
     }
 
     let action = if is_new { "Add" } else { "Update" };
-    let commit_msg = format!("{} overlay: {}/{}/{}", action, org, repo, name);
+    let commit_msg = format!("{action} overlay: {org}/{repo}/{name}");
 
     println!("{} changes...", "Committing".blue().bold());
     manager.commit(&commit_msg)?;
@@ -1125,26 +1109,18 @@ fn auto_commit_overlay(
     println!("{} to remote...", "Pushing".blue().bold());
     match manager.push() {
         Ok(()) => {
-            println!(
-                "\n{} Overlay {}: {}/{}/{}",
-                "✓".green().bold(),
-                if is_new { "created" } else { "updated" },
-                org,
-                repo,
-                name
-            );
+            let check = "✓".green().bold();
+            let action_word = if is_new { "created" } else { "updated" };
+            println!("\n{check} Overlay {action_word}: {org}/{repo}/{name}");
         }
         Err(e) => {
-            eprintln!(
-                "\n{} Committed locally but failed to push: {}",
-                "Warning:".yellow(),
-                e
-            );
+            let warn = "Warning:".yellow();
+            eprintln!("\n{warn} Committed locally but failed to push: {e}");
             eprintln!("Run 'repoverlay push' to push manually when online.");
         }
     }
 
-    println!("To apply: repoverlay apply {}/{}/{}", org, repo, name);
+    println!("To apply: repoverlay apply {org}/{repo}/{name}");
 
     Ok(())
 }
@@ -1161,10 +1137,8 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
     // Validate target is a git repo
     let target = canonicalize_path(target, "Target directory")?;
     if !target.join(".git").exists() {
-        bail!(
-            "Target directory is not a git repository: {}",
-            target.display()
-        );
+        let target_display = target.display();
+        bail!("Target directory is not a git repository: {target_display}");
     }
 
     // Parse the name argument to get org/repo/name
@@ -1176,12 +1150,8 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
 
     if !applied_overlays.contains(&normalized_name) {
         bail!(
-            "Overlay '{}' is not currently applied.\n\n\
-             To apply it first: repoverlay apply {}/{}/{}",
-            overlay_name,
-            org,
-            repo,
-            overlay_name
+            "Overlay '{overlay_name}' is not currently applied.\n\n\
+             To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
         );
     }
 
@@ -1206,22 +1176,13 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
 
     if !overlay_repo_path.exists() {
         bail!(
-            "Overlay '{}/{}/{}' does not exist in overlay repo.\n\n\
-             Did you mean to use 'repoverlay create {}' instead?",
-            org,
-            repo,
-            overlay_name,
-            name_arg
+            "Overlay '{org}/{repo}/{overlay_name}' does not exist in overlay repo.\n\n\
+             Did you mean to use 'repoverlay create {name_arg}' instead?"
         );
     }
 
-    println!(
-        "{} overlay: {}/{}/{}",
-        "Syncing".blue().bold(),
-        org,
-        repo,
-        overlay_name
-    );
+    let syncing = "Syncing".blue().bold();
+    println!("{syncing} overlay: {org}/{repo}/{overlay_name}");
 
     if dry_run {
         println!("  Target: {}", target.display());
@@ -1304,10 +1265,8 @@ fn add_files_to_overlay(
     // Validate target is a git repo
     let target = canonicalize_path(target, "Target directory")?;
     if !target.join(".git").exists() {
-        bail!(
-            "Target directory is not a git repository: {}",
-            target.display()
-        );
+        let target_display = target.display();
+        bail!("Target directory is not a git repository: {target_display}");
     }
 
     // Check that files were provided
@@ -1327,12 +1286,8 @@ fn add_files_to_overlay(
 
     if !applied_overlays.contains(&normalized_name) {
         bail!(
-            "Overlay '{}' is not currently applied.\n\n\
-             To apply it first: repoverlay apply {}/{}/{}",
-            overlay_name,
-            org,
-            repo,
-            overlay_name
+            "Overlay '{overlay_name}' is not currently applied.\n\n\
+             To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
         );
     }
 
@@ -1401,12 +1356,8 @@ fn add_files_to_overlay(
 
     if !overlay_repo_path.exists() {
         bail!(
-            "Overlay '{}/{}/{}' does not exist in overlay repo.\n\n\
-             Did you mean to use 'repoverlay create {}' instead?",
-            org,
-            repo,
-            overlay_name,
-            name_arg
+            "Overlay '{org}/{repo}/{overlay_name}' does not exist in overlay repo.\n\n\
+             Did you mean to use 'repoverlay create {name_arg}' instead?"
         );
     }
 
@@ -1626,7 +1577,7 @@ mod tests {
                 None,
                 false,
             );
-            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
             // Check symlink was created
             let target_file = repo.path().join(".envrc");
@@ -1941,7 +1892,7 @@ mod tests {
                 None,
                 false,
             );
-            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
             // Check directory symlink was created
             let target_dir = repo.path().join("scratch");
@@ -1984,7 +1935,7 @@ mod tests {
                 None,
                 false,
             );
-            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
             // Check directory was copied (not symlinked)
             let target_dir = repo.path().join("scratch");
@@ -2024,7 +1975,7 @@ mod tests {
                 None,
                 false,
             );
-            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
             // Check directory symlink was created
             let target_dir = repo.path().join("scratch");
@@ -2059,7 +2010,7 @@ mod tests {
                 false,
             );
             // Should succeed (just warns about missing directory)
-            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
             // Check regular file was still symlinked
             assert!(repo.path().join(".envrc").is_symlink());
@@ -2235,7 +2186,7 @@ mod tests {
                 None,
                 false,
             );
-            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
             // Check that mapping was applied (file at nested destination)
             assert!(
@@ -2281,7 +2232,7 @@ directories =
                 None,
                 false,
             );
-            assert!(result.is_ok(), "apply_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
             // Check directory symlink was created
             let target_dir = repo.path().join("config/editors");
@@ -2933,7 +2884,7 @@ directories =
                 false,
                 false,
             );
-            assert!(result.is_ok(), "create_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "create_overlay failed: {result:?}");
 
             // Check file was copied
             let overlay_file = output.path().join("test-overlay/.envrc");
@@ -2970,7 +2921,7 @@ directories =
                 false,
                 false,
             );
-            assert!(result.is_ok(), "create_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "create_overlay failed: {result:?}");
 
             // Check directory was copied
             let overlay_dir = output.path().join("test-overlay/.claude");
@@ -3041,8 +2992,7 @@ directories =
             let err_msg = result.unwrap_err().to_string();
             assert!(
                 err_msg.contains("No files") || err_msg.contains("--include"),
-                "Expected error about no files, got: {}",
-                err_msg
+                "Expected error about no files, got: {err_msg}"
             );
         }
 
@@ -3355,7 +3305,7 @@ directories =
                 Some("second-overlay".to_string()),
                 None,
             );
-            assert!(result.is_ok(), "switch_overlay failed: {:?}", result);
+            assert!(result.is_ok(), "switch_overlay failed: {result:?}");
 
             // Verify first overlay is removed
             assert!(

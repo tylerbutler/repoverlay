@@ -235,7 +235,7 @@ impl OverlayRepoManager {
         let path = self.repo_path.join(org).join(repo).join(name);
 
         if !path.exists() {
-            bail!("Overlay not found: {}/{}/{}", org, repo, name);
+            bail!("Overlay not found: {org}/{repo}/{name}");
         }
 
         Ok(path)
@@ -270,14 +270,15 @@ impl OverlayRepoManager {
         }
 
         // Nothing found - provide helpful error
-        let mut msg = format!("Overlay not found: {}/{}/{}", org, repo, name);
+        let mut msg = format!("Overlay not found: {org}/{repo}/{name}");
         if let Some(up) = upstream {
+            let up_org = &up.org;
+            let up_repo = &up.repo;
             msg.push_str(&format!(
-                "\nAlso checked upstream: {}/{}/{}",
-                up.org, up.repo, name
+                "\nAlso checked upstream: {up_org}/{up_repo}/{name}"
             ));
         }
-        bail!("{}", msg);
+        bail!("{msg}");
     }
 
     /// Stage an overlay for publishing.

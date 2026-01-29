@@ -41,10 +41,10 @@ impl GitHubSource {
     /// - `https://github.com/owner/repo/tree/v1.0.0`
     /// - `https://github.com/owner/repo/tree/abc123...` (commit SHA)
     pub fn parse(input: &str) -> Result<Self> {
-        let url = Url::parse(input).with_context(|| format!("Invalid URL: {}", input))?;
+        let url = Url::parse(input).with_context(|| format!("Invalid URL: {input}"))?;
 
         if url.host_str() != Some("github.com") {
-            bail!("Not a GitHub URL: {}", input);
+            bail!("Not a GitHub URL: {input}");
         }
 
         // Extract path segments: /owner/repo[/tree/ref/subpath]
@@ -52,7 +52,7 @@ impl GitHubSource {
         let segments: Vec<&str> = path.split('/').collect();
 
         if segments.len() < 2 || segments[0].is_empty() || segments[1].is_empty() {
-            bail!("Invalid GitHub URL - missing owner/repo: {}", input);
+            bail!("Invalid GitHub URL - missing owner/repo: {input}");
         }
 
         let owner = segments[0].to_string();
@@ -63,7 +63,7 @@ impl GitHubSource {
                 // Has ref and possibly subpath
                 let ref_str = segments
                     .get(3)
-                    .ok_or_else(|| anyhow!("Missing ref after /tree/ in URL: {}", input))?;
+                    .ok_or_else(|| anyhow!("Missing ref after /tree/ in URL: {input}"))?;
 
                 let subpath = if segments.len() > 4 {
                     Some(PathBuf::from(segments[4..].join("/")))
@@ -175,8 +175,8 @@ impl std::fmt::Display for GitRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GitRef::Default => write!(f, "(default branch)"),
-            GitRef::Branch(s) => write!(f, "branch:{}", s),
-            GitRef::Tag(s) => write!(f, "tag:{}", s),
+            GitRef::Branch(s) => write!(f, "branch:{s}"),
+            GitRef::Tag(s) => write!(f, "tag:{s}"),
             GitRef::Commit(s) => write!(f, "commit:{}", &s[..12.min(s.len())]),
         }
     }
