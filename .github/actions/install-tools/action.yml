@@ -1,0 +1,14 @@
+name: Install Tools
+description: Install common Rust development tools
+
+inputs:
+  tools:
+    description: Tools to install (comma-separated)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: ${{ inputs.tools }}
