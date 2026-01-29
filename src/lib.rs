@@ -42,6 +42,32 @@ use state::{
 };
 use upstream::detect_upstream;
 
+/// Strategy for handling conflicts during overlay application.
+///
+/// Controls behavior when applying an overlay encounters conflicts with
+/// existing files in the repository or with other applied overlays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ConflictStrategy {
+    /// Fail immediately on any conflict (default behavior).
+    #[default]
+    Fail,
+
+    /// Overwrite existing unmanaged files and re-apply same-name overlays.
+    ///
+    /// - For same-name overlays: removes existing overlay first, then re-applies
+    /// - For existing repo files: overwrites them
+    /// - For cross-overlay conflicts (files managed by another overlay): still fails
+    ///   to prevent accidentally breaking other overlays
+    Force,
+
+    /// Skip conflicting files silently, continue with non-conflicting files.
+    ///
+    /// - For cross-overlay conflicts: skips the file with a warning
+    /// - For existing repo files: skips the file with a warning
+    /// - Logs skipped files but does not error
+    SkipConflicts,
+}
+
 /// Canonicalize a path and return an error with a descriptive message if it fails.
 pub(crate) fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf> {
     path.canonicalize()
@@ -239,8 +265,8 @@ pub(crate) fn resolve_source(
 /// Returns an error if:
 /// - Source resolution fails
 /// - Target is not a git repository
-/// - Overlay with same name already exists
-/// - File conflicts with existing overlay or repo file
+/// - Overlay with same name already exists (unless using `Force` strategy)
+/// - File conflicts with existing overlay or repo file (unless using `Force` or `SkipConflicts`)
 /// - No files found in overlay source
 pub(crate) fn apply_overlay(
     source_str: &str,
@@ -249,13 +275,15 @@ pub(crate) fn apply_overlay(
     name_override: Option<String>,
     ref_override: Option<&str>,
     update_cache: bool,
+    conflict_strategy: ConflictStrategy,
 ) -> Result<()> {
     debug!(
-        "apply_overlay: source={}, target={}, force_copy={}, name_override={:?}",
+        "apply_overlay: source={}, target={}, force_copy={}, name_override={:?}, conflict_strategy={:?}",
         source_str,
         target.display(),
         force_copy,
-        name_override
+        name_override,
+        conflict_strategy
     );
 
     // Resolve source (handles GitHub URLs and local paths)
@@ -301,11 +329,23 @@ pub(crate) fn apply_overlay(
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
     let overlay_state_path = overlays_dir.join(format!("{}.ccl", normalized_name));
     if overlay_state_path.exists() {
-        bail!(
-            "Overlay '{}' is already applied. Run 'repoverlay remove {}' first.",
-            overlay_name,
-            normalized_name
-        );
+        match conflict_strategy {
+            ConflictStrategy::Force => {
+                println!(
+                    "  {} Removing existing overlay '{}'",
+                    "Force:".yellow(),
+                    overlay_name
+                );
+                remove_single_overlay(&target, &overlays_dir, &normalized_name)?;
+            }
+            ConflictStrategy::Fail | ConflictStrategy::SkipConflicts => {
+                bail!(
+                    "Overlay '{}' is already applied. Run 'repoverlay remove {}' first, or use --force.",
+                    overlay_name,
+                    normalized_name
+                );
+            }
+        }
     }
 
     // Load all existing overlay targets to check for conflicts
@@ -348,23 +388,61 @@ pub(crate) fn apply_overlay(
         // Check for conflicts with existing overlays
         let dir_rel_str = dir_path.to_string_lossy().to_string();
         if let Some(conflicting_overlay) = existing_targets.get(&dir_rel_str) {
-            bail!(
-                "Conflict: directory '{}' is already managed by overlay '{}'\n\
-                 Remove that overlay first or use different file mappings.",
-                dir_path.display(),
-                conflicting_overlay
-            );
+            match conflict_strategy {
+                ConflictStrategy::SkipConflicts => {
+                    eprintln!(
+                        "  {} Skipping directory '{}' (managed by overlay '{}')",
+                        "Skip:".yellow(),
+                        dir_path.display(),
+                        conflicting_overlay
+                    );
+                    continue;
+                }
+                ConflictStrategy::Fail | ConflictStrategy::Force => {
+                    bail!(
+                        "Conflict: directory '{}' is already managed by overlay '{}'\n\
+                         Remove that overlay first, use --skip-conflicts, or use different file mappings.",
+                        dir_path.display(),
+                        conflicting_overlay
+                    );
+                }
+            }
         }
 
         let target_dir = target.join(&dir_path);
 
         // Check for conflicts with existing files/dirs in repo
         if target_dir.exists() {
-            bail!(
-                "Conflict: target path already exists: {}\n\
-                 Remove it first to apply the overlay.",
-                target_dir.display()
-            );
+            match conflict_strategy {
+                ConflictStrategy::Force => {
+                    eprintln!(
+                        "  {} Overwriting existing directory: {}",
+                        "Force:".yellow(),
+                        dir_path.display()
+                    );
+                    fs::remove_dir_all(&target_dir).with_context(|| {
+                        format!(
+                            "Failed to remove existing directory: {}",
+                            target_dir.display()
+                        )
+                    })?;
+                }
+                ConflictStrategy::SkipConflicts => {
+                    eprintln!(
+                        "  {} Skipping directory '{}' (already exists)",
+                        "Skip:".yellow(),
+                        dir_path.display()
+                    );
+                    continue;
+                }
+                ConflictStrategy::Fail => {
+                    bail!(
+                        "Conflict: target path already exists: {}\n\
+                         Remove it first, use --force, or use --skip-conflicts.",
+                        target_dir.display()
+                    );
+                }
+            }
         }
 
         // Create parent directories if needed
@@ -509,21 +587,56 @@ pub(crate) fn apply_overlay(
 
         // Check for conflicts with existing overlays
         if let Some(conflicting_overlay) = existing_targets.get(&target_rel_str) {
-            bail!(
-                "Conflict: file '{}' is already managed by overlay '{}'\n\
-                 Remove that overlay first or use different file mappings.",
-                target_rel.display(),
-                conflicting_overlay
-            );
+            match conflict_strategy {
+                ConflictStrategy::SkipConflicts => {
+                    eprintln!(
+                        "  {} Skipping file '{}' (managed by overlay '{}')",
+                        "Skip:".yellow(),
+                        target_rel.display(),
+                        conflicting_overlay
+                    );
+                    continue;
+                }
+                ConflictStrategy::Fail | ConflictStrategy::Force => {
+                    bail!(
+                        "Conflict: file '{}' is already managed by overlay '{}'\n\
+                         Remove that overlay first, use --skip-conflicts, or use different file mappings.",
+                        target_rel.display(),
+                        conflicting_overlay
+                    );
+                }
+            }
         }
 
         // Check for conflicts with existing files in repo
         if target_file.exists() {
-            bail!(
-                "Conflict: target file already exists: {}\n\
-                 Remove it first or add a mapping to rename the overlay file.",
-                target_file.display()
-            );
+            match conflict_strategy {
+                ConflictStrategy::Force => {
+                    eprintln!(
+                        "  {} Overwriting existing file: {}",
+                        "Force:".yellow(),
+                        target_rel.display()
+                    );
+                    fs::remove_file(&target_file).with_context(|| {
+                        format!("Failed to remove existing file: {}", target_file.display())
+                    })?;
+                }
+                ConflictStrategy::SkipConflicts => {
+                    eprintln!(
+                        "  {} Skipping file '{}' (already exists)",
+                        "Skip:".yellow(),
+                        target_rel.display()
+                    );
+                    continue;
+                }
+                ConflictStrategy::Fail => {
+                    bail!(
+                        "Conflict: target file already exists: {}\n\
+                         Remove it first, use --force, or use --skip-conflicts.",
+                        target_file.display()
+                    );
+                }
+            }
         }
 
         // Create parent directories if needed
@@ -935,11 +1048,16 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
 ///
 /// 1. Load external state backup for the target repository
 /// 2. For each saved overlay state, re-apply using original source
-pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
+pub(crate) fn restore_overlays(
+    target: &Path,
+    dry_run: bool,
+    conflict_strategy: ConflictStrategy,
+) -> Result<()> {
     debug!(
-        "restore_overlays: target={}, dry_run={}",
+        "restore_overlays: target={}, dry_run={}, conflict_strategy={:?}",
         target.display(),
-        dry_run
+        dry_run,
+        conflict_strategy
     );
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
@@ -1018,6 +1136,7 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
             Some(state.name.clone()),
             ref_override,
             true, // Update cache
+            conflict_strategy,
         ) {
             Ok(()) => {}
             Err(e) => {
@@ -1044,12 +1163,18 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
 /// 2. For each GitHub overlay, check remote for new commits
 /// 3. Report available updates
 /// 4. If not dry-run, remove and re-apply each overlay with updated cache
-pub(crate) fn update_overlays(target: &Path, name: Option<String>, dry_run: bool) -> Result<()> {
+pub(crate) fn update_overlays(
+    target: &Path,
+    name: Option<String>,
+    dry_run: bool,
+    conflict_strategy: ConflictStrategy,
+) -> Result<()> {
     debug!(
-        "update_overlays: target={}, name={:?}, dry_run={}",
+        "update_overlays: target={}, name={:?}, dry_run={}, conflict_strategy={:?}",
         target.display(),
         name,
-        dry_run
+        dry_run,
+        conflict_strategy
     );
     let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
@@ -1174,6 +1299,7 @@ pub(crate) fn update_overlays(target: &Path, name: Option<String>, dry_run: bool
                 Some(state.name.clone()),
                 Some(git_ref.as_str()),
                 true,
+                conflict_strategy,
             )?;
         }
     }
@@ -1636,7 +1762,16 @@ pub(crate) fn switch_overlay(
 
     // Apply the new overlay
     println!("{} new overlay...", "Applying".blue().bold());
-    apply_overlay(source, target, copy, name, ref_override, false)?;
+    // Switch doesn't support conflict flags - it removes all overlays first
+    apply_overlay(
+        source,
+        target,
+        copy,
+        name,
+        ref_override,
+        false,
+        ConflictStrategy::Fail,
+    )?;
 
     Ok(())
 }
