@@ -1,0 +1,63 @@
+name: PR Validation
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  # Semver compatibility check with PR comments
+  semver:
+    name: Semver Check
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft != true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: cargo-semver-checks
+      - name: Get merge base
+        id: merge-base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MERGE_BASE=$(git merge-base origin/main HEAD)
+          echo "sha=$MERGE_BASE" >> "$GITHUB_OUTPUT"
+      - name: Check semver compatibility
+        id: semver
+        env:
+          MERGE_BASE_SHA: ${{ steps.merge-base.outputs.sha }}
+        run: |
+          set +e
+          OUTPUT=$(cargo semver-checks --baseline-rev "$MERGE_BASE_SHA" --color never 2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+          {
+            echo "output<<EOF"
+            echo "$OUTPUT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "has_breaking=$([[ $EXIT_CODE -ne 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Comment on PR with breaking changes
+        if: steps.semver.outputs.has_breaking == 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: semver-check
+          message: |
+            ## Semver Breaking Changes Detected
+
+            This PR introduces API changes that may be semver-incompatible:
+
+            ```
+            ${{ steps.semver.outputs.output }}
+            ```
+
+            If these changes are intentional, please ensure the version bump reflects the breaking change.
+      - name: Remove semver comment if no breaking changes
+        if: steps.semver.outputs.has_breaking == 'false'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: semver-check
+          delete: true
