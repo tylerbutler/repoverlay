@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/tylerbutler/repoverlay/compare/v0.2.1...v0.2.2) - 2026-01-29
+
+### Added
+
+- add debug logging and documentation improvements ([#34](https://github.com/tylerbutler/repoverlay/pull/34))
+
+### Other
+
+- add conventional commit enforcement tooling ([#39](https://github.com/tylerbutler/repoverlay/pull/39))
+- add rust toolchain and formatting configuration ([#37](https://github.com/tylerbutler/repoverlay/pull/37))
+- add cargo binstall command
+
 ## [0.2.1](https://github.com/tylerbutler/repoverlay/compare/v0.2.0...v0.2.1) - 2026-01-28
 
 ### Added
