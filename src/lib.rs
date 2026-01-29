@@ -2464,6 +2464,33 @@ mod tests {
             // Should not match due to different spacing
             assert!(!any_overlay_sections_remain(content));
         }
+
+        #[test]
+        fn remove_overlay_section_cleans_multiple_trailing_newlines() {
+            // Content with empty line before section creates multiple trailing newlines after removal
+            let content = "line1\n\n# repoverlay:test start\n.envrc\n# repoverlay:test end\n";
+            let result = remove_overlay_section(content, "test");
+            // Should clean up the double newline at the end
+            assert!(result.contains("line1"));
+            assert!(!result.contains(".envrc"));
+            assert!(
+                !result.ends_with("\n\n"),
+                "Should not end with double newline"
+            );
+            assert!(result.ends_with('\n'), "Should end with single newline");
+        }
+
+        #[test]
+        fn remove_overlay_section_cleans_many_trailing_newlines() {
+            // Multiple empty lines before section
+            let content = "line1\n\n\n# repoverlay:test start\n.envrc\n# repoverlay:test end\n";
+            let result = remove_overlay_section(content, "test");
+            // Should clean up all excess trailing newlines
+            assert!(
+                !result.ends_with("\n\n"),
+                "Should not end with double newline"
+            );
+        }
     }
 
     // Tests for path validation edge cases

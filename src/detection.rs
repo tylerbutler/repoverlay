@@ -71,15 +71,12 @@ pub fn is_ai_config(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
 
     for pattern in AI_CONFIG_PATTERNS {
-        // Check exact match
+        // Check exact match (e.g., ".claude" == ".claude")
         if path_str == *pattern {
             return true;
         }
-        // Check if path starts with pattern (for directories like .claude/)
-        if path_str.starts_with(pattern) {
-            return true;
-        }
-        // Check if pattern is a prefix with separator
+        // Check if path is inside a pattern directory (e.g., ".claude/file" matches ".claude")
+        // Must use separator to avoid false matches like ".claude-backup" matching ".claude"
         let pattern_with_sep = format!("{pattern}/");
         if path_str.starts_with(&pattern_with_sep) {
             return true;
@@ -653,5 +650,29 @@ mod tests {
             .find(|(cat, _)| *cat == FileCategory::AiConfigDirectory);
         assert!(dir_group.is_some());
         assert_eq!(dir_group.unwrap().1.len(), 1);
+    }
+
+    #[test]
+    fn test_detect_gitignored_files_non_git_directory() {
+        // Test fallback when git command fails (non-git directory)
+        let temp = TempDir::new().unwrap();
+        // Don't initialize git - this should trigger the fallback
+        fs::write(temp.path().join(".envrc"), "export FOO=bar").unwrap();
+
+        let ignored = detect_gitignored_files(temp.path());
+        // Should return empty vec when git fails
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn test_detect_untracked_files_non_git_directory() {
+        // Test fallback when git command fails (non-git directory)
+        let temp = TempDir::new().unwrap();
+        // Don't initialize git - this should trigger the fallback
+        fs::write(temp.path().join("notes.txt"), "notes").unwrap();
+
+        let untracked = detect_untracked_files(temp.path());
+        // Should return empty vec when git fails
+        assert!(untracked.is_empty());
     }
 }
