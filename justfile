@@ -1,84 +1,61 @@
+#!/usr/bin/env just --justfile
+
+# Common aliases for faster development
+alias b := build
+alias br := build-release
+alias t := test
+alias tf := test-fast
+alias tv := test-verbose
+alias l := lint
+alias f := format
+alias fc := fmt-check
+alias a := audit
+alias c := check
+alias tc := test-coverage
+alias d := docs
+alias gc := generate-configs
+alias cc := check-configs
+alias cl := changelog
+alias i := install
+alias wt := watch-test
+alias wl := watch-lint
+
+export RUST_BACKTRACE := "1"
+
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
+
 # Default recipe - list available commands
 default:
     @just --list
 
-# Build the project in debug mode
-build:
-    cargo build
+# ============================================
+# Build Commands
+# ============================================
 
-alias b := build
+# Build the project in debug mode
+build *ARGS='':
+    cargo build {{ARGS}}
 
 # Build the project in release mode
-release:
-    cargo build --release
+build-release *ARGS='':
+    cargo build --release {{ARGS}}
 
-alias r := release
+# ============================================
+# Test Commands
+# ============================================
 
 # Run all tests (builds binary first for CLI tests)
-test *ARGS:
+test *ARGS='':
     cargo build
     cargo test --all-features {{ARGS}}
 
-alias t := test
+# Run tests with nextest (faster parallel execution)
+test-fast *ARGS='':
+    cargo nextest run {{ARGS}}
 
 # Run tests with output shown
 test-verbose:
     cargo test -- --nocapture
-
-alias tv := test-verbose
-
-# Run clippy lints
-lint:
-    cargo clippy --all-targets --all-features -- -D warnings
-
-alias l := lint
-
-# Format code
-format:
-    cargo fmt
-
-alias fmt := format
-alias f := format
-
-# Check formatting without making changes
-fmt-check:
-    cargo fmt -- --check
-
-alias fc := fmt-check
-
-# Run all checks (format, lint, test)
-check: fmt-check lint test
-
-alias c := check
-
-# Clean build artifacts
-clean:
-    cargo clean
-
-# Install the binary locally
-install:
-    cargo install --path .
-
-alias i := install
-
-# Run the binary with arguments
-run *ARGS:
-    cargo run -- {{ARGS}}
-
-# Watch for changes and run tests
-watch-test:
-    cargo watch -x test
-
-alias wt := watch-test
-
-# Watch for changes and run clippy
-watch-lint:
-    cargo watch -x clippy
-
-alias wl := watch-lint
-
-# Run all CI checks (test, lint, format check)
-ci: test lint fmt-check
 
 # Run tests with coverage (generates lcov.info)
 test-coverage:
@@ -92,8 +69,6 @@ test-coverage:
     cargo test --all-features -- --test-threads=1
     cargo llvm-cov report --lcov --output-path lcov.info
 
-alias tc := test-coverage
-
 # Generate HTML coverage report
 coverage-html:
     cargo llvm-cov nextest --all-features --html --output-dir coverage
@@ -102,15 +77,101 @@ coverage-html:
 coverage-report: coverage-html
     open coverage/html/index.html || xdg-open coverage/html/index.html 2>/dev/null || echo "Open coverage/html/index.html manually"
 
-# Run security audit
+# ============================================
+# Lint & Format Commands
+# ============================================
+
+# Run clippy lints
+lint *ARGS='':
+    cargo clippy --all-targets --all-features {{ARGS}} -- -D warnings
+
+# Format code
+format *ARGS='':
+    cargo fmt --all -- {{ARGS}}
+
+# Check formatting without changes
+fmt-check:
+    cargo fmt --all -- --check
+
+# Run all checks (format, lint, test)
+check: fmt-check lint test
+
+# ============================================
+# Security Commands
+# ============================================
+
+# Security audit
 audit:
     cargo audit
     cargo deny check
 
-alias a := audit
+# ============================================
+# Documentation Commands
+# ============================================
 
-# Build documentation (fails on warnings)
+# Build documentation
 docs:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
-alias d := docs
+# Open documentation in browser
+docs-open: docs
+    cargo doc --no-deps --all-features --open
+
+# ============================================
+# Changelog & Config Commands
+# ============================================
+
+# Regenerate all configs from commit-types.json
+generate-configs:
+    python3 scripts/generate-cliff-configs.py
+    python3 scripts/generate-commitlint-config.py
+
+# Check that generated configs are in sync
+check-configs:
+    python3 scripts/check-configs-sync.py
+
+# Generate changelog
+changelog: generate-configs
+    git-cliff -o CHANGELOG.md
+
+# ============================================
+# Watch Commands
+# ============================================
+
+# Watch for changes and run tests
+watch-test:
+    cargo watch -x test
+
+# Watch for changes and run clippy
+watch-lint:
+    cargo watch -x clippy
+
+# ============================================
+# CI & Release Commands
+# ============================================
+
+# Run all CI checks locally
+ci: fmt-check lint check-configs test audit build
+
+# PR checks (mimics CI workflow)
+pr: fmt-check lint check-configs test-coverage audit build
+
+# ============================================
+# Utility Commands
+# ============================================
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# Install the binary locally
+install:
+    cargo install --path .
+
+# Run the binary with arguments
+run *ARGS:
+    cargo run -- {{ARGS}}
+
+# Update dependencies
+update:
+    cargo update
