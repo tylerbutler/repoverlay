@@ -2,32 +2,49 @@
 
 ## Prerequisites
 
-- **Rust** (stable, 2024 edition) - https://rustup.rs/
+- **Rust** 1.88+ (2024 edition) - https://rustup.rs/
 - **just** - Task runner - https://github.com/casey/just
 - **git** - Required at runtime for GitHub overlay functionality
 
 ## Building
 
 ```bash
-just build      # Debug build
-just release    # Release build
+just build      # Debug build (alias: b)
+just release    # Release build (alias: r)
 ```
 
 ## Testing
 
 ```bash
-just test           # Run all tests
-just test-verbose   # Run tests with output shown
+just test           # Run all tests (alias: t)
+just test-verbose   # Run tests with output shown (alias: tv)
 just test <name>    # Run specific test (via cargo test)
 ```
 
+Run a single test directly:
+```bash
+cargo test <test_name>
+cargo test apply::applies_single_file  # Run specific test module::test_name
+```
+
+### Test Organization
+
+- **`tests/cli.rs`** - CLI integration tests using `assert_cmd`
+- **`tests/common/mod.rs`** - Shared test utilities and fixtures
+- **`src/testutil.rs`** - Test helper module with `create_test_repo()` / `create_test_overlay()`
+- **Unit tests** - Embedded within individual modules (`lib.rs`, `state.rs`, etc.)
+
+Tests create temporary git repos using `tempfile::TempDir`. Some tests require serial execution due to environment variable handling (coverage runs use `--test-threads=1`).
+
 ## Linting and Formatting
 
+Clippy is configured with `pedantic` and `nursery` lints enabled.
+
 ```bash
-just lint       # Run clippy
-just format     # Format code
-just fmt-check  # Check formatting without changes
-just check      # Run format check, lint, and tests
+just lint       # Run clippy (alias: l)
+just format     # Format code (aliases: fmt, f)
+just fmt-check  # Check formatting without changes (alias: fc)
+just check      # Run format check, lint, and tests (alias: c)
 ```
 
 ## Running Locally
@@ -41,8 +58,21 @@ just run --help
 Or install locally:
 
 ```bash
-just install
+just install    # alias: i
 repoverlay --help
+```
+
+## Additional Commands
+
+```bash
+just clean          # Clean build artifacts
+just watch-test     # Watch mode for tests (alias: wt)
+just watch-lint     # Watch mode for clippy (alias: wl)
+just test-coverage  # Run tests with coverage (alias: tc)
+just coverage-html  # Generate HTML coverage report
+just coverage-report # Open coverage report in browser
+just audit          # Run security audit with cargo-audit and cargo-deny (alias: a)
+just docs           # Build documentation (alias: d)
 ```
 
 ## CI
@@ -78,16 +108,4 @@ release-plz determines version bumps from conventional commit messages:
 
 ## Project Structure
 
-```
-src/
-├── main.rs        # CLI entry point and command handlers
-├── lib.rs         # Core library with apply/remove/status operations
-├── state.rs       # State persistence (in-repo and external backup)
-├── github.rs      # GitHub URL parsing and source resolution
-├── cache.rs       # GitHub repository cache management
-├── config.rs      # Global and per-repo configuration (CCL format)
-├── overlay_repo.rs # Shared overlay repository integration
-└── detection.rs   # File discovery for overlay creation
-```
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed module structure and responsibilities.
