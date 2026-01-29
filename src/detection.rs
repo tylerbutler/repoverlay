@@ -80,7 +80,7 @@ pub fn is_ai_config(path: &Path) -> bool {
             return true;
         }
         // Check if pattern is a prefix with separator
-        let pattern_with_sep = format!("{}/", pattern);
+        let pattern_with_sep = format!("{pattern}/");
         if path_str.starts_with(&pattern_with_sep) {
             return true;
         }

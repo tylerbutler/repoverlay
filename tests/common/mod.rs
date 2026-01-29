@@ -82,7 +82,7 @@ impl TestContext {
     pub fn overlay_state_exists(&self, name: &str) -> bool {
         self.repo
             .path()
-            .join(format!(".repoverlay/overlays/{}.ccl", name))
+            .join(format!(".repoverlay/overlays/{name}.ccl"))
             .exists()
     }
 

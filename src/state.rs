@@ -310,7 +310,7 @@ pub fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
 
 /// Save overlay state to the external backup location.
 pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlayState) -> Result<()> {
-    debug!("save_external_state: {}", overlay_name);
+    debug!("save_external_state: {overlay_name}");
     let dir = external_state_dir_for_target(target)?;
     fs::create_dir_all(&dir)?;
 
@@ -320,7 +320,7 @@ pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlaySta
         fs::write(&marker_path, target.display().to_string())?;
     }
 
-    let state_file = dir.join(format!("{}.ccl", overlay_name));
+    let state_file = dir.join(format!("{overlay_name}.ccl"));
     let content = sickle::to_string(state).context("Failed to serialize state to CCL")?;
     fs::write(&state_file, content)?;
 
@@ -330,7 +330,7 @@ pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlaySta
 /// Remove overlay state from the external backup location.
 pub fn remove_external_state(target: &Path, overlay_name: &str) -> Result<()> {
     let dir = external_state_dir_for_target(target)?;
-    let state_file = dir.join(format!("{}.ccl", overlay_name));
+    let state_file = dir.join(format!("{overlay_name}.ccl"));
 
     if state_file.exists() {
         fs::remove_file(&state_file)?;
@@ -389,12 +389,12 @@ fn hash_path(path: &Path) -> String {
 
 /// Generate the start marker for a git exclude section.
 pub fn exclude_marker_start(name: &str) -> String {
-    format!("# repoverlay:{} start", name)
+    format!("# repoverlay:{name} start")
 }
 
 /// Generate the end marker for a git exclude section.
 pub fn exclude_marker_end(name: &str) -> String {
-    format!("# repoverlay:{} end", name)
+    format!("# repoverlay:{name} end")
 }
 
 /// Validate and normalize overlay name for use as filename.
@@ -407,7 +407,7 @@ pub fn normalize_overlay_name(name: &str) -> Result<String> {
         .collect();
 
     if normalized.is_empty() {
-        anyhow::bail!("Invalid overlay name: '{}'", name);
+        anyhow::bail!("Invalid overlay name: '{name}'");
     }
     Ok(normalized)
 }
@@ -471,16 +471,16 @@ pub fn list_applied_overlays(target: &Path) -> Result<Vec<String>> {
 
 /// Load an overlay state from the in-repo state file.
 pub fn load_overlay_state(target: &Path, name: &str) -> Result<OverlayState> {
-    debug!("load_overlay_state: {}", name);
+    debug!("load_overlay_state: {name}");
     let state_file = target
         .join(STATE_DIR)
         .join(OVERLAYS_DIR)
-        .join(format!("{}.ccl", name));
+        .join(format!("{name}.ccl"));
 
     let content = fs::read_to_string(&state_file)
-        .with_context(|| format!("Failed to read overlay state: {}", name))?;
+        .with_context(|| format!("Failed to read overlay state: {name}"))?;
 
-    sickle::from_str(&content).with_context(|| format!("Failed to parse overlay state: {}", name))
+    sickle::from_str(&content).with_context(|| format!("Failed to parse overlay state: {name}"))
 }
 
 /// Save an overlay state to the in-repo state file.
@@ -489,7 +489,7 @@ pub fn save_overlay_state(target: &Path, state: &OverlayState) -> Result<()> {
     fs::create_dir_all(&overlays_dir)?;
 
     let normalized_name = normalize_overlay_name(&state.name)?;
-    let state_file = overlays_dir.join(format!("{}.ccl", normalized_name));
+    let state_file = overlays_dir.join(format!("{normalized_name}.ccl"));
 
     let content = sickle::to_string(state).context("Failed to serialize overlay state")?;
     fs::write(&state_file, content)?;

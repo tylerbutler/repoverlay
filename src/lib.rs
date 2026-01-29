@@ -86,10 +86,7 @@ pub(crate) fn resolve_source(
     update: bool,
     target_path: Option<&Path>,
 ) -> Result<ResolvedSource> {
-    debug!(
-        "resolve_source: {} (ref_override={:?}, update={})",
-        source_str, ref_override, update
-    );
+    debug!("resolve_source: {source_str} (ref_override={ref_override:?}, update={update})");
 
     // Try to parse as GitHub URL
     if GitHubSource::is_github_url(source_str) {
@@ -134,7 +131,7 @@ pub(crate) fn resolve_source(
         debug!("resolved as local path: {}", path.display());
         let canonical = path
             .canonicalize()
-            .with_context(|| format!("Overlay source not found: {}", source_str))?;
+            .with_context(|| format!("Overlay source not found: {source_str}"))?;
 
         return Ok(ResolvedSource {
             path: canonical.clone(),
@@ -144,10 +141,7 @@ pub(crate) fn resolve_source(
 
     // Try to parse as overlay repo reference (org/repo/name)
     if let Some((org, repo, name)) = overlay_repo::parse_overlay_reference(source_str) {
-        debug!(
-            "parsed as overlay repo reference: {}/{}/{}",
-            org, repo, name
-        );
+        debug!("parsed as overlay repo reference: {org}/{repo}/{name}");
         // Load config and create overlay repo manager
         let config = config::load_config(None)?;
         let overlay_config = config.overlay_repo.ok_or_else(|| {
@@ -211,12 +205,11 @@ pub(crate) fn resolve_source(
 
     // Nothing matched
     bail!(
-        "Overlay source not found: {}\n\n\
+        "Overlay source not found: {source_str}\n\n\
          Valid formats:\n\
          - Local path: ./my-overlay\n\
          - GitHub URL: https://github.com/owner/repo\n\
-         - Overlay repo: org/repo/name",
-        source_str
+         - Overlay repo: org/repo/name"
     )
 }
 
@@ -299,12 +292,10 @@ pub(crate) fn apply_overlay(
 
     // Check if this specific overlay already exists
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-    let overlay_state_path = overlays_dir.join(format!("{}.ccl", normalized_name));
+    let overlay_state_path = overlays_dir.join(format!("{normalized_name}.ccl"));
     if overlay_state_path.exists() {
         bail!(
-            "Overlay '{}' is already applied. Run 'repoverlay remove {}' first.",
-            overlay_name,
-            normalized_name
+            "Overlay '{overlay_name}' is already applied. Run 'repoverlay remove {normalized_name}' first."
         );
     }
 
@@ -671,8 +662,8 @@ pub(crate) fn remove_overlay(target: &Path, name: Option<String>, remove_all: bo
 
 /// Remove a single overlay by name.
 pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &str) -> Result<()> {
-    debug!("remove_single_overlay: {}", name);
-    let state_file = overlays_dir.join(format!("{}.ccl", name));
+    debug!("remove_single_overlay: {name}");
+    let state_file = overlays_dir.join(format!("{name}.ccl"));
 
     if !state_file.exists() {
         // List available overlays for helpful error message
@@ -761,7 +752,7 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
             let path = e.target.to_string_lossy().replace('\\', "/");
             // Add trailing slash for directories in git exclude
             match e.entry_type {
-                EntryType::Directory => format!("{}/", path),
+                EntryType::Directory => format!("{path}/"),
                 EntryType::File => path,
             }
         })
@@ -858,10 +849,11 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
             ..
         } => {
             println!("    Source:  {} {}", url, "(GitHub)".dimmed());
-            println!("    Ref:     {}", git_ref);
-            println!("    Commit:  {}", &commit[..12.min(commit.len())]);
+            println!("    Ref:     {git_ref}");
+            let short_commit = &commit[..12.min(commit.len())];
+            println!("    Commit:  {short_commit}");
             if let Some(sp) = subpath {
-                println!("    Subpath: {}", sp);
+                println!("    Subpath: {sp}");
             }
         }
         OverlaySource::OverlayRepo {
@@ -967,7 +959,7 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
                 println!("    Source: {}", path.display());
             }
             OverlaySource::GitHub { url, git_ref, .. } => {
-                println!("    Source: {} ({})", url, git_ref);
+                println!("    Source: {url} ({git_ref})");
             }
             OverlaySource::OverlayRepo {
                 org,
@@ -975,10 +967,7 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
                 name: overlay_name,
                 ..
             } => {
-                println!(
-                    "    Source: {}/{}/{} (overlay repo)",
-                    org, repo, overlay_name
-                );
+                println!("    Source: {org}/{repo}/{overlay_name} (overlay repo)");
             }
         }
     }
@@ -1001,7 +990,7 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
                 name: overlay_name,
                 ..
             } => {
-                format!("{}/{}/{}", org, repo, overlay_name)
+                format!("{org}/{repo}/{overlay_name}")
             }
         };
 
@@ -1547,15 +1536,14 @@ pub(crate) fn generate_overlay_config(name: &str) -> String {
 overlay =
   /= name: Display name for this overlay.
   /= Used in status output and when listing overlays.
-  name = {}
+  name = {name}
 
 /= mappings (optional): Remap file paths when applying the overlay.
 /= Keys are source paths (in the overlay), values are target paths (in the repo).
 /= Use this to rename files or place them in different locations.
 /= mappings =
 /=   .envrc.template = .envrc
-"#,
-        name
+"#
     )
 }
 
@@ -1755,7 +1743,7 @@ pub(crate) fn any_overlay_sections_remain(content: &str) -> bool {
 pub(crate) fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
     github::parse_remote_url(url).ok_or_else(|| {
         if url.contains("github.com") {
-            anyhow::anyhow!("Could not parse git remote URL: {}", url)
+            anyhow::anyhow!("Could not parse git remote URL: {url}")
         } else {
             anyhow::anyhow!(
                 "Could not detect target repository from git remote.\n\
