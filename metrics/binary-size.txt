@@ -1,0 +1,3 @@
+# Binary Size History
+# Format: date binary size_bytes size_human
+# Updated by: just record-size

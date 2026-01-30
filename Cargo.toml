@@ -2,7 +2,7 @@
 name = "repoverlay"
 version = "0.2.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 authors = ["Tyler Butler <tyler@tylerbutler.com>"]
 description = "Overlay config files into git repositories without committing them"
 license = "MIT"

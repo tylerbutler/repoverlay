@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Rust** 1.88+ (2024 edition) - https://rustup.rs/
+- **Rust** 1.90+ (2024 edition) - https://rustup.rs/
 - **just** - Task runner - https://github.com/casey/just
 - **git** - Required at runtime for GitHub overlay functionality
 
