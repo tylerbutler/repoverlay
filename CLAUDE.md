@@ -17,7 +17,7 @@ just lint       # Run clippy lints
 
 ## Project Context
 
-- **Rust 2024 edition**, minimum version 1.88
+- **Rust 2024 edition**, minimum version 1.90
 - **Clippy pedantic + nursery** lints enabled
 - **CCL format** used for configuration and state files (not TOML)
 - Tests use `tempfile::TempDir` for temporary git repos
