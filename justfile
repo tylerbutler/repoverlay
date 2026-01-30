@@ -157,6 +157,27 @@ ci: fmt-check lint check-configs test audit build
 pr: fmt-check lint check-configs test-coverage audit build
 
 # ============================================
+# Binary Size Analysis Commands
+# ============================================
+
+# Run cargo-bloated on repoverlay, save to metrics/ (Linux only)
+[linux]
+bloat:
+    cargo bloated --release --bin=repoverlay --output crates | tee metrics/bloat.txt
+
+# Record release binary size to metrics/binary-size.txt
+[linux]
+record-size:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release
+    SIZE=$(stat --format="%s" target/release/repoverlay)
+    HUMAN=$(numfmt --to=iec --suffix=B "$SIZE")
+    DATE=$(date +%Y-%m-%d)
+    echo "$DATE repoverlay $SIZE $HUMAN" >> metrics/binary-size.txt
+    echo "Recorded binary size: $SIZE ($HUMAN)"
+
+# ============================================
 # Utility Commands
 # ============================================
 

@@ -1,0 +1,37 @@
+# git-cliff config for repoverlay
+# Auto-generated from commit-types.json - edit that file instead
+
+[changelog]
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [unreleased]
+{% endif %}\
+{% for group, group_commits in commits | group_by(attribute="group") %}\
+{% if group != "_ignored" %}
+### {{ group | upper_first }}
+{% for commit in group_commits %}
+- {{ commit.message | upper_first }}
+{% endfor %}
+{% endif %}\
+{% endfor %}\
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+tag_pattern = "v[0-9].*"
+commit_parsers = [
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Bug Fixes" },
+    { message = "^improvement", group = "Improvements" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^perf", group = "Performance" },
+    { message = ".*", group = "_ignored" },
+]

@@ -10,7 +10,7 @@ use std::process::Command;
 use crate::github::parse_remote_url;
 
 /// Information about an upstream repository.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpstreamInfo {
     /// GitHub organization/owner
     pub org: String,

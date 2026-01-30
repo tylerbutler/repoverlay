@@ -2,47 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Build and Development Commands
+## Quick Reference
 
-This project uses `just` as a task runner. Common commands:
+- **Development guide**: [DEV.md](DEV.md) - build commands, testing, CI, release process
+- **Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md) - module structure, data flows, design decisions
+
+## Key Commands
 
 ```bash
-just build       # Build in debug mode (alias: b)
-just release     # Build in release mode (alias: r)
-just test        # Run all tests (alias: t)
-just test-verbose # Run tests with output shown (alias: tv)
-just lint        # Run clippy lints (alias: l)
-just format      # Format code (aliases: fmt, f)
-just fmt-check   # Check formatting without changes (alias: fc)
-just check       # Run all checks: format, lint, test (alias: c)
-just ci          # Run full CI suite: test, lint, fmt-check
-just run <args>  # Run the binary with arguments
+just check      # Run all checks: format, lint, test
+just test       # Run all tests
+just lint       # Run clippy lints
 ```
 
-Run a single test:
-```bash
-cargo test <test_name>
-cargo test apply::applies_single_file  # Run specific test module::test_name
-```
+## Project Context
 
-## Architecture Overview
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed architecture documentation including:
-- Module structure and responsibilities
-- Data flow diagrams for each operation
-- State file format
-- Git integration details
-- Caching strategy
-
-## Testing
-
-Tests are organized in `src/main.rs` under `mod tests`:
-- Unit tests: `remove_section`, `state` tests
-- Integration tests: `apply`, `remove`, `status`, `create`, `switch` modules
-- CLI tests: `cli` module using `assert_cmd`
-
-Tests create temporary git repos using `tempfile::TempDir` and the `create_test_repo()` / `create_test_overlay()` helpers.
-
-## Rust Edition
-
-Uses Rust 2024 edition (`edition = "2024"` in Cargo.toml).
+- **Rust 2024 edition**, minimum version 1.90
+- **Clippy pedantic + nursery** lints enabled
+- **CCL format** used for configuration and state files (not TOML)
+- Tests use `tempfile::TempDir` for temporary git repos
