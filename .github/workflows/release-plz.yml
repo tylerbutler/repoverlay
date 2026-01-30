@@ -10,23 +10,136 @@ on:
       - main
 
 jobs:
-  release-plz:
-    name: Release-plz
+  release-plz-release:
+    name: Release-plz release
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-release
+      cancel-in-progress: false
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use PAT to allow tag pushes to trigger release workflow
-          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
 
-      - name: Run release-plz
+      - name: Run release-plz release
         uses: release-plz/action@v0.5
+        with:
+          command: release
         env:
-          # Use PAT to allow tag creation to trigger release workflow
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+      - uses: ./.github/actions/setup-rust
+
+      - name: Run release-plz release-pr
+        id: release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Install cargo-bloated
+        if: steps.release-plz.outputs.prs_created == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-bloated
+
+      - uses: ./.github/actions/install-tools
+        if: steps.release-plz.outputs.prs_created == 'true'
+        with:
+          tools: just
+
+      - name: Record binary size metrics
+        id: binary-size
+        if: steps.release-plz.outputs.prs_created == 'true'
+        run: |
+          # Get previous size from metrics file
+          PREV_SIZE=$(tail -1 metrics/binary-size.txt | grep -v '^#' | awk '{print $3}' || echo "0")
+
+          cargo build --release
+          SIZE=$(stat --format="%s" target/release/repoverlay)
+          HUMAN=$(numfmt --to=iec --suffix=B "$SIZE")
+          DATE=$(date +%Y-%m-%d)
+          echo "$DATE repoverlay $SIZE $HUMAN" >> metrics/binary-size.txt
+          echo "Recorded binary size: $SIZE ($HUMAN)"
+
+          # Generate bloat reports
+          just bloat
+
+          # Calculate diff
+          if [ "$PREV_SIZE" != "0" ] && [ -n "$PREV_SIZE" ]; then
+            DIFF=$((SIZE - PREV_SIZE))
+            DIFF_HUMAN=$(numfmt --to=iec --suffix=B -- "$DIFF" | sed 's/^-/-/')
+            PREV_HUMAN=$(numfmt --to=iec --suffix=B "$PREV_SIZE")
+            if [ "$DIFF" -gt 0 ]; then
+              DIFF_HUMAN="+$DIFF_HUMAN"
+            fi
+            PERCENT=$(awk "BEGIN {printf \"%.1f\", ($DIFF / $PREV_SIZE) * 100}")
+            if [ "$DIFF" -gt 0 ]; then
+              PERCENT="+$PERCENT"
+            fi
+            echo "size=$HUMAN" >> "$GITHUB_OUTPUT"
+            echo "prev_size=$PREV_HUMAN" >> "$GITHUB_OUTPUT"
+            echo "diff=$DIFF_HUMAN" >> "$GITHUB_OUTPUT"
+            echo "diff_bytes=$DIFF" >> "$GITHUB_OUTPUT"
+            echo "percent=$PERCENT%" >> "$GITHUB_OUTPUT"
+            echo "changed=$( [ "$DIFF" -ne 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+          else
+            echo "size=$HUMAN" >> "$GITHUB_OUTPUT"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit metrics updates
+        if: steps.release-plz.outputs.prs_created == 'true'
+        env:
+          PR_BRANCH: ${{ fromJson(steps.release-plz.outputs.pr).head_branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage metrics updates
+          git add metrics/
+
+          # Check if there are changes to commit
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update binary size metrics"
+            git push origin "$PR_BRANCH"
+          fi
+
+      - name: Comment on PR with binary size change
+        if: steps.release-plz.outputs.prs_created == 'true' && steps.binary-size.outputs.changed == 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: binary-size
+          number: ${{ fromJson(steps.release-plz.outputs.pr).number }}
+          message: |
+            ## Binary Size
+
+            | Metric | Value |
+            |--------|-------|
+            | Current | ${{ steps.binary-size.outputs.size }} |
+            | Previous | ${{ steps.binary-size.outputs.prev_size }} |
+            | Change | ${{ steps.binary-size.outputs.diff }} (${{ steps.binary-size.outputs.percent }}) |
