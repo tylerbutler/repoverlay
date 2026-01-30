@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft != true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust
@@ -45,7 +45,7 @@ jobs:
           exit 0
       - name: Comment on PR with breaking changes
         if: steps.semver.outputs.has_breaking == 'true'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # ratchet:marocchino/sticky-pull-request-comment@v2
         with:
           header: semver-check
           message: |
@@ -60,7 +60,7 @@ jobs:
             If these changes are intentional, please ensure the version bump reflects the breaking change.
       - name: Remove semver comment if no breaking changes
         if: steps.semver.outputs.has_breaking == 'false'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # ratchet:marocchino/sticky-pull-request-comment@v2
         with:
           header: semver-check
           delete: true

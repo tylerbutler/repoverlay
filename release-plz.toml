@@ -1,14 +1,19 @@
+# release-plz configuration
+# https://release-plz.ieni.dev/docs/config
+
 [workspace]
-# Changelog configuration
+allow_dirty = false
 changelog_update = true
+git_release_enable = false  # Let cargo-dist handle releases
+publish = true
+semver_check = true
 
 # PR configuration
 pr_draft = false
 pr_labels = ["release"]
 
-# Git configuration
-# Disable GitHub release creation - cargo-dist handles this with binary assets
-git_release_enable = false
-# Enable git tag creation - this triggers cargo-dist release workflow
+[[package]]
+name = "repoverlay"
+changelog_path = "CHANGELOG.md"
 git_tag_enable = true
 git_tag_name = "v{{ version }}"

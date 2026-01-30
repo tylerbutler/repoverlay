@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -27,7 +27,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
 
       - name: Run release-plz release
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@04be57ca3dcedfbaa64e9a73c40c8ea6fbe5f0f5 # ratchet:release-plz/action@v0.5
         with:
           command: release
         env:
@@ -43,7 +43,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
@@ -52,7 +52,7 @@ jobs:
 
       - name: Run release-plz release-pr
         id: release-plz
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@04be57ca3dcedfbaa64e9a73c40c8ea6fbe5f0f5 # ratchet:release-plz/action@v0.5
         with:
           command: release-pr
         env:
@@ -61,7 +61,7 @@ jobs:
 
       - name: Install cargo-bloated
         if: steps.release-plz.outputs.prs_created == 'true'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@735e5f6350e709e1ae1bd03f0f0c6bf67e62a18f # ratchet:taiki-e/install-action@v2
         with:
           tool: cargo-bloated
 
@@ -131,7 +131,7 @@ jobs:
 
       - name: Comment on PR with binary size change
         if: steps.release-plz.outputs.prs_created == 'true' && steps.binary-size.outputs.changed == 'true'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # ratchet:marocchino/sticky-pull-request-comment@v2
         with:
           header: binary-size
           number: ${{ fromJson(steps.release-plz.outputs.pr).number }}

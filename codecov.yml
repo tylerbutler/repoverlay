@@ -1,16 +1,27 @@
 # Codecov configuration
-# https://docs.codecov.com/docs/codecov-yaml
+# https://docs.codecov.com/docs/codecovyml-reference
+
+codecov:
+  require_ci_to_pass: true
 
 coverage:
+  precision: 2
+  round: down
+  range: "70...100"
   status:
     project:
       default:
         target: auto
-        threshold: 2%
+        threshold: 1%
     patch:
       default:
         target: auto
-        threshold: 5%
+        threshold: 10%
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: false
 
 ignore:
   # Test utilities - these are only used in tests and don't need coverage
