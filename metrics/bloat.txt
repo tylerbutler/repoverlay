@@ -1,0 +1,62 @@
+  File  .text    Size  Crate
+ 70.0%  98.8% 1823KiB  *
+ 16.3%  23.0%  424KiB  repoverlay
+ 11.4%  16.1%  297KiB  regex_automata
+ 10.6%  15.0%  277KiB  clap_builder
+  8.0%  11.3%  209KiB  regex_syntax
+  6.8%   9.5%  176KiB  aho_corasick
+  1.7%   2.4% 44.3KiB  chrono
+  1.6%   2.3% 41.8KiB  url
+  1.3%   1.8% 33.6KiB  sickle
+  1.3%   1.8% 33.6KiB  idna
+  1.2%   1.6% 30.3KiB  alloc
+  1.0%   1.4% 25.2KiB  std
+  1.0%   1.4% 24.9KiB  crossterm
+  0.8%   1.1% 19.7KiB  walkdir
+  0.7%   0.9% 17.1KiB  memchr
+  0.6%   0.8% 14.5KiB  icu_normalizer
+  0.5%   0.8% 13.9KiB  dialoguer
+  0.5%   0.7% 13.2KiB  env_logger
+  0.5%   0.7% 12.5KiB  env_filter
+  0.5%   0.6% 12.0KiB  console
+  0.4%   0.6% 11.3KiB  anyhow
+  0.3%   0.5% 9.11KiB  colored
+  0.3%   0.5% 9.03KiB  core
+  0.3%   0.4% 7.77KiB  core
+  0.3%   0.4% 7.38KiB  signal_hook_registry
+  0.2%   0.3% 6.45KiB  std
+  0.2%   0.3% 5.62KiB  jiff
+  0.2%   0.2% 4.10KiB  alloc
+  0.2%   0.2% 3.96KiB  parking_lot_core
+  0.1%   0.2% 3.38KiB  parking_lot
+  0.1%   0.2% 3.16KiB  directories
+  0.1%   0.2% 3.16KiB  anstream
+  0.1%   0.2% 2.90KiB  regex
+  0.1%   0.2% 2.84KiB  clap_lex
+  0.1%   0.1% 2.69KiB  anstyle
+  0.1%   0.1% 2.63KiB  signal_hook
+  0.1%   0.1% 2.11KiB  smallvec
+  0.1%   0.1% 1770  B  strsim
+  0.1%   0.1% 1714  B  percent_encoding
+  0.1%   0.1% 1713  B  serde_core
+  0.1%   0.1% 1703  B  ?
+  0.1%   0.1% 1628  B  icu_collections
+  0.1%   0.1% 1421  B  hashbrown
+  0.0%   0.1% 1149  B  log
+  0.0%   0.1% 1109  B  mio
+  0.0%   0.0%  840  B  unicode_width
+  0.0%   0.0%  633  B  dirs_sys
+  0.0%   0.0%  587  B  rustix
+  0.0%   0.0%  538  B  icu_properties
+  0.0%   0.0%  428  B  hashbrown
+  0.0%   0.0%  364  B  hashbrown
+  0.0%   0.0%  304  B  utf8_iter
+  0.0%   0.0%  258  B  serde
+  0.0%   0.0%  220  B  same_file
+  0.0%   0.0%  191  B  libc
+  0.0%   0.0%  156  B  repoverlay
+  0.0%   0.0%  106  B  signal_hook_mio
+  0.0%   0.0%   40  B  colorchoice
+  0.0%   0.0%   24  B  errno
+  0.0%   0.0%   15  B  dirs
+
