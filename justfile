@@ -161,9 +161,10 @@ pr: fmt-check lint check-configs test-coverage audit build
 # ============================================
 
 # Run cargo-bloated on repoverlay, save to metrics/ (Linux only)
+# Uses separate 'bloat' profile because cargo-bloated requires panic=unwind
 [linux]
 bloat:
-    cargo bloated --release --bin=repoverlay --output crates | tee metrics/bloat.txt
+    cargo bloated --profile bloat --bin=repoverlay --output crates | tee metrics/bloat.txt
 
 # Record release binary size to metrics/binary-size.txt
 [linux]
