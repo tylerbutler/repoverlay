@@ -60,6 +60,11 @@ lto = "thin"
 inherits = "release"
 debug = true
 
+# Profile for cargo-bloated analysis (requires panic=unwind)
+[profile.bloat]
+inherits = "release"
+panic = "unwind"
+
 [lints.rust]
 unsafe_code = "warn"
 
