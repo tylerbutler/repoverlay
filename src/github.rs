@@ -8,7 +8,7 @@ use std::str::FromStr;
 use url::Url;
 
 /// Parsed GitHub URL components.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitHubSource {
     pub owner: String,
     pub repo: String,
@@ -17,7 +17,7 @@ pub struct GitHubSource {
 }
 
 /// Git reference type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitRef {
     /// Use repository's default branch
     Default,
@@ -41,10 +41,10 @@ impl GitHubSource {
     /// - `https://github.com/owner/repo/tree/v1.0.0`
     /// - `https://github.com/owner/repo/tree/abc123...` (commit SHA)
     pub fn parse(input: &str) -> Result<Self> {
-        let url = Url::parse(input).with_context(|| format!("Invalid URL: {}", input))?;
+        let url = Url::parse(input).with_context(|| format!("Invalid URL: {input}"))?;
 
         if url.host_str() != Some("github.com") {
-            bail!("Not a GitHub URL: {}", input);
+            bail!("Not a GitHub URL: {input}");
         }
 
         // Extract path segments: /owner/repo[/tree/ref/subpath]
@@ -52,7 +52,7 @@ impl GitHubSource {
         let segments: Vec<&str> = path.split('/').collect();
 
         if segments.len() < 2 || segments[0].is_empty() || segments[1].is_empty() {
-            bail!("Invalid GitHub URL - missing owner/repo: {}", input);
+            bail!("Invalid GitHub URL - missing owner/repo: {input}");
         }
 
         let owner = segments[0].to_string();
@@ -63,7 +63,7 @@ impl GitHubSource {
                 // Has ref and possibly subpath
                 let ref_str = segments
                     .get(3)
-                    .ok_or_else(|| anyhow!("Missing ref after /tree/ in URL: {}", input))?;
+                    .ok_or_else(|| anyhow!("Missing ref after /tree/ in URL: {input}"))?;
 
                 let subpath = if segments.len() > 4 {
                     Some(PathBuf::from(segments[4..].join("/")))
@@ -85,7 +85,7 @@ impl GitHubSource {
             (GitRef::Default, None)
         };
 
-        Ok(GitHubSource {
+        Ok(Self {
             owner,
             repo,
             git_ref,
@@ -146,11 +146,11 @@ impl FromStr for GitRef {
     /// - Otherwise = branch name (can't distinguish branch from tag at parse time)
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-            Ok(GitRef::Commit(s.to_string()))
+            Ok(Self::Commit(s.to_string()))
         } else {
             // Cannot distinguish branch from tag at parse time
             // Git will resolve it during clone/checkout
-            Ok(GitRef::Branch(s.to_string()))
+            Ok(Self::Branch(s.to_string()))
         }
     }
 }
@@ -159,25 +159,25 @@ impl GitRef {
     /// Get the ref as a string for display and storage.
     pub fn as_str(&self) -> &str {
         match self {
-            GitRef::Default => "HEAD",
-            GitRef::Branch(s) | GitRef::Tag(s) | GitRef::Commit(s) => s,
+            Self::Default => "HEAD",
+            Self::Branch(s) | Self::Tag(s) | Self::Commit(s) => s,
         }
     }
 
     /// Check if this is the default ref.
     #[allow(dead_code)]
-    pub fn is_default(&self) -> bool {
-        matches!(self, GitRef::Default)
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::Default)
     }
 }
 
 impl std::fmt::Display for GitRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GitRef::Default => write!(f, "(default branch)"),
-            GitRef::Branch(s) => write!(f, "branch:{}", s),
-            GitRef::Tag(s) => write!(f, "tag:{}", s),
-            GitRef::Commit(s) => write!(f, "commit:{}", &s[..12.min(s.len())]),
+            Self::Default => write!(f, "(default branch)"),
+            Self::Branch(s) => write!(f, "branch:{s}"),
+            Self::Tag(s) => write!(f, "tag:{s}"),
+            Self::Commit(s) => write!(f, "commit:{}", &s[..12.min(s.len())]),
         }
     }
 }

@@ -6,22 +6,33 @@ repoverlay is a CLI tool that overlays config files into git repositories withou
 
 ```
 src/
-├── main.rs        # CLI entry point and command handlers
-├── lib.rs         # Core library with apply/remove/status/restore/update operations
-├── state.rs       # State persistence (in-repo and external backup)
-├── github.rs      # GitHub URL parsing and source resolution
-├── cache.rs       # GitHub repository cache management
-├── config.rs      # Global and per-repo configuration (CCL format)
+├── main.rs         # CLI entry point (minimal - delegates to lib)
+├── cli.rs          # CLI command definitions and argument parsing (clap)
+├── lib.rs          # Core library with apply/remove/status/restore/update operations
+├── state.rs        # State persistence (in-repo and external backup)
+├── github.rs       # GitHub URL parsing and source resolution
+├── cache.rs        # GitHub repository cache management
+├── config.rs       # Global and per-repo configuration (CCL format)
 ├── overlay_repo.rs # Shared overlay repository integration
-├── upstream.rs    # Upstream repository detection for fork inheritance
-└── detection.rs   # File discovery for overlay creation
+├── upstream.rs     # Upstream repository detection for fork inheritance
+├── detection.rs    # File discovery for overlay creation
+├── selection.rs    # Interactive file selection UI
+└── testutil.rs     # Test utilities (create_test_repo, create_test_overlay)
+
+tests/
+├── cli.rs          # CLI integration tests using assert_cmd
+└── common/mod.rs   # Shared test utilities and fixtures
 ```
 
 ### Module Responsibilities
 
-- **main.rs** - CLI entry point using clap. Parses arguments and dispatches to library functions.
+- **main.rs** - Minimal CLI entry point. Initializes logging and delegates to `lib::run()`.
+
+- **cli.rs** - CLI command definitions using clap derive macros. Defines all subcommands, arguments, and flags.
 
 - **lib.rs** - Core operations: `apply_overlay`, `remove_overlay`, `show_status`, `restore_overlays`, `update_overlays`, `create_overlay`, `switch_overlay`. Also handles git exclude file management.
+
+- **selection.rs** - Interactive file selection UI. Handles checkbox-style multi-select for overlay creation.
 
 - **state.rs** - State persistence layer. Manages overlay state in two locations:
   - In-repo: `.repoverlay/overlays/<name>.ccl` - tracks applied overlays
@@ -38,6 +49,8 @@ src/
 - **upstream.rs** - Upstream repository detection. Scans git remotes to identify parent repositories (forks), enabling automatic overlay inheritance from upstream.
 
 - **detection.rs** - File discovery for the `create` command. Identifies AI configs, gitignored files, and untracked files that might be candidates for overlay creation.
+
+- **testutil.rs** - Test utilities including `create_test_repo()` and `create_test_overlay()` helpers for setting up temporary git repositories in tests.
 
 ## Data Flow
 

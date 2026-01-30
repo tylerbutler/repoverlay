@@ -94,7 +94,7 @@ impl TestContext {
     pub fn overlay_state_exists(&self, name: &str) -> bool {
         self.repo
             .path()
-            .join(format!(".repoverlay/overlays/{}.ccl", name))
+            .join(format!(".repoverlay/overlays/{name}.ccl"))
             .exists()
     }
 
@@ -123,7 +123,7 @@ pub fn create_overlay_dir(files: &[(&str, &str)]) -> TempDir {
     dir
 }
 
-/// Create a test git repository and return the TempDir.
+/// Create a test git repository and return the `TempDir`.
 pub fn create_test_repo() -> TempDir {
     let dir = TempDir::new().expect("Failed to create temp dir");
     Command::new("git")
@@ -158,9 +158,9 @@ pub fn mapped_overlay() -> Vec<(&'static str, &'static str)> {
         (".envrc", "export FOO=bar"),
         (
             "repoverlay.ccl",
-            r#"mappings =
+            r"mappings =
   .envrc = .env
-"#,
+",
         ),
     ]
 }
@@ -172,10 +172,9 @@ pub fn named_overlay(name: &str) -> Vec<(String, String)> {
         (
             "repoverlay.ccl".to_string(),
             format!(
-                r#"overlay =
-  name = {}
-"#,
-                name
+                r"overlay =
+  name = {name}
+"
             ),
         ),
     ]
