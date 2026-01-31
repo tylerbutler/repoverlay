@@ -74,21 +74,25 @@ enum Commands {
         name: Option<String>,
 
         /// Git ref (branch, tag, or commit) to use (GitHub sources only)
-        #[arg(short, long, value_name = "REF")]
+        #[arg(short, long, value_name = "REF", help_heading = "GitHub Options")]
         r#ref: Option<String>,
 
         /// Force update the cached repository before applying (GitHub sources only)
-        #[arg(long)]
+        #[arg(long, help_heading = "GitHub Options")]
         update: bool,
 
         /// Use a specific overlay source instead of priority order (multi-source configs only)
-        #[arg(long = "from", value_name = "SOURCE")]
+        #[arg(long = "from", value_name = "SOURCE", help_heading = "GitHub Options")]
         from_source: Option<String>,
+
+        /// Show what would be applied without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Remove applied overlay(s)
     Remove {
-        /// Name of the overlay to remove (interactive if not specified)
+        /// Name of the overlay to remove
         name: Option<String>,
 
         /// Target repository directory (defaults to current directory)
@@ -98,6 +102,14 @@ enum Commands {
         /// Remove all applied overlays
         #[arg(long)]
         all: bool,
+
+        /// Show what would be removed without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Interactive selection mode
+        #[arg(short, long)]
+        interactive: bool,
     },
 
     /// Show the status of applied overlays
@@ -141,22 +153,16 @@ enum Commands {
     /// Examples:
     ///   repoverlay create my-overlay          # Detects org/repo from git remote
     ///   repoverlay create org/repo/my-overlay # Explicit target
-    ///   repoverlay create --local ./output    # Write to local directory only
     Create {
         /// Overlay name or full path (org/repo/name)
         ///
         /// Short form: `my-overlay` - detects org/repo from git remote
         /// Full form: `org/repo/name` - uses explicit target
-        /// Omit to use interactive mode or --local for local output
-        name: Option<String>,
+        name: String,
 
         /// Include specific files or directories (can be specified multiple times)
         #[arg(short, long)]
         include: Vec<PathBuf>,
-
-        /// Write to local directory instead of overlay repo
-        #[arg(short, long, conflicts_with = "name")]
-        local: Option<PathBuf>,
 
         /// Source repository to extract files from (defaults to current directory)
         #[arg(short, long)]
@@ -171,6 +177,36 @@ enum Commands {
         yes: bool,
 
         /// Force overwrite if overlay already exists
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Create a new overlay in a local directory
+    ///
+    /// Examples:
+    ///   repoverlay create-local ./output      # Write to local directory
+    #[command(name = "create-local")]
+    CreateLocal {
+        /// Output directory for the overlay
+        output: PathBuf,
+
+        /// Include specific files or directories (can be specified multiple times)
+        #[arg(short, long)]
+        include: Vec<PathBuf>,
+
+        /// Source repository to extract files from (defaults to current directory)
+        #[arg(short, long)]
+        source: Option<PathBuf>,
+
+        /// Show what would be created without creating files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip interactive prompts, use defaults
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Force overwrite if output already exists
         #[arg(short, long)]
         force: bool,
     },
@@ -206,8 +242,8 @@ enum Commands {
     /// List available overlays from the overlay repository
     List {
         /// Filter by target repository (format: org/repo)
-        #[arg(short, long)]
-        target: Option<String>,
+        #[arg(short = 'f', long, alias = "target")]
+        filter: Option<String>,
 
         /// Update overlay repo before listing
         #[arg(long)]
@@ -363,6 +399,7 @@ pub fn run() -> Result<()> {
             r#ref,
             update,
             from_source,
+            dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             apply_overlay(
@@ -373,11 +410,18 @@ pub fn run() -> Result<()> {
                 r#ref.as_deref(),
                 update,
                 from_source.as_deref(),
+                dry_run,
             )?;
         }
-        Commands::Remove { name, target, all } => {
+        Commands::Remove {
+            name,
+            target,
+            all,
+            dry_run,
+            interactive,
+        } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            handle_remove(&target, name, all)?;
+            handle_remove(&target, name, all, dry_run, interactive)?;
         }
         Commands::Status { target, name } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
@@ -398,14 +442,24 @@ pub fn run() -> Result<()> {
         Commands::Create {
             name,
             include,
-            local,
             source,
             dry_run,
             yes,
             force,
         } => {
             let source = source.unwrap_or_else(|| PathBuf::from("."));
-            create_overlay_command(&source, name, local, &include, dry_run, yes, force)?;
+            create_overlay_command(&source, Some(name), None, &include, dry_run, yes, force)?;
+        }
+        Commands::CreateLocal {
+            output,
+            include,
+            source,
+            dry_run,
+            yes,
+            force: _,
+        } => {
+            let source = source.unwrap_or_else(|| PathBuf::from("."));
+            crate::create_overlay(&source, Some(output), &include, None, dry_run, yes)?;
         }
         Commands::Switch {
             source,
@@ -420,8 +474,8 @@ pub fn run() -> Result<()> {
         Commands::Cache { command } => {
             handle_cache_command(command)?;
         }
-        Commands::List { target, update } => {
-            list_overlays(target.as_deref(), update)?;
+        Commands::List { filter, update } => {
+            list_overlays(filter.as_deref(), update)?;
         }
         Commands::Sync {
             name,
@@ -579,9 +633,27 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
 }
 
 /// Handle remove command with interactive selection support.
-fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: bool) -> Result<()> {
+fn handle_remove(
+    target: &std::path::Path,
+    name: Option<String>,
+    remove_all: bool,
+    dry_run: bool,
+    interactive: bool,
+) -> Result<()> {
+    // If name or --all is specified, use direct removal
     if remove_all || name.is_some() {
-        return remove_overlay(target, name, remove_all);
+        return remove_overlay(target, name, remove_all, dry_run);
+    }
+
+    // If not interactive and no name specified, require explicit action
+    if !interactive {
+        bail!(
+            "No overlay name specified.\n\n\
+             Usage:\n  \
+             repoverlay remove <name>        # Remove specific overlay\n  \
+             repoverlay remove --all         # Remove all overlays\n  \
+             repoverlay remove --interactive # Interactive selection"
+        );
     }
 
     // Interactive selection
@@ -619,6 +691,10 @@ fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: boo
     if let Ok(selection) = input.parse::<usize>() {
         if selection == applied_overlays.len() + 1 {
             // Remove all
+            if dry_run {
+                println!("\n{} Dry run - would remove all overlays", "Note:".yellow());
+                return Ok(());
+            }
             for overlay_name in &applied_overlays {
                 remove_single_overlay(&target, &overlays_dir, overlay_name)?;
             }
@@ -626,6 +702,14 @@ fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: boo
             println!("\n{} Removed all overlays", "✓".green().bold());
         } else if selection >= 1 && selection <= applied_overlays.len() {
             let overlay_name = &applied_overlays[selection - 1];
+            if dry_run {
+                println!(
+                    "\n{} Dry run - would remove overlay '{}'",
+                    "Note:".yellow(),
+                    overlay_name
+                );
+                return Ok(());
+            }
             remove_single_overlay(&target, &overlays_dir, overlay_name)?;
 
             let remaining = list_applied_overlays(&target)?;
@@ -636,6 +720,10 @@ fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: boo
             bail!("Invalid selection: {selection}");
         }
     } else if input.eq_ignore_ascii_case("all") {
+        if dry_run {
+            println!("\n{} Dry run - would remove all overlays", "Note:".yellow());
+            return Ok(());
+        }
         for overlay_name in &applied_overlays {
             remove_single_overlay(&target, &overlays_dir, overlay_name)?;
         }
@@ -1641,6 +1729,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -1674,6 +1763,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok());
 
@@ -1689,11 +1779,12 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
+                true, // copy mode
                 None,
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok());
 
@@ -1718,6 +1809,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -1755,6 +1847,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -1786,6 +1879,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -1809,6 +1903,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -1829,6 +1924,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_err());
             assert!(
@@ -1853,6 +1949,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -1864,6 +1961,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("already applied"));
@@ -1884,6 +1982,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("Conflict"));
@@ -1903,6 +2002,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -1914,6 +2014,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
@@ -1933,6 +2034,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("No files found"));
@@ -1949,6 +2051,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_err());
         }
@@ -1978,6 +2081,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2022,6 +2126,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2063,6 +2168,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2098,6 +2204,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             // Should succeed (just warns about missing directory)
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
@@ -2134,6 +2241,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
 
             assert!(result.is_err());
@@ -2162,6 +2270,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2183,6 +2292,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
 
             assert!(result.is_err());
@@ -2210,6 +2320,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2243,6 +2354,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok());
 
@@ -2279,6 +2391,7 @@ mod tests {
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2326,6 +2439,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2339,6 +2453,35 @@ directories =
 
             // Check files inside are accessible
             assert!(target_dir.join("vscode.json").exists());
+        }
+
+        #[test]
+        fn dry_run_does_not_apply_overlay() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                true, // dry_run
+            );
+            assert!(result.is_ok(), "apply_overlay dry_run failed: {result:?}");
+
+            // Check no files were created
+            assert!(
+                !repo.path().join(".envrc").exists(),
+                ".envrc should not exist in dry run"
+            );
+            // Check no state was saved
+            assert!(
+                !repo.path().join(".repoverlay").exists(),
+                ".repoverlay dir should not exist in dry run"
+            );
         }
     }
 
@@ -2362,9 +2505,10 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
-            remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test-overlay".to_string()), false, false).unwrap();
 
             assert!(!repo.path().join(".envrc").exists());
             assert!(!repo.path().join(".vscode/settings.json").exists());
@@ -2385,6 +2529,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -2395,13 +2540,14 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
             assert!(repo.path().join(".envrc").exists());
             assert!(repo.path().join(".env.local").exists());
 
-            remove_overlay(repo.path(), None, true).unwrap();
+            remove_overlay(repo.path(), None, true, false).unwrap();
 
             assert!(!repo.path().join(".envrc").exists());
             assert!(!repo.path().join(".env.local").exists());
@@ -2422,6 +2568,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -2432,10 +2579,11 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
-            remove_overlay(repo.path(), Some("overlay-a".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("overlay-a".to_string()), false, false).unwrap();
 
             assert!(!repo.path().join(".envrc").exists());
             assert!(repo.path().join(".env.local").exists());
@@ -2455,11 +2603,12 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
             assert!(repo.path().join(".vscode").exists());
 
-            remove_overlay(repo.path(), Some("test".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test".to_string()), false, false).unwrap();
             assert!(
                 !repo.path().join(".vscode").exists(),
                 ".vscode should be removed"
@@ -2483,9 +2632,10 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
-            remove_overlay(repo.path(), Some("test".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test".to_string()), false, false).unwrap();
 
             assert!(
                 repo.path().join(".vscode").exists(),
@@ -2507,9 +2657,10 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
-            remove_overlay(repo.path(), Some("test".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test".to_string()), false, false).unwrap();
 
             let exclude_path = repo.path().join(".git/info/exclude");
             let content = fs::read_to_string(&exclude_path).unwrap();
@@ -2523,7 +2674,7 @@ directories =
         fn fails_when_no_overlay_applied() {
             let repo = create_test_repo();
 
-            let result = remove_overlay(repo.path(), Some("nonexistent".to_string()), false);
+            let result = remove_overlay(repo.path(), Some("nonexistent".to_string()), false, false);
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("No overlay"));
         }
@@ -2541,10 +2692,12 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
-            let result = remove_overlay(repo.path(), Some("fake-overlay".to_string()), false);
+            let result =
+                remove_overlay(repo.path(), Some("fake-overlay".to_string()), false, false);
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("not found"));
         }
@@ -2562,6 +2715,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2569,7 +2723,7 @@ directories =
             fs::remove_file(repo.path().join(".envrc")).unwrap();
 
             // Remove should still succeed
-            let result = remove_overlay(repo.path(), Some("test".to_string()), false);
+            let result = remove_overlay(repo.path(), Some("test".to_string()), false, false);
             assert!(result.is_ok());
         }
 
@@ -2597,6 +2751,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2604,7 +2759,7 @@ directories =
             assert!(repo.path().join("scratch").is_symlink());
 
             // Remove overlay
-            remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test-overlay".to_string()), false, false).unwrap();
 
             // Verify directory symlink was removed
             assert!(!repo.path().join("scratch").exists());
@@ -2635,6 +2790,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2644,11 +2800,156 @@ directories =
             assert!(target_dir.is_dir());
 
             // Remove overlay
-            remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test-overlay".to_string()), false, false).unwrap();
 
             // Verify directory was removed
             assert!(!repo.path().join("scratch").exists());
             assert!(!repo.path().join(".repoverlay").exists());
+        }
+
+        #[test]
+        fn dry_run_does_not_remove_overlay() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Dry run removal
+            let result = remove_overlay(repo.path(), Some("test-overlay".to_string()), false, true);
+            assert!(result.is_ok(), "dry_run remove failed: {result:?}");
+
+            // Verify files are still present
+            assert!(
+                repo.path().join(".envrc").exists(),
+                ".envrc should still exist after dry run"
+            );
+            assert!(
+                repo.path().join(".repoverlay").exists(),
+                ".repoverlay should still exist after dry run"
+            );
+        }
+
+        #[test]
+        fn dry_run_all_does_not_remove_overlays() {
+            let repo = create_test_repo();
+            let overlay1 = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+            let overlay2 = create_test_overlay(&[(".env.local", "LOCAL=true")]);
+
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-a".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+            apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-b".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Dry run removal of all
+            let result = remove_overlay(repo.path(), None, true, true);
+            assert!(result.is_ok(), "dry_run remove --all failed: {result:?}");
+
+            // Verify all files are still present
+            assert!(
+                repo.path().join(".envrc").exists(),
+                ".envrc should still exist after dry run"
+            );
+            assert!(
+                repo.path().join(".env.local").exists(),
+                ".env.local should still exist after dry run"
+            );
+        }
+
+        #[test]
+        fn handle_remove_requires_name_or_interactive_flag() {
+            let repo = create_test_repo();
+
+            // Calling handle_remove without name, --all, or --interactive should fail
+            let result = handle_remove(repo.path(), None, false, false, false);
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("No overlay name specified"),
+                "Expected usage error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn handle_remove_with_name_succeeds() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Calling handle_remove with a name should succeed
+            let result = handle_remove(
+                repo.path(),
+                Some("test-overlay".to_string()),
+                false,
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "handle_remove with name failed: {result:?}");
+            assert!(!repo.path().join(".envrc").exists());
+        }
+
+        #[test]
+        fn handle_remove_with_all_flag_succeeds() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Calling handle_remove with --all should succeed
+            let result = handle_remove(repo.path(), None, true, false, false);
+            assert!(
+                result.is_ok(),
+                "handle_remove with --all failed: {result:?}"
+            );
+            assert!(!repo.path().join(".envrc").exists());
         }
     }
 
@@ -2676,6 +2977,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2697,6 +2999,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -2707,6 +3010,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2728,6 +3032,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -2738,6 +3043,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -2758,6 +3064,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -3171,6 +3478,67 @@ directories =
                     .contains("not a git repository")
             );
         }
+
+        #[test]
+        fn create_local_creates_overlay_in_output_directory() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+            fs::create_dir_all(source.path().join(".vscode")).unwrap();
+            fs::write(
+                source.path().join(".vscode/settings.json"),
+                r#"{"key": "value"}"#,
+            )
+            .unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("my-local-overlay")),
+                &[PathBuf::from(".envrc"), PathBuf::from(".vscode")],
+                None,
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "create_overlay failed: {result:?}");
+
+            // Check files were created in output directory
+            let overlay_dir = output.path().join("my-local-overlay");
+            assert!(overlay_dir.exists(), "Overlay directory should exist");
+            assert!(overlay_dir.join(".envrc").exists(), ".envrc should exist");
+            assert!(
+                overlay_dir.join(".vscode/settings.json").exists(),
+                ".vscode/settings.json should exist"
+            );
+
+            // Verify content
+            let content = fs::read_to_string(overlay_dir.join(".envrc")).unwrap();
+            assert_eq!(content, "export FOO=bar");
+        }
+
+        #[test]
+        fn create_local_dry_run_does_not_create_files() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("my-local-overlay")),
+                &[PathBuf::from(".envrc")],
+                None,
+                true, // dry_run
+                false,
+            );
+            assert!(result.is_ok());
+
+            // Check no files were created
+            assert!(
+                !output.path().join("my-local-overlay").exists(),
+                "Overlay directory should not exist in dry run"
+            );
+        }
     }
 
     // Unit tests for parse_overlay_name_arg
@@ -3405,6 +3773,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -3488,6 +3857,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -3498,6 +3868,7 @@ directories =
                 None,
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -3574,6 +3945,7 @@ directories =
                     r#ref,
                     update,
                     from_source,
+                    dry_run,
                 }) => {
                     assert_eq!(source, "./overlay");
                     assert_eq!(target, Some(PathBuf::from("/path/to/repo")));
@@ -3582,6 +3954,20 @@ directories =
                     assert_eq!(r#ref, Some("main".to_string()));
                     assert!(update);
                     assert!(from_source.is_none());
+                    assert!(!dry_run);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_parses_dry_run() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--dry-run"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Apply { dry_run, .. }) => {
+                    assert!(dry_run);
                 }
                 _ => panic!("Expected Apply command"),
             }
@@ -3614,6 +4000,43 @@ directories =
                 Some(Commands::Remove { name, all, .. }) => {
                     assert!(name.is_none());
                     assert!(all);
+                }
+                _ => panic!("Expected Remove command"),
+            }
+        }
+
+        #[test]
+        fn remove_parses_dry_run() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "remove", "my-overlay", "--dry-run"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Remove { dry_run, .. }) => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Remove command"),
+            }
+        }
+
+        #[test]
+        fn remove_parses_interactive() {
+            let cli = Cli::try_parse_from(["repoverlay", "remove", "--interactive"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Remove { interactive, .. }) => {
+                    assert!(interactive);
+                }
+                _ => panic!("Expected Remove command"),
+            }
+        }
+
+        #[test]
+        fn remove_parses_short_interactive() {
+            let cli = Cli::try_parse_from(["repoverlay", "remove", "-i"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Remove { interactive, .. }) => {
+                    assert!(interactive);
                 }
                 _ => panic!("Expected Remove command"),
             }
@@ -3693,12 +4116,45 @@ directories =
                     yes,
                     ..
                 }) => {
-                    assert_eq!(name, Some("my-overlay".to_string()));
+                    assert_eq!(name, "my-overlay");
                     assert_eq!(include.len(), 2);
                     assert!(force);
                     assert!(yes);
                 }
                 _ => panic!("Expected Create command"),
+            }
+        }
+
+        #[test]
+        fn create_requires_name() {
+            let result = Cli::try_parse_from(["repoverlay", "create"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn create_local_parses_options() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "create-local",
+                "./output",
+                "--include",
+                ".envrc",
+                "--yes",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::CreateLocal {
+                    output,
+                    include,
+                    yes,
+                    ..
+                }) => {
+                    assert_eq!(output, PathBuf::from("./output"));
+                    assert_eq!(include.len(), 1);
+                    assert!(yes);
+                }
+                _ => panic!("Expected CreateLocal command"),
             }
         }
 
@@ -3711,6 +4167,31 @@ directories =
                     assert_eq!(source, "./new-overlay");
                 }
                 _ => panic!("Expected Switch command"),
+            }
+        }
+
+        #[test]
+        fn list_parses_filter() {
+            let cli = Cli::try_parse_from(["repoverlay", "list", "--filter", "org/repo"]).unwrap();
+
+            match cli.command {
+                Some(Commands::List { filter, .. }) => {
+                    assert_eq!(filter, Some("org/repo".to_string()));
+                }
+                _ => panic!("Expected List command"),
+            }
+        }
+
+        #[test]
+        fn list_parses_target_alias() {
+            // --target should work as an alias for --filter
+            let cli = Cli::try_parse_from(["repoverlay", "list", "--target", "org/repo"]).unwrap();
+
+            match cli.command {
+                Some(Commands::List { filter, .. }) => {
+                    assert_eq!(filter, Some("org/repo".to_string()));
+                }
+                _ => panic!("Expected List command"),
             }
         }
 

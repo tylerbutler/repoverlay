@@ -330,6 +330,7 @@ fn resolve_from_sources(
 /// - Overlay with same name already exists
 /// - File conflicts with existing overlay or repo file
 /// - No files found in overlay source
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_overlay(
     source_str: &str,
     target: &Path,
@@ -338,13 +339,15 @@ pub(crate) fn apply_overlay(
     ref_override: Option<&str>,
     update_cache: bool,
     source_filter: Option<&str>,
+    dry_run: bool,
 ) -> Result<()> {
     debug!(
-        "apply_overlay: source={}, target={}, force_copy={}, name_override={:?}",
+        "apply_overlay: source={}, target={}, force_copy={}, name_override={:?}, dry_run={}",
         source_str,
         target.display(),
         force_copy,
-        name_override
+        name_override,
+        dry_run
     );
 
     // Resolve source (handles GitHub URLs and local paths)
@@ -356,6 +359,12 @@ pub(crate) fn apply_overlay(
         Some(target),
         source_filter,
     )?;
+
+    if dry_run {
+        println!("{} Dry run - no changes made.", "Note:".yellow());
+        println!("\nWould apply overlay from: {}", resolved.path.display());
+        return Ok(());
+    }
     let source = &resolved.path;
     debug!("resolved source path: {}", source.display());
 
@@ -714,13 +723,38 @@ pub(crate) fn apply_overlay(
 /// 5. Delete state file
 /// 6. Remove external backup
 /// 7. If no overlays remain, remove `.repoverlay/` directory
-pub(crate) fn remove_overlay(target: &Path, name: Option<String>, remove_all: bool) -> Result<()> {
+pub(crate) fn remove_overlay(
+    target: &Path,
+    name: Option<String>,
+    remove_all: bool,
+    dry_run: bool,
+) -> Result<()> {
     debug!(
-        "remove_overlay: target={}, name={:?}, remove_all={}",
+        "remove_overlay: target={}, name={:?}, remove_all={}, dry_run={}",
         target.display(),
         name,
-        remove_all
+        remove_all,
+        dry_run
     );
+
+    if dry_run {
+        let target = canonicalize_path(target, "Target directory")?;
+        let applied_overlays = list_applied_overlays(&target)?;
+
+        if remove_all {
+            println!("{} Dry run - would remove all overlays:", "Note:".yellow());
+            for overlay_name in &applied_overlays {
+                println!("  - {overlay_name}");
+            }
+        } else if let Some(ref name) = name {
+            println!(
+                "{} Dry run - would remove overlay '{}'",
+                "Note:".yellow(),
+                name
+            );
+        }
+        return Ok(());
+    }
     let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
 
@@ -1104,8 +1138,9 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
             false, // Use symlinks by default
             Some(state.name.clone()),
             ref_override,
-            true, // Update cache
-            None, // Use default source resolution for restore
+            true,  // Update cache
+            None,  // Use default source resolution for restore
+            false, // Not a dry run
         ) {
             Ok(()) => {}
             Err(e) => {
@@ -1263,7 +1298,8 @@ pub(crate) fn update_overlays(target: &Path, name: Option<String>, dry_run: bool
                 Some(state.name.clone()),
                 Some(git_ref.as_str()),
                 true,
-                None, // Use default source resolution for update
+                None,  // Use default source resolution for update
+                false, // Not a dry run
             )?;
         }
     }
@@ -1723,12 +1759,12 @@ pub(crate) fn switch_overlay(
     if has_overlays {
         println!("{} existing overlays...", "Removing".yellow().bold());
         // Remove all existing overlays
-        remove_overlay(target, None, true)?;
+        remove_overlay(target, None, true, false)?;
     }
 
     // Apply the new overlay
     println!("{} new overlay...", "Applying".blue().bold());
-    apply_overlay(source, target, copy, name, ref_override, false, None)?;
+    apply_overlay(source, target, copy, name, ref_override, false, None, false)?;
 
     Ok(())
 }
