@@ -45,7 +45,7 @@ tests/
 
 - **config.rs** - Configuration management using CCL format. Handles global config (`~/.config/repoverlay/config.ccl`) and per-overlay config (`repoverlay.ccl`).
 
-- **sources.rs** - Multi-source overlay resolution. Manages a priority-ordered list of overlay sources (configured via `repoverlay source add/remove/move`). Provides `SourceManager` for resolving overlay references across multiple sources with first-match-wins semantics.
+- **sources.rs** - Multi-source overlay resolution. Manages a priority-ordered list of overlay sources (configured via `repoverlay source add/remove/list`). Provides `SourceManager` for resolving overlay references across multiple sources with first-match-wins semantics.
 
 - **overlay_repo.rs** - Shared overlay repository support. Allows overlays to be referenced as `org/repo/name` from a centrally managed repository. Supports fallback resolution for fork inheritance.
 
