@@ -1153,42 +1153,6 @@ fn source_help_displays() {
 }
 
 #[test]
-fn source_add_rejects_position_zero() {
-    let ctx = SourceTestContext::new();
-    // Position 0 should be rejected with an error, consistent with source move
-    ctx.cmd()
-        .args([
-            "source",
-            "add",
-            "https://github.com/example/repo",
-            "--position",
-            "0",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Position must be 1 or greater"));
-}
-
-#[test]
-fn source_add_accepts_position_one() {
-    let ctx = SourceTestContext::new();
-    // Position 1 should be valid
-    ctx.cmd()
-        .args([
-            "source",
-            "add",
-            "https://github.com/example/position-test",
-            "--position",
-            "1",
-            "--name",
-            "test-source",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Added"));
-}
-
-#[test]
 fn source_add_rejects_empty_url() {
     let ctx = SourceTestContext::new();
     // Empty URL should be rejected
@@ -1288,42 +1252,7 @@ fn source_add_duplicate_name_fails() {
 }
 
 #[test]
-fn source_move_rejects_position_zero() {
-    let ctx = SourceTestContext::new();
-
-    // Add a source first
-    ctx.cmd()
-        .args([
-            "source",
-            "add",
-            "https://github.com/test/move-repo",
-            "--name",
-            "move-test",
-        ])
-        .assert()
-        .success();
-
-    // Moving to position 0 should fail
-    ctx.cmd()
-        .args(["source", "move", "move-test", "--position", "0"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Position must be 1 or greater"));
-}
-
-#[test]
-fn source_move_nonexistent_fails() {
-    let ctx = SourceTestContext::new();
-    // Moving a non-existent source should fail
-    ctx.cmd()
-        .args(["source", "move", "nonexistent-source", "--position", "1"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not found"));
-}
-
-#[test]
-fn source_full_add_move_remove_workflow() {
+fn source_full_add_remove_workflow() {
     let ctx = SourceTestContext::new();
 
     // Add first source
@@ -1357,13 +1286,6 @@ fn source_full_add_move_remove_workflow() {
         .success()
         .stdout(predicate::str::contains("source-a"))
         .stdout(predicate::str::contains("source-b"));
-
-    // Move second to position 1 (first)
-    ctx.cmd()
-        .args(["source", "move", "source-b", "--position", "1"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Moved"));
 
     // Remove both
     ctx.cmd()
@@ -1399,45 +1321,4 @@ fn source_add_strips_git_suffix_from_name() {
         .stdout(predicate::str::contains("source 'git-suffix'"));
 }
 
-#[test]
-fn source_add_with_position_inserts_correctly() {
-    let ctx = SourceTestContext::new();
 
-    // Add first two sources
-    ctx.cmd()
-        .args([
-            "source",
-            "add",
-            "https://github.com/test/first",
-            "--name",
-            "pos-first",
-        ])
-        .assert()
-        .success();
-
-    ctx.cmd()
-        .args([
-            "source",
-            "add",
-            "https://github.com/test/second",
-            "--name",
-            "pos-second",
-        ])
-        .assert()
-        .success();
-
-    // Add third at position 2 (between first and second)
-    ctx.cmd()
-        .args([
-            "source",
-            "add",
-            "https://github.com/test/insert",
-            "--name",
-            "pos-insert",
-            "--position",
-            "2",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("position 2"));
-}

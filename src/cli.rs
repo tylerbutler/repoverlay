@@ -199,17 +199,6 @@ enum Commands {
         command: CacheCommand,
     },
 
-    /// Initialize overlay repository configuration
-    #[command(name = "init-repo")]
-    InitRepo {
-        /// URL of the overlay repository (e.g., `https://github.com/user/repo-overlays`)
-        url: String,
-
-        /// Skip cloning the repository
-        #[arg(long)]
-        no_clone: bool,
-    },
-
     /// List available overlays from the overlay repository
     List {
         /// Filter by target repository (format: org/repo)
@@ -267,10 +256,6 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Push all pending commits in the overlay repo to remote
-    #[command(hide = true)] // Hidden: auto-push is done after create/sync
-    Push,
-
     /// Publish an overlay to the overlay repository
     #[command(hide = true)] // Hidden: deprecated, use create instead
     Publish {
@@ -316,10 +301,6 @@ enum SourceCommand {
         /// Name for this source (defaults to repo name)
         #[arg(long)]
         name: Option<String>,
-
-        /// Position in priority order (1 = highest priority)
-        #[arg(long)]
-        position: Option<usize>,
     },
 
     /// List configured overlay sources
@@ -329,16 +310,6 @@ enum SourceCommand {
     Remove {
         /// Name of the source to remove
         name: String,
-    },
-
-    /// Change the priority order of a source
-    Move {
-        /// Name of the source to move
-        name: String,
-
-        /// New position (1 = highest priority)
-        #[arg(long)]
-        position: usize,
     },
 }
 
@@ -433,9 +404,6 @@ pub fn run() -> Result<()> {
         Commands::Cache { command } => {
             handle_cache_command(command)?;
         }
-        Commands::InitRepo { url, no_clone } => {
-            init_repo(&url, no_clone)?;
-        }
         Commands::List { target, update } => {
             list_overlays(target.as_deref(), update)?;
         }
@@ -455,9 +423,6 @@ pub fn run() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             add_files_to_overlay(&name, &target, &files, dry_run)?;
-        }
-        Commands::Push => {
-            push_overlay_repo()?;
         }
         Commands::Publish {
             source,
@@ -500,19 +465,10 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
     let mut config = config::load_config(None)?;
 
     match command {
-        SourceCommand::Add {
-            url,
-            name,
-            position,
-        } => {
+        SourceCommand::Add { url, name } => {
             // Validate URL is not empty
             if url.is_empty() {
                 anyhow::bail!("URL cannot be empty");
-            }
-
-            // Validate position (consistent with Move command)
-            if position == Some(0) {
-                anyhow::bail!("Position must be 1 or greater");
             }
 
             // Extract name from URL if not provided
@@ -543,18 +499,15 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                 url: url.clone(),
             };
 
-            // Insert at position or append
-            let insert_pos =
-                position.map_or(config.sources.len(), |p| (p - 1).min(config.sources.len()));
-
-            config.sources.insert(insert_pos, new_source);
+            // Append to end of sources list
+            config.sources.push(new_source);
             config::save_config(&config)?;
 
             println!(
                 "{} source '{}' at position {}",
                 "Added".green().bold(),
                 source_name,
-                insert_pos + 1
+                config.sources.len()
             );
             println!("       URL: {url}");
         }
@@ -603,36 +556,6 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
             config::save_config(&config)?;
 
             println!("{} source '{}'", "Removed".red().bold(), name);
-        }
-        SourceCommand::Move { name, position } => {
-            let current_pos = config
-                .sources
-                .iter()
-                .position(|s| s.name == name)
-                .ok_or_else(|| anyhow::anyhow!("Source '{name}' not found"))?;
-
-            if position == 0 {
-                anyhow::bail!("Position must be 1 or greater");
-            }
-
-            let new_pos = (position - 1).min(config.sources.len() - 1);
-
-            if current_pos == new_pos {
-                println!("Source '{name}' is already at position {position}");
-                return Ok(());
-            }
-
-            let source = config.sources.remove(current_pos);
-            config.sources.insert(new_pos, source);
-            config::save_config(&config)?;
-
-            println!(
-                "{} source '{}' from position {} to {}",
-                "Moved".blue().bold(),
-                name,
-                current_pos + 1,
-                new_pos + 1
-            );
         }
     }
 
@@ -789,59 +712,6 @@ fn handle_cache_command(command: CacheCommand) -> Result<()> {
     Ok(())
 }
 
-/// Initialize overlay repository configuration.
-fn init_repo(url: &str, no_clone: bool) -> Result<()> {
-    use crate::config::{OverlayRepoConfig, global_config_path, save_global_config_with_comments};
-    use crate::overlay_repo::OverlayRepoManager;
-
-    // Validate URL looks reasonable
-    if !url.starts_with("https://") && !url.starts_with("git@") {
-        bail!(
-            "Invalid repository URL. Use HTTPS (https://github.com/...) or SSH (git@github.com:...) format."
-        );
-    }
-
-    let config = OverlayRepoConfig {
-        url: url.to_string(),
-        local_path: None,
-    };
-
-    // Save configuration
-    save_global_config_with_comments(&config)?;
-    println!(
-        "{} Configuration saved to: {}",
-        "✓".green().bold(),
-        global_config_path()?.display()
-    );
-
-    if no_clone {
-        println!(
-            "\n{} Skipped cloning. Run 'repoverlay list' to clone and see available overlays.",
-            "Note:".yellow()
-        );
-        return Ok(());
-    }
-
-    // Clone the repository
-    println!("{} overlay repository...", "Cloning".blue().bold());
-    let manager = OverlayRepoManager::new(config)?;
-    manager.ensure_cloned()?;
-
-    // List available overlays
-    let overlays = manager.list_overlays()?;
-    println!(
-        "\n{} Overlay repository initialized with {} overlay(s) available.",
-        "✓".green().bold(),
-        overlays.len()
-    );
-
-    if !overlays.is_empty() {
-        println!("\nRun 'repoverlay list' to see available overlays.");
-    }
-
-    Ok(())
-}
-
 /// List available overlays from the overlay repository.
 fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
     use crate::config::load_config;
@@ -852,8 +722,8 @@ fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository.\n\
-             Example: repoverlay init-repo https://github.com/tylerbutler/repo-overlays"
+             Run 'repoverlay source add <url>' to set up an overlay source.\n\
+             Example: repoverlay source add https://github.com/tylerbutler/repo-overlays"
         )
     })?;
 
@@ -938,7 +808,7 @@ fn publish_overlay(
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+             Run 'repoverlay source add <url>' to set up an overlay source."
         )
     })?;
 
@@ -1155,7 +1025,7 @@ fn create_overlay_command(
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository.\n\
+             Run 'repoverlay source add <url>' to set up an overlay source.\n\
              Or use --local to write to a local directory."
         )
     })?;
@@ -1367,7 +1237,7 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+             Run 'repoverlay source add <url>' to set up an overlay source."
         )
     })?;
 
@@ -1547,7 +1417,7 @@ fn add_files_to_overlay(
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+             Run 'repoverlay source add <url>' to set up an overlay source."
         )
     })?;
 
@@ -1648,32 +1518,6 @@ fn add_files_to_overlay(
 
     // Auto-commit to overlay repo
     auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
-
-    Ok(())
-}
-
-/// Push all pending commits in the overlay repo to remote.
-fn push_overlay_repo() -> Result<()> {
-    use crate::config::load_config;
-    use crate::overlay_repo::OverlayRepoManager;
-
-    // Load overlay repo config
-    let config = load_config(None)?;
-    let overlay_config = config.overlay_repo.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository."
-        )
-    })?;
-
-    // Create manager and ensure cloned
-    let manager = OverlayRepoManager::new(overlay_config)?;
-    manager.ensure_cloned()?;
-
-    println!("{} to remote...", "Pushing".blue().bold());
-    manager.push()?;
-
-    println!("{} Pushed successfully.", "✓".green().bold());
 
     Ok(())
 }

@@ -148,50 +148,6 @@ pub fn load_config(repo_path: Option<&Path>) -> Result<RepoverlayConfig> {
     Ok(config)
 }
 
-/// Generate a config file with helpful comments.
-pub fn generate_config_ccl(config: &OverlayRepoConfig) -> String {
-    let mut output = String::new();
-    output.push_str("/= repoverlay global configuration\n");
-    output.push_str("/= This file configures repoverlay's overlay repository integration.\n\n");
-    output.push_str("overlay_repo =\n");
-    output.push_str("  /= url: The Git URL of the shared overlay repository.\n");
-    output.push_str("  /= This is where overlays are stored and retrieved from.\n");
-    output.push_str("  /= Supports HTTPS and SSH URLs.\n");
-    let _ = writeln!(output, "  url = {}", config.url);
-
-    if let Some(ref local_path) = config.local_path {
-        output.push_str("\n  /= local_path: Override the default clone location.\n");
-        let _ = writeln!(output, "  local_path = {}", local_path.display());
-    } else {
-        output.push_str("\n  /= local_path (optional): Override the default clone location.\n");
-        output.push_str(
-            "  /= By default, the repo is cloned to ~/.local/share/repoverlay/overlay-repo/\n",
-        );
-        output.push_str("  /= Uncomment to use a custom path instead:\n");
-        output.push_str("  /= local_path = /custom/path/to/clone\n");
-    }
-
-    output
-}
-
-/// Save the global configuration with helpful comments.
-pub fn save_global_config_with_comments(config: &OverlayRepoConfig) -> Result<()> {
-    let config_path = global_config_path()?;
-
-    // Ensure config directory exists
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
-    }
-
-    let content = generate_config_ccl(config);
-
-    fs::write(&config_path, content)
-        .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
-
-    Ok(())
-}
-
 /// Generate a config file for multi-source configuration.
 pub fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
     let mut output = String::new();
@@ -203,7 +159,7 @@ pub fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
             "/= Sources are checked in priority order (first listed = highest priority).\n",
         );
         output.push_str(
-            "/= Use `repoverlay source move <name> --position <n>` to change priority.\n",
+            "/= To change priority, edit this file directly or remove and re-add sources.\n",
         );
         output.push_str("sources =\n");
 
@@ -288,28 +244,6 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = load_repo_config(temp.path()).unwrap();
         assert!(config.is_none());
-    }
-
-    #[test]
-    fn test_generate_config_ccl() {
-        let config = OverlayRepoConfig {
-            url: "https://github.com/user/repo-overlays".to_string(),
-            local_path: None,
-        };
-        let ccl = generate_config_ccl(&config);
-        assert!(ccl.contains("overlay_repo ="));
-        assert!(ccl.contains("url = https://github.com/user/repo-overlays"));
-        assert!(ccl.contains("/= repoverlay global configuration"));
-    }
-
-    #[test]
-    fn test_generate_config_ccl_with_local_path() {
-        let config = OverlayRepoConfig {
-            url: "https://github.com/user/repo-overlays".to_string(),
-            local_path: Some(PathBuf::from("/custom/path")),
-        };
-        let ccl = generate_config_ccl(&config);
-        assert!(ccl.contains("local_path = /custom/path"));
     }
 
     #[test]
@@ -446,79 +380,6 @@ overlay_repo =
         }
     }
 
-    #[test]
-    #[allow(unsafe_code)]
-    fn test_save_global_config_with_comments() {
-        // Save original XDG_CONFIG_HOME and set to temp dir
-        let original = std::env::var("XDG_CONFIG_HOME").ok();
-        let temp = TempDir::new().unwrap();
-        // SAFETY: Tests are run serially with cargo test, and we restore the value after
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", temp.path());
-        }
-
-        let config = OverlayRepoConfig {
-            url: "https://github.com/test/repo-overlays".to_string(),
-            local_path: None,
-        };
-
-        let result = save_global_config_with_comments(&config);
-        assert!(result.is_ok());
-
-        // Verify file was created
-        let config_path = temp.path().join("repoverlay").join("config.ccl");
-        assert!(config_path.exists());
-
-        // Verify content
-        let content = fs::read_to_string(&config_path).unwrap();
-        assert!(content.contains("overlay_repo ="));
-        assert!(content.contains("url = https://github.com/test/repo-overlays"));
-        assert!(content.contains("/= repoverlay global configuration"));
-
-        // Restore original value
-        // SAFETY: Tests are run serially with cargo test
-        unsafe {
-            match original {
-                Some(val) => std::env::set_var("XDG_CONFIG_HOME", val),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-        }
-    }
-
-    #[test]
-    #[allow(unsafe_code)]
-    fn test_save_global_config_with_local_path() {
-        // Save original XDG_CONFIG_HOME and set to temp dir
-        let original = std::env::var("XDG_CONFIG_HOME").ok();
-        let temp = TempDir::new().unwrap();
-        // SAFETY: Tests are run serially with cargo test, and we restore the value after
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", temp.path());
-        }
-
-        let config = OverlayRepoConfig {
-            url: "https://github.com/test/repo-overlays".to_string(),
-            local_path: Some(PathBuf::from("/custom/clone/path")),
-        };
-
-        let result = save_global_config_with_comments(&config);
-        assert!(result.is_ok());
-
-        // Verify content includes local_path
-        let config_path = temp.path().join("repoverlay").join("config.ccl");
-        let content = fs::read_to_string(&config_path).unwrap();
-        assert!(content.contains("local_path = /custom/clone/path"));
-
-        // Restore original value
-        // SAFETY: Tests are run serially with cargo test
-        unsafe {
-            match original {
-                Some(val) => std::env::set_var("XDG_CONFIG_HOME", val),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-        }
-    }
-
     // Additional edge case tests for config parsing
     #[test]
     fn test_load_repo_config_ignores_unknown_keys() {
@@ -573,19 +434,6 @@ some_other_section =
         assert!(config.is_some());
         let config = config.unwrap();
         assert!(config.overlay_repo.is_none());
-    }
-
-    #[test]
-    fn test_generate_config_ccl_includes_comments() {
-        let config = OverlayRepoConfig {
-            url: "https://github.com/user/repo-overlays".to_string(),
-            local_path: None,
-        };
-        let ccl = generate_config_ccl(&config);
-
-        // Should include helpful comments
-        assert!(ccl.contains("/= repoverlay global configuration"));
-        assert!(ccl.contains("/= url:"));
     }
 
     // ==================== Multi-source config tests ====================

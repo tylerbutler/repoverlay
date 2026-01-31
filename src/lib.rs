@@ -177,7 +177,7 @@ pub(crate) fn resolve_source(
             anyhow::anyhow!(
                 "Overlay repository not configured.\n\n\
                  To apply overlays from a shared repository, first run:\n\
-                 repoverlay init-repo <url>\n\n\
+                 repoverlay source add <url>\n\n\
                  Or use a local path or GitHub URL instead."
             )
         })?;
@@ -1302,7 +1302,7 @@ fn detect_target_from_git_remote(repo_path: &Path) -> Option<(String, String)> {
 /// # Output Directory Resolution
 ///
 /// When `output` is `None`, the output directory is determined as follows:
-/// 1. If an overlay repo is configured (`init-repo` was run), the overlay is
+/// 1. If an overlay source is configured (`source add` was run), the overlay is
 ///    created directly in the overlay repo at `<org>/<repo>/<name>/`, where
 ///    org/repo is detected from the source repository's git remote origin.
 /// 2. If no overlay repo is configured (or git remote detection fails), falls
