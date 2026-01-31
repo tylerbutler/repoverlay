@@ -1320,5 +1320,3 @@ fn source_add_strips_git_suffix_from_name() {
         .success()
         .stdout(predicate::str::contains("source 'git-suffix'"));
 }
-
-
