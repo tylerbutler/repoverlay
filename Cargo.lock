@@ -1126,9 +1126,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "sickle"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6b021463bdd5fabf241721618f6b88cbf87b997b363143ba161f4bbf58f1197"
+checksum = "8a2ab772335dfacfc03054914d39833d03dea0adeaa2128cef55d28dafb8cd02"
 dependencies = [
  "indexmap",
  "serde",
