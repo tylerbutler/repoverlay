@@ -505,6 +505,16 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
             name,
             position,
         } => {
+            // Validate URL is not empty
+            if url.is_empty() {
+                anyhow::bail!("URL cannot be empty");
+            }
+
+            // Validate position (consistent with Move command)
+            if position == Some(0) {
+                anyhow::bail!("Position must be 1 or greater");
+            }
+
             // Extract name from URL if not provided
             let source_name = name.unwrap_or_else(|| {
                 // Try to extract repo name from URL
@@ -515,6 +525,13 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                     .trim_end_matches(".git")
                     .to_string()
             });
+
+            // Validate extracted name is not empty
+            if source_name.is_empty() {
+                anyhow::bail!(
+                    "Could not extract source name from URL. Please provide a name with --name"
+                );
+            }
 
             // Check if name already exists
             if config.sources.iter().any(|s| s.name == source_name) {
@@ -527,9 +544,8 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
             };
 
             // Insert at position or append
-            let insert_pos = position.map_or(config.sources.len(), |p| {
-                (p.saturating_sub(1)).min(config.sources.len())
-            });
+            let insert_pos =
+                position.map_or(config.sources.len(), |p| (p - 1).min(config.sources.len()));
 
             config.sources.insert(insert_pos, new_source);
             config::save_config(&config)?;
