@@ -2454,6 +2454,35 @@ directories =
             // Check files inside are accessible
             assert!(target_dir.join("vscode.json").exists());
         }
+
+        #[test]
+        fn dry_run_does_not_apply_overlay() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                true, // dry_run
+            );
+            assert!(result.is_ok(), "apply_overlay dry_run failed: {result:?}");
+
+            // Check no files were created
+            assert!(
+                !repo.path().join(".envrc").exists(),
+                ".envrc should not exist in dry run"
+            );
+            // Check no state was saved
+            assert!(
+                !repo.path().join(".repoverlay").exists(),
+                ".repoverlay dir should not exist in dry run"
+            );
+        }
     }
 
     // Integration tests for remove command
@@ -2776,6 +2805,151 @@ directories =
             // Verify directory was removed
             assert!(!repo.path().join("scratch").exists());
             assert!(!repo.path().join(".repoverlay").exists());
+        }
+
+        #[test]
+        fn dry_run_does_not_remove_overlay() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Dry run removal
+            let result = remove_overlay(repo.path(), Some("test-overlay".to_string()), false, true);
+            assert!(result.is_ok(), "dry_run remove failed: {result:?}");
+
+            // Verify files are still present
+            assert!(
+                repo.path().join(".envrc").exists(),
+                ".envrc should still exist after dry run"
+            );
+            assert!(
+                repo.path().join(".repoverlay").exists(),
+                ".repoverlay should still exist after dry run"
+            );
+        }
+
+        #[test]
+        fn dry_run_all_does_not_remove_overlays() {
+            let repo = create_test_repo();
+            let overlay1 = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+            let overlay2 = create_test_overlay(&[(".env.local", "LOCAL=true")]);
+
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-a".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+            apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-b".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Dry run removal of all
+            let result = remove_overlay(repo.path(), None, true, true);
+            assert!(result.is_ok(), "dry_run remove --all failed: {result:?}");
+
+            // Verify all files are still present
+            assert!(
+                repo.path().join(".envrc").exists(),
+                ".envrc should still exist after dry run"
+            );
+            assert!(
+                repo.path().join(".env.local").exists(),
+                ".env.local should still exist after dry run"
+            );
+        }
+
+        #[test]
+        fn handle_remove_requires_name_or_interactive_flag() {
+            let repo = create_test_repo();
+
+            // Calling handle_remove without name, --all, or --interactive should fail
+            let result = handle_remove(repo.path(), None, false, false, false);
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("No overlay name specified"),
+                "Expected usage error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn handle_remove_with_name_succeeds() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Calling handle_remove with a name should succeed
+            let result = handle_remove(
+                repo.path(),
+                Some("test-overlay".to_string()),
+                false,
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "handle_remove with name failed: {result:?}");
+            assert!(!repo.path().join(".envrc").exists());
+        }
+
+        #[test]
+        fn handle_remove_with_all_flag_succeeds() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Calling handle_remove with --all should succeed
+            let result = handle_remove(repo.path(), None, true, false, false);
+            assert!(
+                result.is_ok(),
+                "handle_remove with --all failed: {result:?}"
+            );
+            assert!(!repo.path().join(".envrc").exists());
         }
     }
 
@@ -3302,6 +3476,67 @@ directories =
                     .unwrap_err()
                     .to_string()
                     .contains("not a git repository")
+            );
+        }
+
+        #[test]
+        fn create_local_creates_overlay_in_output_directory() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+            fs::create_dir_all(source.path().join(".vscode")).unwrap();
+            fs::write(
+                source.path().join(".vscode/settings.json"),
+                r#"{"key": "value"}"#,
+            )
+            .unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("my-local-overlay")),
+                &[PathBuf::from(".envrc"), PathBuf::from(".vscode")],
+                None,
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "create_overlay failed: {result:?}");
+
+            // Check files were created in output directory
+            let overlay_dir = output.path().join("my-local-overlay");
+            assert!(overlay_dir.exists(), "Overlay directory should exist");
+            assert!(overlay_dir.join(".envrc").exists(), ".envrc should exist");
+            assert!(
+                overlay_dir.join(".vscode/settings.json").exists(),
+                ".vscode/settings.json should exist"
+            );
+
+            // Verify content
+            let content = fs::read_to_string(overlay_dir.join(".envrc")).unwrap();
+            assert_eq!(content, "export FOO=bar");
+        }
+
+        #[test]
+        fn create_local_dry_run_does_not_create_files() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("my-local-overlay")),
+                &[PathBuf::from(".envrc")],
+                None,
+                true, // dry_run
+                false,
+            );
+            assert!(result.is_ok());
+
+            // Check no files were created
+            assert!(
+                !output.path().join("my-local-overlay").exists(),
+                "Overlay directory should not exist in dry run"
             );
         }
     }
