@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/tylerbutler/repoverlay/compare/v0.2.1...v0.2.2) - 2026-01-31
+
+### Added
+
+- *(cli)* add dry-run flags, help headings, and create-local command ([#45](https://github.com/tylerbutler/repoverlay/pull/45))
+- *(sources)* add multi-source overlay sharing ([#44](https://github.com/tylerbutler/repoverlay/pull/44))
+- add debug logging and documentation improvements ([#34](https://github.com/tylerbutler/repoverlay/pull/34))
+
+### Other
+
+- *(deps)* bump the rust-deps group with 2 updates ([#43](https://github.com/tylerbutler/repoverlay/pull/43))
+- update sickle to pick up fixes
+- add talk outline and Marp slide deck
+- enhance justfile with organized recipes and bloat profile ([#41](https://github.com/tylerbutler/repoverlay/pull/41))
+- add reusable actions and improved workflows ([#40](https://github.com/tylerbutler/repoverlay/pull/40))
+- add Cargo.toml improvements for lints and profiles ([#38](https://github.com/tylerbutler/repoverlay/pull/38))
+- add conventional commit enforcement tooling ([#39](https://github.com/tylerbutler/repoverlay/pull/39))
+- add rust toolchain and formatting configuration ([#37](https://github.com/tylerbutler/repoverlay/pull/37))
+- add cargo binstall command
+
 ## [0.2.1](https://github.com/tylerbutler/repoverlay/compare/v0.2.0...v0.2.1) - 2026-01-28
 
 ### Added
