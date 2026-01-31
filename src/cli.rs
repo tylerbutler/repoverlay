@@ -1,7 +1,7 @@
 //! CLI implementation for repoverlay.
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use std::fs;
 use std::io::{self, Write};
@@ -42,7 +42,11 @@ fn version_string() -> &'static str {
 #[command(version = version_string(), about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
+
+    /// Print help in markdown format (for documentation generation)
+    #[arg(long, hide = true)]
+    markdown_help: bool,
 }
 
 #[derive(Subcommand)]
@@ -338,7 +342,19 @@ enum CacheCommand {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    // Handle markdown help generation (for documentation)
+    if cli.markdown_help {
+        clap_markdown::print_help_markdown::<Cli>();
+        return Ok(());
+    }
+
+    // Show help when no command is provided
+    let Some(command) = cli.command else {
+        Cli::command().print_help()?;
+        return Ok(());
+    };
+
+    match command {
         Commands::Apply {
             source,
             target,
@@ -3525,7 +3541,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "apply", "./my-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Apply { source, .. } => {
+                Some(Commands::Apply { source, .. }) => {
                     assert_eq!(source, "./my-overlay");
                 }
                 _ => panic!("Expected Apply command"),
@@ -3550,7 +3566,7 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Apply {
+                Some(Commands::Apply {
                     source,
                     target,
                     copy,
@@ -3558,7 +3574,7 @@ directories =
                     r#ref,
                     update,
                     from_source,
-                } => {
+                }) => {
                     assert_eq!(source, "./overlay");
                     assert_eq!(target, Some(PathBuf::from("/path/to/repo")));
                     assert!(copy);
@@ -3582,7 +3598,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "remove", "my-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Remove { name, all, .. } => {
+                Some(Commands::Remove { name, all, .. }) => {
                     assert_eq!(name, Some("my-overlay".to_string()));
                     assert!(!all);
                 }
@@ -3595,7 +3611,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "remove", "--all"]).unwrap();
 
             match cli.command {
-                Commands::Remove { name, all, .. } => {
+                Some(Commands::Remove { name, all, .. }) => {
                     assert!(name.is_none());
                     assert!(all);
                 }
@@ -3608,7 +3624,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "status"]).unwrap();
 
             match cli.command {
-                Commands::Status { target, name } => {
+                Some(Commands::Status { target, name }) => {
                     assert!(target.is_none());
                     assert!(name.is_none());
                 }
@@ -3622,7 +3638,7 @@ directories =
                 Cli::try_parse_from(["repoverlay", "status", "--name", "my-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Status { name, .. } => {
+                Some(Commands::Status { name, .. }) => {
                     assert_eq!(name, Some("my-overlay".to_string()));
                 }
                 _ => panic!("Expected Status command"),
@@ -3634,7 +3650,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "restore", "--dry-run"]).unwrap();
 
             match cli.command {
-                Commands::Restore { dry_run, .. } => {
+                Some(Commands::Restore { dry_run, .. }) => {
                     assert!(dry_run);
                 }
                 _ => panic!("Expected Restore command"),
@@ -3646,7 +3662,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "update", "my-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Update { name, dry_run, .. } => {
+                Some(Commands::Update { name, dry_run, .. }) => {
                     assert_eq!(name, Some("my-overlay".to_string()));
                     assert!(!dry_run);
                 }
@@ -3670,13 +3686,13 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Create {
+                Some(Commands::Create {
                     name,
                     include,
                     force,
                     yes,
                     ..
-                } => {
+                }) => {
                     assert_eq!(name, Some("my-overlay".to_string()));
                     assert_eq!(include.len(), 2);
                     assert!(force);
@@ -3691,7 +3707,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "switch", "./new-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Switch { source, .. } => {
+                Some(Commands::Switch { source, .. }) => {
                     assert_eq!(source, "./new-overlay");
                 }
                 _ => panic!("Expected Switch command"),
@@ -3703,7 +3719,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "list"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::List => {}
                     _ => panic!("Expected Cache List subcommand"),
                 },
@@ -3716,7 +3732,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "clear"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::Clear { yes } => {
                         assert!(!yes, "default yes should be false");
                     }
@@ -3731,7 +3747,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "clear", "--yes"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::Clear { yes } => {
                         assert!(yes, "yes flag should be true");
                     }
@@ -3752,7 +3768,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "remove", "owner/repo"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::Remove { repo } => {
                         assert_eq!(repo, "owner/repo");
                     }
@@ -3767,7 +3783,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "path"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::Path => {}
                     _ => panic!("Expected Cache Path subcommand"),
                 },
@@ -3803,12 +3819,12 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Apply {
+                Some(Commands::Apply {
                     target,
                     name,
                     r#ref,
                     ..
-                } => {
+                }) => {
                     assert_eq!(target, Some(PathBuf::from("/repo")));
                     assert_eq!(name, Some("name".to_string()));
                     assert_eq!(r#ref, Some("main".to_string()));
@@ -3830,12 +3846,12 @@ directories =
                     .unwrap();
 
             match cli.command {
-                Commands::Add {
+                Some(Commands::Add {
                     name,
                     files,
                     target,
                     dry_run,
-                } => {
+                }) => {
                     assert_eq!(name, "my-overlay");
                     assert_eq!(files.len(), 2);
                     assert_eq!(files[0], PathBuf::from("file1.txt"));
@@ -3861,12 +3877,12 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Add {
+                Some(Commands::Add {
                     name,
                     files,
                     target,
                     dry_run,
-                } => {
+                }) => {
                     assert_eq!(name, "org/repo/my-overlay");
                     assert_eq!(files, vec![PathBuf::from("newfile.txt")]);
                     assert_eq!(target, Some(PathBuf::from("/repo")));
@@ -3883,7 +3899,7 @@ directories =
                     .unwrap();
 
             match cli.command {
-                Commands::Add { target, .. } => {
+                Some(Commands::Add { target, .. }) => {
                     assert_eq!(target, Some(PathBuf::from("/repo")));
                 }
                 _ => panic!("Expected Add command"),
@@ -3903,7 +3919,7 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Add { files, .. } => {
+                Some(Commands::Add { files, .. }) => {
                     assert_eq!(files.len(), 3);
                     assert_eq!(files[0], PathBuf::from("file1.txt"));
                     assert_eq!(files[1], PathBuf::from("file2.txt"));
@@ -3925,7 +3941,7 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Add { files, .. } => {
+                Some(Commands::Add { files, .. }) => {
                     assert_eq!(files.len(), 2);
                     assert_eq!(files[0], PathBuf::from("file with spaces.txt"));
                     assert_eq!(files[1], PathBuf::from(".hidden-file"));
@@ -3939,7 +3955,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
 
             match cli.command {
-                Commands::Add { dry_run, .. } => {
+                Some(Commands::Add { dry_run, .. }) => {
                     assert!(!dry_run);
                 }
                 _ => panic!("Expected Add command"),
@@ -3951,7 +3967,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
 
             match cli.command {
-                Commands::Add { target, .. } => {
+                Some(Commands::Add { target, .. }) => {
                     assert!(target.is_none());
                 }
                 _ => panic!("Expected Add command"),
