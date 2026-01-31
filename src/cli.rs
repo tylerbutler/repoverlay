@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{
-    CONFIG_FILE, CacheManager, OVERLAYS_DIR, STATE_DIR, apply_overlay, canonicalize_path,
+    CONFIG_FILE, CacheManager, OVERLAYS_DIR, STATE_DIR, apply_overlay, canonicalize_path, config,
     list_applied_overlays, parse_github_owner_repo, remove_overlay, remove_single_overlay,
     restore_overlays, show_status, switch_overlay, update_overlays,
 };
@@ -76,6 +76,10 @@ enum Commands {
         /// Force update the cached repository before applying (GitHub sources only)
         #[arg(long)]
         update: bool,
+
+        /// Use a specific overlay source instead of priority order (multi-source configs only)
+        #[arg(long = "from", value_name = "SOURCE")]
+        from_source: Option<String>,
     },
 
     /// Remove applied overlay(s)
@@ -294,6 +298,48 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Manage overlay sources (for multi-source configurations)
+    Source {
+        #[command(subcommand)]
+        command: SourceCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SourceCommand {
+    /// Add a new overlay source
+    Add {
+        /// Git URL of the overlay repository
+        url: String,
+
+        /// Name for this source (defaults to repo name)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Position in priority order (1 = highest priority)
+        #[arg(long)]
+        position: Option<usize>,
+    },
+
+    /// List configured overlay sources
+    List,
+
+    /// Remove an overlay source
+    Remove {
+        /// Name of the source to remove
+        name: String,
+    },
+
+    /// Change the priority order of a source
+    Move {
+        /// Name of the source to move
+        name: String,
+
+        /// New position (1 = highest priority)
+        #[arg(long)]
+        position: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -329,9 +375,18 @@ pub fn run() -> Result<()> {
             name,
             r#ref,
             update,
+            from_source,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            apply_overlay(&source, &target, copy, name, r#ref.as_deref(), update)?;
+            apply_overlay(
+                &source,
+                &target,
+                copy,
+                name,
+                r#ref.as_deref(),
+                update,
+                from_source.as_deref(),
+            )?;
         }
         Commands::Remove { name, target, all } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
@@ -429,6 +484,139 @@ pub fn run() -> Result<()> {
                 no_push,
                 dry_run,
             )?;
+        }
+        Commands::Source { command } => {
+            handle_source_command(command)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle source subcommands.
+fn handle_source_command(command: SourceCommand) -> Result<()> {
+    use colored::Colorize;
+
+    let mut config = config::load_config(None)?;
+
+    match command {
+        SourceCommand::Add {
+            url,
+            name,
+            position,
+        } => {
+            // Extract name from URL if not provided
+            let source_name = name.unwrap_or_else(|| {
+                // Try to extract repo name from URL
+                url.trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("source")
+                    .trim_end_matches(".git")
+                    .to_string()
+            });
+
+            // Check if name already exists
+            if config.sources.iter().any(|s| s.name == source_name) {
+                anyhow::bail!("Source '{source_name}' already exists");
+            }
+
+            let new_source = config::Source {
+                name: source_name.clone(),
+                url: url.clone(),
+            };
+
+            // Insert at position or append
+            let insert_pos = position.map_or(config.sources.len(), |p| {
+                (p.saturating_sub(1)).min(config.sources.len())
+            });
+
+            config.sources.insert(insert_pos, new_source);
+            config::save_config(&config)?;
+
+            println!(
+                "{} source '{}' at position {}",
+                "Added".green().bold(),
+                source_name,
+                insert_pos + 1
+            );
+            println!("       URL: {url}");
+        }
+        SourceCommand::List => {
+            if config.sources.is_empty() {
+                println!("No overlay sources configured.");
+                println!();
+                println!("Add a source with:");
+                println!("  repoverlay source add <url>");
+                return Ok(());
+            }
+
+            println!("{}", "Configured overlay sources (priority order):".bold());
+            println!();
+
+            for (i, source) in config.sources.iter().enumerate() {
+                println!(
+                    "  {}. {} {}",
+                    i + 1,
+                    source.name.cyan(),
+                    "(highest priority)"
+                        .dimmed()
+                        .to_string()
+                        .chars()
+                        .take(if i == 0 { 18 } else { 0 })
+                        .collect::<String>()
+                );
+                println!("     URL: {}", source.url);
+            }
+
+            // Show legacy config if present
+            if let Some(ref legacy) = config.overlay_repo {
+                println!();
+                println!("{}", "Legacy configuration (deprecated):".yellow());
+                println!("  overlay_repo: {}", legacy.url);
+            }
+        }
+        SourceCommand::Remove { name } => {
+            let original_len = config.sources.len();
+            config.sources.retain(|s| s.name != name);
+
+            if config.sources.len() == original_len {
+                anyhow::bail!("Source '{name}' not found");
+            }
+
+            config::save_config(&config)?;
+
+            println!("{} source '{}'", "Removed".red().bold(), name);
+        }
+        SourceCommand::Move { name, position } => {
+            let current_pos = config
+                .sources
+                .iter()
+                .position(|s| s.name == name)
+                .ok_or_else(|| anyhow::anyhow!("Source '{name}' not found"))?;
+
+            if position == 0 {
+                anyhow::bail!("Position must be 1 or greater");
+            }
+
+            let new_pos = (position - 1).min(config.sources.len() - 1);
+
+            if current_pos == new_pos {
+                println!("Source '{name}' is already at position {position}");
+                return Ok(());
+            }
+
+            let source = config.sources.remove(current_pos);
+            config.sources.insert(new_pos, source);
+            config::save_config(&config)?;
+
+            println!(
+                "{} source '{}' from position {} to {}",
+                "Moved".blue().bold(),
+                name,
+                current_pos + 1,
+                new_pos + 1
+            );
         }
     }
 
@@ -1576,6 +1764,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -1608,6 +1797,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok());
 
@@ -1627,6 +1817,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok());
 
@@ -1650,6 +1841,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -1686,6 +1878,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -1716,6 +1909,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -1738,6 +1932,7 @@ mod tests {
                 Some("custom-name".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -1757,6 +1952,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_err());
             assert!(
@@ -1780,6 +1976,7 @@ mod tests {
                 Some("my-overlay".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -1790,6 +1987,7 @@ mod tests {
                 Some("my-overlay".to_string()),
                 None,
                 false,
+                None,
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("already applied"));
@@ -1809,6 +2007,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("Conflict"));
@@ -1827,6 +2026,7 @@ mod tests {
                 Some("first".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -1837,6 +2037,7 @@ mod tests {
                 Some("second".to_string()),
                 None,
                 false,
+                None,
             );
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
@@ -1855,6 +2056,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("No files found"));
@@ -1863,7 +2065,15 @@ mod tests {
         #[test]
         fn fails_on_nonexistent_source() {
             let repo = create_test_repo();
-            let result = apply_overlay("/nonexistent/path", repo.path(), false, None, None, false);
+            let result = apply_overlay(
+                "/nonexistent/path",
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                None,
+            );
             assert!(result.is_err());
         }
 
@@ -1891,6 +2101,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -1934,6 +2145,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -1974,6 +2186,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2008,6 +2221,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             // Should succeed (just warns about missing directory)
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
@@ -2043,6 +2257,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
 
             assert!(result.is_err());
@@ -2070,6 +2285,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2090,6 +2306,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
 
             assert!(result.is_err());
@@ -2116,6 +2333,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2148,6 +2366,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok());
 
@@ -2183,6 +2402,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2229,6 +2449,7 @@ directories =
                 None,
                 None,
                 false,
+                None,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2264,6 +2485,7 @@ directories =
                 Some("test-overlay".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
@@ -2286,6 +2508,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             apply_overlay(
@@ -2295,6 +2518,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2321,6 +2545,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             apply_overlay(
@@ -2330,6 +2555,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2352,6 +2578,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             assert!(repo.path().join(".vscode").exists());
@@ -2379,6 +2606,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             remove_overlay(repo.path(), Some("test".to_string()), false).unwrap();
@@ -2402,6 +2630,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             remove_overlay(repo.path(), Some("test".to_string()), false).unwrap();
@@ -2435,6 +2664,7 @@ directories =
                 Some("real-overlay".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2455,6 +2685,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2489,6 +2720,7 @@ directories =
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2526,6 +2758,7 @@ directories =
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2566,6 +2799,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2586,6 +2820,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             apply_overlay(
@@ -2595,6 +2830,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2615,6 +2851,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             apply_overlay(
@@ -2624,6 +2861,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -2643,6 +2881,7 @@ directories =
                 Some("real".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -3289,6 +3528,7 @@ directories =
                 Some("first-overlay".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -3371,6 +3611,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
             apply_overlay(
@@ -3380,6 +3621,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                None,
             )
             .unwrap();
 
@@ -3455,6 +3697,7 @@ directories =
                     name,
                     r#ref,
                     update,
+                    from_source,
                 } => {
                     assert_eq!(source, "./overlay");
                     assert_eq!(target, Some(PathBuf::from("/path/to/repo")));
@@ -3462,6 +3705,7 @@ directories =
                     assert_eq!(name, Some("my-name".to_string()));
                     assert_eq!(r#ref, Some("main".to_string()));
                     assert!(update);
+                    assert!(from_source.is_none());
                 }
                 _ => panic!("Expected Apply command"),
             }

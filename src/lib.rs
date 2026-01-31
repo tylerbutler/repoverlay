@@ -9,6 +9,7 @@ mod detection;
 mod github;
 mod overlay_repo;
 mod selection;
+mod sources;
 mod state;
 #[cfg(test)]
 mod testutil;
@@ -70,7 +71,9 @@ pub(crate) struct ResolvedSource {
 /// 1. GitHub URL (`https://github.com/...`) - downloads to cache, returns cached path
 /// 2. Local path (`./path` or `/path`) - returns path directly after validation
 /// 3. Overlay repo reference (`org/repo/name`) - resolves from configured shared repository
-///    - First tries exact match (org/repo/name)
+///    - If `sources` are configured, checks each source in priority order
+///    - If `source_filter` is provided, only that source is checked
+///    - Falls back to legacy `overlay_repo` if no sources configured
 ///    - Falls back to upstream if `target_path` has an upstream remote
 ///
 /// # Errors
@@ -80,13 +83,17 @@ pub(crate) struct ResolvedSource {
 /// - A local path doesn't exist
 /// - GitHub fetch fails
 /// - Overlay repo is not configured (for org/repo/name format)
+/// - `source_filter` specifies an unknown source
 pub(crate) fn resolve_source(
     source_str: &str,
     ref_override: Option<&str>,
     update: bool,
     target_path: Option<&Path>,
+    source_filter: Option<&str>,
 ) -> Result<ResolvedSource> {
-    debug!("resolve_source: {source_str} (ref_override={ref_override:?}, update={update})");
+    debug!(
+        "resolve_source: {source_str} (ref_override={ref_override:?}, update={update}, source_filter={source_filter:?})"
+    );
 
     // Try to parse as GitHub URL
     if GitHubSource::is_github_url(source_str) {
@@ -142,8 +149,30 @@ pub(crate) fn resolve_source(
     // Try to parse as overlay repo reference (org/repo/name)
     if let Some((org, repo, name)) = overlay_repo::parse_overlay_reference(source_str) {
         debug!("parsed as overlay repo reference: {org}/{repo}/{name}");
-        // Load config and create overlay repo manager
+        // Load config
         let config = config::load_config(None)?;
+
+        // Detect upstream for fallback resolution
+        let upstream = target_path.and_then(|p| detect_upstream(p).ok()).flatten();
+
+        // Try multi-source resolution first if sources are configured
+        if !config.sources.is_empty() {
+            debug!(
+                "using multi-source resolution with {} sources",
+                config.sources.len()
+            );
+            return resolve_from_sources(
+                &config.sources,
+                &org,
+                &repo,
+                &name,
+                upstream.as_ref(),
+                source_filter,
+                update,
+            );
+        }
+
+        // Fall back to legacy overlay_repo config
         let overlay_config = config.overlay_repo.ok_or_else(|| {
             anyhow::anyhow!(
                 "Overlay repository not configured.\n\n\
@@ -160,9 +189,6 @@ pub(crate) fn resolve_source(
             println!("{} overlay repository...", "Updating".blue().bold());
             manager.pull()?;
         }
-
-        // Detect upstream for fallback resolution
-        let upstream = target_path.and_then(|p| detect_upstream(p).ok()).flatten();
 
         // Try to resolve with fallback
         let (overlay_path, resolved_via) =
@@ -213,6 +239,75 @@ pub(crate) fn resolve_source(
     )
 }
 
+/// Resolve an overlay from configured sources using priority-based resolution.
+fn resolve_from_sources(
+    sources: &[config::Source],
+    org: &str,
+    repo: &str,
+    name: &str,
+    upstream: Option<&upstream::UpstreamInfo>,
+    source_filter: Option<&str>,
+    update: bool,
+) -> Result<ResolvedSource> {
+    let manager = sources::SourceManager::new(sources.to_vec())?;
+
+    // Ensure all sources are cloned
+    manager.ensure_all_cloned()?;
+
+    if update {
+        println!("{} overlay sources...", "Updating".blue().bold());
+        manager.pull_all()?;
+    }
+
+    // Resolve overlay from sources
+    let resolved = manager
+        .resolve(org, repo, name, upstream, source_filter)?
+        .ok_or_else(|| {
+            let source_list = manager.source_names().join(", ");
+            anyhow::anyhow!(
+                "Overlay not found: {org}/{repo}/{name}\n\n\
+                 Searched sources: {source_list}\n\n\
+                 Use `repoverlay list` to see available overlays."
+            )
+        })?;
+
+    // Determine actual org/repo for state tracking
+    let via_upstream = resolved.resolved_via == state::ResolvedVia::Upstream;
+    let (actual_org, actual_repo) = match (upstream, via_upstream) {
+        (Some(up), true) => (up.org.clone(), up.repo.clone()),
+        _ => (org.to_string(), repo.to_string()),
+    };
+
+    let via_suffix = if via_upstream {
+        " (via upstream)".dimmed().to_string()
+    } else {
+        String::new()
+    };
+    let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
+
+    println!(
+        "{} overlay: {}/{}/{}{}{}",
+        "Resolving".blue().bold(),
+        actual_org,
+        actual_repo,
+        name,
+        via_suffix,
+        source_suffix,
+    );
+
+    Ok(ResolvedSource {
+        path: resolved.path,
+        source_info: OverlaySource::overlay_repo_full(
+            actual_org,
+            actual_repo,
+            name.to_string(),
+            resolved.commit,
+            resolved.resolved_via,
+            resolved.source.name,
+        ),
+    })
+}
+
 /// Apply an overlay to a target git repository.
 ///
 /// # Workflow
@@ -242,6 +337,7 @@ pub(crate) fn apply_overlay(
     name_override: Option<String>,
     ref_override: Option<&str>,
     update_cache: bool,
+    source_filter: Option<&str>,
 ) -> Result<()> {
     debug!(
         "apply_overlay: source={}, target={}, force_copy={}, name_override={:?}",
@@ -253,7 +349,13 @@ pub(crate) fn apply_overlay(
 
     // Resolve source (handles GitHub URLs and local paths)
     // Pass target to enable upstream detection for fork inheritance
-    let resolved = resolve_source(source_str, ref_override, update_cache, Some(target))?;
+    let resolved = resolve_source(
+        source_str,
+        ref_override,
+        update_cache,
+        Some(target),
+        source_filter,
+    )?;
     let source = &resolved.path;
     debug!("resolved source path: {}", source.display());
 
@@ -860,6 +962,7 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
             name: overlay_name,
             commit,
             resolved_via,
+            source_name,
         } => {
             let via_upstream = matches!(resolved_via, Some(state::ResolvedVia::Upstream));
             let via_str = if via_upstream {
@@ -867,15 +970,12 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
             } else {
                 String::new()
             };
-            println!(
-                "    Source:  {}/{}/{}{} {}",
-                org,
-                repo,
-                overlay_name,
-                via_str,
-                "(overlay repo)".dimmed()
-            );
-            println!("    Commit:  {}", &commit[..12.min(commit.len())]);
+            println!("    Source:  {org}/{repo}/{overlay_name}{via_str}");
+            let short_commit = &commit[..12.min(commit.len())];
+            println!("    Commit:  {short_commit}");
+            if let Some(source) = source_name {
+                println!("    From:    {}", source.cyan());
+            }
         }
     }
 
@@ -1005,6 +1105,7 @@ pub(crate) fn restore_overlays(target: &Path, dry_run: bool) -> Result<()> {
             Some(state.name.clone()),
             ref_override,
             true, // Update cache
+            None, // Use default source resolution for restore
         ) {
             Ok(()) => {}
             Err(e) => {
@@ -1162,6 +1263,7 @@ pub(crate) fn update_overlays(target: &Path, name: Option<String>, dry_run: bool
                 Some(state.name.clone()),
                 Some(git_ref.as_str()),
                 true,
+                None, // Use default source resolution for update
             )?;
         }
     }
@@ -1626,7 +1728,7 @@ pub(crate) fn switch_overlay(
 
     // Apply the new overlay
     println!("{} new overlay...", "Applying".blue().bold());
-    apply_overlay(source, target, copy, name, ref_override, false)?;
+    apply_overlay(source, target, copy, name, ref_override, false, None)?;
 
     Ok(())
 }
