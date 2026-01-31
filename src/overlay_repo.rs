@@ -110,7 +110,7 @@ impl OverlayRepoManager {
     /// Pull latest changes from the remote.
     pub fn pull(&self) -> Result<()> {
         if !self.repo_path.exists() {
-            bail!("Overlay repository not cloned. Run 'repoverlay init-repo' first.");
+            bail!("Overlay repository not cloned. Run 'repoverlay source add <url>' first.");
         }
 
         let output = Command::new("git")
@@ -161,7 +161,7 @@ impl OverlayRepoManager {
     /// List all available overlays in the repository.
     pub fn list_overlays(&self) -> Result<Vec<AvailableOverlay>> {
         if !self.repo_path.exists() {
-            bail!("Overlay repository not cloned. Run 'repoverlay init-repo' first.");
+            bail!("Overlay repository not cloned. Run 'repoverlay source add <url>' first.");
         }
 
         let mut overlays = Vec::new();

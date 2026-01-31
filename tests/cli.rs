@@ -8,7 +8,7 @@ use predicates::prelude::*;
 use std::fs;
 
 mod common;
-use common::{TestContext, envrc_overlay};
+use common::{SourceTestContext, TestContext, envrc_overlay};
 
 #[test]
 fn help_displays() {
@@ -1137,4 +1137,186 @@ fn cache_path_shows_directory() {
         .assert()
         .success()
         .stdout(predicate::str::contains("repoverlay"));
+}
+
+// ============================================================================
+// Source Command Tests
+// ============================================================================
+
+#[test]
+fn source_help_displays() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("source"));
+}
+
+#[test]
+fn source_add_rejects_empty_url() {
+    let ctx = SourceTestContext::new();
+    // Empty URL should be rejected
+    ctx.cmd()
+        .args(["source", "add", ""])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("URL cannot be empty"));
+}
+
+#[test]
+fn source_add_rejects_trailing_slash_only_url() {
+    let ctx = SourceTestContext::new();
+    // URL that results in empty name after parsing should be rejected
+    ctx.cmd()
+        .args(["source", "add", "/"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Could not extract"));
+}
+
+#[test]
+fn source_list_shows_no_sources_when_empty() {
+    let ctx = SourceTestContext::new();
+    // When no sources are configured, list should show appropriate message
+    ctx.cmd()
+        .args(["source", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No overlay sources configured"));
+}
+
+#[test]
+fn source_add_and_list_workflow() {
+    let ctx = SourceTestContext::new();
+
+    // Add source
+    ctx.cmd()
+        .args([
+            "source",
+            "add",
+            "https://github.com/test/workflow-repo",
+            "--name",
+            "workflow-test",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added"));
+
+    // List should show the new source
+    ctx.cmd()
+        .args(["source", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("workflow-test"));
+}
+
+#[test]
+fn source_remove_nonexistent_fails() {
+    let ctx = SourceTestContext::new();
+    // Removing a non-existent source should fail
+    ctx.cmd()
+        .args(["source", "remove", "nonexistent-source"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn source_add_duplicate_name_fails() {
+    let ctx = SourceTestContext::new();
+
+    // Add first source
+    ctx.cmd()
+        .args([
+            "source",
+            "add",
+            "https://github.com/test/first",
+            "--name",
+            "dup-test",
+        ])
+        .assert()
+        .success();
+
+    // Try to add second with same name - should fail
+    ctx.cmd()
+        .args([
+            "source",
+            "add",
+            "https://github.com/test/second",
+            "--name",
+            "dup-test",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+}
+
+#[test]
+fn source_full_add_remove_workflow() {
+    let ctx = SourceTestContext::new();
+
+    // Add first source
+    ctx.cmd()
+        .args([
+            "source",
+            "add",
+            "https://github.com/test/repo-a",
+            "--name",
+            "source-a",
+        ])
+        .assert()
+        .success();
+
+    // Add second source
+    ctx.cmd()
+        .args([
+            "source",
+            "add",
+            "https://github.com/test/repo-b",
+            "--name",
+            "source-b",
+        ])
+        .assert()
+        .success();
+
+    // List should show both
+    ctx.cmd()
+        .args(["source", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("source-a"))
+        .stdout(predicate::str::contains("source-b"));
+
+    // Remove both
+    ctx.cmd()
+        .args(["source", "remove", "source-a"])
+        .assert()
+        .success();
+
+    ctx.cmd()
+        .args(["source", "remove", "source-b"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn source_add_extracts_name_from_url() {
+    let ctx = SourceTestContext::new();
+    // When no --name is provided, name should be extracted from URL
+    ctx.cmd()
+        .args(["source", "add", "https://github.com/test/extracted-name"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("source 'extracted-name'"));
+}
+
+#[test]
+fn source_add_strips_git_suffix_from_name() {
+    let ctx = SourceTestContext::new();
+    // URL ending in .git should have that suffix stripped
+    ctx.cmd()
+        .args(["source", "add", "https://github.com/test/git-suffix.git"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("source 'git-suffix'"));
 }

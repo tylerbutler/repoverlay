@@ -109,8 +109,12 @@ audit:
 # Documentation Commands
 # ============================================
 
+# Generate CLI reference markdown
+cli-reference:
+    cargo run -- --markdown-help > docs/cli-reference.md
+
 # Build documentation
-docs:
+docs: cli-reference
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
 # Open documentation in browser
