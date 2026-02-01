@@ -17,16 +17,22 @@ use crate::{
 /// Build version string with git info for local builds
 static VERSION: LazyLock<String> = LazyLock::new(|| {
     let version = env!("CARGO_PKG_VERSION");
+    let is_ci = option_env!("REPOVERLAY_CI_BUILD") == Some("true");
 
-    // Get short SHA, branch, and dirty status
+    // CI builds just show the version
+    if is_ci {
+        return version.to_string();
+    }
+
+    // Local builds show: {version}-{branch} ({sha}) or {version}-{branch} ({sha}) (dirty)
     let sha = option_env!("VERGEN_GIT_SHA").map(|s| &s[..7.min(s.len())]);
-    let branch = option_env!("VERGEN_GIT_BRANCH").filter(|b| *b != "main" && *b != "master");
+    let branch = option_env!("VERGEN_GIT_BRANCH");
     let dirty = option_env!("VERGEN_GIT_DIRTY") == Some("true");
 
     match (sha, branch, dirty) {
-        (Some(sha), Some(branch), true) => format!("{version} ({branch} {sha}-dirty)"),
-        (Some(sha), Some(branch), false) => format!("{version} ({branch} {sha})"),
-        (Some(sha), None, true) => format!("{version} ({sha}-dirty)"),
+        (Some(sha), Some(branch), true) => format!("{version}-{branch} ({sha}) (dirty)"),
+        (Some(sha), Some(branch), false) => format!("{version}-{branch} ({sha})"),
+        (Some(sha), None, true) => format!("{version} ({sha}) (dirty)"),
         (Some(sha), None, false) => format!("{version} ({sha})"),
         (None, _, _) => version.to_string(),
     }
