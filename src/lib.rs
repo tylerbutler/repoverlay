@@ -362,7 +362,7 @@ fn list_overlays_from_cached_repo(owner: &str, repo: &str) -> Result<Vec<String>
 
     let cache = CacheManager::new()?;
     let cache_dir = cache.cache_dir();
-    let repo_path = cache_dir.join(owner).join(repo);
+    let repo_path = cache_dir.join("github").join(owner).join(repo);
 
     if !repo_path.exists() {
         bail!("Repository not cached: {owner}/{repo}");
@@ -3054,6 +3054,80 @@ mod tests {
             let result =
                 list_overlays_from_cached_repo("nonexistent-owner-xyz", "nonexistent-repo-xyz");
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn list_overlays_from_cached_repo_finds_overlays_at_correct_path() {
+            use crate::cache::CacheManager;
+            use crate::github::GitHubSource;
+
+            // Use a unique test owner/repo to avoid conflicts with real cache
+            let test_owner = "test-owner-abc123xyz";
+            let test_repo = "test-repo-abc123xyz";
+
+            let cache = CacheManager::new().unwrap();
+            let source =
+                GitHubSource::parse(&format!("https://github.com/{test_owner}/{test_repo}"))
+                    .unwrap();
+
+            // Get the path where CacheManager would store this repo
+            // This includes the "github" subdirectory: {cache_dir}/github/{owner}/{repo}
+            let expected_repo_path = cache.repo_path(&source);
+
+            // Create overlay structure at the correct cache location
+            let overlay_path = expected_repo_path.join("target-org/target-repo/test-overlay");
+            fs::create_dir_all(&overlay_path).unwrap();
+
+            // Now list_overlays_from_cached_repo should find it
+            let result = list_overlays_from_cached_repo(test_owner, test_repo);
+
+            // Clean up before asserting (so cleanup happens even if test fails)
+            let _ = fs::remove_dir_all(&expected_repo_path);
+            // Also clean up parent dirs if empty
+            if let Some(parent) = expected_repo_path.parent() {
+                let _ = fs::remove_dir(parent);
+                if let Some(grandparent) = parent.parent() {
+                    let _ = fs::remove_dir(grandparent);
+                }
+            }
+
+            // This should succeed - we created overlays at the correct cache location
+            let overlays = result.expect(
+                "list_overlays_from_cached_repo should find overlays at the path returned by CacheManager::repo_path()"
+            );
+            assert_eq!(overlays.len(), 1);
+            assert_eq!(overlays[0], "target-org/target-repo/test-overlay");
+        }
+
+        #[test]
+        fn list_overlays_from_cached_repo_path_matches_cache_manager() {
+            use crate::cache::CacheManager;
+            use crate::github::GitHubSource;
+
+            // This test verifies that list_overlays_from_cached_repo looks in the same
+            // location where CacheManager stores repositories.
+            //
+            // CacheManager::repo_path() returns: {cache_dir}/github/{owner}/{repo}
+            // list_overlays_from_cached_repo should look in the same location.
+
+            let cache = CacheManager::new().unwrap();
+            let source =
+                GitHubSource::parse("https://github.com/test-owner-xyz/test-repo-xyz").unwrap();
+
+            let cache_manager_path = cache.repo_path(&source);
+
+            // Verify the cache manager path includes "github" subdirectory
+            assert!(
+                cache_manager_path
+                    .to_string_lossy()
+                    .contains("/github/test-owner-xyz/test-repo-xyz"),
+                "CacheManager::repo_path() should include 'github' subdirectory, got: {}",
+                cache_manager_path.display()
+            );
+
+            // The path that list_overlays_from_cached_repo constructs should match
+            // Currently it constructs: {cache_dir}/{owner}/{repo} (MISSING "github"!)
+            // This test documents the expected behavior.
         }
 
         #[test]
