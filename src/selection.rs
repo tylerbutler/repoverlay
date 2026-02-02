@@ -291,7 +291,7 @@ pub fn select_files(
     config: SelectionConfig,
 ) -> anyhow::Result<SelectionResult> {
     // Non-TTY fallback: return preselected files
-    if !atty_is_interactive() {
+    if !is_interactive() {
         let selected: Vec<PathBuf> = files
             .iter()
             .filter(|f| f.preselected)
@@ -341,7 +341,7 @@ pub fn select_files(
 /// - Running as a cargo test binary (executable in target/*/deps/)
 /// - TERM is unset or "dumb"
 /// - `REPOVERLAY_NON_INTERACTIVE` env var is set
-fn atty_is_interactive() -> bool {
+pub fn is_interactive() -> bool {
     use std::io::IsTerminal;
 
     // Explicit non-interactive override
@@ -1539,4 +1539,15 @@ mod tests {
         assert!(state.visible_categories.contains(&FileCategory::Untracked));
         assert_eq!(state.visible_categories.len(), 4);
     }
+
+    #[test]
+    fn is_interactive_returns_false_in_tests() {
+        // In test context, is_interactive should return false
+        // because the executable is in target/*/deps/
+        assert!(!is_interactive());
+    }
+
+    // Note: Tests for env var handling are skipped because set_var/remove_var
+    // are unsafe in Rust 2024 edition. The is_interactive_returns_false_in_tests
+    // test verifies the test detection path works correctly.
 }

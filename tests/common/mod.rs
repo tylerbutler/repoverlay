@@ -2,10 +2,35 @@
 
 #![allow(dead_code)]
 
+use assert_cmd::Command as AssertCommand;
+use assert_cmd::cargo::cargo_bin_cmd;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
+
+/// Context for testing source commands with isolated config.
+///
+/// Creates a temporary directory for `XDG_CONFIG_HOME` so tests don't
+/// interfere with each other or the user's real config.
+pub struct SourceTestContext {
+    config_dir: TempDir,
+}
+
+impl SourceTestContext {
+    pub fn new() -> Self {
+        Self {
+            config_dir: TempDir::new().expect("Failed to create temp config dir"),
+        }
+    }
+
+    /// Create a command with the isolated config directory.
+    pub fn cmd(&self) -> AssertCommand {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.env("XDG_CONFIG_HOME", self.config_dir.path());
+        cmd
+    }
+}
 
 /// A test context that provides a temporary git repository and overlay directory.
 pub struct TestContext {

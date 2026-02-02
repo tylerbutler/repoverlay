@@ -13,6 +13,7 @@ src/
 ├── github.rs       # GitHub URL parsing and source resolution
 ├── cache.rs        # GitHub repository cache management
 ├── config.rs       # Global and per-repo configuration (CCL format)
+├── sources.rs      # Multi-source overlay resolution with priority ordering
 ├── overlay_repo.rs # Shared overlay repository integration
 ├── upstream.rs     # Upstream repository detection for fork inheritance
 ├── detection.rs    # File discovery for overlay creation
@@ -43,6 +44,8 @@ tests/
 - **cache.rs** - GitHub repository caching. Manages cloned repos in `~/.cache/repoverlay/github/owner/repo/`. Supports shallow clones and update checking.
 
 - **config.rs** - Configuration management using CCL format. Handles global config (`~/.config/repoverlay/config.ccl`) and per-overlay config (`repoverlay.ccl`).
+
+- **sources.rs** - Multi-source overlay resolution. Manages a priority-ordered list of overlay sources (configured via `repoverlay source add/remove/list`). Provides `SourceManager` for resolving overlay references across multiple sources with first-match-wins semantics.
 
 - **overlay_repo.rs** - Shared overlay repository support. Allows overlays to be referenced as `org/repo/name` from a centrally managed repository. Supports fallback resolution for fork inheritance.
 

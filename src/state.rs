@@ -71,6 +71,9 @@ pub enum OverlaySource {
         /// How this overlay was resolved (direct match or upstream fallback)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resolved_via: Option<ResolvedVia>,
+        /// Name of the source this overlay came from (for multi-source configs)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_name: Option<String>,
     },
 }
 
@@ -109,6 +112,7 @@ impl OverlaySource {
             name,
             commit,
             resolved_via: None,
+            source_name: None,
         }
     }
 
@@ -126,6 +130,26 @@ impl OverlaySource {
             name,
             commit,
             resolved_via: Some(resolved_via),
+            source_name: None,
+        }
+    }
+
+    /// Create a new overlay repository source with full info (resolution + source name).
+    pub const fn overlay_repo_full(
+        org: String,
+        repo: String,
+        name: String,
+        commit: String,
+        resolved_via: ResolvedVia,
+        source_name: String,
+    ) -> Self {
+        Self::OverlayRepo {
+            org,
+            repo,
+            name,
+            commit,
+            resolved_via: Some(resolved_via),
+            source_name: Some(source_name),
         }
     }
 
@@ -148,17 +172,22 @@ impl OverlaySource {
                 name,
                 commit,
                 resolved_via,
+                source_name,
             } => {
                 let via = match resolved_via {
                     Some(ResolvedVia::Upstream) => " via upstream",
                     _ => "",
                 };
+                let source = source_name
+                    .as_ref()
+                    .map_or_else(String::new, |s| format!(" [{s}]"));
                 format!(
-                    "{}/{}/{}{} (@{})",
+                    "{}/{}/{}{}{} (@{})",
                     org,
                     repo,
                     name,
                     via,
+                    source,
                     &commit[..12.min(commit.len())]
                 )
             }
@@ -659,6 +688,7 @@ mod tests {
             name: "claude-config".to_string(),
             commit: "abc123".to_string(),
             resolved_via: Some(ResolvedVia::Upstream),
+            source_name: None,
         };
 
         let serialized = sickle::to_string(&source).unwrap();
@@ -680,6 +710,7 @@ mod tests {
             name: "claude-config".to_string(),
             commit: "abc123".to_string(),
             resolved_via: None,
+            source_name: None,
         };
 
         let serialized = sickle::to_string(&source).unwrap();
@@ -727,6 +758,7 @@ mod tests {
             name: "claude-config".to_string(),
             commit: "abc123def456".to_string(),
             resolved_via: Some(ResolvedVia::Upstream),
+            source_name: None,
         };
         let display = source.display();
         assert!(display.contains("via upstream"));

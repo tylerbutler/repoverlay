@@ -20,7 +20,8 @@ name = "repoverlay"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5.54", features = ["derive"] }
+clap = { version = "4.5.56", features = ["derive"] }
+clap-markdown = "0.1.5"
 env_logger = "0.11"
 log = "0.4"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -35,6 +36,7 @@ dialoguer = "0.12.0"
 crossterm = "0.29.0"
 sickle = { version = "0.1.2", features = ["serde"] }
 dirs = "6.0.0"
+fuzzy-matcher = "0.3"
 
 [build-dependencies]
 vergen = { version = "9", features = ["build"] }

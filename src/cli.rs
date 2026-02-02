@@ -1,7 +1,7 @@
 //! CLI implementation for repoverlay.
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use std::fs;
 use std::io::{self, Write};
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{
-    CONFIG_FILE, CacheManager, OVERLAYS_DIR, STATE_DIR, apply_overlay, canonicalize_path,
+    CONFIG_FILE, CacheManager, OVERLAYS_DIR, STATE_DIR, apply_overlay, canonicalize_path, config,
     list_applied_overlays, parse_github_owner_repo, remove_overlay, remove_single_overlay,
     restore_overlays, show_status, switch_overlay, update_overlays,
 };
@@ -17,16 +17,22 @@ use crate::{
 /// Build version string with git info for local builds
 static VERSION: LazyLock<String> = LazyLock::new(|| {
     let version = env!("CARGO_PKG_VERSION");
+    let is_ci = option_env!("REPOVERLAY_CI_BUILD") == Some("true");
 
-    // Get short SHA, branch, and dirty status
+    // CI builds just show the version
+    if is_ci {
+        return version.to_string();
+    }
+
+    // Local builds show: {version}-{branch} ({sha}) or {version}-{branch} ({sha}) (dirty)
     let sha = option_env!("VERGEN_GIT_SHA").map(|s| &s[..7.min(s.len())]);
-    let branch = option_env!("VERGEN_GIT_BRANCH").filter(|b| *b != "main" && *b != "master");
+    let branch = option_env!("VERGEN_GIT_BRANCH");
     let dirty = option_env!("VERGEN_GIT_DIRTY") == Some("true");
 
     match (sha, branch, dirty) {
-        (Some(sha), Some(branch), true) => format!("{version} ({branch} {sha}-dirty)"),
-        (Some(sha), Some(branch), false) => format!("{version} ({branch} {sha})"),
-        (Some(sha), None, true) => format!("{version} ({sha}-dirty)"),
+        (Some(sha), Some(branch), true) => format!("{version}-{branch} ({sha}) (dirty)"),
+        (Some(sha), Some(branch), false) => format!("{version}-{branch} ({sha})"),
+        (Some(sha), None, true) => format!("{version} ({sha}) (dirty)"),
         (Some(sha), None, false) => format!("{version} ({sha})"),
         (None, _, _) => version.to_string(),
     }
@@ -42,7 +48,11 @@ fn version_string() -> &'static str {
 #[command(version = version_string(), about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
+
+    /// Print help in markdown format (for documentation generation)
+    #[arg(long, hide = true)]
+    markdown_help: bool,
 }
 
 #[derive(Subcommand)]
@@ -70,17 +80,25 @@ enum Commands {
         name: Option<String>,
 
         /// Git ref (branch, tag, or commit) to use (GitHub sources only)
-        #[arg(short, long, value_name = "REF")]
+        #[arg(short, long, value_name = "REF", help_heading = "GitHub Options")]
         r#ref: Option<String>,
 
         /// Force update the cached repository before applying (GitHub sources only)
-        #[arg(long)]
+        #[arg(long, help_heading = "GitHub Options")]
         update: bool,
+
+        /// Use a specific overlay source instead of priority order (multi-source configs only)
+        #[arg(long = "from", value_name = "SOURCE", help_heading = "GitHub Options")]
+        from_source: Option<String>,
+
+        /// Show what would be applied without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Remove applied overlay(s)
     Remove {
-        /// Name of the overlay to remove (interactive if not specified)
+        /// Name of the overlay to remove
         name: Option<String>,
 
         /// Target repository directory (defaults to current directory)
@@ -90,6 +108,14 @@ enum Commands {
         /// Remove all applied overlays
         #[arg(long)]
         all: bool,
+
+        /// Show what would be removed without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Interactive selection mode
+        #[arg(short, long)]
+        interactive: bool,
     },
 
     /// Show the status of applied overlays
@@ -133,22 +159,16 @@ enum Commands {
     /// Examples:
     ///   repoverlay create my-overlay          # Detects org/repo from git remote
     ///   repoverlay create org/repo/my-overlay # Explicit target
-    ///   repoverlay create --local ./output    # Write to local directory only
     Create {
         /// Overlay name or full path (org/repo/name)
         ///
         /// Short form: `my-overlay` - detects org/repo from git remote
         /// Full form: `org/repo/name` - uses explicit target
-        /// Omit to use interactive mode or --local for local output
-        name: Option<String>,
+        name: String,
 
         /// Include specific files or directories (can be specified multiple times)
         #[arg(short, long)]
         include: Vec<PathBuf>,
-
-        /// Write to local directory instead of overlay repo
-        #[arg(short, long, conflicts_with = "name")]
-        local: Option<PathBuf>,
 
         /// Source repository to extract files from (defaults to current directory)
         #[arg(short, long)]
@@ -163,6 +183,36 @@ enum Commands {
         yes: bool,
 
         /// Force overwrite if overlay already exists
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Create a new overlay in a local directory
+    ///
+    /// Examples:
+    ///   repoverlay create-local ./output      # Write to local directory
+    #[command(name = "create-local")]
+    CreateLocal {
+        /// Output directory for the overlay
+        output: PathBuf,
+
+        /// Include specific files or directories (can be specified multiple times)
+        #[arg(short, long)]
+        include: Vec<PathBuf>,
+
+        /// Source repository to extract files from (defaults to current directory)
+        #[arg(short, long)]
+        source: Option<PathBuf>,
+
+        /// Show what would be created without creating files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip interactive prompts, use defaults
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Force overwrite if output already exists
         #[arg(short, long)]
         force: bool,
     },
@@ -195,22 +245,11 @@ enum Commands {
         command: CacheCommand,
     },
 
-    /// Initialize overlay repository configuration
-    #[command(name = "init-repo")]
-    InitRepo {
-        /// URL of the overlay repository (e.g., `https://github.com/user/repo-overlays`)
-        url: String,
-
-        /// Skip cloning the repository
-        #[arg(long)]
-        no_clone: bool,
-    },
-
     /// List available overlays from the overlay repository
     List {
         /// Filter by target repository (format: org/repo)
-        #[arg(short, long)]
-        target: Option<String>,
+        #[arg(short = 'f', long, alias = "target")]
+        filter: Option<String>,
 
         /// Update overlay repo before listing
         #[arg(long)]
@@ -263,10 +302,6 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Push all pending commits in the overlay repo to remote
-    #[command(hide = true)] // Hidden: auto-push is done after create/sync
-    Push,
-
     /// Publish an overlay to the overlay repository
     #[command(hide = true)] // Hidden: deprecated, use create instead
     Publish {
@@ -293,6 +328,34 @@ enum Commands {
         /// Show what would be published without making changes
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Manage overlay sources (for multi-source configurations)
+    Source {
+        #[command(subcommand)]
+        command: SourceCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SourceCommand {
+    /// Add a new overlay source
+    Add {
+        /// Git URL of the overlay repository
+        url: String,
+
+        /// Name for this source (defaults to repo name)
+        #[arg(long)]
+        name: Option<String>,
+    },
+
+    /// List configured overlay sources
+    List,
+
+    /// Remove an overlay source
+    Remove {
+        /// Name of the source to remove
+        name: String,
     },
 }
 
@@ -321,7 +384,19 @@ enum CacheCommand {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    // Handle markdown help generation (for documentation)
+    if cli.markdown_help {
+        clap_markdown::print_help_markdown::<Cli>();
+        return Ok(());
+    }
+
+    // Show help when no command is provided
+    let Some(command) = cli.command else {
+        Cli::command().print_help()?;
+        return Ok(());
+    };
+
+    match command {
         Commands::Apply {
             source,
             target,
@@ -329,13 +404,30 @@ pub fn run() -> Result<()> {
             name,
             r#ref,
             update,
+            from_source,
+            dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            apply_overlay(&source, &target, copy, name, r#ref.as_deref(), update)?;
+            apply_overlay(
+                &source,
+                &target,
+                copy,
+                name,
+                r#ref.as_deref(),
+                update,
+                from_source.as_deref(),
+                dry_run,
+            )?;
         }
-        Commands::Remove { name, target, all } => {
+        Commands::Remove {
+            name,
+            target,
+            all,
+            dry_run,
+            interactive,
+        } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            handle_remove(&target, name, all)?;
+            handle_remove(&target, name, all, dry_run, interactive)?;
         }
         Commands::Status { target, name } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
@@ -356,14 +448,24 @@ pub fn run() -> Result<()> {
         Commands::Create {
             name,
             include,
-            local,
             source,
             dry_run,
             yes,
             force,
         } => {
             let source = source.unwrap_or_else(|| PathBuf::from("."));
-            create_overlay_command(&source, name, local, &include, dry_run, yes, force)?;
+            create_overlay_command(&source, Some(name), None, &include, dry_run, yes, force)?;
+        }
+        Commands::CreateLocal {
+            output,
+            include,
+            source,
+            dry_run,
+            yes,
+            force: _,
+        } => {
+            let source = source.unwrap_or_else(|| PathBuf::from("."));
+            crate::create_overlay(&source, Some(output), &include, None, dry_run, yes)?;
         }
         Commands::Switch {
             source,
@@ -378,11 +480,8 @@ pub fn run() -> Result<()> {
         Commands::Cache { command } => {
             handle_cache_command(command)?;
         }
-        Commands::InitRepo { url, no_clone } => {
-            init_repo(&url, no_clone)?;
-        }
-        Commands::List { target, update } => {
-            list_overlays(target.as_deref(), update)?;
+        Commands::List { filter, update } => {
+            list_overlays(filter.as_deref(), update)?;
         }
         Commands::Sync {
             name,
@@ -400,9 +499,6 @@ pub fn run() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             add_files_to_overlay(&name, &target, &files, dry_run)?;
-        }
-        Commands::Push => {
-            push_overlay_repo()?;
         }
         Commands::Publish {
             source,
@@ -430,15 +526,140 @@ pub fn run() -> Result<()> {
                 dry_run,
             )?;
         }
+        Commands::Source { command } => {
+            handle_source_command(command)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle source subcommands.
+fn handle_source_command(command: SourceCommand) -> Result<()> {
+    use colored::Colorize;
+
+    let mut config = config::load_config(None)?;
+
+    match command {
+        SourceCommand::Add { url, name } => {
+            // Validate URL is not empty
+            if url.is_empty() {
+                anyhow::bail!("URL cannot be empty");
+            }
+
+            // Extract name from URL if not provided
+            let source_name = name.unwrap_or_else(|| {
+                // Try to extract repo name from URL
+                url.trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("source")
+                    .trim_end_matches(".git")
+                    .to_string()
+            });
+
+            // Validate extracted name is not empty
+            if source_name.is_empty() {
+                anyhow::bail!(
+                    "Could not extract source name from URL. Please provide a name with --name"
+                );
+            }
+
+            // Check if name already exists
+            if config.sources.iter().any(|s| s.name == source_name) {
+                anyhow::bail!("Source '{source_name}' already exists");
+            }
+
+            let new_source = config::Source {
+                name: source_name.clone(),
+                url: url.clone(),
+            };
+
+            // Append to end of sources list
+            config.sources.push(new_source);
+            config::save_config(&config)?;
+
+            println!(
+                "{} source '{}' at position {}",
+                "Added".green().bold(),
+                source_name,
+                config.sources.len()
+            );
+            println!("       URL: {url}");
+        }
+        SourceCommand::List => {
+            if config.sources.is_empty() {
+                println!("No overlay sources configured.");
+                println!();
+                println!("Add a source with:");
+                println!("  repoverlay source add <url>");
+                return Ok(());
+            }
+
+            println!("{}", "Configured overlay sources (priority order):".bold());
+            println!();
+
+            for (i, source) in config.sources.iter().enumerate() {
+                println!(
+                    "  {}. {} {}",
+                    i + 1,
+                    source.name.cyan(),
+                    "(highest priority)"
+                        .dimmed()
+                        .to_string()
+                        .chars()
+                        .take(if i == 0 { 18 } else { 0 })
+                        .collect::<String>()
+                );
+                println!("     URL: {}", source.url);
+            }
+
+            // Show legacy config if present
+            if let Some(ref legacy) = config.overlay_repo {
+                println!();
+                println!("{}", "Legacy configuration (deprecated):".yellow());
+                println!("  overlay_repo: {}", legacy.url);
+            }
+        }
+        SourceCommand::Remove { name } => {
+            let original_len = config.sources.len();
+            config.sources.retain(|s| s.name != name);
+
+            if config.sources.len() == original_len {
+                anyhow::bail!("Source '{name}' not found");
+            }
+
+            config::save_config(&config)?;
+
+            println!("{} source '{}'", "Removed".red().bold(), name);
+        }
     }
 
     Ok(())
 }
 
 /// Handle remove command with interactive selection support.
-fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: bool) -> Result<()> {
+fn handle_remove(
+    target: &std::path::Path,
+    name: Option<String>,
+    remove_all: bool,
+    dry_run: bool,
+    interactive: bool,
+) -> Result<()> {
+    // If name or --all is specified, use direct removal
     if remove_all || name.is_some() {
-        return remove_overlay(target, name, remove_all);
+        return remove_overlay(target, name, remove_all, dry_run);
+    }
+
+    // If not interactive and no name specified, require explicit action
+    if !interactive {
+        bail!(
+            "No overlay name specified.\n\n\
+             Usage:\n  \
+             repoverlay remove <name>        # Remove specific overlay\n  \
+             repoverlay remove --all         # Remove all overlays\n  \
+             repoverlay remove --interactive # Interactive selection"
+        );
     }
 
     // Interactive selection
@@ -476,6 +697,10 @@ fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: boo
     if let Ok(selection) = input.parse::<usize>() {
         if selection == applied_overlays.len() + 1 {
             // Remove all
+            if dry_run {
+                println!("\n{} Dry run - would remove all overlays", "Note:".yellow());
+                return Ok(());
+            }
             for overlay_name in &applied_overlays {
                 remove_single_overlay(&target, &overlays_dir, overlay_name)?;
             }
@@ -483,6 +708,14 @@ fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: boo
             println!("\n{} Removed all overlays", "✓".green().bold());
         } else if selection >= 1 && selection <= applied_overlays.len() {
             let overlay_name = &applied_overlays[selection - 1];
+            if dry_run {
+                println!(
+                    "\n{} Dry run - would remove overlay '{}'",
+                    "Note:".yellow(),
+                    overlay_name
+                );
+                return Ok(());
+            }
             remove_single_overlay(&target, &overlays_dir, overlay_name)?;
 
             let remaining = list_applied_overlays(&target)?;
@@ -493,6 +726,10 @@ fn handle_remove(target: &std::path::Path, name: Option<String>, remove_all: boo
             bail!("Invalid selection: {selection}");
         }
     } else if input.eq_ignore_ascii_case("all") {
+        if dry_run {
+            println!("\n{} Dry run - would remove all overlays", "Note:".yellow());
+            return Ok(());
+        }
         for overlay_name in &applied_overlays {
             remove_single_overlay(&target, &overlays_dir, overlay_name)?;
         }
@@ -585,59 +822,6 @@ fn handle_cache_command(command: CacheCommand) -> Result<()> {
     Ok(())
 }
 
-/// Initialize overlay repository configuration.
-fn init_repo(url: &str, no_clone: bool) -> Result<()> {
-    use crate::config::{OverlayRepoConfig, global_config_path, save_global_config_with_comments};
-    use crate::overlay_repo::OverlayRepoManager;
-
-    // Validate URL looks reasonable
-    if !url.starts_with("https://") && !url.starts_with("git@") {
-        bail!(
-            "Invalid repository URL. Use HTTPS (https://github.com/...) or SSH (git@github.com:...) format."
-        );
-    }
-
-    let config = OverlayRepoConfig {
-        url: url.to_string(),
-        local_path: None,
-    };
-
-    // Save configuration
-    save_global_config_with_comments(&config)?;
-    println!(
-        "{} Configuration saved to: {}",
-        "✓".green().bold(),
-        global_config_path()?.display()
-    );
-
-    if no_clone {
-        println!(
-            "\n{} Skipped cloning. Run 'repoverlay list' to clone and see available overlays.",
-            "Note:".yellow()
-        );
-        return Ok(());
-    }
-
-    // Clone the repository
-    println!("{} overlay repository...", "Cloning".blue().bold());
-    let manager = OverlayRepoManager::new(config)?;
-    manager.ensure_cloned()?;
-
-    // List available overlays
-    let overlays = manager.list_overlays()?;
-    println!(
-        "\n{} Overlay repository initialized with {} overlay(s) available.",
-        "✓".green().bold(),
-        overlays.len()
-    );
-
-    if !overlays.is_empty() {
-        println!("\nRun 'repoverlay list' to see available overlays.");
-    }
-
-    Ok(())
-}
-
 /// List available overlays from the overlay repository.
 fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
     use crate::config::load_config;
@@ -648,8 +832,8 @@ fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository.\n\
-             Example: repoverlay init-repo https://github.com/tylerbutler/repo-overlays"
+             Run 'repoverlay source add <url>' to set up an overlay source.\n\
+             Example: repoverlay source add https://github.com/tylerbutler/repo-overlays"
         )
     })?;
 
@@ -734,7 +918,7 @@ fn publish_overlay(
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+             Run 'repoverlay source add <url>' to set up an overlay source."
         )
     })?;
 
@@ -951,7 +1135,7 @@ fn create_overlay_command(
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository.\n\
+             Run 'repoverlay source add <url>' to set up an overlay source.\n\
              Or use --local to write to a local directory."
         )
     })?;
@@ -1163,7 +1347,7 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+             Run 'repoverlay source add <url>' to set up an overlay source."
         )
     })?;
 
@@ -1343,7 +1527,7 @@ fn add_files_to_overlay(
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository."
+             Run 'repoverlay source add <url>' to set up an overlay source."
         )
     })?;
 
@@ -1444,32 +1628,6 @@ fn add_files_to_overlay(
 
     // Auto-commit to overlay repo
     auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
-
-    Ok(())
-}
-
-/// Push all pending commits in the overlay repo to remote.
-fn push_overlay_repo() -> Result<()> {
-    use crate::config::load_config;
-    use crate::overlay_repo::OverlayRepoManager;
-
-    // Load overlay repo config
-    let config = load_config(None)?;
-    let overlay_config = config.overlay_repo.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Overlay repository not configured.\n\n\
-             Run 'repoverlay init-repo <url>' to set up an overlay repository."
-        )
-    })?;
-
-    // Create manager and ensure cloned
-    let manager = OverlayRepoManager::new(overlay_config)?;
-    manager.ensure_cloned()?;
-
-    println!("{} to remote...", "Pushing".blue().bold());
-    manager.push()?;
-
-    println!("{} Pushed successfully.", "✓".green().bold());
 
     Ok(())
 }
@@ -1576,6 +1734,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -1608,6 +1768,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             );
             assert!(result.is_ok());
 
@@ -1623,8 +1785,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
+                true, // copy mode
                 None,
+                None,
+                false,
                 None,
                 false,
             );
@@ -1648,6 +1812,8 @@ mod tests {
                 repo.path(),
                 false,
                 None,
+                None,
+                false,
                 None,
                 false,
             )
@@ -1686,6 +1852,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -1716,6 +1884,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -1738,6 +1908,8 @@ mod tests {
                 Some("custom-name".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -1755,6 +1927,8 @@ mod tests {
                 dir.path(),
                 false,
                 None,
+                None,
+                false,
                 None,
                 false,
             );
@@ -1780,6 +1954,8 @@ mod tests {
                 Some("my-overlay".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -1788,6 +1964,8 @@ mod tests {
                 repo.path(),
                 false,
                 Some("my-overlay".to_string()),
+                None,
+                false,
                 None,
                 false,
             );
@@ -1809,6 +1987,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("Conflict"));
@@ -1827,6 +2007,8 @@ mod tests {
                 Some("first".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -1835,6 +2017,8 @@ mod tests {
                 repo.path(),
                 false,
                 Some("second".to_string()),
+                None,
+                false,
                 None,
                 false,
             );
@@ -1855,6 +2039,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("No files found"));
@@ -1863,7 +2049,16 @@ mod tests {
         #[test]
         fn fails_on_nonexistent_source() {
             let repo = create_test_repo();
-            let result = apply_overlay("/nonexistent/path", repo.path(), false, None, None, false);
+            let result = apply_overlay(
+                "/nonexistent/path",
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                None,
+                false,
+            );
             assert!(result.is_err());
         }
 
@@ -1889,6 +2084,8 @@ mod tests {
                 repo.path(),
                 false,
                 None,
+                None,
+                false,
                 None,
                 false,
             );
@@ -1934,6 +2131,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -1974,6 +2173,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2006,6 +2207,8 @@ mod tests {
                 repo.path(),
                 false,
                 None,
+                None,
+                false,
                 None,
                 false,
             );
@@ -2043,6 +2246,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             );
 
             assert!(result.is_err());
@@ -2070,6 +2275,8 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -2088,6 +2295,8 @@ mod tests {
                 repo.path(),
                 false,
                 None,
+                None,
+                false,
                 None,
                 false,
             );
@@ -2114,6 +2323,8 @@ mod tests {
                 repo.path(),
                 false,
                 None,
+                None,
+                false,
                 None,
                 false,
             )
@@ -2146,6 +2357,8 @@ mod tests {
                 repo.path(),
                 false,
                 None,
+                None,
+                false,
                 None,
                 false,
             );
@@ -2181,6 +2394,8 @@ mod tests {
                 repo.path(),
                 false,
                 None,
+                None,
+                false,
                 None,
                 false,
             );
@@ -2229,6 +2444,8 @@ directories =
                 None,
                 None,
                 false,
+                None,
+                false,
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2242,6 +2459,35 @@ directories =
 
             // Check files inside are accessible
             assert!(target_dir.join("vscode.json").exists());
+        }
+
+        #[test]
+        fn dry_run_does_not_apply_overlay() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                true, // dry_run
+            );
+            assert!(result.is_ok(), "apply_overlay dry_run failed: {result:?}");
+
+            // Check no files were created
+            assert!(
+                !repo.path().join(".envrc").exists(),
+                ".envrc should not exist in dry run"
+            );
+            // Check no state was saved
+            assert!(
+                !repo.path().join(".repoverlay").exists(),
+                ".repoverlay dir should not exist in dry run"
+            );
         }
     }
 
@@ -2264,9 +2510,11 @@ directories =
                 Some("test-overlay".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
-            remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test-overlay".to_string()), false, false).unwrap();
 
             assert!(!repo.path().join(".envrc").exists());
             assert!(!repo.path().join(".vscode/settings.json").exists());
@@ -2286,6 +2534,8 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -2295,13 +2545,15 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
             assert!(repo.path().join(".envrc").exists());
             assert!(repo.path().join(".env.local").exists());
 
-            remove_overlay(repo.path(), None, true).unwrap();
+            remove_overlay(repo.path(), None, true, false).unwrap();
 
             assert!(!repo.path().join(".envrc").exists());
             assert!(!repo.path().join(".env.local").exists());
@@ -2321,6 +2573,8 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -2330,10 +2584,12 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
-            remove_overlay(repo.path(), Some("overlay-a".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("overlay-a".to_string()), false, false).unwrap();
 
             assert!(!repo.path().join(".envrc").exists());
             assert!(repo.path().join(".env.local").exists());
@@ -2352,11 +2608,13 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
             assert!(repo.path().join(".vscode").exists());
 
-            remove_overlay(repo.path(), Some("test".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test".to_string()), false, false).unwrap();
             assert!(
                 !repo.path().join(".vscode").exists(),
                 ".vscode should be removed"
@@ -2379,9 +2637,11 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
-            remove_overlay(repo.path(), Some("test".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test".to_string()), false, false).unwrap();
 
             assert!(
                 repo.path().join(".vscode").exists(),
@@ -2402,9 +2662,11 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
-            remove_overlay(repo.path(), Some("test".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test".to_string()), false, false).unwrap();
 
             let exclude_path = repo.path().join(".git/info/exclude");
             let content = fs::read_to_string(&exclude_path).unwrap();
@@ -2418,7 +2680,7 @@ directories =
         fn fails_when_no_overlay_applied() {
             let repo = create_test_repo();
 
-            let result = remove_overlay(repo.path(), Some("nonexistent".to_string()), false);
+            let result = remove_overlay(repo.path(), Some("nonexistent".to_string()), false, false);
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("No overlay"));
         }
@@ -2435,10 +2697,13 @@ directories =
                 Some("real-overlay".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
-            let result = remove_overlay(repo.path(), Some("fake-overlay".to_string()), false);
+            let result =
+                remove_overlay(repo.path(), Some("fake-overlay".to_string()), false, false);
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("not found"));
         }
@@ -2455,6 +2720,8 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -2462,7 +2729,7 @@ directories =
             fs::remove_file(repo.path().join(".envrc")).unwrap();
 
             // Remove should still succeed
-            let result = remove_overlay(repo.path(), Some("test".to_string()), false);
+            let result = remove_overlay(repo.path(), Some("test".to_string()), false, false);
             assert!(result.is_ok());
         }
 
@@ -2489,6 +2756,8 @@ directories =
                 None,
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -2496,7 +2765,7 @@ directories =
             assert!(repo.path().join("scratch").is_symlink());
 
             // Remove overlay
-            remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test-overlay".to_string()), false, false).unwrap();
 
             // Verify directory symlink was removed
             assert!(!repo.path().join("scratch").exists());
@@ -2526,6 +2795,8 @@ directories =
                 None,
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -2535,11 +2806,156 @@ directories =
             assert!(target_dir.is_dir());
 
             // Remove overlay
-            remove_overlay(repo.path(), Some("test-overlay".to_string()), false).unwrap();
+            remove_overlay(repo.path(), Some("test-overlay".to_string()), false, false).unwrap();
 
             // Verify directory was removed
             assert!(!repo.path().join("scratch").exists());
             assert!(!repo.path().join(".repoverlay").exists());
+        }
+
+        #[test]
+        fn dry_run_does_not_remove_overlay() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Dry run removal
+            let result = remove_overlay(repo.path(), Some("test-overlay".to_string()), false, true);
+            assert!(result.is_ok(), "dry_run remove failed: {result:?}");
+
+            // Verify files are still present
+            assert!(
+                repo.path().join(".envrc").exists(),
+                ".envrc should still exist after dry run"
+            );
+            assert!(
+                repo.path().join(".repoverlay").exists(),
+                ".repoverlay should still exist after dry run"
+            );
+        }
+
+        #[test]
+        fn dry_run_all_does_not_remove_overlays() {
+            let repo = create_test_repo();
+            let overlay1 = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+            let overlay2 = create_test_overlay(&[(".env.local", "LOCAL=true")]);
+
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-a".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+            apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("overlay-b".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Dry run removal of all
+            let result = remove_overlay(repo.path(), None, true, true);
+            assert!(result.is_ok(), "dry_run remove --all failed: {result:?}");
+
+            // Verify all files are still present
+            assert!(
+                repo.path().join(".envrc").exists(),
+                ".envrc should still exist after dry run"
+            );
+            assert!(
+                repo.path().join(".env.local").exists(),
+                ".env.local should still exist after dry run"
+            );
+        }
+
+        #[test]
+        fn handle_remove_requires_name_or_interactive_flag() {
+            let repo = create_test_repo();
+
+            // Calling handle_remove without name, --all, or --interactive should fail
+            let result = handle_remove(repo.path(), None, false, false, false);
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("No overlay name specified"),
+                "Expected usage error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn handle_remove_with_name_succeeds() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Calling handle_remove with a name should succeed
+            let result = handle_remove(
+                repo.path(),
+                Some("test-overlay".to_string()),
+                false,
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "handle_remove with name failed: {result:?}");
+            assert!(!repo.path().join(".envrc").exists());
+        }
+
+        #[test]
+        fn handle_remove_with_all_flag_succeeds() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Calling handle_remove with --all should succeed
+            let result = handle_remove(repo.path(), None, true, false, false);
+            assert!(
+                result.is_ok(),
+                "handle_remove with --all failed: {result:?}"
+            );
+            assert!(!repo.path().join(".envrc").exists());
         }
     }
 
@@ -2566,6 +2982,8 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -2586,6 +3004,8 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -2593,6 +3013,8 @@ directories =
                 repo.path(),
                 false,
                 Some("overlay-b".to_string()),
+                None,
+                false,
                 None,
                 false,
             )
@@ -2615,6 +3037,8 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -2622,6 +3046,8 @@ directories =
                 repo.path(),
                 false,
                 Some("overlay-b".to_string()),
+                None,
+                false,
                 None,
                 false,
             )
@@ -2641,6 +3067,8 @@ directories =
                 repo.path(),
                 false,
                 Some("real".to_string()),
+                None,
+                false,
                 None,
                 false,
             )
@@ -3056,6 +3484,67 @@ directories =
                     .contains("not a git repository")
             );
         }
+
+        #[test]
+        fn create_local_creates_overlay_in_output_directory() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+            fs::create_dir_all(source.path().join(".vscode")).unwrap();
+            fs::write(
+                source.path().join(".vscode/settings.json"),
+                r#"{"key": "value"}"#,
+            )
+            .unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("my-local-overlay")),
+                &[PathBuf::from(".envrc"), PathBuf::from(".vscode")],
+                None,
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "create_overlay failed: {result:?}");
+
+            // Check files were created in output directory
+            let overlay_dir = output.path().join("my-local-overlay");
+            assert!(overlay_dir.exists(), "Overlay directory should exist");
+            assert!(overlay_dir.join(".envrc").exists(), ".envrc should exist");
+            assert!(
+                overlay_dir.join(".vscode/settings.json").exists(),
+                ".vscode/settings.json should exist"
+            );
+
+            // Verify content
+            let content = fs::read_to_string(overlay_dir.join(".envrc")).unwrap();
+            assert_eq!(content, "export FOO=bar");
+        }
+
+        #[test]
+        fn create_local_dry_run_does_not_create_files() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            let result = create_overlay(
+                source.path(),
+                Some(output.path().join("my-local-overlay")),
+                &[PathBuf::from(".envrc")],
+                None,
+                true, // dry_run
+                false,
+            );
+            assert!(result.is_ok());
+
+            // Check no files were created
+            assert!(
+                !output.path().join("my-local-overlay").exists(),
+                "Overlay directory should not exist in dry run"
+            );
+        }
     }
 
     // Unit tests for parse_overlay_name_arg
@@ -3289,6 +3778,8 @@ directories =
                 Some("first-overlay".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
 
@@ -3371,6 +3862,8 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                None,
+                false,
             )
             .unwrap();
             apply_overlay(
@@ -3378,6 +3871,8 @@ directories =
                 repo.path(),
                 false,
                 Some("overlay-b".to_string()),
+                None,
+                false,
                 None,
                 false,
             )
@@ -3423,7 +3918,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "apply", "./my-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Apply { source, .. } => {
+                Some(Commands::Apply { source, .. }) => {
                     assert_eq!(source, "./my-overlay");
                 }
                 _ => panic!("Expected Apply command"),
@@ -3448,20 +3943,37 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Apply {
+                Some(Commands::Apply {
                     source,
                     target,
                     copy,
                     name,
                     r#ref,
                     update,
-                } => {
+                    from_source,
+                    dry_run,
+                }) => {
                     assert_eq!(source, "./overlay");
                     assert_eq!(target, Some(PathBuf::from("/path/to/repo")));
                     assert!(copy);
                     assert_eq!(name, Some("my-name".to_string()));
                     assert_eq!(r#ref, Some("main".to_string()));
                     assert!(update);
+                    assert!(from_source.is_none());
+                    assert!(!dry_run);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_parses_dry_run() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--dry-run"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Apply { dry_run, .. }) => {
+                    assert!(dry_run);
                 }
                 _ => panic!("Expected Apply command"),
             }
@@ -3478,7 +3990,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "remove", "my-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Remove { name, all, .. } => {
+                Some(Commands::Remove { name, all, .. }) => {
                     assert_eq!(name, Some("my-overlay".to_string()));
                     assert!(!all);
                 }
@@ -3491,9 +4003,46 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "remove", "--all"]).unwrap();
 
             match cli.command {
-                Commands::Remove { name, all, .. } => {
+                Some(Commands::Remove { name, all, .. }) => {
                     assert!(name.is_none());
                     assert!(all);
+                }
+                _ => panic!("Expected Remove command"),
+            }
+        }
+
+        #[test]
+        fn remove_parses_dry_run() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "remove", "my-overlay", "--dry-run"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Remove { dry_run, .. }) => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Remove command"),
+            }
+        }
+
+        #[test]
+        fn remove_parses_interactive() {
+            let cli = Cli::try_parse_from(["repoverlay", "remove", "--interactive"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Remove { interactive, .. }) => {
+                    assert!(interactive);
+                }
+                _ => panic!("Expected Remove command"),
+            }
+        }
+
+        #[test]
+        fn remove_parses_short_interactive() {
+            let cli = Cli::try_parse_from(["repoverlay", "remove", "-i"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Remove { interactive, .. }) => {
+                    assert!(interactive);
                 }
                 _ => panic!("Expected Remove command"),
             }
@@ -3504,7 +4053,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "status"]).unwrap();
 
             match cli.command {
-                Commands::Status { target, name } => {
+                Some(Commands::Status { target, name }) => {
                     assert!(target.is_none());
                     assert!(name.is_none());
                 }
@@ -3518,7 +4067,7 @@ directories =
                 Cli::try_parse_from(["repoverlay", "status", "--name", "my-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Status { name, .. } => {
+                Some(Commands::Status { name, .. }) => {
                     assert_eq!(name, Some("my-overlay".to_string()));
                 }
                 _ => panic!("Expected Status command"),
@@ -3530,7 +4079,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "restore", "--dry-run"]).unwrap();
 
             match cli.command {
-                Commands::Restore { dry_run, .. } => {
+                Some(Commands::Restore { dry_run, .. }) => {
                     assert!(dry_run);
                 }
                 _ => panic!("Expected Restore command"),
@@ -3542,7 +4091,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "update", "my-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Update { name, dry_run, .. } => {
+                Some(Commands::Update { name, dry_run, .. }) => {
                     assert_eq!(name, Some("my-overlay".to_string()));
                     assert!(!dry_run);
                 }
@@ -3566,14 +4115,14 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Create {
+                Some(Commands::Create {
                     name,
                     include,
                     force,
                     yes,
                     ..
-                } => {
-                    assert_eq!(name, Some("my-overlay".to_string()));
+                }) => {
+                    assert_eq!(name, "my-overlay");
                     assert_eq!(include.len(), 2);
                     assert!(force);
                     assert!(yes);
@@ -3583,14 +4132,72 @@ directories =
         }
 
         #[test]
+        fn create_requires_name() {
+            let result = Cli::try_parse_from(["repoverlay", "create"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn create_local_parses_options() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "create-local",
+                "./output",
+                "--include",
+                ".envrc",
+                "--yes",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::CreateLocal {
+                    output,
+                    include,
+                    yes,
+                    ..
+                }) => {
+                    assert_eq!(output, PathBuf::from("./output"));
+                    assert_eq!(include.len(), 1);
+                    assert!(yes);
+                }
+                _ => panic!("Expected CreateLocal command"),
+            }
+        }
+
+        #[test]
         fn switch_parses_source() {
             let cli = Cli::try_parse_from(["repoverlay", "switch", "./new-overlay"]).unwrap();
 
             match cli.command {
-                Commands::Switch { source, .. } => {
+                Some(Commands::Switch { source, .. }) => {
                     assert_eq!(source, "./new-overlay");
                 }
                 _ => panic!("Expected Switch command"),
+            }
+        }
+
+        #[test]
+        fn list_parses_filter() {
+            let cli = Cli::try_parse_from(["repoverlay", "list", "--filter", "org/repo"]).unwrap();
+
+            match cli.command {
+                Some(Commands::List { filter, .. }) => {
+                    assert_eq!(filter, Some("org/repo".to_string()));
+                }
+                _ => panic!("Expected List command"),
+            }
+        }
+
+        #[test]
+        fn list_parses_target_alias() {
+            // --target should work as an alias for --filter
+            let cli = Cli::try_parse_from(["repoverlay", "list", "--target", "org/repo"]).unwrap();
+
+            match cli.command {
+                Some(Commands::List { filter, .. }) => {
+                    assert_eq!(filter, Some("org/repo".to_string()));
+                }
+                _ => panic!("Expected List command"),
             }
         }
 
@@ -3599,7 +4206,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "list"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::List => {}
                     _ => panic!("Expected Cache List subcommand"),
                 },
@@ -3612,7 +4219,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "clear"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::Clear { yes } => {
                         assert!(!yes, "default yes should be false");
                     }
@@ -3627,7 +4234,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "clear", "--yes"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::Clear { yes } => {
                         assert!(yes, "yes flag should be true");
                     }
@@ -3648,7 +4255,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "remove", "owner/repo"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::Remove { repo } => {
                         assert_eq!(repo, "owner/repo");
                     }
@@ -3663,7 +4270,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "cache", "path"]).unwrap();
 
             match cli.command {
-                Commands::Cache { command } => match command {
+                Some(Commands::Cache { command }) => match command {
                     CacheCommand::Path => {}
                     _ => panic!("Expected Cache Path subcommand"),
                 },
@@ -3699,12 +4306,12 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Apply {
+                Some(Commands::Apply {
                     target,
                     name,
                     r#ref,
                     ..
-                } => {
+                }) => {
                     assert_eq!(target, Some(PathBuf::from("/repo")));
                     assert_eq!(name, Some("name".to_string()));
                     assert_eq!(r#ref, Some("main".to_string()));
@@ -3726,12 +4333,12 @@ directories =
                     .unwrap();
 
             match cli.command {
-                Commands::Add {
+                Some(Commands::Add {
                     name,
                     files,
                     target,
                     dry_run,
-                } => {
+                }) => {
                     assert_eq!(name, "my-overlay");
                     assert_eq!(files.len(), 2);
                     assert_eq!(files[0], PathBuf::from("file1.txt"));
@@ -3757,12 +4364,12 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Add {
+                Some(Commands::Add {
                     name,
                     files,
                     target,
                     dry_run,
-                } => {
+                }) => {
                     assert_eq!(name, "org/repo/my-overlay");
                     assert_eq!(files, vec![PathBuf::from("newfile.txt")]);
                     assert_eq!(target, Some(PathBuf::from("/repo")));
@@ -3779,7 +4386,7 @@ directories =
                     .unwrap();
 
             match cli.command {
-                Commands::Add { target, .. } => {
+                Some(Commands::Add { target, .. }) => {
                     assert_eq!(target, Some(PathBuf::from("/repo")));
                 }
                 _ => panic!("Expected Add command"),
@@ -3799,7 +4406,7 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Add { files, .. } => {
+                Some(Commands::Add { files, .. }) => {
                     assert_eq!(files.len(), 3);
                     assert_eq!(files[0], PathBuf::from("file1.txt"));
                     assert_eq!(files[1], PathBuf::from("file2.txt"));
@@ -3821,7 +4428,7 @@ directories =
             .unwrap();
 
             match cli.command {
-                Commands::Add { files, .. } => {
+                Some(Commands::Add { files, .. }) => {
                     assert_eq!(files.len(), 2);
                     assert_eq!(files[0], PathBuf::from("file with spaces.txt"));
                     assert_eq!(files[1], PathBuf::from(".hidden-file"));
@@ -3835,7 +4442,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
 
             match cli.command {
-                Commands::Add { dry_run, .. } => {
+                Some(Commands::Add { dry_run, .. }) => {
                     assert!(!dry_run);
                 }
                 _ => panic!("Expected Add command"),
@@ -3847,7 +4454,7 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
 
             match cli.command {
-                Commands::Add { target, .. } => {
+                Some(Commands::Add { target, .. }) => {
                     assert!(target.is_none());
                 }
                 _ => panic!("Expected Add command"),
