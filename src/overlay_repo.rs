@@ -397,6 +397,7 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Parse an overlay reference in the format "org/repo/name".
+#[allow(dead_code)] // Kept for backward compatibility; new code uses reference::SourceReference
 pub fn parse_overlay_reference(s: &str) -> Option<(String, String, String)> {
     // Must have exactly 3 parts separated by /
     let parts: Vec<_> = s.split('/').collect();

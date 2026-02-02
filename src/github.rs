@@ -94,8 +94,12 @@ impl GitHubSource {
     }
 
     /// Check if a string looks like a GitHub URL.
+    ///
+    /// This check is case-insensitive for the host portion, as HTTP URLs
+    /// treat hosts as case-insensitive per RFC 3986.
     pub fn is_github_url(input: &str) -> bool {
-        input.starts_with("https://github.com/") || input.starts_with("http://github.com/")
+        let lower = input.to_ascii_lowercase();
+        lower.starts_with("https://github.com/") || lower.starts_with("http://github.com/")
     }
 
     /// Generate a unique cache directory name.
@@ -588,17 +592,14 @@ mod tests {
     }
 
     #[test]
-    fn test_is_github_url_case_sensitivity() {
-        // HTTP(S) URLs are case-insensitive for the host
+    fn test_is_github_url_case_insensitivity() {
+        // HTTP(S) URLs are case-insensitive for the host per RFC 3986
         assert!(GitHubSource::is_github_url("https://github.com/owner/repo"));
         assert!(GitHubSource::is_github_url("http://github.com/owner/repo"));
-        // But our simple check is case-sensitive (only lowercase matches)
-        assert!(!GitHubSource::is_github_url(
-            "https://GitHub.com/owner/repo"
-        ));
-        assert!(!GitHubSource::is_github_url(
-            "https://GITHUB.COM/owner/repo"
-        ));
+        // Mixed case should also work
+        assert!(GitHubSource::is_github_url("https://GitHub.com/owner/repo"));
+        assert!(GitHubSource::is_github_url("https://GITHUB.COM/owner/repo"));
+        assert!(GitHubSource::is_github_url("HTTPS://GITHUB.COM/owner/repo"));
     }
 
     #[test]
