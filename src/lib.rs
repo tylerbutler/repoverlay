@@ -3266,4 +3266,203 @@ mod tests {
             assert!(msg.contains("source1, source2"));
         }
     }
+
+    // Tests for visible_subdirs
+    mod visible_subdirs_tests {
+        use super::*;
+
+        #[test]
+        fn returns_non_hidden_directories() {
+            let temp = TempDir::new().unwrap();
+
+            fs::create_dir(temp.path().join("visible1")).unwrap();
+            fs::create_dir(temp.path().join("visible2")).unwrap();
+            fs::create_dir(temp.path().join(".hidden")).unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+
+            assert_eq!(result.len(), 2);
+            let names: Vec<&str> = result.iter().map(|(_, n)| n.as_str()).collect();
+            assert!(names.contains(&"visible1"));
+            assert!(names.contains(&"visible2"));
+            assert!(!names.contains(&".hidden"));
+        }
+
+        #[test]
+        fn skips_files() {
+            let temp = TempDir::new().unwrap();
+
+            fs::create_dir(temp.path().join("dir")).unwrap();
+            fs::write(temp.path().join("file.txt"), "content").unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].1, "dir");
+        }
+
+        #[test]
+        fn returns_empty_for_empty_dir() {
+            let temp = TempDir::new().unwrap();
+            let result = visible_subdirs(temp.path()).unwrap();
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn returns_paths_with_names() {
+            let temp = TempDir::new().unwrap();
+            fs::create_dir(temp.path().join("subdir")).unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+
+            assert_eq!(result.len(), 1);
+            let (path, name) = &result[0];
+            assert_eq!(name, "subdir");
+            assert!(path.ends_with("subdir"));
+        }
+    }
+
+    // Tests for format_overlay_path
+    mod format_overlay_path_tests {
+        use super::*;
+
+        #[test]
+        fn formats_valid_three_part_path() {
+            let result = format_overlay_path("microsoft/FluidFramework/vscode-setup");
+            // Should contain all parts
+            assert!(result.contains("microsoft"));
+            assert!(result.contains("FluidFramework"));
+            assert!(result.contains("vscode-setup"));
+        }
+
+        #[test]
+        fn returns_unchanged_for_invalid_path() {
+            let result = format_overlay_path("just-one-part");
+            assert_eq!(result, "just-one-part");
+        }
+
+        #[test]
+        fn returns_unchanged_for_two_parts() {
+            let result = format_overlay_path("only/two");
+            assert_eq!(result, "only/two");
+        }
+
+        #[test]
+        fn returns_unchanged_for_empty_string() {
+            let result = format_overlay_path("");
+            assert_eq!(result, "");
+        }
+    }
+
+    // Tests for resolve_local_path
+    mod resolve_local_path_tests {
+        use super::*;
+
+        #[test]
+        fn resolves_existing_directory() {
+            let temp = TempDir::new().unwrap();
+            let result = resolve_local_path(temp.path(), "test", false).unwrap();
+            assert!(result.path.exists());
+        }
+
+        #[test]
+        fn returns_local_source_type() {
+            let temp = TempDir::new().unwrap();
+            let result = resolve_local_path(temp.path(), "test", false).unwrap();
+            match result.source_info {
+                OverlaySource::Local { .. } => {}
+                _ => panic!("Expected Local source type"),
+            }
+        }
+
+        #[test]
+        fn fails_on_nonexistent_path() {
+            let result = resolve_local_path(Path::new("/nonexistent/path/xyz123"), "test", false);
+            assert!(result.is_err());
+            let err = result.err().unwrap();
+            assert!(err.to_string().contains("not found"));
+        }
+
+        #[test]
+        fn resolves_file_as_well_as_directory() {
+            let temp = TempDir::new().unwrap();
+            let file_path = temp.path().join("file.txt");
+            fs::write(&file_path, "content").unwrap();
+
+            let result = resolve_local_path(&file_path, "test", false).unwrap();
+            assert!(result.path.exists());
+        }
+    }
+
+    // Tests for detect_target_from_git_remote
+    mod detect_target_tests {
+        use super::*;
+
+        #[test]
+        fn returns_none_for_non_git_directory() {
+            let temp = TempDir::new().unwrap();
+            let result = detect_target_from_git_remote(temp.path());
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn returns_none_for_repo_without_remote() {
+            let repo = create_test_repo();
+            let result = detect_target_from_git_remote(repo.path());
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn detects_github_https_remote() {
+            let repo = create_test_repo();
+
+            // Add a GitHub remote
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/owner/repo.git",
+                ])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_from_git_remote(repo.path());
+            assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+        }
+
+        #[test]
+        fn detects_github_ssh_remote() {
+            let repo = create_test_repo();
+
+            Command::new("git")
+                .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_from_git_remote(repo.path());
+            assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+        }
+
+        #[test]
+        fn returns_none_for_non_github_remote() {
+            let repo = create_test_repo();
+
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://gitlab.com/owner/repo.git",
+                ])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_from_git_remote(repo.path());
+            assert!(result.is_none());
+        }
+    }
 }
