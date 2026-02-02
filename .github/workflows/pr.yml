@@ -90,15 +90,16 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # ratchet:actions/checkout@v6
         with:
           ref: main
-          clean: false
+          path: main-branch
 
       - name: Build main binary
+        working-directory: main-branch
         run: cargo build --release
 
       - name: Get main binary size
         id: main-size
         run: |
-          SIZE=$(stat --format="%s" target/release/repoverlay)
+          SIZE=$(stat --format="%s" main-branch/target/release/repoverlay)
           echo "bytes=$SIZE" >> "$GITHUB_OUTPUT"
           echo "Main binary size: $SIZE bytes"
 
