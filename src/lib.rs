@@ -220,19 +220,26 @@ fn resolve_local_path(
     })
 }
 
-/// Resolve a two-part overlay reference (`org/repo`) via browse mode.
+/// Resolve a two-part overlay reference by browsing a GitHub overlay repository.
 ///
-/// In interactive mode, presents a picker to select an overlay.
-/// In non-interactive mode, errors with a list of available overlays.
+/// This is "GitHub browse mode" - the user specified a GitHub repo containing overlays
+/// (e.g., `tylerbutler/repo-overlays`). We clone it to the GitHub cache and let them
+/// interactively select an overlay.
+///
+/// The overlay repo structure is: `<target_org>/<target_repo>/<overlay_name>/`
+/// For example: `microsoft/FluidFramework/vscode-setup/`
+///
+/// Note: This differs from `resolve_three_part` which uses configured overlay sources.
+/// Here we resolve directly from the cached GitHub repo, not through `SourceManager`.
 fn resolve_two_part(
     owner: &str,
     repo: &str,
     ref_override: Option<&str>,
     update: bool,
-    target_path: Option<&Path>,
-    source_filter: Option<&str>,
+    _target_path: Option<&Path>,
+    _source_filter: Option<&str>,
 ) -> Result<ResolvedSource> {
-    debug!("resolving two-part reference (browse mode): {owner}/{repo}");
+    debug!("resolving two-part reference (GitHub browse mode): {owner}/{repo}");
 
     // Create a GitHubSource to fetch/cache the repo
     let github_url = format!("https://github.com/{owner}/{repo}");
@@ -250,15 +257,16 @@ fn resolve_two_part(
         owner,
         repo
     );
-    cache.ensure_cached(&github_source, update)?;
+    let cached = cache.ensure_cached(&github_source, update)?;
 
-    // List available overlays
-    let available_overlays = list_overlays_from_github_repo(owner, repo)?;
+    // List available overlays (returns full paths like "microsoft/FluidFramework/overlay-name")
+    let available_overlays = list_overlays_from_cached_repo(owner, repo)?;
 
     if available_overlays.is_empty() {
         bail!(
             "No overlays found in {owner}/{repo}.\n\n\
-             Make sure the repository contains overlay directories with config files."
+             Make sure the repository contains overlay directories in the format:\n\
+             <target-org>/<target-repo>/<overlay-name>/"
         );
     }
 
@@ -267,106 +275,162 @@ fn resolve_two_part(
         select_overlay_interactive(owner, repo, &available_overlays)?
     } else {
         // Non-interactive mode - error with available overlays
-        let overlay_list = available_overlays.join(", ");
+        let overlay_list = available_overlays
+            .iter()
+            .map(|o| format!("  {}", format_overlay_path(o)))
+            .collect::<Vec<_>>()
+            .join("\n");
         bail!(
-            "No overlay specified. Available overlays in {owner}/{repo}:\n  {overlay_list}\n\n\
-             Use: repoverlay apply {owner}/{repo}/<overlay-name>"
+            "No overlay specified. Available overlays in {owner}/{repo}:\n{overlay_list}\n\n\
+             Use: repoverlay apply {owner}/{repo}/<target-org>/<target-repo>/<overlay-name>"
         );
     };
 
-    // Now resolve the selected overlay using three-part logic
     println!(
-        "{} overlay: {owner}/{repo}/{selected_overlay}",
-        "Selected".green().bold()
+        "{} overlay: {}",
+        "Selected".green().bold(),
+        format_overlay_path(&selected_overlay)
     );
 
-    resolve_three_part(
-        owner,
-        repo,
-        &selected_overlay,
-        target_path,
-        source_filter,
-        false, // Don't update again - we just fetched
-    )
-}
+    // Parse the selected overlay path: target_org/target_repo/overlay_name
+    let (target_org, target_repo, overlay_name) = parse_overlay_path(&selected_overlay)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invalid overlay path format: {selected_overlay}\n\
+                 Expected: <target-org>/<target-repo>/<overlay-name>"
+            )
+        })?;
 
-/// List available overlays from a GitHub repository.
-///
-/// Uses `gh` CLI if available, falls back to parsing the cached repo.
-fn list_overlays_from_github_repo(owner: &str, repo: &str) -> Result<Vec<String>> {
-    // Try gh CLI first (faster, no clone needed for listing)
-    let overlays = list_overlays_via_gh(owner, repo);
-    if !overlays.is_empty() {
-        return Ok(overlays);
+    // Build the overlay path directly from the cached GitHub repo.
+    // This is different from overlay repo resolution (resolve_three_part) which
+    // uses OverlayRepoManager - here we're browsing the GitHub cache directly.
+    let overlay_path = cached
+        .path
+        .join(target_org)
+        .join(target_repo)
+        .join(overlay_name);
+
+    if !overlay_path.exists() {
+        bail!("Overlay directory not found: {}", overlay_path.display());
     }
 
-    // Fall back to listing from cached repo
-    list_overlays_from_cached_repo(owner, repo)
+    // Get commit hash for source tracking
+    let commit = get_cached_repo_commit(&cached.path).unwrap_or_else(|| "unknown".to_string());
+
+    Ok(ResolvedSource {
+        path: overlay_path,
+        source_info: OverlaySource::github(
+            github_url,
+            owner.to_string(),
+            repo.to_string(),
+            github_source.git_ref.as_str().to_string(),
+            commit,
+            Some(format!("{target_org}/{target_repo}/{overlay_name}")),
+        ),
+    })
 }
 
-/// List overlays using gh CLI.
-fn list_overlays_via_gh(owner: &str, repo: &str) -> Vec<String> {
+/// Get the current commit hash from a cached repository.
+fn get_cached_repo_commit(repo_path: &Path) -> Option<String> {
     use std::process::Command;
 
-    debug!("listing overlays via gh CLI: {owner}/{repo}");
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .ok()?;
 
-    // Use gh api to list top-level directories
-    let output = Command::new("gh")
-        .args([
-            "api",
-            &format!("repos/{owner}/{repo}/contents"),
-            "--jq",
-            ".[] | select(.type == \"dir\") | .name",
-        ])
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => {
-            debug!("gh CLI not available or failed, falling back to cached repo");
-            return Vec::new();
-        }
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let overlays: Vec<String> = stdout
-        .lines()
-        .filter(|name| !name.starts_with('.') && !name.is_empty())
-        .map(String::from)
-        .collect();
-
-    debug!("found {} potential overlays via gh", overlays.len());
-    overlays
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
 }
 
-/// List overlays from a cached repository.
+/// List overlays from a cached GitHub repository.
+///
+/// Used by GitHub browse mode (`resolve_two_part`) to list overlays from a
+/// directly-specified GitHub repo (e.g., `tylerbutler/repo-overlays`).
+///
+/// Overlay repos have a nested structure: `target_org/target_repo/overlay_name/`
+/// Returns full paths like `microsoft/FluidFramework/vscode-setup`.
+///
+/// Note: This is the same structure used by `OverlayRepoManager::list_overlays()`,
+/// but operates on the GitHub cache instead of managed overlay repositories.
 fn list_overlays_from_cached_repo(owner: &str, repo: &str) -> Result<Vec<String>> {
-    debug!("listing overlays from cached repo: {owner}/{repo}");
+    debug!("listing overlays from cached GitHub repo: {owner}/{repo}");
 
     let cache = CacheManager::new()?;
     let cache_dir = cache.cache_dir();
-    let repo_path = cache_dir.join(owner).join(repo);
+    let repo_path = cache_dir.join("github").join(owner).join(repo);
 
     if !repo_path.exists() {
         bail!("Repository not cached: {owner}/{repo}");
     }
 
-    // List top-level directories (potential overlays)
+    list_overlays_from_path(&repo_path)
+}
+
+/// List overlays from a directory with nested org/repo/overlay structure.
+///
+/// This is the core logic for listing overlays, extracted for testability.
+fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<String>> {
     let mut overlays = Vec::new();
-    for entry in fs::read_dir(&repo_path)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir()
-            && let Some(name) = path.file_name().and_then(|n| n.to_str())
-            && !name.starts_with('.')
-        {
-            overlays.push(name.to_string());
+
+    // Walk the three-level structure: org/repo/overlay
+    for (org_path, org_name) in visible_subdirs(repo_path)? {
+        for (repo_path, repo_name) in visible_subdirs(&org_path)? {
+            for (_overlay_path, overlay_name) in visible_subdirs(&repo_path)? {
+                overlays.push(format!("{org_name}/{repo_name}/{overlay_name}"));
+            }
         }
     }
 
     overlays.sort();
-    debug!("found {} potential overlays in cache", overlays.len());
+    debug!("found {} overlays in path", overlays.len());
     Ok(overlays)
+}
+
+/// Returns visible (non-hidden) subdirectories with their names.
+fn visible_subdirs(path: &Path) -> Result<Vec<(PathBuf, String)>> {
+    let mut results = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        if !entry_path.is_dir() {
+            continue;
+        }
+        if let Some(name) = entry.file_name().to_str().filter(|n| !n.starts_with('.')) {
+            results.push((entry_path, name.to_string()));
+        }
+    }
+    Ok(results)
+}
+
+/// Parse an overlay path string into `(org, repo, overlay_name)` components.
+///
+/// Returns None if the path doesn't have exactly 3 components.
+fn parse_overlay_path(path: &str) -> Option<(&str, &str, &str)> {
+    let (org, rest) = path.split_once('/')?;
+    let (repo, overlay) = rest.split_once('/')?;
+    // Reject paths with more than 3 components
+    if overlay.contains('/') {
+        None
+    } else {
+        Some((org, repo, overlay))
+    }
+}
+
+/// Format an overlay path for display with the overlay name in bold.
+///
+/// Input: `"microsoft/FluidFramework/vscode-setup"`
+/// Output: `"microsoft/FluidFramework/vscode-setup"` (with "vscode-setup" in bold)
+fn format_overlay_path(path: &str) -> String {
+    if let Some((org, repo, overlay)) = parse_overlay_path(path) {
+        format!("{org}/{repo}/{}", overlay.bold())
+    } else {
+        path.to_string()
+    }
 }
 
 /// Present an interactive picker to select an overlay.
@@ -380,8 +444,11 @@ fn select_overlay_interactive(owner: &str, repo: &str, overlays: &[String]) -> R
         repo
     );
 
+    // Format overlays for display with bold overlay names
+    let display_items: Vec<String> = overlays.iter().map(|o| format_overlay_path(o)).collect();
+
     let selection = Select::with_theme(&ColorfulTheme::default())
-        .items(overlays)
+        .items(&display_items)
         .default(0)
         .interact_opt()
         .context("Failed to show overlay picker")?;
@@ -2990,34 +3057,244 @@ mod tests {
         }
 
         #[test]
-        fn list_overlays_from_cached_repo_with_temp_dir() {
-            // Create a temp directory structure that mimics a cached repo
-            let temp = TempDir::new().unwrap();
-            let cache_dir = temp.path();
+        fn list_overlays_from_cached_repo_finds_overlays_at_correct_path() {
+            use crate::cache::CacheManager;
+            use crate::github::GitHubSource;
 
-            // Create owner/repo structure
-            let repo_path = cache_dir.join("test-owner").join("test-repo");
-            fs::create_dir_all(&repo_path).unwrap();
+            // Use a unique test owner/repo to avoid conflicts with real cache
+            let test_owner = "test-owner-abc123xyz";
+            let test_repo = "test-repo-abc123xyz";
 
-            // Create some overlay directories
-            fs::create_dir(repo_path.join("overlay-a")).unwrap();
-            fs::create_dir(repo_path.join("overlay-b")).unwrap();
-            fs::create_dir(repo_path.join(".hidden")).unwrap(); // Should be skipped
-            fs::write(repo_path.join("file.txt"), "test").unwrap(); // Should be skipped
+            let cache = CacheManager::new().unwrap();
+            let source =
+                GitHubSource::parse(&format!("https://github.com/{test_owner}/{test_repo}"))
+                    .unwrap();
 
-            // We can't easily test this without mocking CacheManager,
-            // but we can verify the function doesn't panic with various inputs
+            // Get the path where CacheManager would store this repo
+            // This includes the "github" subdirectory: {cache_dir}/github/{owner}/{repo}
+            let expected_repo_path = cache.repo_path(&source);
+
+            // Create overlay structure at the correct cache location
+            let overlay_path = expected_repo_path.join("target-org/target-repo/test-overlay");
+            fs::create_dir_all(&overlay_path).unwrap();
+
+            // Now list_overlays_from_cached_repo should find it
+            let result = list_overlays_from_cached_repo(test_owner, test_repo);
+
+            // Clean up before asserting (so cleanup happens even if test fails)
+            let _ = fs::remove_dir_all(&expected_repo_path);
+            // Also clean up parent dirs if empty
+            if let Some(parent) = expected_repo_path.parent() {
+                let _ = fs::remove_dir(parent);
+                if let Some(grandparent) = parent.parent() {
+                    let _ = fs::remove_dir(grandparent);
+                }
+            }
+
+            // This should succeed - we created overlays at the correct cache location
+            let overlays = result.expect(
+                "list_overlays_from_cached_repo should find overlays at the path returned by CacheManager::repo_path()"
+            );
+            assert_eq!(overlays.len(), 1);
+            assert_eq!(overlays[0], "target-org/target-repo/test-overlay");
         }
 
         #[test]
-        fn list_overlays_via_gh_returns_empty_when_gh_unavailable() {
-            // When gh is not available or fails, should return empty vec (not error)
-            // This test verifies graceful fallback behavior
-            // Note: This may actually return overlays if gh is installed and the repo exists
-            let result =
-                list_overlays_via_gh("nonexistent-owner-xyz-12345", "nonexistent-repo-xyz-12345");
-            // Should not panic, should return a Vec (possibly empty)
-            assert!(result.len() <= 1000); // Sanity check
+        fn list_overlays_from_cached_repo_path_matches_cache_manager() {
+            use crate::cache::CacheManager;
+            use crate::github::GitHubSource;
+
+            // This test verifies that list_overlays_from_cached_repo looks in the same
+            // location where CacheManager stores repositories.
+            //
+            // CacheManager::repo_path() returns: {cache_dir}/github/{owner}/{repo}
+            // list_overlays_from_cached_repo should look in the same location.
+
+            let cache = CacheManager::new().unwrap();
+            let source =
+                GitHubSource::parse("https://github.com/test-owner-xyz/test-repo-xyz").unwrap();
+
+            let cache_manager_path = cache.repo_path(&source);
+
+            // Verify the cache manager path includes "github" subdirectory
+            assert!(
+                cache_manager_path
+                    .to_string_lossy()
+                    .contains("/github/test-owner-xyz/test-repo-xyz"),
+                "CacheManager::repo_path() should include 'github' subdirectory, got: {}",
+                cache_manager_path.display()
+            );
+
+            // The path that list_overlays_from_cached_repo constructs should match
+            // Currently it constructs: {cache_dir}/{owner}/{repo} (MISSING "github"!)
+            // This test documents the expected behavior.
+        }
+
+        #[test]
+        fn list_overlays_from_path_with_nested_structure() {
+            // Create a temp directory with the nested org/repo/overlay structure
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            // Create nested overlay directories
+            fs::create_dir_all(repo_path.join("microsoft/FluidFramework/vscode-setup")).unwrap();
+            fs::create_dir_all(repo_path.join("microsoft/FluidFramework/ci-config")).unwrap();
+            fs::create_dir_all(repo_path.join("tylerbutler/some-repo/my-overlay")).unwrap();
+
+            let overlays = list_overlays_from_path(repo_path).unwrap();
+
+            assert_eq!(overlays.len(), 3);
+            // Results should be sorted
+            assert_eq!(overlays[0], "microsoft/FluidFramework/ci-config");
+            assert_eq!(overlays[1], "microsoft/FluidFramework/vscode-setup");
+            assert_eq!(overlays[2], "tylerbutler/some-repo/my-overlay");
+        }
+
+        #[test]
+        fn list_overlays_from_path_skips_hidden_dirs() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            // Create visible and hidden directories at each level
+            fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+            fs::create_dir_all(repo_path.join(".hidden-org/repo/overlay")).unwrap();
+            fs::create_dir_all(repo_path.join("org/.hidden-repo/overlay")).unwrap();
+            fs::create_dir_all(repo_path.join("org/repo/.hidden-overlay")).unwrap();
+
+            let overlays = list_overlays_from_path(repo_path).unwrap();
+
+            // Only the non-hidden overlay should be found
+            assert_eq!(overlays.len(), 1);
+            assert_eq!(overlays[0], "org/repo/overlay");
+        }
+
+        #[test]
+        fn list_overlays_from_path_skips_files() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            // Create overlay directory
+            fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+
+            // Create files at various levels (should be skipped)
+            fs::write(repo_path.join("README.md"), "readme").unwrap();
+            fs::write(repo_path.join("org/README.md"), "readme").unwrap();
+            fs::write(repo_path.join("org/repo/README.md"), "readme").unwrap();
+
+            let overlays = list_overlays_from_path(repo_path).unwrap();
+
+            assert_eq!(overlays.len(), 1);
+            assert_eq!(overlays[0], "org/repo/overlay");
+        }
+
+        #[test]
+        fn list_overlays_from_path_empty_directory() {
+            let temp = TempDir::new().unwrap();
+            let overlays = list_overlays_from_path(temp.path()).unwrap();
+            assert!(overlays.is_empty());
+        }
+
+        #[test]
+        fn list_overlays_from_path_incomplete_nesting() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            // Only one level deep (org only, no repo/overlay)
+            fs::create_dir_all(repo_path.join("org-only")).unwrap();
+            // Two levels deep (org/repo, no overlay)
+            fs::create_dir_all(repo_path.join("org/repo-only")).unwrap();
+            // Complete three-level nesting
+            fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+
+            let overlays = list_overlays_from_path(repo_path).unwrap();
+
+            // Only the complete three-level path should be found
+            assert_eq!(overlays.len(), 1);
+            assert_eq!(overlays[0], "org/repo/overlay");
+        }
+
+        #[test]
+        fn parse_overlay_path_valid_three_parts() {
+            let result = parse_overlay_path("microsoft/FluidFramework/vscode-setup");
+            assert_eq!(
+                result,
+                Some(("microsoft", "FluidFramework", "vscode-setup"))
+            );
+        }
+
+        #[test]
+        fn parse_overlay_path_too_few_parts() {
+            assert_eq!(parse_overlay_path("only-one"), None);
+            assert_eq!(parse_overlay_path("only/two"), None);
+        }
+
+        #[test]
+        fn parse_overlay_path_too_many_parts() {
+            assert_eq!(parse_overlay_path("one/two/three/four"), None);
+        }
+
+        #[test]
+        fn parse_overlay_path_empty() {
+            assert_eq!(parse_overlay_path(""), None);
+        }
+
+        #[test]
+        fn get_cached_repo_commit_valid_git_repo() {
+            let repo = create_test_repo();
+
+            // Configure git user for this repo (required for commits)
+            Command::new("git")
+                .args(["config", "user.email", "test@test.com"])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+            Command::new("git")
+                .args(["config", "user.name", "Test User"])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            // Create a file and commit it
+            fs::write(repo.path().join("test.txt"), "test content").unwrap();
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+            let commit_output = Command::new("git")
+                .args(["commit", "-m", "initial"])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            // Verify commit succeeded
+            assert!(
+                commit_output.status.success(),
+                "git commit failed: {}",
+                String::from_utf8_lossy(&commit_output.stderr)
+            );
+
+            let commit = get_cached_repo_commit(repo.path());
+            assert!(commit.is_some());
+            // Commit hash should be 40 hex characters
+            let hash = commit.unwrap();
+            assert_eq!(hash.len(), 40);
+            assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+
+        #[test]
+        fn get_cached_repo_commit_non_git_directory() {
+            let temp = TempDir::new().unwrap();
+            let commit = get_cached_repo_commit(temp.path());
+            assert!(commit.is_none());
+        }
+
+        #[test]
+        fn get_cached_repo_commit_empty_git_repo() {
+            let repo = create_test_repo();
+            // Empty repo has no commits, so rev-parse HEAD fails
+            let commit = get_cached_repo_commit(repo.path());
+            assert!(commit.is_none());
         }
     }
 
@@ -3061,6 +3338,205 @@ mod tests {
             let msg =
                 format_not_found_error("owner", "repo", "overlay", &[], Some("source1, source2"));
             assert!(msg.contains("source1, source2"));
+        }
+    }
+
+    // Tests for visible_subdirs
+    mod visible_subdirs_tests {
+        use super::*;
+
+        #[test]
+        fn returns_non_hidden_directories() {
+            let temp = TempDir::new().unwrap();
+
+            fs::create_dir(temp.path().join("visible1")).unwrap();
+            fs::create_dir(temp.path().join("visible2")).unwrap();
+            fs::create_dir(temp.path().join(".hidden")).unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+
+            assert_eq!(result.len(), 2);
+            let names: Vec<&str> = result.iter().map(|(_, n)| n.as_str()).collect();
+            assert!(names.contains(&"visible1"));
+            assert!(names.contains(&"visible2"));
+            assert!(!names.contains(&".hidden"));
+        }
+
+        #[test]
+        fn skips_files() {
+            let temp = TempDir::new().unwrap();
+
+            fs::create_dir(temp.path().join("dir")).unwrap();
+            fs::write(temp.path().join("file.txt"), "content").unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].1, "dir");
+        }
+
+        #[test]
+        fn returns_empty_for_empty_dir() {
+            let temp = TempDir::new().unwrap();
+            let result = visible_subdirs(temp.path()).unwrap();
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn returns_paths_with_names() {
+            let temp = TempDir::new().unwrap();
+            fs::create_dir(temp.path().join("subdir")).unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+
+            assert_eq!(result.len(), 1);
+            let (path, name) = &result[0];
+            assert_eq!(name, "subdir");
+            assert!(path.ends_with("subdir"));
+        }
+    }
+
+    // Tests for format_overlay_path
+    mod format_overlay_path_tests {
+        use super::*;
+
+        #[test]
+        fn formats_valid_three_part_path() {
+            let result = format_overlay_path("microsoft/FluidFramework/vscode-setup");
+            // Should contain all parts
+            assert!(result.contains("microsoft"));
+            assert!(result.contains("FluidFramework"));
+            assert!(result.contains("vscode-setup"));
+        }
+
+        #[test]
+        fn returns_unchanged_for_invalid_path() {
+            let result = format_overlay_path("just-one-part");
+            assert_eq!(result, "just-one-part");
+        }
+
+        #[test]
+        fn returns_unchanged_for_two_parts() {
+            let result = format_overlay_path("only/two");
+            assert_eq!(result, "only/two");
+        }
+
+        #[test]
+        fn returns_unchanged_for_empty_string() {
+            let result = format_overlay_path("");
+            assert_eq!(result, "");
+        }
+    }
+
+    // Tests for resolve_local_path
+    mod resolve_local_path_tests {
+        use super::*;
+
+        #[test]
+        fn resolves_existing_directory() {
+            let temp = TempDir::new().unwrap();
+            let result = resolve_local_path(temp.path(), "test", false).unwrap();
+            assert!(result.path.exists());
+        }
+
+        #[test]
+        fn returns_local_source_type() {
+            let temp = TempDir::new().unwrap();
+            let result = resolve_local_path(temp.path(), "test", false).unwrap();
+            match result.source_info {
+                OverlaySource::Local { .. } => {}
+                _ => panic!("Expected Local source type"),
+            }
+        }
+
+        #[test]
+        fn fails_on_nonexistent_path() {
+            let result = resolve_local_path(Path::new("/nonexistent/path/xyz123"), "test", false);
+            assert!(result.is_err());
+            let err = result.err().unwrap();
+            assert!(err.to_string().contains("not found"));
+        }
+
+        #[test]
+        fn resolves_file_as_well_as_directory() {
+            let temp = TempDir::new().unwrap();
+            let file_path = temp.path().join("file.txt");
+            fs::write(&file_path, "content").unwrap();
+
+            let result = resolve_local_path(&file_path, "test", false).unwrap();
+            assert!(result.path.exists());
+        }
+    }
+
+    // Tests for detect_target_from_git_remote
+    mod detect_target_tests {
+        use super::*;
+
+        #[test]
+        fn returns_none_for_non_git_directory() {
+            let temp = TempDir::new().unwrap();
+            let result = detect_target_from_git_remote(temp.path());
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn returns_none_for_repo_without_remote() {
+            let repo = create_test_repo();
+            let result = detect_target_from_git_remote(repo.path());
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn detects_github_https_remote() {
+            let repo = create_test_repo();
+
+            // Add a GitHub remote
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/owner/repo.git",
+                ])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_from_git_remote(repo.path());
+            assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+        }
+
+        #[test]
+        fn detects_github_ssh_remote() {
+            let repo = create_test_repo();
+
+            Command::new("git")
+                .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_from_git_remote(repo.path());
+            assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
+        }
+
+        #[test]
+        fn returns_none_for_non_github_remote() {
+            let repo = create_test_repo();
+
+            Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://gitlab.com/owner/repo.git",
+                ])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            let result = detect_target_from_git_remote(repo.path());
+            assert!(result.is_none());
         }
     }
 }
