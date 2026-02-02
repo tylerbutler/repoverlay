@@ -185,7 +185,7 @@ If `git clean -fdx` wipes your overlay files:
 repoverlay restore
 ```
 
-Restores from external backup in `~/.local/share/repoverlay/`
+Restores from external backup in `~/.local/share/repoverlay/applied/`
 
 ---
 

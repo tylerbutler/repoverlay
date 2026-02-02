@@ -41,6 +41,8 @@ repoverlay status
 
 **Key point:** Show the destination before explaining how to get there.
 
+**Demo tip:** Most commands support `--dry-run` to preview changes without applying them. Useful during live demos to show intent before execution.
+
 ---
 
 ## Section 2: Create Your First Overlay (3-5 min)
@@ -179,7 +181,7 @@ repoverlay restore
 
 Restores from external backup.
 
-**Brief explanation:** repoverlay keeps a backup of what's applied in `~/.local/share/repoverlay/` so it can recover.
+**Brief explanation:** repoverlay keeps a backup of what's applied in `~/.local/share/repoverlay/applied/` so it can recover.
 
 ### Key Point
 
