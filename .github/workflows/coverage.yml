@@ -18,15 +18,15 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # ratchet:actions/checkout@v6
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # ratchet:dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
 
       - name: Install tools
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@650c5ca14212efbbf3e580844b04bdccf68dac31 # ratchet:taiki-e/install-action@v2
         with:
           tool: just,cargo-llvm-cov
 
@@ -34,14 +34,14 @@ jobs:
         run: just test-coverage
 
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # ratchet:codecov/codecov-action@v5
         with:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Archive coverage artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # ratchet:actions/upload-artifact@v6
         with:
           name: coverage-report
           path: lcov.info
