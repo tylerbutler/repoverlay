@@ -86,17 +86,26 @@ jobs:
           echo "bytes=$SIZE" >> "$GITHUB_OUTPUT"
           echo "PR binary size: $SIZE bytes"
 
-      - name: Get main binary size from metrics
+      - name: Download main binary size artifact
+        id: download-main-size
+        uses: dawidd6/action-download-artifact@20319c5641d495c8a52e688b7dc5fada6c3a9fbc # ratchet:dawidd6/action-download-artifact@v8
+        with:
+          workflow: ci.yml
+          branch: main
+          name: binary-size-main
+          path: main-size
+          if_no_artifact_found: warn
+
+      - name: Get main binary size
         id: main-size
         run: |
-          # Fetch the main binary size from the committed metrics file
-          SIZE=$(git show origin/main:metrics/main-binary-size.txt 2>/dev/null || echo "0")
-          if [ "$SIZE" = "0" ] || [ -z "$SIZE" ]; then
-            echo "::warning::No main binary size found, skipping comparison"
-            echo "bytes=0" >> "$GITHUB_OUTPUT"
-          else
+          if [ -f main-size/binary-size.txt ]; then
+            SIZE=$(cat main-size/binary-size.txt)
             echo "bytes=$SIZE" >> "$GITHUB_OUTPUT"
             echo "Main binary size: $SIZE bytes"
+          else
+            echo "::warning::No main binary size artifact found, skipping comparison"
+            echo "bytes=0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Calculate size difference

@@ -51,24 +51,17 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # ratchet:actions/checkout@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: ./.github/actions/setup-rust
       - name: Build release binary
         run: cargo build --release
-      - name: Update binary size metrics
+      - name: Record binary size
         run: |
           SIZE=$(stat --format="%s" target/release/repoverlay)
-          echo "$SIZE" > metrics/main-binary-size.txt
+          echo "$SIZE" > binary-size.txt
           echo "Main binary size: $SIZE bytes"
-      - name: Commit updated metrics
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add metrics/main-binary-size.txt
-          if git diff --staged --quiet; then
-            echo "No size change, skipping commit"
-          else
-            git commit -m "chore: update main binary size [skip ci]"
-            git push
-          fi
+      - name: Upload binary size artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
+        with:
+          name: binary-size-main
+          path: binary-size.txt
+          retention-days: 90
