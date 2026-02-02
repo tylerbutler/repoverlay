@@ -192,6 +192,31 @@ impl SourceManager {
         matches
     }
 
+    /// List overlay names for a specific org/repo across all sources.
+    ///
+    /// Returns unique overlay names (deduplicated across sources).
+    #[must_use]
+    pub fn list_overlays_for_repo(&self, org: &str, repo: &str) -> Vec<String> {
+        let mut names = std::collections::HashSet::new();
+
+        for ms in &self.sources {
+            // Skip sources that aren't cloned
+            if ms.manager.needs_clone() {
+                continue;
+            }
+
+            if let Ok(overlays) = ms.manager.list_overlays_for_repo(org, repo) {
+                for overlay in overlays {
+                    names.insert(overlay.name);
+                }
+            }
+        }
+
+        let mut result: Vec<_> = names.into_iter().collect();
+        result.sort();
+        result
+    }
+
     /// List all overlays across all sources.
     #[allow(dead_code)] // Utility method for future multi-source `list` command
     pub fn list_all_overlays(&self) -> Result<Vec<(Source, AvailableOverlay)>> {
