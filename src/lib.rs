@@ -277,7 +277,7 @@ fn resolve_two_part(
         // Non-interactive mode - error with available overlays
         let overlay_list = available_overlays
             .iter()
-            .map(|o| format!("  {o}"))
+            .map(|o| format!("  {}", format_overlay_path(o)))
             .collect::<Vec<_>>()
             .join("\n");
         bail!(
@@ -286,7 +286,11 @@ fn resolve_two_part(
         );
     };
 
-    println!("{} overlay: {selected_overlay}", "Selected".green().bold());
+    println!(
+        "{} overlay: {}",
+        "Selected".green().bold(),
+        format_overlay_path(&selected_overlay)
+    );
 
     // Parse the selected overlay path: target_org/target_repo/overlay_name
     let (target_org, target_repo, overlay_name) = parse_overlay_path(&selected_overlay)
@@ -417,6 +421,18 @@ fn parse_overlay_path(path: &str) -> Option<(&str, &str, &str)> {
     }
 }
 
+/// Format an overlay path for display with the overlay name in bold.
+///
+/// Input: `"microsoft/FluidFramework/vscode-setup"`
+/// Output: `"microsoft/FluidFramework/vscode-setup"` (with "vscode-setup" in bold)
+fn format_overlay_path(path: &str) -> String {
+    if let Some((org, repo, overlay)) = parse_overlay_path(path) {
+        format!("{org}/{repo}/{}", overlay.bold())
+    } else {
+        path.to_string()
+    }
+}
+
 /// Present an interactive picker to select an overlay.
 fn select_overlay_interactive(owner: &str, repo: &str, overlays: &[String]) -> Result<String> {
     use dialoguer::{Select, theme::ColorfulTheme};
@@ -428,8 +444,11 @@ fn select_overlay_interactive(owner: &str, repo: &str, overlays: &[String]) -> R
         repo
     );
 
+    // Format overlays for display with bold overlay names
+    let display_items: Vec<String> = overlays.iter().map(|o| format_overlay_path(o)).collect();
+
     let selection = Select::with_theme(&ColorfulTheme::default())
-        .items(overlays)
+        .items(&display_items)
         .default(0)
         .interact_opt()
         .context("Failed to show overlay picker")?;
