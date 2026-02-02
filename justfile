@@ -182,6 +182,17 @@ record-size:
     echo "$DATE repoverlay $SIZE $HUMAN" >> metrics/binary-size.txt
     echo "Recorded binary size: $SIZE ($HUMAN)"
 
+# Test the binary size diff script
+test-size-diff:
+    @echo "Testing size increase..."
+    @python3 scripts/binary-size-diff.py 3012456 2900000
+    @echo ""
+    @echo "Testing size decrease..."
+    @python3 scripts/binary-size-diff.py 2900000 3012456
+    @echo ""
+    @echo "Testing no change..."
+    @python3 scripts/binary-size-diff.py 3012456 3012456
+
 # ============================================
 # Utility Commands
 # ============================================

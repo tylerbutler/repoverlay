@@ -43,3 +43,25 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # ratchet:actions/checkout@v6
       - uses: ./.github/actions/setup-rust
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+  # Record binary size on main branch pushes for PR comparisons
+  binary-size:
+    name: Record Binary Size
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # ratchet:actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+      - name: Build release binary
+        run: cargo build --release
+      - name: Record binary size
+        run: |
+          SIZE=$(stat --format="%s" target/release/repoverlay)
+          echo "$SIZE" > binary-size.txt
+          echo "Main binary size: $SIZE bytes"
+      - name: Upload binary size artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
+        with:
+          name: binary-size-main
+          path: binary-size.txt
+          retention-days: 90

@@ -1,3 +1,5 @@
 # Binary Size History
 # Format: date binary size_bytes size_human
 # Updated by: just record-size
+
+2026-02-02 repoverlay 3012456 2.9MB
