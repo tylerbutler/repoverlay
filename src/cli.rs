@@ -335,6 +335,12 @@ enum Commands {
         #[command(subcommand)]
         command: SourceCommand,
     },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -528,6 +534,10 @@ pub fn run() -> Result<()> {
         }
         Commands::Source { command } => {
             handle_source_command(command)?;
+        }
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "repoverlay", &mut io::stdout());
         }
     }
 
