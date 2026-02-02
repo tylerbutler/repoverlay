@@ -43,3 +43,32 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # ratchet:actions/checkout@v6
       - uses: ./.github/actions/setup-rust
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+  # Record binary size on main branch pushes for PR comparisons
+  binary-size:
+    name: Record Binary Size
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # ratchet:actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/setup-rust
+      - name: Build release binary
+        run: cargo build --release
+      - name: Update binary size metrics
+        run: |
+          SIZE=$(stat --format="%s" target/release/repoverlay)
+          echo "$SIZE" > metrics/main-binary-size.txt
+          echo "Main binary size: $SIZE bytes"
+      - name: Commit updated metrics
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add metrics/main-binary-size.txt
+          if git diff --staged --quiet; then
+            echo "No size change, skipping commit"
+          else
+            git commit -m "chore: update main binary size [skip ci]"
+            git push
+          fi
