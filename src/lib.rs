@@ -220,11 +220,7 @@ fn resolve_local_path(
     })
 }
 
-/// Resolve a two-part overlay reference (`org/repo`) via browse mode.
-///
-/// In interactive mode, presents a picker to select an overlay.
-/// In non-interactive mode, errors with a list of available overlays.
-/// Resolve a two-part reference by browsing a GitHub overlay repository.
+/// Resolve a two-part overlay reference by browsing a GitHub overlay repository.
 ///
 /// This is "GitHub browse mode" - the user specified a GitHub repo containing overlays
 /// (e.g., `tylerbutler/repo-overlays`). We clone it to the GitHub cache and let them
@@ -234,7 +230,7 @@ fn resolve_local_path(
 /// For example: `microsoft/FluidFramework/vscode-setup/`
 ///
 /// Note: This differs from `resolve_three_part` which uses configured overlay sources.
-/// Here we resolve directly from the cached GitHub repo, not through SourceManager.
+/// Here we resolve directly from the cached GitHub repo, not through `SourceManager`.
 fn resolve_two_part(
     owner: &str,
     repo: &str,
@@ -264,7 +260,7 @@ fn resolve_two_part(
     let cached = cache.ensure_cached(&github_source, update)?;
 
     // List available overlays (returns full paths like "microsoft/FluidFramework/overlay-name")
-    let available_overlays = list_overlays_from_github_repo(owner, repo)?;
+    let available_overlays = list_overlays_from_cached_repo(owner, repo)?;
 
     if available_overlays.is_empty() {
         bail!(
@@ -290,14 +286,11 @@ fn resolve_two_part(
         );
     };
 
-    println!(
-        "{} overlay: {selected_overlay}",
-        "Selected".green().bold()
-    );
+    println!("{} overlay: {selected_overlay}", "Selected".green().bold());
 
     // Parse the selected overlay path: target_org/target_repo/overlay_name
-    let (target_org, target_repo, overlay_name) =
-        parse_overlay_path(&selected_overlay).ok_or_else(|| {
+    let (target_org, target_repo, overlay_name) = parse_overlay_path(&selected_overlay)
+        .ok_or_else(|| {
             anyhow::anyhow!(
                 "Invalid overlay path format: {selected_overlay}\n\
                  Expected: <target-org>/<target-repo>/<overlay-name>"
@@ -307,7 +300,11 @@ fn resolve_two_part(
     // Build the overlay path directly from the cached GitHub repo.
     // This is different from overlay repo resolution (resolve_three_part) which
     // uses OverlayRepoManager - here we're browsing the GitHub cache directly.
-    let overlay_path = cached.path.join(target_org).join(target_repo).join(overlay_name);
+    let overlay_path = cached
+        .path
+        .join(target_org)
+        .join(target_repo)
+        .join(overlay_name);
 
     if !overlay_path.exists() {
         bail!("Overlay directory not found: {}", overlay_path.display());
@@ -346,31 +343,6 @@ fn get_cached_repo_commit(repo_path: &Path) -> Option<String> {
     }
 }
 
-/// List available overlays from a GitHub repository.
-///
-/// Uses `gh` CLI if available, falls back to parsing the cached repo.
-fn list_overlays_from_github_repo(owner: &str, repo: &str) -> Result<Vec<String>> {
-    // Try gh CLI first (faster, no clone needed for listing)
-    let overlays = list_overlays_via_gh(owner, repo);
-    if !overlays.is_empty() {
-        return Ok(overlays);
-    }
-
-    // Fall back to listing from cached repo
-    list_overlays_from_cached_repo(owner, repo)
-}
-
-/// List overlays using gh CLI.
-///
-/// Note: This returns an empty vec to fall back to cached repo scanning,
-/// since listing nested org/repo/overlay structures requires multiple API calls.
-fn list_overlays_via_gh(_owner: &str, _repo: &str) -> Vec<String> {
-    // Overlay repos have nested structure (org/repo/overlay), which would require
-    // multiple recursive API calls. Fall back to cached repo scanning instead.
-    debug!("skipping gh CLI for overlay listing (requires recursive scanning)");
-    Vec::new()
-}
-
 /// List overlays from a cached GitHub repository.
 ///
 /// Used by GitHub browse mode (`resolve_two_part`) to list overlays from a
@@ -399,51 +371,13 @@ fn list_overlays_from_cached_repo(owner: &str, repo: &str) -> Result<Vec<String>
 ///
 /// This is the core logic for listing overlays, extracted for testability.
 fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<String>> {
-    // Walk the nested structure: org/repo/overlay
     let mut overlays = Vec::new();
 
-    // Level 1: target organizations
-    for org_entry in fs::read_dir(repo_path)? {
-        let org_entry = org_entry?;
-        let org_path = org_entry.path();
-
-        // Skip non-directories and hidden files
-        if !org_path.is_dir() {
-            continue;
-        }
-        let org_name = match org_entry.file_name().to_str() {
-            Some(n) if !n.starts_with('.') => n.to_string(),
-            _ => continue,
-        };
-
-        // Level 2: target repositories
-        for repo_entry in fs::read_dir(&org_path)? {
-            let repo_entry = repo_entry?;
-            let target_repo_path = repo_entry.path();
-
-            if !target_repo_path.is_dir() {
-                continue;
-            }
-            let target_repo_name = match repo_entry.file_name().to_str() {
-                Some(n) if !n.starts_with('.') => n.to_string(),
-                _ => continue,
-            };
-
-            // Level 3: overlay names
-            for overlay_entry in fs::read_dir(&target_repo_path)? {
-                let overlay_entry = overlay_entry?;
-                let overlay_path = overlay_entry.path();
-
-                if !overlay_path.is_dir() {
-                    continue;
-                }
-                let overlay_name = match overlay_entry.file_name().to_str() {
-                    Some(n) if !n.starts_with('.') => n.to_string(),
-                    _ => continue,
-                };
-
-                // Return full path: org/repo/overlay
-                overlays.push(format!("{org_name}/{target_repo_name}/{overlay_name}"));
+    // Walk the three-level structure: org/repo/overlay
+    for (org_path, org_name) in visible_subdirs(repo_path)? {
+        for (repo_path, repo_name) in visible_subdirs(&org_path)? {
+            for (_overlay_path, overlay_name) in visible_subdirs(&repo_path)? {
+                overlays.push(format!("{org_name}/{repo_name}/{overlay_name}"));
             }
         }
     }
@@ -453,15 +387,33 @@ fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<String>> {
     Ok(overlays)
 }
 
-/// Parse an overlay path string into (org, repo, overlay_name) components.
+/// Returns visible (non-hidden) subdirectories with their names.
+fn visible_subdirs(path: &Path) -> Result<Vec<(PathBuf, String)>> {
+    let mut results = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        if !entry_path.is_dir() {
+            continue;
+        }
+        if let Some(name) = entry.file_name().to_str().filter(|n| !n.starts_with('.')) {
+            results.push((entry_path, name.to_string()));
+        }
+    }
+    Ok(results)
+}
+
+/// Parse an overlay path string into `(org, repo, overlay_name)` components.
 ///
 /// Returns None if the path doesn't have exactly 3 components.
 fn parse_overlay_path(path: &str) -> Option<(&str, &str, &str)> {
-    let parts: Vec<&str> = path.split('/').collect();
-    if parts.len() == 3 {
-        Some((parts[0], parts[1], parts[2]))
-    } else {
+    let (org, rest) = path.split_once('/')?;
+    let (repo, overlay) = rest.split_once('/')?;
+    // Reject paths with more than 3 components
+    if overlay.contains('/') {
         None
+    } else {
+        Some((org, repo, overlay))
     }
 }
 
@@ -3171,7 +3123,10 @@ mod tests {
         #[test]
         fn parse_overlay_path_valid_three_parts() {
             let result = parse_overlay_path("microsoft/FluidFramework/vscode-setup");
-            assert_eq!(result, Some(("microsoft", "FluidFramework", "vscode-setup")));
+            assert_eq!(
+                result,
+                Some(("microsoft", "FluidFramework", "vscode-setup"))
+            );
         }
 
         #[test]
@@ -3247,14 +3202,6 @@ mod tests {
             // Empty repo has no commits, so rev-parse HEAD fails
             let commit = get_cached_repo_commit(repo.path());
             assert!(commit.is_none());
-        }
-
-        #[test]
-        fn list_overlays_via_gh_returns_empty() {
-            // gh CLI listing is disabled (returns empty to fall back to cached scanning)
-            let result =
-                list_overlays_via_gh("any-owner", "any-repo");
-            assert!(result.is_empty());
         }
     }
 
