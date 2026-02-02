@@ -1,57 +1,63 @@
   File  .text    Size  Crate
- 70.0%  98.8% 1823KiB  *
- 16.3%  23.0%  424KiB  repoverlay
- 11.4%  16.1%  297KiB  regex_automata
- 10.6%  15.0%  277KiB  clap_builder
-  8.0%  11.3%  209KiB  regex_syntax
-  6.8%   9.5%  176KiB  aho_corasick
-  1.7%   2.4% 44.3KiB  chrono
-  1.6%   2.3% 41.8KiB  url
-  1.3%   1.8% 33.6KiB  sickle
-  1.3%   1.8% 33.6KiB  idna
-  1.2%   1.6% 30.3KiB  alloc
-  1.0%   1.4% 25.2KiB  std
-  1.0%   1.4% 24.9KiB  crossterm
-  0.8%   1.1% 19.7KiB  walkdir
-  0.7%   0.9% 17.1KiB  memchr
-  0.6%   0.8% 14.5KiB  icu_normalizer
-  0.5%   0.8% 13.9KiB  dialoguer
-  0.5%   0.7% 13.2KiB  env_logger
-  0.5%   0.7% 12.5KiB  env_filter
-  0.5%   0.6% 12.0KiB  console
-  0.4%   0.6% 11.3KiB  anyhow
-  0.3%   0.5% 9.11KiB  colored
-  0.3%   0.5% 9.03KiB  core
-  0.3%   0.4% 7.77KiB  core
-  0.3%   0.4% 7.38KiB  signal_hook_registry
-  0.2%   0.3% 6.45KiB  std
+ 71.2%  98.8% 2.11MiB  *
+ 16.7%  23.1%  506KiB  repoverlay
+ 10.1%  14.0%  306KiB  clap_builder
+  9.8%  13.6%  297KiB  regex_automata
+  6.9%   9.5%  209KiB  regex_syntax
+  5.8%   8.1%  176KiB  aho_corasick
+  3.0%   4.2% 92.2KiB  clap_complete
+  2.7%   3.7% 81.5KiB  sickle
+  1.6%   2.3% 49.3KiB  alloc
+  1.4%   1.9% 41.8KiB  url
+  1.3%   1.9% 40.7KiB  chrono
+  1.1%   1.5% 33.6KiB  idna
+  1.0%   1.4% 29.6KiB  dialoguer
+  1.0%   1.3% 29.4KiB  std
+  0.8%   1.1% 24.9KiB  crossterm
+  0.6%   0.9% 19.7KiB  walkdir
+  0.6%   0.8% 17.2KiB  console
+  0.6%   0.8% 17.1KiB  clap_markdown
+  0.6%   0.8% 17.1KiB  memchr
+  0.4%   0.6% 13.2KiB  env_logger
+  0.4%   0.6% 12.6KiB  anyhow
+  0.4%   0.6% 12.5KiB  env_filter
+  0.4%   0.5% 12.0KiB  core
+  0.4%   0.5% 11.9KiB  icu_normalizer
+  0.3%   0.5% 10.2KiB  core
+  0.3%   0.4% 9.83KiB  fuzzy_matcher
+  0.3%   0.4% 9.11KiB  colored
+  0.3%   0.4% 8.97KiB  std
+  0.2%   0.3% 7.38KiB  signal_hook_registry
   0.2%   0.3% 5.62KiB  jiff
-  0.2%   0.2% 4.10KiB  alloc
-  0.2%   0.2% 3.96KiB  parking_lot_core
+  0.2%   0.2% 5.33KiB  alloc
+  0.1%   0.2% 3.96KiB  parking_lot_core
   0.1%   0.2% 3.38KiB  parking_lot
-  0.1%   0.2% 3.16KiB  directories
-  0.1%   0.2% 3.16KiB  anstream
-  0.1%   0.2% 2.90KiB  regex
-  0.1%   0.2% 2.84KiB  clap_lex
+  0.1%   0.2% 3.33KiB  serde_core
+  0.1%   0.2% 3.33KiB  indexmap
+  0.1%   0.1% 3.16KiB  directories
+  0.1%   0.1% 3.16KiB  anstream
+  0.1%   0.1% 2.90KiB  regex
+  0.1%   0.1% 2.90KiB  utf8_iter
+  0.1%   0.1% 2.84KiB  clap_lex
   0.1%   0.1% 2.69KiB  anstyle
   0.1%   0.1% 2.63KiB  signal_hook
   0.1%   0.1% 2.11KiB  smallvec
+  0.1%   0.1% 2.09KiB  ?
+  0.1%   0.1% 2044  B  thread_local
+  0.1%   0.1% 1924  B  hashbrown
   0.1%   0.1% 1770  B  strsim
   0.1%   0.1% 1714  B  percent_encoding
-  0.1%   0.1% 1713  B  serde_core
-  0.1%   0.1% 1703  B  ?
   0.1%   0.1% 1628  B  icu_collections
-  0.1%   0.1% 1421  B  hashbrown
+  0.0%   0.1% 1421  B  hashbrown
   0.0%   0.1% 1149  B  log
-  0.0%   0.1% 1109  B  mio
+  0.0%   0.0% 1109  B  mio
+  0.0%   0.0% 1000  B  once_cell
   0.0%   0.0%  840  B  unicode_width
   0.0%   0.0%  633  B  dirs_sys
   0.0%   0.0%  587  B  rustix
   0.0%   0.0%  538  B  icu_properties
-  0.0%   0.0%  428  B  hashbrown
+  0.0%   0.0%  504  B  serde
   0.0%   0.0%  364  B  hashbrown
-  0.0%   0.0%  304  B  utf8_iter
-  0.0%   0.0%  258  B  serde
   0.0%   0.0%  220  B  same_file
   0.0%   0.0%  191  B  libc
   0.0%   0.0%  156  B  repoverlay
