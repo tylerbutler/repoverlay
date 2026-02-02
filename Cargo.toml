@@ -38,6 +38,7 @@ crossterm = "0.29.0"
 sickle = { version = "0.1.2", features = ["serde"] }
 dirs = "6.0.0"
 fuzzy-matcher = "0.3"
+tiny-update-check = { git = "https://github.com/tylerbutler/tiny-update-check" }
 
 [build-dependencies]
 vergen = { version = "9", features = ["build"] }

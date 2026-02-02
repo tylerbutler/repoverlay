@@ -1,6 +1,8 @@
 [workspace]
 # Changelog configuration
 changelog_update = true
+# Treat feature commits as minor releases even before 1.0
+features_always_increment_minor = true
 
 # PR configuration
 pr_draft = false
