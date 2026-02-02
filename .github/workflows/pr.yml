@@ -88,7 +88,7 @@ jobs:
 
       - name: Download main binary size artifact
         id: download-main-size
-        uses: dawidd6/action-download-artifact@20319c5641d495c8a52e688b7dc5fada6c3a9fbc # ratchet:dawidd6/action-download-artifact@v8
+        uses: dawidd6/action-download-artifact@5c98f0b039f36ef966fdb7dfa9779262785ecb05 # ratchet:dawidd6/action-download-artifact@v14
         with:
           workflow: ci.yml
           branch: main
