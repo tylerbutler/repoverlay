@@ -131,12 +131,17 @@ pub(crate) fn resolve_source(
         ),
 
         SourceReference::OnePart { username } => {
-            // Phase C: Username shorthand - not yet implemented
-            bail!(
-                "Username shorthand not yet implemented.\n\n\
-                 Please use the full format:\n\
-                 repoverlay apply {username}/{DEFAULT_OVERLAY_REPO_NAME}/<overlay-name>\n\n\
-                 Or specify a GitHub URL or local path."
+            // Phase C: Expand username to username/repo-overlays
+            debug!(
+                "expanding one-part reference: {username} -> {username}/{DEFAULT_OVERLAY_REPO_NAME}"
+            );
+            resolve_two_part(
+                &username,
+                DEFAULT_OVERLAY_REPO_NAME,
+                ref_override,
+                update,
+                target_path,
+                source_filter,
             )
         }
     }
