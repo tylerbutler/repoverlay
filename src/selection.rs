@@ -291,7 +291,7 @@ pub fn select_files(
     config: SelectionConfig,
 ) -> anyhow::Result<SelectionResult> {
     // Non-TTY fallback: return preselected files
-    if !atty_is_interactive() {
+    if !is_interactive() {
         let selected: Vec<PathBuf> = files
             .iter()
             .filter(|f| f.preselected)
@@ -341,7 +341,7 @@ pub fn select_files(
 /// - Running as a cargo test binary (executable in target/*/deps/)
 /// - TERM is unset or "dumb"
 /// - `REPOVERLAY_NON_INTERACTIVE` env var is set
-fn atty_is_interactive() -> bool {
+pub fn is_interactive() -> bool {
     use std::io::IsTerminal;
 
     // Explicit non-interactive override

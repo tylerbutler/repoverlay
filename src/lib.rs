@@ -38,6 +38,7 @@ use fuzzy::OverlayMatcher;
 use github::GitHubSource;
 use overlay_repo::copy_dir_recursive;
 use reference::SourceReference;
+use selection::is_interactive;
 use state::{
     CONFIG_FILE, EntryType, FileEntry, GIT_EXCLUDE, GlobalMeta, LinkType, MANAGED_SECTION_NAME,
     META_FILE, OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR,
@@ -120,15 +121,14 @@ pub(crate) fn resolve_source(
             overlay,
         } => resolve_three_part(&owner, &repo, &overlay, target_path, source_filter, update),
 
-        SourceReference::TwoPart { owner, repo } => {
-            // Phase B: Browse mode - not yet implemented
-            bail!(
-                "Browse mode not yet implemented.\n\n\
-                 Please specify an overlay name:\n\
-                 repoverlay apply {owner}/{repo}/<overlay-name>\n\n\
-                 Use `repoverlay list --filter {owner}/{repo}` to see available overlays."
-            )
-        }
+        SourceReference::TwoPart { owner, repo } => resolve_two_part(
+            &owner,
+            &repo,
+            ref_override,
+            update,
+            target_path,
+            source_filter,
+        ),
 
         SourceReference::OnePart { username } => {
             // Phase C: Username shorthand - not yet implemented
@@ -213,6 +213,178 @@ fn resolve_local_path(
         path: canonical.clone(),
         source_info: OverlaySource::local(canonical),
     })
+}
+
+/// Resolve a two-part overlay reference (`org/repo`) via browse mode.
+///
+/// In interactive mode, presents a picker to select an overlay.
+/// In non-interactive mode, errors with a list of available overlays.
+fn resolve_two_part(
+    owner: &str,
+    repo: &str,
+    ref_override: Option<&str>,
+    update: bool,
+    target_path: Option<&Path>,
+    source_filter: Option<&str>,
+) -> Result<ResolvedSource> {
+    debug!("resolving two-part reference (browse mode): {owner}/{repo}");
+
+    // Create a GitHubSource to fetch/cache the repo
+    let github_url = format!("https://github.com/{owner}/{repo}");
+    let mut github_source = GitHubSource::parse(&github_url)?;
+
+    if let Some(ref_str) = ref_override {
+        github_source = github_source.with_ref_override(Some(ref_str));
+    }
+
+    // Fetch/cache the repository
+    let cache = CacheManager::new()?;
+    println!(
+        "{} repository: {}/{}",
+        if update { "Updating" } else { "Fetching" }.blue().bold(),
+        owner,
+        repo
+    );
+    cache.ensure_cached(&github_source, update)?;
+
+    // List available overlays
+    let available_overlays = list_overlays_from_github_repo(owner, repo)?;
+
+    if available_overlays.is_empty() {
+        bail!(
+            "No overlays found in {owner}/{repo}.\n\n\
+             Make sure the repository contains overlay directories with config files."
+        );
+    }
+
+    // Select overlay based on interactivity
+    let selected_overlay = if is_interactive() {
+        select_overlay_interactive(owner, repo, &available_overlays)?
+    } else {
+        // Non-interactive mode - error with available overlays
+        let overlay_list = available_overlays.join(", ");
+        bail!(
+            "No overlay specified. Available overlays in {owner}/{repo}:\n  {overlay_list}\n\n\
+             Use: repoverlay apply {owner}/{repo}/<overlay-name>"
+        );
+    };
+
+    // Now resolve the selected overlay using three-part logic
+    println!(
+        "{} overlay: {owner}/{repo}/{selected_overlay}",
+        "Selected".green().bold()
+    );
+
+    resolve_three_part(
+        owner,
+        repo,
+        &selected_overlay,
+        target_path,
+        source_filter,
+        false, // Don't update again - we just fetched
+    )
+}
+
+/// List available overlays from a GitHub repository.
+///
+/// Uses `gh` CLI if available, falls back to parsing the cached repo.
+fn list_overlays_from_github_repo(owner: &str, repo: &str) -> Result<Vec<String>> {
+    // Try gh CLI first (faster, no clone needed for listing)
+    let overlays = list_overlays_via_gh(owner, repo);
+    if !overlays.is_empty() {
+        return Ok(overlays);
+    }
+
+    // Fall back to listing from cached repo
+    list_overlays_from_cached_repo(owner, repo)
+}
+
+/// List overlays using gh CLI.
+fn list_overlays_via_gh(owner: &str, repo: &str) -> Vec<String> {
+    use std::process::Command;
+
+    debug!("listing overlays via gh CLI: {owner}/{repo}");
+
+    // Use gh api to list top-level directories
+    let output = Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{owner}/{repo}/contents"),
+            "--jq",
+            ".[] | select(.type == \"dir\") | .name",
+        ])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            debug!("gh CLI not available or failed, falling back to cached repo");
+            return Vec::new();
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let overlays: Vec<String> = stdout
+        .lines()
+        .filter(|name| !name.starts_with('.') && !name.is_empty())
+        .map(String::from)
+        .collect();
+
+    debug!("found {} potential overlays via gh", overlays.len());
+    overlays
+}
+
+/// List overlays from a cached repository.
+fn list_overlays_from_cached_repo(owner: &str, repo: &str) -> Result<Vec<String>> {
+    debug!("listing overlays from cached repo: {owner}/{repo}");
+
+    let cache = CacheManager::new()?;
+    let cache_dir = cache.cache_dir();
+    let repo_path = cache_dir.join(owner).join(repo);
+
+    if !repo_path.exists() {
+        bail!("Repository not cached: {owner}/{repo}");
+    }
+
+    // List top-level directories (potential overlays)
+    let mut overlays = Vec::new();
+    for entry in fs::read_dir(&repo_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir()
+            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && !name.starts_with('.')
+        {
+            overlays.push(name.to_string());
+        }
+    }
+
+    overlays.sort();
+    debug!("found {} potential overlays in cache", overlays.len());
+    Ok(overlays)
+}
+
+/// Present an interactive picker to select an overlay.
+fn select_overlay_interactive(owner: &str, repo: &str, overlays: &[String]) -> Result<String> {
+    use dialoguer::{Select, theme::ColorfulTheme};
+
+    println!(
+        "\n{} Select an overlay from {}/{}:\n",
+        "?".cyan().bold(),
+        owner,
+        repo
+    );
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .items(overlays)
+        .default(0)
+        .interact_opt()
+        .context("Failed to show overlay picker")?;
+
+    match selection {
+        Some(idx) => Ok(overlays[idx].clone()),
+        None => bail!("Overlay selection cancelled"),
+    }
 }
 
 /// Resolve a three-part overlay reference (`org/repo/overlay`).
