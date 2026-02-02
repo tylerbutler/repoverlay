@@ -168,4 +168,103 @@ mod tests {
         let matches = matcher.find_matches("overlay", &candidates, 3);
         assert!(matches.len() <= 3);
     }
+
+    #[test]
+    fn empty_candidates_returns_empty() {
+        let matcher = OverlayMatcher::new();
+        let candidates: Vec<String> = vec![];
+
+        let matches = matcher.find_matches("test", &candidates, 5);
+        assert!(matches.is_empty());
+
+        let suggestions = matcher.suggest("test", &candidates, 5);
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn empty_query_still_works() {
+        let matcher = OverlayMatcher::new();
+        let candidates = vec!["overlay-a".to_string(), "overlay-b".to_string()];
+
+        // Empty query may or may not match depending on fuzzy matcher behavior
+        let matches = matcher.find_matches("", &candidates, 5);
+        // Just verify it doesn't panic
+        assert!(matches.len() <= 5);
+    }
+
+    #[test]
+    fn scored_match_fields() {
+        let scored = ScoredMatch {
+            value: "test-overlay".to_string(),
+            score: 100,
+        };
+        assert_eq!(scored.value, "test-overlay");
+        assert_eq!(scored.score, 100);
+    }
+
+    #[test]
+    fn scored_match_clone_and_eq() {
+        let original = ScoredMatch {
+            value: "test".to_string(),
+            score: 50,
+        };
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn scored_match_debug() {
+        let scored = ScoredMatch {
+            value: "overlay".to_string(),
+            score: 75,
+        };
+        let debug_str = format!("{scored:?}");
+        assert!(debug_str.contains("overlay"));
+        assert!(debug_str.contains("75"));
+    }
+
+    #[test]
+    fn overlay_matcher_default() {
+        // Test Default implementation
+        let matcher = OverlayMatcher::default();
+        let candidates = vec!["test".to_string()];
+        let matches = matcher.find_matches("test", &candidates, 1);
+        assert!(!matches.is_empty());
+    }
+
+    #[test]
+    fn matches_sorted_by_score_descending() {
+        let matcher = OverlayMatcher::new();
+        let candidates = vec!["abc".to_string(), "abcd".to_string(), "abcde".to_string()];
+
+        let matches = matcher.find_matches("abcde", &candidates, 3);
+        // Best match (exact) should be first
+        if matches.len() >= 2 {
+            assert!(matches[0].score >= matches[1].score);
+        }
+    }
+
+    #[test]
+    fn suggest_returns_values_only() {
+        let matcher = OverlayMatcher::new();
+        let candidates = vec!["claude-config".to_string(), "copilot-config".to_string()];
+
+        let suggestions = matcher.suggest("claude", &candidates, 2);
+        // suggest() returns Vec<String>, not Vec<ScoredMatch>
+        for suggestion in &suggestions {
+            assert!(candidates.contains(suggestion));
+        }
+    }
+
+    #[test]
+    fn max_results_zero_returns_empty() {
+        let matcher = OverlayMatcher::new();
+        let candidates = vec!["test".to_string()];
+
+        let matches = matcher.find_matches("test", &candidates, 0);
+        assert!(matches.is_empty());
+
+        let suggestions = matcher.suggest("test", &candidates, 0);
+        assert!(suggestions.is_empty());
+    }
 }

@@ -1539,4 +1539,15 @@ mod tests {
         assert!(state.visible_categories.contains(&FileCategory::Untracked));
         assert_eq!(state.visible_categories.len(), 4);
     }
+
+    #[test]
+    fn is_interactive_returns_false_in_tests() {
+        // In test context, is_interactive should return false
+        // because the executable is in target/*/deps/
+        assert!(!is_interactive());
+    }
+
+    // Note: Tests for env var handling are skipped because set_var/remove_var
+    // are unsafe in Rust 2024 edition. The is_interactive_returns_false_in_tests
+    // test verifies the test detection path works correctly.
 }

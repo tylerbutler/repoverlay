@@ -283,4 +283,127 @@ mod tests {
         let result = SourceReference::parse("HTTPS://GITHUB.COM/owner/repo");
         assert!(matches!(result, SourceReference::GitHubUrl(_)));
     }
+
+    #[test]
+    fn parse_empty_input() {
+        // Empty input should not panic
+        let result = SourceReference::parse("");
+        // Empty string doesn't match structured formats, falls to local path
+        assert!(matches!(result, SourceReference::LocalPath { .. }));
+    }
+
+    #[test]
+    fn parse_tilde_with_path() {
+        // ~/some/path should expand tilde
+        let result = SourceReference::parse("~/overlays/test");
+        if let SourceReference::LocalPath {
+            path,
+            needs_prefix_warning,
+        } = result
+        {
+            if let Some(home) = dirs::home_dir() {
+                assert_eq!(path, home.join("overlays/test"));
+            }
+            assert!(!needs_prefix_warning);
+        } else {
+            panic!("Expected LocalPath for tilde path");
+        }
+    }
+
+    #[test]
+    fn parse_four_parts_invalid() {
+        // Four or more parts should not match structured formats
+        let result = SourceReference::parse("a/b/c/d");
+        assert!(matches!(result, SourceReference::LocalPath { .. }));
+
+        let result = SourceReference::parse("a/b/c/d/e/f");
+        assert!(matches!(result, SourceReference::LocalPath { .. }));
+    }
+
+    #[test]
+    fn parse_two_part_empty_parts_invalid() {
+        // Empty parts should not match two-part
+        let result = SourceReference::parse("/repo");
+        // Starts with / so it's an absolute path
+        assert!(matches!(result, SourceReference::LocalPath { .. }));
+
+        let result = SourceReference::parse("owner/");
+        // Has empty second part
+        assert!(matches!(result, SourceReference::LocalPath { .. }));
+    }
+
+    #[test]
+    fn parse_with_whitespace() {
+        // Whitespace in input is preserved (not trimmed)
+        // " owner/repo " splits into [" owner", "repo "] - 2 non-empty parts
+        // so it matches as TwoPart with spaces in the values
+        let result = SourceReference::parse(" owner/repo ");
+        if let SourceReference::TwoPart { owner, repo } = result {
+            assert_eq!(owner, " owner");
+            assert_eq!(repo, "repo ");
+        } else {
+            panic!("Expected TwoPart with whitespace preserved");
+        }
+    }
+
+    #[test]
+    fn needs_local_path_warning_returns_false_for_explicit_paths() {
+        let reference = SourceReference::LocalPath {
+            path: PathBuf::from("./test"),
+            needs_prefix_warning: false,
+        };
+        assert!(!reference.needs_local_path_warning());
+    }
+
+    #[test]
+    fn needs_local_path_warning_returns_true_for_ambiguous_paths() {
+        let reference = SourceReference::LocalPath {
+            path: PathBuf::from("test"),
+            needs_prefix_warning: true,
+        };
+        assert!(reference.needs_local_path_warning());
+    }
+
+    #[test]
+    fn needs_local_path_warning_returns_false_for_non_local_path() {
+        let reference = SourceReference::GitHubUrl("https://github.com/a/b".to_string());
+        assert!(!reference.needs_local_path_warning());
+
+        let reference = SourceReference::ThreePart {
+            owner: "a".to_string(),
+            repo: "b".to_string(),
+            overlay: "c".to_string(),
+        };
+        assert!(!reference.needs_local_path_warning());
+    }
+
+    #[test]
+    fn parse_http_github_url() {
+        // HTTP (not HTTPS) should also work
+        let result = SourceReference::parse("http://github.com/owner/repo");
+        assert!(matches!(result, SourceReference::GitHubUrl(_)));
+    }
+
+    #[test]
+    fn source_reference_clone_and_eq() {
+        // Test Clone and PartialEq derives
+        let original = SourceReference::ThreePart {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            overlay: "overlay".to_string(),
+        };
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn source_reference_debug() {
+        // Test Debug derive
+        let reference = SourceReference::OnePart {
+            username: "user".to_string(),
+        };
+        let debug_str = format!("{reference:?}");
+        assert!(debug_str.contains("OnePart"));
+        assert!(debug_str.contains("user"));
+    }
 }
