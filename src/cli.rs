@@ -42,6 +42,29 @@ fn version_string() -> &'static str {
     &VERSION
 }
 
+/// Check for updates and print a notification if a new version is available.
+///
+/// Uses tiny-update-check to query crates.io with caching (24 hours).
+fn check_for_updates() {
+    let name = env!("CARGO_PKG_NAME");
+    let version = env!("CARGO_PKG_VERSION");
+
+    if let Ok(Some(update)) = tiny_update_check::check(name, version) {
+        eprintln!();
+        eprintln!(
+            "{} A new version of {} is available: {} → {}",
+            "Update available:".yellow().bold(),
+            name,
+            update.current,
+            update.latest.green().bold()
+        );
+        eprintln!(
+            "                  {}",
+            "https://github.com/tylerbutler/repoverlay/releases".cyan()
+        );
+    }
+}
+
 /// Overlay config files into git repositories without committing them
 #[derive(Parser)]
 #[command(name = "repoverlay")]
@@ -538,8 +561,13 @@ pub fn run() -> Result<()> {
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "repoverlay", &mut io::stdout());
+            // Skip update check for completions - output goes to shell scripts
+            return Ok(());
         }
     }
+
+    // Check for updates after successful command execution
+    check_for_updates();
 
     Ok(())
 }
