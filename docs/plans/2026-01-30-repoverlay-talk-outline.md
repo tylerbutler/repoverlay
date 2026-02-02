@@ -4,7 +4,7 @@ A conversational walkthrough for developers who want consistent AI configs acros
 
 **Format:** Informal walkthrough, ~15-20 minutes
 **Audience:** Developers familiar with git basics, briefly frame the problem before diving in
-**Golden path:** Full lifecycle with an overlay repository - create, apply, sync, manage
+**Golden path:** Apply-first workflow - use existing overlays, then learn to create your own
 
 ---
 
@@ -12,14 +12,16 @@ A conversational walkthrough for developers who want consistent AI configs acros
 
 ### The Problem
 
-"I have a project with Claude configs - `.claude/` directory, `CLAUDE.md`, maybe some custom commands. These files make Claude Code work great for this project. But:
-- I shouldn't commit them (they're personal preferences, not project config)
-- I want them in my other projects too
-- When I improve them, I want the improvements everywhere"
+"I work across multiple projects - maybe my own repos, maybe forks of open source projects. I've got Claude configs that make my workflow great:
+- `.claude/` directory with custom commands
+- `CLAUDE.md` with project context
+- Maybe some local scratch files
+
+But these are *my* preferences, not project config. I shouldn't commit them. And I want them everywhere."
 
 ### The Core Concept
 
-repoverlay symlinks files from an external source into your repo and automatically excludes them from git. That's it. Files appear in your project, git ignores them, and they're actually stored somewhere you control.
+repoverlay symlinks files from an external source into your repo and automatically excludes them from git. Files appear in your project, git ignores them, and they're actually stored somewhere you control.
 
 ### Demo: Show the End State
 
@@ -35,62 +37,41 @@ git status
 # Peek behind the curtain - they're symlinks
 ls -la
 
-# The tool's view - overlay name, source, managed files
+# The tool's view
 repoverlay status
 ```
 
 **Key point:** Show the destination before explaining how to get there.
 
----
-
-## Section 2: Create Your First Overlay (3-5 min)
-
-### Setup Requirement
-
-You need an **overlay repository** - a git repo where your overlays live. This could be `github.com/yourname/overlays` or similar.
-
-### Demo: Interactive Overlay Creation
-
-Start in a project that has `.claude/` and `CLAUDE.md` (not yet managed by repoverlay).
-
-```bash
-repoverlay create my-ai-config
-```
-
-1. **Interactive selection UI appears** - checkbox list of discovered files (AI configs, gitignored files, untracked files)
-2. Select `.claude/` and `CLAUDE.md` using the checkbox interface
-3. Confirm
-
-**What happened:**
-- Files copied to overlay repo
-- Originals replaced with symlinks
-- Auto-committed and pushed to overlay repo
-
-**Output shows:** The `org/repo/overlay-name` path where the overlay now lives.
-
-### Concepts Introduced
-
-- Overlay repository ("a git repo where your overlays live")
-- The `org/repo/overlay-name` naming convention
+**Demo tip:** Most commands support `--dry-run` to preview changes without applying them.
 
 ---
 
-## Section 3: Apply to Another Project (2-3 min)
+## Section 2: Apply an Existing Overlay (3-4 min)
 
-### Demo: Apply the Overlay
+### The Simple Case
+
+"Let's say a teammate already has overlays set up, or you've found some shared configs online. Getting them is one command."
 
 ```bash
-# Move to a different project (no AI configs yet)
-cd ~/projects/other-project
-
-# Apply using the short-form syntax
-repoverlay apply yourname/overlays/my-ai-config
+# Just the username - assumes tylerbutler/repo-overlays
+repoverlay apply tylerbutler
 ```
 
-**Show the results:**
+Interactive selection appears:
+```
+? Select an overlay from tylerbutler/repo-overlays:
+  > claude-config
+    dev-setup
+    rust-tools
+```
+
+Select `claude-config`, done.
+
+### Show the Results
 
 ```bash
-# Symlinks pointing to overlay repo
+# Symlinks pointing to cached overlay
 ls -la
 
 # Confirms the overlay is applied
@@ -100,70 +81,65 @@ repoverlay status
 git status
 ```
 
-### Key Point
+### The Syntax Shorthand
 
-"Both projects now share the same files. Edit in one place, it's updated everywhere - because they're symlinks to the same source."
+"repoverlay figures out what you mean based on how specific you are:"
 
-### Concepts Introduced
+| You type | repoverlay understands |
+|----------|------------------------|
+| `tylerbutler` | Browse `tylerbutler/repo-overlays` on GitHub |
+| `tylerbutler/my-configs` | Browse `tylerbutler/my-configs` on GitHub |
+| `tylerbutler/my-configs/claude` | Apply `claude` directly |
 
-- The short-form `org/repo/overlay-name` syntax
-- Git exclude (briefly: "repoverlay automatically adds these to `.git/info/exclude` so git ignores them")
+"If you know exactly what you want, be specific. If you want to browse, be vague."
 
-### If Asked
+### Key Points
 
-Why `.git/info/exclude` instead of `.gitignore`? The exclude file is local to your clone; `.gitignore` is tracked and would affect everyone.
-
----
-
-## Section 4: Making Changes and Syncing Back (2-3 min)
-
-### Demo: Edit and Sync
-
-```bash
-# Make a change to an overlay file
-# (e.g., edit CLAUDE.md or add a command to .claude/commands/)
-
-# Sync changes back to the overlay repo
-repoverlay sync my-ai-config
-```
-
-**Output shows:** Changes detected, committed, pushed to overlay repo.
-
-**Optional:** `cd` to the other project, show the change is already there (because symlinks).
-
-### Key Point
-
-"You edit files normally - they're just files in your project. When you're happy with changes, `sync` pushes them back to the overlay repo. Since everything is symlinked, other projects already have the update."
-
-### Potential Confusion
-
-"Wait, if they're symlinks, why do I need to sync?"
-
-The files live in the overlay repo on disk. Sync commits and pushes those changes so the git repo stays up to date (and so GitHub has the latest version).
+- GitHub is assumed - no URLs to type
+- Convention: `username/repo-overlays` is the default repo name
+- You can also use full GitHub URLs or local paths if needed
 
 ---
 
-## Section 5: Day-to-Day Management (2-3 min)
+## Section 3: Day-to-Day Usage (3-4 min)
 
-### Status Check
+### Checking Status
 
 ```bash
 # See all applied overlays
 repoverlay status
 
 # Details on specific overlay
-repoverlay status --name my-ai-config
+repoverlay status --name claude-config
 ```
 
 Shows: source, files managed, when applied.
+
+### Making Changes
+
+"You edit files normally - they're just files in your project. When you're happy with changes, `sync` pushes them back to the source."
+
+```bash
+# Edit CLAUDE.md or add a command to .claude/commands/
+# Then sync changes back
+repoverlay sync claude-config
+```
+
+**Output shows:** Changes detected, committed, pushed.
+
+### Potential Confusion
+
+"Wait, if they're symlinks, why do I need to sync?"
+
+The files live in a cached copy of the overlay repo. Sync commits and pushes those changes so the git repo stays up to date (and so others get your improvements).
 
 ### Removing an Overlay
 
 ```bash
 # Remove specific overlay
-repoverlay remove my-ai-config
+repoverlay remove claude-config
 
-# Interactive selection if multiple overlays
+# Interactive selection if you have multiple
 repoverlay remove
 ```
 
@@ -177,27 +153,103 @@ Removes symlinks, cleans up git exclude.
 repoverlay restore
 ```
 
-Restores from external backup.
-
-**Brief explanation:** repoverlay keeps a backup of what's applied in `~/.local/share/repoverlay/` so it can recover.
+Restores from external backup in `~/.local/share/repoverlay/applied/`.
 
 ### Key Point
 
-"These are the commands you'll use day-to-day: `status` to see what's applied, `sync` to push changes, and occasionally `restore` if something gets cleaned up."
+"These are the commands you'll use most: `status` to see what's applied, `sync` to push changes, and occasionally `restore` if something gets cleaned up."
 
 ---
 
-## Bonus: Directory Symlinks via Config
+## Section 4: Create Your Own Overlay (3-4 min)
+
+### When You're Ready to Share (Or Just Reuse)
+
+"Once you've got configs you want to reuse across projects - or share with your team - you can create your own overlay."
+
+### Setup: The Overlay Repository
+
+"If you want to share overlays via GitHub, create a repo to store them. The convention is `repo-overlays`:"
+
+```
+github.com/yourname/repo-overlays
+```
+
+"If you don't have one yet, repoverlay can set it up:"
+
+```bash
+repoverlay create claude-config
+# No overlay repository configured. Create one?
+# > Yes, create yourname/repo-overlays on GitHub
+#   No, I'll use a local directory
+#   No, let me configure it manually
+```
+
+Selecting "Yes" runs `gh repo create yourname/repo-overlays --private` and configures it automatically.
+
+### Local-Only Option
+
+"If you don't want to share at all - just reuse configs across your own machines - use a local path:"
+
+```bash
+repoverlay create-local ~/my-overlays/claude-config
+```
+
+This creates the overlay in a local directory. No GitHub, no sharing - just symlinks to a folder you control.
+
+### Demo: Create an Overlay
+
+Start in a project that has `.claude/` and `CLAUDE.md`.
+
+```bash
+repoverlay create claude-config
+```
+
+Interactive selection UI appears - checkbox list of discovered files:
+```
+? Select files to include:
+  [x] .claude/
+  [x] CLAUDE.md
+  [ ] .envrc
+  [ ] scratch/
+```
+
+Confirm selection.
+
+### What Happened
+
+1. Files copied to your overlay repo (under `yourname/repo-overlays/claude-config/`)
+2. Originals replaced with symlinks
+3. Auto-committed and pushed to GitHub
+
+**Output shows:** The full path where the overlay now lives.
+
+### Now Others Can Use It
+
+```bash
+# Your teammate runs:
+repoverlay apply yourname
+
+# Selects claude-config, done.
+```
+
+### Key Point
+
+"Creating is the advanced flow - most people start by applying existing overlays. But when you're ready, it's just `create` with a name, or `create-local` if you want to keep things private."
+
+---
+
+## Bonus: Directory Symlinks via Config (2 min)
 
 ### The Problem
 
-By default, repoverlay walks directories and symlinks individual files. But sometimes you want the whole directory as one symlink.
+"By default, repoverlay walks directories and symlinks individual files. But sometimes you want the whole directory as one symlink."
 
 "If I add a new file to `.claude/commands/` in my overlay, it doesn't automatically appear in projects - because each file is symlinked individually."
 
-### Demo: Configure Directory Symlinks
+### Solution: Configure Directory Symlinks
 
-Open `repoverlay.ccl` in the overlay repo (first time seeing this file):
+Open `repoverlay.ccl` in the overlay directory:
 
 ```
 directories =
@@ -207,46 +259,50 @@ directories =
 Re-apply the overlay:
 
 ```bash
-repoverlay remove my-ai-config
-repoverlay apply yourname/overlays/my-ai-config
+repoverlay remove claude-config
+repoverlay apply yourname/repo-overlays/claude-config
 ```
 
 Now `.claude/` itself is the symlink:
 
 ```bash
 ls -la
-# .claude -> /path/to/overlay/repo/.claude
+# .claude -> /path/to/cached/overlay/.claude
 ```
+
+New files appear automatically.
 
 ### Key Point
 
-"This is the one config option worth knowing. Directory symlinks mean the overlay stays in sync without re-applying."
+"This is the one config option worth knowing. Directory symlinks mean new files in the overlay appear everywhere without re-applying."
 
 ### CCL Format
 
-"The config uses CCL format - it's like a simpler TOML. You probably won't need to edit it often, but `directories` is the useful one. If you're curious about CCL, check out [ccl.tylerbutler.com](https://ccl.tylerbutler.com)."
+"The config uses CCL format - like a simpler TOML. You probably won't edit it often, but `directories` is the useful one."
+
+Learn more: [ccl.tylerbutler.com](https://ccl.tylerbutler.com)
 
 ---
 
-## Concepts Reference
+## Concepts Recap
 
 ### Introduced (in order)
 
 1. **Symlinks + git exclude** - core mechanism
-2. **Overlay repository** - where overlays live
-3. **`org/repo/overlay-name` naming** - how to reference overlays
-4. **Sync workflow** - edit files normally, sync pushes to overlay repo
+2. **GitHub shorthand** - `username`, `owner/repo`, `owner/repo/overlay`
+3. **`repo-overlays` convention** - default repo name for single-username form
+4. **Sync workflow** - edit files normally, sync pushes to source
 5. **External backup** - enables recovery after `git clean`
-6. **Directory symlinks** - config option for atomic directory management
+6. **Overlay repository** - where your overlays live (GitHub or local)
+7. **Directory symlinks** - config option for atomic directory management
 
 ### Intentionally Minimized
 
-- CCL config format details (just show `directories`)
-- State file internals (`.repoverlay/` exists, don't explain)
-- Copy mode (`--copy`)
-- GitHub URL sources (mention "also works" if asked)
-- Fork inheritance
-- Cache management
+- Full URL syntax (mention "also works" if asked)
+- `--copy` mode
+- Multi-source configuration
+- Fork inheritance / upstream resolution
+- Cache management commands
 
 ---
 
@@ -254,9 +310,11 @@ ls -la
 
 | Task | Command |
 |------|---------|
-| Create overlay | `repoverlay create <name>` |
-| Apply overlay | `repoverlay apply <source>` |
+| Apply overlay (browse) | `repoverlay apply <username>` |
+| Apply overlay (direct) | `repoverlay apply <owner/repo/overlay>` |
 | Check status | `repoverlay status` |
 | Sync changes | `repoverlay sync <name>` |
 | Remove overlay | `repoverlay remove <name>` |
 | Restore after clean | `repoverlay restore` |
+| Create overlay (shared) | `repoverlay create <name>` |
+| Create overlay (local) | `repoverlay create-local <path>` |
