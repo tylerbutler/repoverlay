@@ -118,6 +118,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Save generated metrics files before switching branches
+          cp -r metrics/ /tmp/metrics-backup/
+
+          # Checkout the PR branch to commit metrics there
+          git fetch origin "$PR_BRANCH"
+          git checkout "$PR_BRANCH"
+
+          # Restore the generated metrics files
+          cp -r /tmp/metrics-backup/* metrics/
+
           # Stage metrics updates
           git add metrics/
 
