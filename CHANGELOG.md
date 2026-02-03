@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- *(deps)* bump dawidd6/action-download-artifact from 8 to 14 ([#57](https://github.com/tylerbutler/repoverlay/pull/57))
 - add workflow to close dependabot PRs for generated files
 - cargo update
 - *(talk)* restructure to apply-first flow with unified syntax ([#47](https://github.com/tylerbutler/repoverlay/pull/47))
