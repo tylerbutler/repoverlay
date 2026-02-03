@@ -1,6 +1,6 @@
 ---
 marp: true
-theme: default
+theme: nord-theme
 paginate: true
 title: repoverlay - Config Files Everywhere
 ---
