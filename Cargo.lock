@@ -1507,7 +1507,7 @@ dependencies = [
 [[package]]
 name = "tiny-update-check"
 version = "0.1.0"
-source = "git+https://github.com/tylerbutler/tiny-update-check#035cbee9c2c00d831c0a4116515ae697a4848c91"
+source = "git+https://github.com/tylerbutler/tiny-update-check#f81a954dc7715b94c781294ebc9a1e7c069d4990"
 dependencies = [
  "dirs",
  "semver",
