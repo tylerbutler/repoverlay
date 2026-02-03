@@ -1,62 +1,86 @@
   File  .text    Size  Crate
- 70.0%  98.8% 1823KiB  *
- 16.3%  23.0%  424KiB  repoverlay
- 11.4%  16.1%  297KiB  regex_automata
- 10.6%  15.0%  277KiB  clap_builder
-  8.0%  11.3%  209KiB  regex_syntax
-  6.8%   9.5%  176KiB  aho_corasick
-  1.7%   2.4% 44.3KiB  chrono
-  1.6%   2.3% 41.8KiB  url
-  1.3%   1.8% 33.6KiB  sickle
-  1.3%   1.8% 33.6KiB  idna
-  1.2%   1.6% 30.3KiB  alloc
-  1.0%   1.4% 25.2KiB  std
-  1.0%   1.4% 24.9KiB  crossterm
-  0.8%   1.1% 19.7KiB  walkdir
-  0.7%   0.9% 17.1KiB  memchr
-  0.6%   0.8% 14.5KiB  icu_normalizer
-  0.5%   0.8% 13.9KiB  dialoguer
-  0.5%   0.7% 13.2KiB  env_logger
-  0.5%   0.7% 12.5KiB  env_filter
-  0.5%   0.6% 12.0KiB  console
-  0.4%   0.6% 11.3KiB  anyhow
-  0.3%   0.5% 9.11KiB  colored
-  0.3%   0.5% 9.03KiB  core
-  0.3%   0.4% 7.77KiB  core
-  0.3%   0.4% 7.38KiB  signal_hook_registry
-  0.2%   0.3% 6.45KiB  std
-  0.2%   0.3% 5.62KiB  jiff
-  0.2%   0.2% 4.10KiB  alloc
-  0.2%   0.2% 3.96KiB  parking_lot_core
-  0.1%   0.2% 3.38KiB  parking_lot
-  0.1%   0.2% 3.16KiB  directories
-  0.1%   0.2% 3.16KiB  anstream
-  0.1%   0.2% 2.90KiB  regex
-  0.1%   0.2% 2.84KiB  clap_lex
+ 67.0%  98.7% 2.41MiB  *
+ 13.8%  20.3%  508KiB  repoverlay
+  8.3%  12.2%  306KiB  clap_builder
+  8.0%  11.8%  297KiB  regex_automata
+  5.7%   8.3%  209KiB  regex_syntax
+  4.8%   7.0%  176KiB  aho_corasick
+  3.4%   5.0%  125KiB  ureq
+  2.5%   3.7% 92.2KiB  clap_complete
+  2.2%   3.3% 81.5KiB  sickle
+  1.4%   2.1% 53.3KiB  alloc
+  1.3%   1.9% 47.7KiB  http
+  1.3%   1.9% 46.7KiB  ureq_proto
+  1.1%   1.7% 41.8KiB  url
+  1.1%   1.6% 41.1KiB  std
+  1.1%   1.6% 40.7KiB  chrono
+  0.9%   1.3% 33.6KiB  idna
+  0.8%   1.2% 29.6KiB  dialoguer
+  0.7%   1.0% 24.9KiB  crossterm
+  0.5%   0.8% 19.7KiB  walkdir
+  0.5%   0.7% 17.2KiB  console
+  0.5%   0.7% 17.1KiB  clap_markdown
+  0.5%   0.7% 17.1KiB  memchr
+  0.4%   0.6% 16.0KiB  openssl
+  0.4%   0.6% 15.2KiB  core
+  0.4%   0.5% 13.2KiB  env_logger
+  0.4%   0.5% 13.1KiB  std
+  0.3%   0.5% 12.6KiB  anyhow
+  0.3%   0.5% 12.5KiB  env_filter
+  0.3%   0.5% 11.9KiB  icu_normalizer
+  0.3%   0.4% 11.3KiB  core
+  0.3%   0.4% 9.83KiB  fuzzy_matcher
+  0.2%   0.4% 9.11KiB  colored
+  0.2%   0.3% 8.17KiB  tiny_update_check
+  0.2%   0.3% 7.38KiB  signal_hook_registry
+  0.2%   0.3% 6.80KiB  alloc
+  0.2%   0.3% 6.47KiB  bytes
+  0.2%   0.2% 5.84KiB  der
+  0.2%   0.2% 5.62KiB  jiff
+  0.1%   0.2% 5.11KiB  semver
+  0.1%   0.2% 3.96KiB  parking_lot_core
+  0.1%   0.2% 3.85KiB  httparse
+  0.1%   0.2% 3.79KiB  native_tls
+  0.1%   0.1% 3.75KiB  base64ct
+  0.1%   0.1% 3.39KiB  pem_rfc7468
+  0.1%   0.1% 3.38KiB  parking_lot
+  0.1%   0.1% 3.33KiB  serde_core
+  0.1%   0.1% 3.33KiB  indexmap
+  0.1%   0.1% 3.16KiB  directories
+  0.1%   0.1% 3.16KiB  anstream
+  0.1%   0.1% 2.90KiB  regex
+  0.1%   0.1% 2.90KiB  utf8_iter
+  0.1%   0.1% 2.84KiB  clap_lex
   0.1%   0.1% 2.69KiB  anstyle
   0.1%   0.1% 2.63KiB  signal_hook
+  0.1%   0.1% 2.60KiB  base64
+  0.1%   0.1% 2.48KiB  ?
+  0.1%   0.1% 2.18KiB  openssl_probe
   0.1%   0.1% 2.11KiB  smallvec
-  0.1%   0.1% 1770  B  strsim
-  0.1%   0.1% 1714  B  percent_encoding
-  0.1%   0.1% 1713  B  serde_core
-  0.1%   0.1% 1703  B  ?
-  0.1%   0.1% 1628  B  icu_collections
-  0.1%   0.1% 1421  B  hashbrown
-  0.0%   0.1% 1149  B  log
-  0.0%   0.1% 1109  B  mio
+  0.1%   0.1% 2044  B  thread_local
+  0.1%   0.1% 1924  B  hashbrown
+  0.0%   0.1% 1770  B  strsim
+  0.0%   0.1% 1714  B  percent_encoding
+  0.0%   0.1% 1628  B  icu_collections
+  0.0%   0.1% 1444  B  log
+  0.0%   0.1% 1421  B  hashbrown
+  0.0%   0.0% 1109  B  mio
+  0.0%   0.0% 1000  B  once_cell
   0.0%   0.0%  840  B  unicode_width
   0.0%   0.0%  633  B  dirs_sys
   0.0%   0.0%  587  B  rustix
+  0.0%   0.0%  560  B  itoa
   0.0%   0.0%  538  B  icu_properties
-  0.0%   0.0%  428  B  hashbrown
+  0.0%   0.0%  504  B  serde
   0.0%   0.0%  364  B  hashbrown
-  0.0%   0.0%  304  B  utf8_iter
-  0.0%   0.0%  258  B  serde
+  0.0%   0.0%  338  B  utf8
+  0.0%   0.0%  283  B  openssl_sys
+  0.0%   0.0%  276  B  rustls_pki_types
+  0.0%   0.0%  252  B  dirs
   0.0%   0.0%  220  B  same_file
   0.0%   0.0%  191  B  libc
   0.0%   0.0%  156  B  repoverlay
   0.0%   0.0%  106  B  signal_hook_mio
   0.0%   0.0%   40  B  colorchoice
   0.0%   0.0%   24  B  errno
-  0.0%   0.0%   15  B  dirs
 
