@@ -1,0 +1,15 @@
+{
+  "name": "repoverlay-talks",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Presentation slides for repoverlay",
+  "scripts": {
+    "preview": "marp --preview",
+    "build": "marp --output dist",
+    "build:pdf": "marp --pdf --output dist",
+    "watch": "marp --watch"
+  },
+  "devDependencies": {
+    "@marp-team/marp-cli": "^4.1.1"
+  }
+}

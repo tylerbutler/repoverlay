@@ -1,0 +1,436 @@
+/*!
+ * Marp Darcula theme.
+ *
+ * @theme darcula
+ * @author Tyler Butler
+ *
+ * @auto-scaling true
+ * @size 4:3 960px 720px
+ * @size 16:9 1280px 720px
+ *
+ * Darcula color palette (JetBrains IDE):
+ * Background: #2B2B2B
+ * Panel: #3C3F41
+ * Text: #A9B7C6
+ * Keyword: #CC7832
+ * String: #6A8759
+ * Number: #6897BB
+ * Comment: #808080
+ * Class/Type: #FFC66D
+ */
+
+/* Base styles */
+.markdown-body, section {
+  -ms-text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+  line-height: 1.5;
+  color: #A9B7C6;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  font-size: 16px;
+  word-wrap: break-word;
+}
+
+.markdown-body a, section a {
+  color: #287BDE;
+  text-decoration: none;
+}
+
+.markdown-body a:hover, section a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body strong, section strong {
+  font-weight: 600;
+  color: #FFC66D;
+}
+
+.markdown-body h1, section h1,
+.markdown-body h2, section h2,
+.markdown-body h3, section h3,
+.markdown-body h4, section h4,
+.markdown-body h5, section h5,
+.markdown-body h6, section h6 {
+  margin-top: 24px;
+  margin-bottom: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #FFC66D;
+}
+
+.markdown-body h1, section h1 {
+  font-size: 2em;
+  border-bottom: none;
+}
+
+.markdown-body h2, section h2 {
+  font-size: 1.5em;
+  border-bottom: 1px solid #555;
+  padding-bottom: 0.3em;
+}
+
+.markdown-body h3, section h3 {
+  font-size: 1.25em;
+}
+
+.markdown-body h4, section h4 {
+  font-size: 1em;
+}
+
+.markdown-body h5, section h5 {
+  font-size: 0.875em;
+}
+
+.markdown-body h6, section h6 {
+  font-size: 0.85em;
+  color: #808080;
+}
+
+.markdown-body hr, section hr {
+  height: 0.25em;
+  padding: 0;
+  margin: 24px 0;
+  background-color: #555;
+  border: 0;
+}
+
+.markdown-body blockquote, section blockquote {
+  padding: 0 1em;
+  color: #808080;
+  border-left: 0.25em solid #CC7832;
+  margin: 0 0 16px 0;
+}
+
+.markdown-body ol, section ol,
+.markdown-body ul, section ul {
+  padding-left: 2em;
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+.markdown-body li, section li {
+  word-wrap: break-all;
+}
+
+.markdown-body li + li, section li + li {
+  margin-top: 0.25em;
+}
+
+/* Tables */
+.markdown-body table, section table {
+  display: block;
+  width: 100%;
+  overflow: auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+
+.markdown-body table th, section table th {
+  font-weight: 600;
+  background-color: #3C3F41;
+}
+
+.markdown-body table td, section table td,
+.markdown-body table th, section table th {
+  padding: 6px 13px;
+  border: 1px solid #555;
+}
+
+.markdown-body table tr, section table tr {
+  background-color: #2B2B2B;
+  border-top: 1px solid #555;
+}
+
+.markdown-body table tr:nth-child(2n), section table tr:nth-child(2n) {
+  background-color: #313335;
+}
+
+/* Code */
+.markdown-body code, section code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  font-family: 'JetBrains Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace;
+  background-color: #313335;
+  border-radius: 3px;
+  color: #A9B7C6;
+}
+
+.markdown-body pre, section pre {
+  word-wrap: normal;
+  padding: 16px;
+  overflow: auto;
+  font-size: 85%;
+  line-height: 1.45;
+  background-color: #2B2B2B;
+  border-radius: 3px;
+  border: 1px solid #555;
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+.markdown-body pre > code, section pre > code {
+  padding: 0;
+  margin: 0;
+  font-size: 100%;
+  word-break: normal;
+  white-space: pre;
+  background: transparent;
+  border: 0;
+}
+
+/* highlight.js Darcula theme */
+.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 0.5em;
+  background: #2B2B2B;
+  color: #A9B7C6;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #808080;
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-tag {
+  color: #CC7832;
+}
+
+.hljs-string,
+.hljs-attr,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+  color: #6A8759;
+}
+
+.hljs-number,
+.hljs-literal {
+  color: #6897BB;
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #FFC66D;
+}
+
+.hljs-type,
+.hljs-class,
+.hljs-built_in {
+  color: #FFC66D;
+}
+
+.hljs-function {
+  color: #FFC66D;
+}
+
+.hljs-function > .hljs-title {
+  color: #FFC66D;
+}
+
+.hljs-params {
+  color: #A9B7C6;
+}
+
+.hljs-variable,
+.hljs-template-variable {
+  color: #9876AA;
+}
+
+.hljs-regexp {
+  color: #6A8759;
+}
+
+.hljs-link {
+  color: #287BDE;
+}
+
+.hljs-meta {
+  color: #BBB529;
+}
+
+.hljs-meta-keyword {
+  color: #CC7832;
+}
+
+.hljs-meta-string {
+  color: #6A8759;
+}
+
+.hljs-deletion {
+  background-color: rgba(191, 97, 106, 0.5);
+}
+
+.hljs-addition {
+  background-color: rgba(106, 135, 89, 0.3);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+.hljs-subst {
+  color: #A9B7C6;
+}
+
+/* Marp-specific styles */
+svg[data-marp-fitting='svg'] {
+  max-height: 563px;
+}
+
+h1 {
+  border-bottom: none;
+  color: #FFC66D;
+  font-size: 1.6em;
+}
+
+h2 {
+  border-bottom: none;
+  font-size: 1.3em;
+  color: #FFC66D;
+}
+
+h3 {
+  font-size: 1.1em;
+  color: #FFC66D;
+}
+
+h4 {
+  font-size: 1.05em;
+  color: #FFC66D;
+}
+
+h5 {
+  font-size: 1em;
+  color: #FFC66D;
+}
+
+h6 {
+  font-size: 0.9em;
+  color: #808080;
+}
+
+h1 strong,
+h2 strong,
+h3 strong,
+h4 strong,
+h5 strong,
+h6 strong {
+  font-weight: inherit;
+  color: #CC7832;
+}
+
+a {
+  color: #287BDE;
+}
+
+hr {
+  height: 0;
+  padding-top: 0.25em;
+}
+
+pre {
+  border: 1px solid #555;
+  line-height: 1.15;
+  overflow: visible;
+  background-color: #2B2B2B;
+}
+
+pre code svg[data-marp-fitting='svg'] {
+  max-height: 529px;
+}
+
+code {
+  background-color: #313335;
+  color: #A9B7C6;
+}
+
+header,
+footer {
+  margin: 0;
+  position: absolute;
+  left: 30px;
+  color: rgba(169, 183, 198, 0.6);
+  font-size: 18px;
+}
+
+header {
+  top: 21px;
+}
+
+footer {
+  bottom: 21px;
+}
+
+/* Main section styling */
+section {
+  background: #2B2B2B;
+  color: #A9B7C6;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  font-size: 29px;
+  height: 720px;
+  justify-content: center;
+  padding: 78.5px;
+  width: 1280px;
+}
+
+section.lead h1 {
+  font-size: 3.1em;
+}
+
+section > *:last-child,
+section[data-footer] > :nth-last-child(2) {
+  margin-bottom: 0;
+}
+
+section > *:first-child,
+section > header:first-child + * {
+  margin-top: 0;
+}
+
+section::after {
+  position: absolute;
+  padding: 0;
+  right: 30px;
+  bottom: 21px;
+  font-size: 24px;
+  color: #808080;
+}
+
+section[data-color] h1,
+section[data-color] h2,
+section[data-color] h3,
+section[data-color] h4,
+section[data-color] h5,
+section[data-color] h6 {
+  color: currentColor;
+}
+
+/* Invert class for accent slides */
+section.invert {
+  background: #3C3F41;
+  color: #A9B7C6;
+}
+
+section.invert h1,
+section.invert h2,
+section.invert h3,
+section.invert h4,
+section.invert h5 {
+  color: #CC7832;
+}
