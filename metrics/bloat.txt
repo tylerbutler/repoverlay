@@ -1,19 +1,19 @@
   File  .text    Size  Crate
  67.0%  98.7% 2.42MiB  *
- 13.8%  20.4%  510KiB  repoverlay
+ 13.8%  20.4%  512KiB  repoverlay
   8.3%  12.2%  306KiB  clap_builder
   8.0%  11.8%  297KiB  regex_automata
   5.7%   8.3%  209KiB  regex_syntax
   4.8%   7.0%  176KiB  aho_corasick
   3.4%   5.0%  125KiB  ureq
   2.5%   3.7% 92.2KiB  clap_complete
-  2.2%   3.3% 81.5KiB  sickle
+  2.2%   3.3% 81.8KiB  sickle
   1.4%   2.1% 53.3KiB  alloc
   1.3%   1.9% 47.7KiB  http
   1.3%   1.9% 46.7KiB  ureq_proto
+  1.1%   1.7% 42.2KiB  chrono
   1.1%   1.7% 41.8KiB  url
-  1.1%   1.6% 41.1KiB  std
-  1.1%   1.6% 40.7KiB  chrono
+  1.1%   1.6% 40.8KiB  std
   0.9%   1.3% 33.6KiB  idna
   0.8%   1.2% 29.6KiB  dialoguer
   0.7%   1.0% 24.9KiB  crossterm
