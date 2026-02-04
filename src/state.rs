@@ -18,7 +18,6 @@ pub const STATE_DIR: &str = ".repoverlay";
 pub const OVERLAYS_DIR: &str = "overlays";
 pub const META_FILE: &str = "meta.ccl";
 pub const CONFIG_FILE: &str = "repoverlay.ccl";
-pub const GIT_EXCLUDE: &str = ".git/info/exclude";
 pub const MANAGED_SECTION_NAME: &str = "managed";
 
 /// How an overlay was resolved from a reference.
