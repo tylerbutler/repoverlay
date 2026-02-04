@@ -3699,4 +3699,235 @@ mod tests {
             assert!(result.is_none());
         }
     }
+
+    // Tests for restore_overlays
+    mod restore_overlays_tests {
+        use super::*;
+        use crate::state::{OverlayState, external_state_dir_for_target, load_external_states};
+        use crate::testutil::TestContext;
+
+        #[test]
+        fn does_not_restore_explicitly_removed_overlay() {
+            // This test verifies that `restore` does not re-apply overlays that were
+            // explicitly removed via `repoverlay remove`. The issue is that if external
+            // state exists but in-repo state was intentionally deleted (via remove command),
+            // restore should NOT re-apply the overlay.
+            //
+            // The fix marks external state with `removed_at` timestamp when an overlay
+            // is explicitly removed, so that `restore` knows to skip it.
+
+            let ctx = TestContext::new().with_overlay(&[(".envrc", "export FOO=bar")]);
+
+            // Use canonical path consistently (this is what restore_overlays does internally)
+            let canonical_repo_path = ctx.repo_path().canonicalize().unwrap();
+
+            // Step 1: Apply the overlay
+            apply_overlay(
+                ctx.overlay_source(),
+                ctx.repo_path(),
+                false, // use symlinks
+                None,  // auto-name
+                None,  // no ref override
+                false, // don't update cache
+                None,  // default source resolution
+                false, // not dry run
+            )
+            .expect("apply should succeed");
+
+            // Verify overlay was applied
+            assert!(
+                ctx.file_exists(".envrc"),
+                "overlay file should exist after apply"
+            );
+            assert!(
+                ctx.overlay_state_exists("test-overlay") || ctx.state_dir_exists(),
+                "in-repo state should exist"
+            );
+
+            // Verify external state was saved (before removal)
+            let ext_dir = external_state_dir_for_target(&canonical_repo_path).unwrap();
+            assert!(ext_dir.exists(), "external state directory should exist");
+
+            // Step 2: Remove the overlay (this simulates explicit user removal)
+            // This should mark the external state with `removed_at` instead of deleting it.
+            let applied = list_applied_overlays(ctx.repo_path()).expect("list should work");
+            assert!(
+                !applied.is_empty(),
+                "at least one overlay should be applied"
+            );
+            let overlay_name = &applied[0];
+
+            remove_overlay(ctx.repo_path(), Some(overlay_name.clone()), false, false)
+                .expect("remove should succeed");
+
+            // Verify overlay was removed from in-repo state
+            assert!(!ctx.file_exists(".envrc"), "overlay file should be removed");
+            assert!(
+                !ctx.overlay_state_exists(overlay_name),
+                "in-repo state should be removed"
+            );
+
+            // Verify external state file still exists (with removed_at marker)
+            let ext_state_file = ext_dir.join(format!("{overlay_name}.ccl"));
+            assert!(
+                ext_state_file.exists(),
+                "external state file should still exist (as tombstone)"
+            );
+
+            // Read the external state and verify it has removed_at set
+            let content = fs::read_to_string(&ext_state_file).unwrap();
+            let ext_state: OverlayState = sickle::from_str(&content).unwrap();
+            assert!(
+                ext_state.removed_at.is_some(),
+                "external state should have removed_at marker"
+            );
+
+            // Verify load_external_states skips removed overlays
+            let external_states =
+                load_external_states(&canonical_repo_path).expect("load should work");
+            assert_eq!(
+                external_states.len(),
+                0,
+                "load_external_states should skip removed overlays"
+            );
+
+            // Step 3: Call restore - this SHOULD NOT restore the overlay
+            // because it was explicitly removed (has removed_at marker).
+            restore_overlays(ctx.repo_path(), false).expect("restore should succeed");
+
+            // Step 4: Verify the overlay was NOT restored
+            assert!(
+                !ctx.file_exists(".envrc"),
+                "overlay file should NOT be restored after explicit removal"
+            );
+        }
+
+        #[test]
+        fn restores_overlay_after_git_clean() {
+            // This test verifies that `restore` DOES re-apply overlays when
+            // in-repo state is missing due to `git clean -fdx` (not explicit removal).
+            //
+            // The external state should NOT have `removed_at` set because the
+            // overlay was not explicitly removed.
+
+            let ctx = TestContext::new().with_overlay(&[(".envrc", "export FOO=bar")]);
+            let canonical_repo_path = ctx.repo_path().canonicalize().unwrap();
+
+            // Step 1: Apply the overlay
+            apply_overlay(
+                ctx.overlay_source(),
+                ctx.repo_path(),
+                false,
+                None,
+                None,
+                false,
+                None,
+                false,
+            )
+            .expect("apply should succeed");
+
+            let applied = list_applied_overlays(ctx.repo_path()).expect("list should work");
+            assert!(!applied.is_empty());
+
+            // Verify external state exists and doesn't have removed_at
+            let ext_states = load_external_states(&canonical_repo_path).unwrap();
+            assert_eq!(ext_states.len(), 1);
+            assert!(
+                ext_states[0].removed_at.is_none(),
+                "external state should NOT have removed_at"
+            );
+
+            // Step 2: Simulate `git clean -fdx` by removing only in-repo state
+            // This does NOT call remove_overlay, so external state stays intact.
+            fs::remove_dir_all(ctx.repo_path().join(".repoverlay")).unwrap();
+            // Also remove the overlay files (as git clean would)
+            fs::remove_file(ctx.repo_path().join(".envrc")).unwrap();
+
+            // Verify in-repo state is gone
+            assert!(!ctx.state_dir_exists(), "in-repo state should be removed");
+            assert!(
+                !ctx.file_exists(".envrc"),
+                "overlay files should be removed"
+            );
+
+            // External state should still be loadable (no removed_at marker)
+            let ext_states_after = load_external_states(&canonical_repo_path).unwrap();
+            assert_eq!(
+                ext_states_after.len(),
+                1,
+                "external state should still be loadable"
+            );
+
+            // Step 3: Call restore - this SHOULD restore the overlay
+            restore_overlays(ctx.repo_path(), false).expect("restore should succeed");
+
+            // Step 4: Verify the overlay WAS restored
+            assert!(
+                ctx.file_exists(".envrc"),
+                "overlay file should be restored after git clean"
+            );
+        }
+
+        #[test]
+        fn reapplying_overlay_clears_removed_marker() {
+            // This test verifies that re-applying an overlay clears the removed_at marker
+            // in case the user changes their mind after removal.
+
+            let ctx = TestContext::new().with_overlay(&[(".envrc", "export FOO=bar")]);
+            let canonical_repo_path = ctx.repo_path().canonicalize().unwrap();
+
+            // Step 1: Apply the overlay
+            apply_overlay(
+                ctx.overlay_source(),
+                ctx.repo_path(),
+                false,
+                None,
+                None,
+                false,
+                None,
+                false,
+            )
+            .expect("apply should succeed");
+
+            let applied = list_applied_overlays(ctx.repo_path()).expect("list should work");
+            let overlay_name = &applied[0];
+
+            // Step 2: Remove the overlay (marks removed_at)
+            remove_overlay(ctx.repo_path(), Some(overlay_name.clone()), false, false)
+                .expect("remove should succeed");
+
+            // Verify removed_at is set
+            let ext_dir = external_state_dir_for_target(&canonical_repo_path).unwrap();
+            let ext_state_file = ext_dir.join(format!("{overlay_name}.ccl"));
+            let content = fs::read_to_string(&ext_state_file).unwrap();
+            let ext_state: OverlayState = sickle::from_str(&content).unwrap();
+            assert!(ext_state.removed_at.is_some());
+
+            // Step 3: Re-apply the overlay
+            apply_overlay(
+                ctx.overlay_source(),
+                ctx.repo_path(),
+                false,
+                None,
+                None,
+                false,
+                None,
+                false,
+            )
+            .expect("re-apply should succeed");
+
+            // Step 4: Verify removed_at is cleared
+            let content_after = fs::read_to_string(&ext_state_file).unwrap();
+            let ext_state_after: OverlayState = sickle::from_str(&content_after).unwrap();
+            assert!(
+                ext_state_after.removed_at.is_none(),
+                "removed_at should be cleared after re-apply"
+            );
+
+            // Verify restore would now restore this overlay
+            // (if git clean happened again)
+            let ext_states = load_external_states(&canonical_repo_path).unwrap();
+            assert_eq!(ext_states.len(), 1, "external state should be loadable");
+        }
+    }
 }
