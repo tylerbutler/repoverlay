@@ -1,3 +1,10 @@
+---
+marp: true
+theme: darcula
+paginate: true
+title: repoverlay Talk Outline
+---
+
 # repoverlay Talk Outline
 
 A conversational walkthrough for developers who want consistent AI configs across their projects.

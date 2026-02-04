@@ -1,9 +1,11 @@
 ---
 marp: true
-theme: nord-theme
+theme: dracula
 paginate: true
 title: repoverlay - Config Files Everywhere
 ---
+
+<!-- _class: lead -->
 
 # repoverlay
 
@@ -179,9 +181,11 @@ Restores from external backup in `~/.local/share/repoverlay/applied/`
 
 ---
 
-<!-- _class: invert -->
+<!-- _class: lead inverted -->
 
 # Creating Your Own
+
+## Sharing is caring
 
 ---
 
@@ -261,7 +265,7 @@ repoverlay apply yourname
 
 ---
 
-<!-- _class: invert -->
+<!-- _class: lead -->
 
 # Bonus
 
@@ -344,7 +348,7 @@ Learn more: [ccl.tylerbutler.com](https://ccl.tylerbutler.com)
 
 ---
 
-<!-- _class: invert -->
+<!-- _class: lead -->
 
 # Questions?
 
