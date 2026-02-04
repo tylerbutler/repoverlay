@@ -2539,6 +2539,40 @@ mod tests {
             let content = fs::read_to_string(&exclude_path).unwrap();
             assert!(!content.contains("# repoverlay:managed"));
         }
+
+        #[test]
+        fn writes_to_correct_location_in_worktree() {
+            let temp = TempDir::new().unwrap();
+            let worktree_path = temp.path();
+
+            // Simulate a worktree: .git is a file pointing to the actual git dir
+            let actual_git_dir = temp.path().join("actual-git-dir");
+            fs::create_dir_all(&actual_git_dir).unwrap();
+
+            let git_file_content = format!("gitdir: {}\n", actual_git_dir.display());
+            fs::write(worktree_path.join(".git"), git_file_content).unwrap();
+
+            let entries = vec![".envrc".to_string()];
+            update_git_exclude(worktree_path, "test-overlay", &entries, true).unwrap();
+
+            // Exclude file should be in the actual git dir, not worktree_path/.git/info/exclude
+            let exclude_path = actual_git_dir.join("info").join("exclude");
+            assert!(
+                exclude_path.exists(),
+                "exclude file should exist in actual git dir"
+            );
+
+            let content = fs::read_to_string(&exclude_path).unwrap();
+            assert!(content.contains("# repoverlay:test-overlay start"));
+            assert!(content.contains(".envrc"));
+
+            // Verify it was NOT written to the worktree's .git path
+            let wrong_path = worktree_path.join(".git").join("info").join("exclude");
+            assert!(
+                !wrong_path.exists(),
+                "exclude file should not be at worktree .git path"
+            );
+        }
     }
 
     // Tests for validate_git_repo
