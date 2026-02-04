@@ -235,6 +235,10 @@ pub struct OverlayState {
     pub source: OverlaySource,
     #[serde(default)]
     pub files: Vec<FileEntry>,
+    /// When the overlay was explicitly removed (if set, overlay should not be restored).
+    /// This is only used in external state files to track removal intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_at: Option<DateTime<Utc>>,
 }
 
 impl OverlayState {
@@ -245,6 +249,7 @@ impl OverlayState {
             applied_at: Utc::now(),
             source,
             files: Vec::new(),
+            removed_at: None,
         }
     }
 
@@ -356,24 +361,25 @@ pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlaySta
     Ok(())
 }
 
-/// Remove overlay state from the external backup location.
+/// Mark overlay state as removed in the external backup location.
+///
+/// Instead of deleting the external state, we mark it with a `removed_at` timestamp.
+/// This allows `restore` to distinguish between overlays that were intentionally
+/// removed vs. those that are missing due to `git clean`.
 pub fn remove_external_state(target: &Path, overlay_name: &str) -> Result<()> {
     let dir = external_state_dir_for_target(target)?;
     let state_file = dir.join(format!("{overlay_name}.ccl"));
 
     if state_file.exists() {
-        fs::remove_file(&state_file)?;
-    }
-
-    // Clean up the directory if empty (except for the marker file)
-    if dir.exists() {
-        let remaining: Vec<_> = fs::read_dir(&dir)?
-            .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_name() != ".target_path")
-            .collect();
-
-        if remaining.is_empty() {
-            fs::remove_dir_all(&dir)?;
+        // Read existing state and mark it as removed
+        let content = fs::read_to_string(&state_file)?;
+        if let Ok(mut state) = sickle::from_str::<OverlayState>(&content) {
+            state.removed_at = Some(Utc::now());
+            let updated_content = sickle::to_string(&state).context("Failed to serialize state")?;
+            fs::write(&state_file, updated_content)?;
+        } else {
+            // If we can't parse it, just delete it
+            fs::remove_file(&state_file)?;
         }
     }
 
@@ -381,6 +387,8 @@ pub fn remove_external_state(target: &Path, overlay_name: &str) -> Result<()> {
 }
 
 /// Load all overlay states from the external backup location for a target.
+///
+/// Only returns states that are eligible for restoration (not marked as removed).
 pub fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
     debug!("load_external_states: {}", target.display());
     let dir = external_state_dir_for_target(target)?;
@@ -401,6 +409,14 @@ pub fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
         {
             let content = fs::read_to_string(&path)?;
             if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
+                // Skip overlays that were explicitly removed
+                if state.removed_at.is_some() {
+                    debug!(
+                        "skipping removed overlay '{}' (removed at {:?})",
+                        state.name, state.removed_at
+                    );
+                    continue;
+                }
                 states.push(state);
             }
         }
@@ -863,6 +879,7 @@ mod tests {
                     entry_type: EntryType::File,
                 },
             ],
+            removed_at: None,
         };
         let content = sickle::to_string(&state).unwrap();
         fs::write(overlays_dir.join("test-overlay.ccl"), content).unwrap();
@@ -1131,6 +1148,7 @@ mappings =
                     entry_type: EntryType::Directory,
                 },
             ],
+            removed_at: None,
         };
         let content = sickle::to_string(&state).unwrap();
         fs::write(overlays_dir.join("test-overlay.ccl"), content).unwrap();
@@ -1230,6 +1248,7 @@ directories =
             source,
             applied_at: chrono::Utc::now(),
             files: vec![],
+            removed_at: None,
         };
 
         let serialized = sickle::to_string(&state).unwrap();
@@ -1266,6 +1285,7 @@ directories =
             source,
             applied_at: chrono::Utc::now(),
             files: vec![],
+            removed_at: None,
         };
 
         let serialized = sickle::to_string(&state).unwrap();
@@ -1302,6 +1322,7 @@ directories =
             source: OverlaySource::local(PathBuf::from("/source")),
             applied_at: chrono::Utc::now(),
             files: vec![],
+            removed_at: None,
         };
         fs::write(
             ext_dir.join("valid.ccl"),
