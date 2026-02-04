@@ -40,11 +40,11 @@ use overlay_repo::copy_dir_recursive;
 use reference::SourceReference;
 use selection::is_interactive;
 use state::{
-    CONFIG_FILE, EntryType, FileEntry, GIT_EXCLUDE, GlobalMeta, LinkType, MANAGED_SECTION_NAME,
-    META_FILE, OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR,
-    exclude_marker_end, exclude_marker_start, list_applied_overlays, load_all_overlay_targets,
-    load_external_states, load_overlay_state, normalize_overlay_name, remove_external_state,
-    save_external_state, save_overlay_state,
+    CONFIG_FILE, EntryType, FileEntry, GlobalMeta, LinkType, MANAGED_SECTION_NAME, META_FILE,
+    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, exclude_marker_end,
+    exclude_marker_start, list_applied_overlays, load_all_overlay_targets, load_external_states,
+    load_overlay_state, normalize_overlay_name, remove_external_state, save_external_state,
+    save_overlay_state,
 };
 use upstream::detect_upstream;
 
@@ -58,12 +58,58 @@ pub(crate) fn canonicalize_path(path: &Path, description: &str) -> Result<PathBu
         .with_context(|| format!("{} not found: {}", description, path.display()))
 }
 
-/// Validate that a path is a git repository (has a .git directory).
+/// Validate that a path is a git repository (has a .git directory or file).
 pub(crate) fn validate_git_repo(path: &Path) -> Result<()> {
     if !path.join(".git").exists() {
         bail!("Target is not a git repository: {}", path.display());
     }
     Ok(())
+}
+
+/// Resolve the actual git directory for a repository.
+///
+/// In a regular git repository, `.git` is a directory containing the git database.
+/// In a git worktree, `.git` is a file containing `gitdir: /path/to/git/dir`.
+/// This function handles both cases and returns the path to the actual git directory.
+pub(crate) fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf> {
+    let git_path = repo_path.join(".git");
+
+    if git_path.is_dir() {
+        // Regular git repository
+        return Ok(git_path);
+    }
+
+    if git_path.is_file() {
+        // Git worktree - .git is a file containing "gitdir: /path/to/git/dir"
+        let content = fs::read_to_string(&git_path)
+            .with_context(|| format!("Failed to read .git file: {}", git_path.display()))?;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if let Some(path_str) = line.strip_prefix("gitdir:") {
+                let path_str = path_str.trim();
+                let gitdir = PathBuf::from(path_str);
+
+                // Handle relative paths (relative to repo_path)
+                let gitdir = if gitdir.is_absolute() {
+                    gitdir
+                } else {
+                    repo_path.join(gitdir)
+                };
+
+                return gitdir.canonicalize().with_context(|| {
+                    format!("Failed to resolve gitdir path: {}", gitdir.display())
+                });
+            }
+        }
+
+        bail!(
+            "Invalid .git file (no gitdir found): {}",
+            git_path.display()
+        );
+    }
+
+    bail!("Not a git repository: {}", repo_path.display());
 }
 
 /// Resolved source information for applying an overlay.
@@ -2163,9 +2209,12 @@ pub(crate) fn update_git_exclude(
         add,
         entries.len()
     );
-    let exclude_path = target.join(GIT_EXCLUDE);
 
-    // Ensure the .git/info directory exists
+    // Resolve the actual git directory (handles worktrees where .git is a file)
+    let git_dir = resolve_git_dir(target)?;
+    let exclude_path = git_dir.join("info").join("exclude");
+
+    // Ensure the info directory exists
     if let Some(parent) = exclude_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -3041,6 +3090,83 @@ mod tests {
             let repo = create_test_repo();
             let result = validate_git_repo(repo.path());
             assert!(result.is_ok());
+        }
+
+        #[test]
+        fn resolve_git_dir_returns_git_directory_for_regular_repo() {
+            let repo = create_test_repo();
+            let result = resolve_git_dir(repo.path());
+            assert!(result.is_ok());
+            let git_dir = result.unwrap();
+            assert!(git_dir.ends_with(".git"));
+            assert!(git_dir.is_dir());
+        }
+
+        #[test]
+        fn resolve_git_dir_handles_worktree() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            // Create a .git file (as in a worktree)
+            let worktree_git_dir = temp.path().join("actual-git-dir");
+            fs::create_dir_all(&worktree_git_dir).unwrap();
+
+            let git_file_content = format!("gitdir: {}\n", worktree_git_dir.display());
+            fs::write(repo_path.join(".git"), git_file_content).unwrap();
+
+            let result = resolve_git_dir(repo_path);
+            assert!(result.is_ok());
+            let resolved = result.unwrap();
+            assert_eq!(
+                resolved.canonicalize().unwrap(),
+                worktree_git_dir.canonicalize().unwrap()
+            );
+        }
+
+        #[test]
+        fn resolve_git_dir_handles_relative_gitdir_path() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            // Create a .git file with a relative path
+            let worktree_git_dir = temp.path().join("actual-git-dir");
+            fs::create_dir_all(&worktree_git_dir).unwrap();
+
+            // Use a relative path in the gitdir
+            let git_file_content = "gitdir: actual-git-dir\n";
+            fs::write(repo_path.join(".git"), git_file_content).unwrap();
+
+            let result = resolve_git_dir(repo_path);
+            assert!(result.is_ok());
+            let resolved = result.unwrap();
+            assert_eq!(
+                resolved.canonicalize().unwrap(),
+                worktree_git_dir.canonicalize().unwrap()
+            );
+        }
+
+        #[test]
+        fn resolve_git_dir_fails_on_non_git_directory() {
+            let temp = TempDir::new().unwrap();
+            let result = resolve_git_dir(temp.path());
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Not a git repository")
+            );
+        }
+
+        #[test]
+        fn resolve_git_dir_fails_on_invalid_git_file() {
+            let temp = TempDir::new().unwrap();
+            // Create a .git file without gitdir line
+            fs::write(temp.path().join(".git"), "invalid content\n").unwrap();
+
+            let result = resolve_git_dir(temp.path());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no gitdir found"));
         }
     }
 
