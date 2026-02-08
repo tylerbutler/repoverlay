@@ -3,9 +3,9 @@
  13.8%  20.4%  512KiB  repoverlay
   8.3%  12.2%  306KiB  clap_builder
   8.0%  11.8%  297KiB  regex_automata
-  5.7%   8.3%  209KiB  regex_syntax
+  5.6%   8.3%  209KiB  regex_syntax
   4.8%   7.0%  176KiB  aho_corasick
-  3.4%   5.0%  125KiB  ureq
+  3.5%   5.1%  128KiB  ureq
   2.5%   3.7% 92.2KiB  clap_complete
   2.2%   3.3% 81.8KiB  sickle
   1.4%   2.1% 53.3KiB  alloc
@@ -36,7 +36,7 @@
   0.2%   0.3% 6.80KiB  alloc
   0.2%   0.3% 6.50KiB  bytes
   0.2%   0.2% 5.84KiB  der
-  0.2%   0.2% 5.62KiB  jiff
+  0.2%   0.2% 5.63KiB  jiff
   0.1%   0.2% 5.11KiB  semver
   0.1%   0.2% 3.96KiB  parking_lot_core
   0.1%   0.2% 3.85KiB  httparse
@@ -54,7 +54,7 @@
   0.1%   0.1% 2.69KiB  anstyle
   0.1%   0.1% 2.63KiB  signal_hook
   0.1%   0.1% 2.60KiB  base64
-  0.1%   0.1% 2.48KiB  ?
+  0.1%   0.1% 2.57KiB  ?
   0.1%   0.1% 2.18KiB  openssl_probe
   0.1%   0.1% 2.11KiB  smallvec
   0.1%   0.1% 2044  B  thread_local
