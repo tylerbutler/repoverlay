@@ -27,7 +27,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
 
       - name: Run release-plz release
-        uses: release-plz/action@e592230ad39e3ec735402572601fc621aa24355c # ratchet:release-plz/action@v0.5
+        uses: release-plz/action@52440b50d383aa252927de395c8b2c1e0a9cf8e9 # ratchet:release-plz/action@v0.5
         with:
           command: release
         env:
@@ -52,7 +52,7 @@ jobs:
 
       - name: Run release-plz release-pr
         id: release-plz
-        uses: release-plz/action@e592230ad39e3ec735402572601fc621aa24355c # ratchet:release-plz/action@v0.5
+        uses: release-plz/action@52440b50d383aa252927de395c8b2c1e0a9cf8e9 # ratchet:release-plz/action@v0.5
         with:
           command: release-pr
         env:
