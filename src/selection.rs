@@ -66,6 +66,17 @@ enum Mode {
     Search,
 }
 
+/// Selection state of a directory's children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirSelectionState {
+    /// No children selected.
+    None,
+    /// Some children selected.
+    Partial,
+    /// All children selected.
+    All,
+}
+
 /// Internal state for the selection UI.
 struct SelectionState {
     /// All files available for selection.
@@ -74,6 +85,8 @@ struct SelectionState {
     selections: HashSet<PathBuf>,
     /// Currently visible categories.
     visible_categories: HashSet<FileCategory>,
+    /// Expanded directory paths (directories whose children are visible).
+    expanded_dirs: HashSet<PathBuf>,
     /// Current search query.
     search_query: String,
     /// Current input mode.
@@ -104,10 +117,19 @@ impl SelectionState {
             .map(|f| f.path.clone())
             .collect();
 
+        // AI config directories start expanded (they're preselected, so
+        // showing contents aids discoverability)
+        let expanded_dirs: HashSet<PathBuf> = files
+            .iter()
+            .filter(|f| f.category == FileCategory::AiConfigDirectory)
+            .map(|f| f.path.clone())
+            .collect();
+
         Self {
             all_files: files,
             selections,
             visible_categories: visible,
+            expanded_dirs,
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
@@ -115,11 +137,17 @@ impl SelectionState {
         }
     }
 
-    /// Get files that are currently visible (match category filter and search).
+    /// Get files that are currently visible (match category filter, search, and expand state).
     fn visible_files(&self) -> Vec<&DetectedFile> {
         self.all_files
             .iter()
             .filter(|f| self.visible_categories.contains(&f.category))
+            .filter(|f| {
+                // Hide children of collapsed directories
+                f.parent_dir
+                    .as_ref()
+                    .is_none_or(|parent| self.expanded_dirs.contains(parent))
+            })
             .filter(|f| {
                 if self.search_query.is_empty() {
                     true
@@ -168,11 +196,34 @@ impl SelectionState {
     }
 
     /// Toggle selection of the file at the current cursor position.
+    ///
+    /// For directories: toggles all children (select all if not all selected, deselect all otherwise).
+    /// For regular files: toggles individual selection.
     fn toggle_current(&mut self) {
         let visible = self.visible_files();
         if let Some(file) = visible.get(self.cursor) {
-            let path = file.path.clone();
-            self.toggle_selection(&path);
+            if file.category == FileCategory::AiConfigDirectory {
+                let dir_path = file.path.clone();
+                let children: Vec<PathBuf> = self.children_of(&dir_path);
+                let all_selected =
+                    !children.is_empty() && children.iter().all(|c| self.selections.contains(c));
+                if all_selected {
+                    // Deselect directory and all children
+                    self.selections.remove(&dir_path);
+                    for child in children {
+                        self.selections.remove(&child);
+                    }
+                } else {
+                    // Select directory and all children
+                    self.selections.insert(dir_path);
+                    for child in children {
+                        self.selections.insert(child);
+                    }
+                }
+            } else {
+                let path = file.path.clone();
+                self.toggle_selection(&path);
+            }
         }
     }
 
@@ -275,6 +326,127 @@ impl SelectionState {
             return false;
         }
         visible.iter().all(|f| self.selections.contains(&f.path))
+    }
+
+    /// Check if a file entry is an expandable directory.
+    fn is_expandable(file: &DetectedFile) -> bool {
+        file.category == FileCategory::AiConfigDirectory
+    }
+
+    /// Get child paths belonging to a directory.
+    fn children_of(&self, dir_path: &Path) -> Vec<PathBuf> {
+        self.all_files
+            .iter()
+            .filter(|f| f.parent_dir.as_deref() == Some(dir_path))
+            .map(|f| f.path.clone())
+            .collect()
+    }
+
+    /// Get the selection state of a directory's children.
+    fn dir_selection_state(&self, dir_path: &Path) -> DirSelectionState {
+        let children = self.children_of(dir_path);
+        if children.is_empty() {
+            return DirSelectionState::None;
+        }
+        let selected_count = children
+            .iter()
+            .filter(|c| self.selections.contains(*c))
+            .count();
+        if selected_count == 0 {
+            DirSelectionState::None
+        } else if selected_count == children.len() {
+            DirSelectionState::All
+        } else {
+            DirSelectionState::Partial
+        }
+    }
+
+    /// Toggle expand/collapse of a directory.
+    #[cfg(test)]
+    fn toggle_expand(&mut self, dir_path: &Path) {
+        if self.expanded_dirs.contains(dir_path) {
+            self.expanded_dirs.remove(dir_path);
+        } else {
+            self.expanded_dirs.insert(dir_path.to_path_buf());
+        }
+        self.clamp_cursor();
+    }
+
+    /// Expand the directory at the current cursor position (no-op if not a directory).
+    fn expand_current(&mut self) {
+        let visible = self.visible_files();
+        if let Some(file) = visible.get(self.cursor)
+            && Self::is_expandable(file)
+            && !self.expanded_dirs.contains(&file.path)
+        {
+            let path = file.path.clone();
+            self.expanded_dirs.insert(path);
+            self.clamp_cursor();
+        }
+    }
+
+    /// Collapse the directory at the current cursor, or navigate to parent if on a child.
+    fn collapse_current(&mut self) {
+        let visible = self.visible_files();
+        if let Some(file) = visible.get(self.cursor) {
+            if Self::is_expandable(file) && self.expanded_dirs.contains(&file.path) {
+                // Collapse this directory
+                let path = file.path.clone();
+                self.expanded_dirs.remove(&path);
+                self.clamp_cursor();
+            } else if let Some(ref parent) = file.parent_dir {
+                // Navigate cursor to parent directory
+                let parent = parent.clone();
+                let visible_after = self.visible_files();
+                if let Some(pos) = visible_after.iter().position(|f| f.path == parent) {
+                    self.cursor = pos;
+                    self.adjust_scroll();
+                }
+            }
+        }
+    }
+
+    /// Resolve selected paths for output.
+    ///
+    /// If ALL children of a directory are selected, emit the directory path.
+    /// If only SOME children are selected, emit only the individual file paths.
+    fn resolve_selected_paths(&self) -> Vec<PathBuf> {
+        let mut result: Vec<PathBuf> = Vec::new();
+        let mut covered_children: HashSet<PathBuf> = HashSet::new();
+
+        // Check each directory: if all children selected, emit directory path
+        for file in &self.all_files {
+            if file.category == FileCategory::AiConfigDirectory
+                && self.selections.contains(&file.path)
+            {
+                let children = self.children_of(&file.path);
+                let all_selected =
+                    !children.is_empty() && children.iter().all(|c| self.selections.contains(c));
+                if all_selected {
+                    result.push(file.path.clone());
+                    for child in children {
+                        covered_children.insert(child);
+                    }
+                }
+                // If not all selected, individual files will be added below
+            }
+        }
+
+        // Add remaining selected files not covered by a directory
+        for path in &self.selections {
+            if !covered_children.contains(path) {
+                // Skip directory entries when children are emitted individually
+                let is_dir = self
+                    .all_files
+                    .iter()
+                    .any(|f| f.path == *path && f.category == FileCategory::AiConfigDirectory);
+                if !is_dir {
+                    result.push(path.clone());
+                }
+            }
+        }
+
+        result
     }
 }
 
@@ -388,7 +560,7 @@ fn run_selection_loop(state: &mut SelectionState, prompt: &str) -> anyhow::Resul
                     SelectionAction::Continue => {}
                     SelectionAction::Confirm => {
                         return Ok(SelectionResult {
-                            selected_files: state.selections.iter().cloned().collect(),
+                            selected_files: state.resolve_selected_paths(),
                             cancelled: false,
                         });
                     }
@@ -426,6 +598,10 @@ fn handle_selection_key(state: &mut SelectionState, key: KeyEvent) -> SelectionA
         // Navigation
         KeyCode::Up | KeyCode::Char('k') => state.cursor_up(),
         KeyCode::Down | KeyCode::Char('j') => state.cursor_down(),
+
+        // Tree expand/collapse
+        KeyCode::Right | KeyCode::Char('l') => state.expand_current(),
+        KeyCode::Left | KeyCode::Char('h') => state.collapse_current(),
 
         // Selection
         KeyCode::Char(' ') => state.toggle_current(),
@@ -755,8 +931,37 @@ fn render_file_list(stdout: &mut io::Stdout, state: &SelectionState) -> io::Resu
             execute!(stdout, Print("  "))?;
         }
 
-        // Checkbox
-        if is_selected {
+        // Indentation for tree children
+        let indent = "  ".repeat(file.depth as usize);
+        if !indent.is_empty() {
+            execute!(stdout, Print(&indent))?;
+        }
+
+        // Checkbox (tri-state for directories)
+        if file.category == FileCategory::AiConfigDirectory {
+            let dir_state = state.dir_selection_state(&file.path);
+            match dir_state {
+                DirSelectionState::All => {
+                    execute!(
+                        stdout,
+                        SetForegroundColor(Color::Green),
+                        Print("[✓] "),
+                        ResetColor
+                    )?;
+                }
+                DirSelectionState::Partial => {
+                    execute!(
+                        stdout,
+                        SetForegroundColor(Color::Yellow),
+                        Print("[-] "),
+                        ResetColor
+                    )?;
+                }
+                DirSelectionState::None => {
+                    execute!(stdout, Print("[ ] "))?;
+                }
+            }
+        } else if is_selected {
             execute!(
                 stdout,
                 SetForegroundColor(Color::Green),
@@ -775,9 +980,29 @@ fn render_file_list(stdout: &mut io::Stdout, state: &SelectionState) -> io::Resu
             FileCategory::Untracked => Color::Blue,
         };
 
-        // File path (highlight search match if any)
-        // Add trailing slash for directories
-        let path_str = if file.category == FileCategory::AiConfigDirectory {
+        // Expand/collapse indicator for directories
+        if file.category == FileCategory::AiConfigDirectory {
+            let indicator = if state.expanded_dirs.contains(&file.path) {
+                "▾ "
+            } else {
+                "▸ "
+            };
+            execute!(
+                stdout,
+                SetForegroundColor(Color::DarkGrey),
+                Print(indicator),
+                ResetColor
+            )?;
+        }
+
+        // File path display
+        // For children, show just the filename (parent path implied by tree)
+        let path_str = if file.parent_dir.is_some() {
+            file.path.file_name().map_or_else(
+                || file.path.to_string_lossy().to_string(),
+                |n| n.to_string_lossy().to_string(),
+            )
+        } else if file.category == FileCategory::AiConfigDirectory {
             format!("{}/", file.path.to_string_lossy())
         } else {
             file.path.to_string_lossy().to_string()
@@ -852,6 +1077,7 @@ fn render_help_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Resu
         Ok(())
     } else {
         render_key_hint(stdout, "↑↓", "move")?;
+        render_key_hint(stdout, "←→", "expand")?;
         render_key_hint(stdout, "Space", "toggle")?;
         render_key_hint(stdout, "Enter", "confirm")?;
         render_key_hint(stdout, "a", "all")?;
@@ -872,26 +1098,36 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude/settings.json"),
                 category: FileCategory::AiConfig,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".env.local"),
                 category: FileCategory::Gitignored,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("scratch.txt"),
                 category: FileCategory::Untracked,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             },
         ]
     }
@@ -1255,6 +1491,8 @@ mod tests {
                 path: PathBuf::from(format!("file{i}.txt")),
                 category: FileCategory::Untracked,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             });
         }
 
@@ -1283,6 +1521,8 @@ mod tests {
                 path: PathBuf::from(format!("file{i}.txt")),
                 category: FileCategory::Untracked,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             });
         }
 
@@ -1416,26 +1656,36 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".cursor"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("notes.txt"),
                 category: FileCategory::Untracked,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             },
         ]
     }
@@ -1545,6 +1795,327 @@ mod tests {
         // In test context, is_interactive should return false
         // because the executable is in target/*/deps/
         assert!(!is_interactive());
+    }
+
+    /// Helper to create test files with directories and children for tree tests.
+    fn make_test_files_with_children() -> Vec<DetectedFile> {
+        vec![
+            DetectedFile {
+                path: PathBuf::from("CLAUDE.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                depth: 0,
+                parent_dir: None,
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                depth: 0,
+                parent_dir: None,
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/settings.json"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                depth: 1,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/commands/test.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                depth: 2,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".envrc"),
+                category: FileCategory::Gitignored,
+                preselected: false,
+                depth: 0,
+                parent_dir: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_expanded_dirs_default_state() {
+        let files = make_test_files_with_children();
+        let state = SelectionState::new(files, HashSet::new());
+
+        // AI config directories start expanded
+        assert!(state.expanded_dirs.contains(&PathBuf::from(".claude")));
+    }
+
+    #[test]
+    fn test_toggle_expand_collapses_directory() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        assert!(state.expanded_dirs.contains(&PathBuf::from(".claude")));
+
+        state.toggle_expand(Path::new(".claude"));
+        assert!(!state.expanded_dirs.contains(&PathBuf::from(".claude")));
+
+        state.toggle_expand(Path::new(".claude"));
+        assert!(state.expanded_dirs.contains(&PathBuf::from(".claude")));
+    }
+
+    #[test]
+    fn test_visible_files_hides_collapsed_children() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // With .claude expanded, children are visible
+        let visible = state.visible_files();
+        assert_eq!(visible.len(), 5); // CLAUDE.md, .claude, settings.json, test.md, .envrc
+
+        // Collapse .claude
+        state.toggle_expand(Path::new(".claude"));
+        let visible = state.visible_files();
+        assert_eq!(visible.len(), 3); // CLAUDE.md, .claude, .envrc
+        assert!(
+            visible
+                .iter()
+                .all(|f| f.path != PathBuf::from(".claude/settings.json"))
+        );
+    }
+
+    #[test]
+    fn test_expand_current_on_non_directory() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Cursor is on CLAUDE.md (index 0, not a directory)
+        state.expand_current();
+        // No-op, no crash
+        assert_eq!(state.expanded_dirs.len(), 1); // Only .claude
+    }
+
+    #[test]
+    fn test_collapse_current_navigates_to_parent() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Move cursor to .claude/settings.json (index 2 when expanded)
+        state.cursor_down(); // .claude
+        state.cursor_down(); // .claude/settings.json
+        assert_eq!(state.cursor, 2);
+
+        // Collapse current (child) should navigate to parent
+        state.collapse_current();
+
+        // Cursor should be at .claude (index 1)
+        assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
+    fn test_toggle_directory_selects_all_children() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.selections.clear();
+
+        // Move cursor to .claude directory (index 1)
+        state.cursor_down();
+        assert_eq!(
+            state.visible_files()[state.cursor].path,
+            PathBuf::from(".claude")
+        );
+
+        // Toggle: should select directory + all children
+        state.toggle_current();
+
+        assert!(state.selections.contains(&PathBuf::from(".claude")));
+        assert!(
+            state
+                .selections
+                .contains(&PathBuf::from(".claude/settings.json"))
+        );
+        assert!(
+            state
+                .selections
+                .contains(&PathBuf::from(".claude/commands/test.md"))
+        );
+    }
+
+    #[test]
+    fn test_toggle_directory_deselects_all_children() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // All are preselected; move cursor to .claude directory
+        state.cursor_down();
+
+        // Toggle: since all children are selected, should deselect all
+        state.toggle_current();
+
+        assert!(!state.selections.contains(&PathBuf::from(".claude")));
+        assert!(
+            !state
+                .selections
+                .contains(&PathBuf::from(".claude/settings.json"))
+        );
+        assert!(
+            !state
+                .selections
+                .contains(&PathBuf::from(".claude/commands/test.md"))
+        );
+    }
+
+    #[test]
+    fn test_dir_selection_state_none() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.selections.clear();
+
+        assert_eq!(
+            state.dir_selection_state(Path::new(".claude")),
+            DirSelectionState::None
+        );
+    }
+
+    #[test]
+    fn test_dir_selection_state_partial() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.selections.clear();
+
+        // Select only one child
+        state
+            .selections
+            .insert(PathBuf::from(".claude/settings.json"));
+
+        assert_eq!(
+            state.dir_selection_state(Path::new(".claude")),
+            DirSelectionState::Partial
+        );
+    }
+
+    #[test]
+    fn test_dir_selection_state_all() {
+        let files = make_test_files_with_children();
+        let state = SelectionState::new(files, HashSet::new());
+
+        // All children are preselected
+        assert_eq!(
+            state.dir_selection_state(Path::new(".claude")),
+            DirSelectionState::All
+        );
+    }
+
+    #[test]
+    fn test_cursor_clamp_on_collapse() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Move cursor to last child (index 3: .claude/commands/test.md)
+        for _ in 0..3 {
+            state.cursor_down();
+        }
+        assert_eq!(state.cursor, 3);
+
+        // Collapse .claude — children disappear, cursor should clamp
+        state.toggle_expand(Path::new(".claude"));
+
+        // After collapse, only 3 items visible (CLAUDE.md, .claude, .envrc)
+        assert!(state.cursor < 3);
+    }
+
+    #[test]
+    fn test_search_filters_within_expanded_children() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Search for "settings" — should find child
+        state.set_search("settings");
+        let visible = state.visible_files();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].path, PathBuf::from(".claude/settings.json"));
+    }
+
+    #[test]
+    fn test_select_all_visible_includes_expanded_children() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.selections.clear();
+
+        // All visible includes expanded children
+        state.select_all_visible();
+        assert!(
+            state
+                .selections
+                .contains(&PathBuf::from(".claude/settings.json"))
+        );
+        assert!(
+            state
+                .selections
+                .contains(&PathBuf::from(".claude/commands/test.md"))
+        );
+    }
+
+    #[test]
+    fn test_resolve_paths_all_children_selected_emits_directory() {
+        let files = make_test_files_with_children();
+        let state = SelectionState::new(files, HashSet::new());
+
+        // All files are preselected, so all children selected
+        let resolved = state.resolve_selected_paths();
+
+        // Should emit directory path, not individual children
+        assert!(resolved.contains(&PathBuf::from(".claude")));
+        assert!(!resolved.contains(&PathBuf::from(".claude/settings.json")));
+        assert!(!resolved.contains(&PathBuf::from(".claude/commands/test.md")));
+        // Non-directory files are still emitted
+        assert!(resolved.contains(&PathBuf::from("CLAUDE.md")));
+    }
+
+    #[test]
+    fn test_resolve_paths_partial_children_emits_individuals() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Deselect one child
+        state
+            .selections
+            .remove(&PathBuf::from(".claude/commands/test.md"));
+
+        let resolved = state.resolve_selected_paths();
+
+        // Should NOT emit directory path (partial selection)
+        assert!(!resolved.contains(&PathBuf::from(".claude")));
+        // Should emit individual selected child
+        assert!(resolved.contains(&PathBuf::from(".claude/settings.json")));
+        // Should NOT emit deselected child
+        assert!(!resolved.contains(&PathBuf::from(".claude/commands/test.md")));
+    }
+
+    #[test]
+    fn test_children_of() {
+        let files = make_test_files_with_children();
+        let state = SelectionState::new(files, HashSet::new());
+
+        let children = state.children_of(Path::new(".claude"));
+        assert_eq!(children.len(), 2);
+        assert!(children.contains(&PathBuf::from(".claude/settings.json")));
+        assert!(children.contains(&PathBuf::from(".claude/commands/test.md")));
+    }
+
+    #[test]
+    fn test_is_expandable() {
+        let files = make_test_files_with_children();
+        let state = SelectionState::new(files, HashSet::new());
+
+        assert!(SelectionState::is_expandable(&state.all_files[1])); // .claude directory
+        assert!(!SelectionState::is_expandable(&state.all_files[0])); // CLAUDE.md file
+    }
+
+    #[test]
+    fn test_dir_selection_state_enum_equality() {
+        assert_eq!(DirSelectionState::None, DirSelectionState::None);
+        assert_eq!(DirSelectionState::Partial, DirSelectionState::Partial);
+        assert_eq!(DirSelectionState::All, DirSelectionState::All);
+        assert_ne!(DirSelectionState::None, DirSelectionState::Partial);
+        assert_ne!(DirSelectionState::Partial, DirSelectionState::All);
     }
 
     // Note: Tests for env var handling are skipped because set_var/remove_var

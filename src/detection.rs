@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use walkdir::WalkDir;
 
 /// Categories of detected files for overlay creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -28,6 +29,10 @@ pub struct DetectedFile {
     pub category: FileCategory,
     /// Whether this file should be pre-selected by default
     pub preselected: bool,
+    /// Depth in the tree (0 = top-level, 1+ = children of a directory)
+    pub depth: u8,
+    /// Parent directory path (None for top-level entries)
+    pub parent_dir: Option<PathBuf>,
 }
 
 /// AI configuration file patterns.
@@ -62,7 +67,6 @@ pub const AI_CONFIG_PATTERNS: &[&str] = &[
 ///
 /// These are directories containing AI agent configuration that should
 /// be linked as a whole rather than having their contents walked.
-#[allow(dead_code)] // Will be used for directory detection in create command
 pub const AI_CONFIG_DIRECTORIES: &[&str] =
     &[".claude", ".cursor", ".continue", ".cody", ".aider", ".ai"];
 
@@ -99,6 +103,8 @@ pub fn detect_ai_configs(repo_path: &Path) -> Vec<DetectedFile> {
                 path: PathBuf::from(pattern),
                 category: FileCategory::AiConfig,
                 preselected: true, // AI configs are pre-selected by default
+                depth: 0,
+                parent_dir: None,
             });
         }
     }
@@ -109,7 +115,6 @@ pub fn detect_ai_configs(repo_path: &Path) -> Vec<DetectedFile> {
 /// Detect AI configuration directories in a repository.
 ///
 /// Returns directories that should be symlinked as units.
-#[allow(dead_code)] // Will be used for directory detection in create command
 pub fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile> {
     let mut results = Vec::new();
 
@@ -120,11 +125,47 @@ pub fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile> {
                 path: PathBuf::from(dir_name),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true, // AI config directories are pre-selected by default
+                depth: 0,
+                parent_dir: None,
             });
         }
     }
 
     results
+}
+
+/// Detect child files within an AI configuration directory.
+///
+/// Walks the directory tree and returns child entries with appropriate
+/// depth and parent directory information for tree display.
+pub fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Vec<DetectedFile> {
+    let full_path = repo_path.join(dir_path);
+    if !full_path.exists() || !full_path.is_dir() {
+        return Vec::new();
+    }
+
+    WalkDir::new(&full_path)
+        .min_depth(1) // Skip the directory itself
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| {
+            let relative = entry
+                .path()
+                .strip_prefix(repo_path)
+                .unwrap_or_else(|_| entry.path());
+            let depth = relative.components().count().saturating_sub(1);
+            DetectedFile {
+                path: relative.to_path_buf(),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                #[allow(clippy::cast_possible_truncation)]
+                depth: depth as u8,
+                parent_dir: Some(dir_path.to_path_buf()),
+            }
+        })
+        .collect()
 }
 
 /// Detect gitignored files that exist on disk.
@@ -148,6 +189,8 @@ pub fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
                     path: PathBuf::from(line),
                     category: FileCategory::Gitignored,
                     preselected: false,
+                    depth: 0,
+                    parent_dir: None,
                 })
                 .collect()
         }
@@ -176,6 +219,8 @@ pub fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
                     path: PathBuf::from(line),
                     category: FileCategory::Untracked,
                     preselected: false,
+                    depth: 0,
+                    parent_dir: None,
                 })
                 .collect()
         }
@@ -186,14 +231,35 @@ pub fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
 /// Discover all overlay candidate files in a repository.
 ///
 /// Returns files organized by category:
-/// 1. AI configuration files (pre-selected)
-/// 2. Gitignored files
-/// 3. Untracked files
+/// 1. AI configuration directories with their children (pre-selected)
+/// 2. AI configuration files that aren't inside directories (pre-selected)
+/// 3. Gitignored files
+/// 4. Untracked files
 pub fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
     let mut all_files = Vec::new();
 
-    // First, add AI configs (these are pre-selected)
-    all_files.extend(detect_ai_configs(repo_path));
+    // Collect AI config directory paths for filtering
+    let ai_dirs = detect_ai_config_directories(repo_path);
+    let ai_dir_paths: Vec<PathBuf> = ai_dirs.iter().map(|d| d.path.clone()).collect();
+
+    // Add AI config directories with their children
+    for dir in ai_dirs {
+        let dir_path = dir.path.clone();
+        all_files.push(dir);
+        all_files.extend(detect_directory_children(repo_path, &dir_path));
+    }
+
+    // Add AI config files that aren't directories (skip those covered by directory entries)
+    let ai_configs = detect_ai_configs(repo_path);
+    for config in ai_configs {
+        let is_directory_entry = ai_dir_paths.contains(&config.path);
+        let is_inside_directory = ai_dir_paths
+            .iter()
+            .any(|d| config.path.starts_with(d) && config.path != *d);
+        if !is_directory_entry && !is_inside_directory {
+            all_files.push(config);
+        }
+    }
 
     // Then add gitignored files
     all_files.extend(detect_gitignored_files(repo_path));
@@ -398,16 +464,22 @@ mod tests {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfig,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("notes.txt"),
                 category: FileCategory::Untracked,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             },
         ];
 
@@ -433,11 +505,15 @@ mod tests {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfig,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
         ];
 
@@ -562,11 +638,15 @@ mod tests {
             path: PathBuf::from("test.txt"),
             category: FileCategory::AiConfig,
             preselected: true,
+            depth: 0,
+            parent_dir: None,
         };
         let cloned = file.clone();
         assert_eq!(cloned.path, file.path);
         assert_eq!(cloned.category, file.category);
         assert_eq!(cloned.preselected, file.preselected);
+        assert_eq!(cloned.depth, file.depth);
+        assert_eq!(cloned.parent_dir, file.parent_dir);
     }
 
     #[test]
@@ -626,16 +706,22 @@ mod tests {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
+                depth: 0,
+                parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
+                depth: 0,
+                parent_dir: None,
             },
         ];
 
