@@ -149,20 +149,27 @@ pub fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Vec<Detec
         .sort_by_file_name()
         .into_iter()
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
         .map(|entry| {
             let relative = entry
                 .path()
                 .strip_prefix(repo_path)
                 .unwrap_or_else(|_| entry.path());
             let depth = relative.components().count().saturating_sub(1);
+            let is_dir = entry.file_type().is_dir();
+            // Use the immediate parent, not the top-level directory,
+            // so the tree expand/collapse logic works at every level.
+            let parent = relative.parent().map(Path::to_path_buf);
             DetectedFile {
                 path: relative.to_path_buf(),
-                category: FileCategory::AiConfig,
+                category: if is_dir {
+                    FileCategory::AiConfigDirectory
+                } else {
+                    FileCategory::AiConfig
+                },
                 preselected: true,
                 #[allow(clippy::cast_possible_truncation)]
                 depth: depth as u8,
-                parent_dir: Some(dir_path.to_path_buf()),
+                parent_dir: parent,
             }
         })
         .collect()
@@ -760,5 +767,78 @@ mod tests {
         let untracked = detect_untracked_files(temp.path());
         // Should return empty vec when git fails
         assert!(untracked.is_empty());
+    }
+
+    #[test]
+    fn test_detect_directory_children_includes_subdirectories() {
+        let repo = create_test_repo();
+
+        // Create nested directory structure: .claude/commands/test.md
+        fs::create_dir_all(repo.path().join(".claude/commands")).unwrap();
+        fs::write(repo.path().join(".claude/settings.json"), "{}").unwrap();
+        fs::write(repo.path().join(".claude/commands/test.md"), "# Test").unwrap();
+
+        let children = detect_directory_children(repo.path(), Path::new(".claude"));
+
+        // Should include the subdirectory entry
+        let subdir = children
+            .iter()
+            .find(|f| f.path == Path::new(".claude/commands"));
+        assert!(subdir.is_some(), "should include subdirectory entry");
+        let subdir = subdir.unwrap();
+        assert_eq!(subdir.category, FileCategory::AiConfigDirectory);
+        assert_eq!(subdir.depth, 1);
+        assert_eq!(subdir.parent_dir, Some(PathBuf::from(".claude")));
+
+        // Should include files with correct immediate parents
+        let settings = children
+            .iter()
+            .find(|f| f.path == Path::new(".claude/settings.json"));
+        assert!(settings.is_some());
+        assert_eq!(settings.unwrap().parent_dir, Some(PathBuf::from(".claude")));
+
+        let test_md = children
+            .iter()
+            .find(|f| f.path == Path::new(".claude/commands/test.md"));
+        assert!(test_md.is_some());
+        assert_eq!(
+            test_md.unwrap().parent_dir,
+            Some(PathBuf::from(".claude/commands"))
+        );
+        assert_eq!(test_md.unwrap().depth, 2);
+    }
+
+    #[test]
+    fn test_detect_directory_children_deeply_nested() {
+        let repo = create_test_repo();
+
+        // Create 3 levels deep: .claude/a/b/c.md
+        fs::create_dir_all(repo.path().join(".claude/a/b")).unwrap();
+        fs::write(repo.path().join(".claude/a/b/c.md"), "deep").unwrap();
+
+        let children = detect_directory_children(repo.path(), Path::new(".claude"));
+
+        // Should have entries for: a/ (dir), a/b/ (dir), a/b/c.md (file)
+        assert_eq!(children.len(), 3);
+
+        let dir_a = children.iter().find(|f| f.path == Path::new(".claude/a"));
+        assert!(dir_a.is_some());
+        assert_eq!(dir_a.unwrap().category, FileCategory::AiConfigDirectory);
+        assert_eq!(dir_a.unwrap().parent_dir, Some(PathBuf::from(".claude")));
+
+        let dir_b = children.iter().find(|f| f.path == Path::new(".claude/a/b"));
+        assert!(dir_b.is_some());
+        assert_eq!(dir_b.unwrap().category, FileCategory::AiConfigDirectory);
+        assert_eq!(dir_b.unwrap().parent_dir, Some(PathBuf::from(".claude/a")));
+
+        let file_c = children
+            .iter()
+            .find(|f| f.path == Path::new(".claude/a/b/c.md"));
+        assert!(file_c.is_some());
+        assert_eq!(file_c.unwrap().category, FileCategory::AiConfig);
+        assert_eq!(
+            file_c.unwrap().parent_dir,
+            Some(PathBuf::from(".claude/a/b"))
+        );
     }
 }
