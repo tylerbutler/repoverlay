@@ -120,6 +120,14 @@ pub(crate) struct ResolvedSource {
     pub source_info: OverlaySource,
 }
 
+/// Result of source resolution - may be a single overlay or multiple from browse mode.
+pub(crate) enum ResolvedSources {
+    /// A single resolved overlay source.
+    Single(ResolvedSource),
+    /// Multiple resolved overlay sources (from browse mode multi-select).
+    Multiple(Vec<ResolvedSource>),
+}
+
 /// Resolve a source string to a local path.
 ///
 /// Resolution order:
@@ -144,7 +152,7 @@ pub(crate) fn resolve_source(
     update: bool,
     target_path: Option<&Path>,
     source_filter: Option<&str>,
-) -> Result<ResolvedSource> {
+) -> Result<ResolvedSources> {
     debug!(
         "resolve_source: {source_str} (ref_override={ref_override:?}, update={update}, source_filter={source_filter:?})"
     );
@@ -154,18 +162,23 @@ pub(crate) fn resolve_source(
     debug!("parsed reference: {reference:?}");
 
     match reference {
-        SourceReference::GitHubUrl(url) => resolve_github_url(&url, ref_override, update),
+        SourceReference::GitHubUrl(url) => {
+            resolve_github_url(&url, ref_override, update).map(ResolvedSources::Single)
+        }
 
         SourceReference::LocalPath {
             path,
             needs_prefix_warning,
-        } => resolve_local_path(&path, source_str, needs_prefix_warning),
+        } => {
+            resolve_local_path(&path, source_str, needs_prefix_warning).map(ResolvedSources::Single)
+        }
 
         SourceReference::ThreePart {
             owner,
             repo,
             overlay,
-        } => resolve_three_part(&owner, &repo, &overlay, target_path, source_filter, update),
+        } => resolve_three_part(&owner, &repo, &overlay, target_path, source_filter, update)
+            .map(ResolvedSources::Single),
 
         SourceReference::TwoPart { owner, repo } => resolve_two_part(
             &owner,
@@ -270,7 +283,7 @@ fn resolve_local_path(
 ///
 /// This is "GitHub browse mode" - the user specified a GitHub repo containing overlays
 /// (e.g., `tylerbutler/repo-overlays`). We clone it to the GitHub cache and let them
-/// interactively select an overlay.
+/// interactively select one or more overlays.
 ///
 /// The overlay repo structure is: `<target_org>/<target_repo>/<overlay_name>/`
 /// For example: `microsoft/FluidFramework/vscode-setup/`
@@ -284,7 +297,7 @@ fn resolve_two_part(
     update: bool,
     _target_path: Option<&Path>,
     _source_filter: Option<&str>,
-) -> Result<ResolvedSource> {
+) -> Result<ResolvedSources> {
     debug!("resolving two-part reference (GitHub browse mode): {owner}/{repo}");
 
     // Create a GitHubSource to fetch/cache the repo
@@ -316,9 +329,9 @@ fn resolve_two_part(
         );
     }
 
-    // Select overlay based on interactivity
-    let selected_overlay = if is_interactive() {
-        select_overlay_interactive(owner, repo, &available_overlays)?
+    // Select overlays based on interactivity
+    let selected_overlays = if is_interactive() {
+        select_overlays_interactive(owner, repo, &available_overlays)?
     } else {
         // Non-interactive mode - error with available overlays
         let overlay_list = available_overlays
@@ -332,48 +345,68 @@ fn resolve_two_part(
         );
     };
 
-    println!(
-        "{} overlay: {}",
-        "Selected".green().bold(),
-        format_overlay_path(&selected_overlay)
-    );
-
-    // Parse the selected overlay path: target_org/target_repo/overlay_name
-    let (target_org, target_repo, overlay_name) = parse_overlay_path(&selected_overlay)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Invalid overlay path format: {selected_overlay}\n\
-                 Expected: <target-org>/<target-repo>/<overlay-name>"
-            )
-        })?;
-
-    // Build the overlay path directly from the cached GitHub repo.
-    // This is different from overlay repo resolution (resolve_three_part) which
-    // uses OverlayRepoManager - here we're browsing the GitHub cache directly.
-    let overlay_path = cached
-        .path
-        .join(target_org)
-        .join(target_repo)
-        .join(overlay_name);
-
-    if !overlay_path.exists() {
-        bail!("Overlay directory not found: {}", overlay_path.display());
+    if selected_overlays.len() == 1 {
+        println!(
+            "{} overlay: {}",
+            "Selected".green().bold(),
+            format_overlay_path(&selected_overlays[0])
+        );
+    } else {
+        println!(
+            "{} {} overlays:",
+            "Selected".green().bold(),
+            selected_overlays.len()
+        );
+        for overlay_path in &selected_overlays {
+            println!("  - {}", format_overlay_path(overlay_path));
+        }
     }
 
-    // Get commit hash for source tracking
+    // Resolve each selected overlay to a ResolvedSource
+    let git_ref_str = github_source.git_ref.as_str().to_string();
     let commit = get_cached_repo_commit(&cached.path).unwrap_or_else(|| "unknown".to_string());
 
-    Ok(ResolvedSource {
-        path: overlay_path,
-        source_info: OverlaySource::github(
-            github_url,
-            owner.to_string(),
-            repo.to_string(),
-            github_source.git_ref.as_str().to_string(),
-            commit,
-            Some(format!("{target_org}/{target_repo}/{overlay_name}")),
-        ),
-    })
+    let mut resolved_sources = Vec::with_capacity(selected_overlays.len());
+
+    for selected_overlay in &selected_overlays {
+        let (target_org, target_repo, overlay_name) = parse_overlay_path(selected_overlay)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid overlay path format: {selected_overlay}\n\
+                     Expected: <target-org>/<target-repo>/<overlay-name>"
+                )
+            })?;
+
+        let overlay_path = cached
+            .path
+            .join(target_org)
+            .join(target_repo)
+            .join(overlay_name);
+
+        if !overlay_path.exists() {
+            bail!("Overlay directory not found: {}", overlay_path.display());
+        }
+
+        resolved_sources.push(ResolvedSource {
+            path: overlay_path,
+            source_info: OverlaySource::github(
+                github_url.clone(),
+                owner.to_string(),
+                repo.to_string(),
+                git_ref_str.clone(),
+                commit.clone(),
+                Some(format!("{target_org}/{target_repo}/{overlay_name}")),
+            ),
+        });
+    }
+
+    if resolved_sources.len() == 1 {
+        Ok(ResolvedSources::Single(
+            resolved_sources.into_iter().next().unwrap(),
+        ))
+    } else {
+        Ok(ResolvedSources::Multiple(resolved_sources))
+    }
 }
 
 /// Get the current commit hash from a cached repository.
@@ -479,12 +512,19 @@ fn format_overlay_path(path: &str) -> String {
     }
 }
 
-/// Present an interactive picker to select an overlay.
-fn select_overlay_interactive(owner: &str, repo: &str, overlays: &[String]) -> Result<String> {
-    use dialoguer::{Select, theme::ColorfulTheme};
+/// Present an interactive multi-select picker for overlays.
+///
+/// Uses `dialoguer::MultiSelect` to allow selecting one or more overlays.
+/// Space toggles selection, Enter confirms.
+fn select_overlays_interactive(
+    owner: &str,
+    repo: &str,
+    overlays: &[String],
+) -> Result<Vec<String>> {
+    use dialoguer::{MultiSelect, theme::ColorfulTheme};
 
     println!(
-        "\n{} Select an overlay from {}/{}:\n",
+        "\n{} Select overlay(s) from {}/{} (Space to toggle, Enter to confirm):\n",
         "?".cyan().bold(),
         owner,
         repo
@@ -493,15 +533,16 @@ fn select_overlay_interactive(owner: &str, repo: &str, overlays: &[String]) -> R
     // Format overlays for display with bold overlay names
     let display_items: Vec<String> = overlays.iter().map(|o| format_overlay_path(o)).collect();
 
-    let selection = Select::with_theme(&ColorfulTheme::default())
+    let selections = MultiSelect::with_theme(&ColorfulTheme::default())
         .items(&display_items)
-        .default(0)
         .interact_opt()
         .context("Failed to show overlay picker")?;
 
-    match selection {
-        Some(idx) => Ok(overlays[idx].clone()),
-        None => bail!("Overlay selection cancelled"),
+    match selections {
+        Some(indices) if !indices.is_empty() => {
+            Ok(indices.into_iter().map(|i| overlays[i].clone()).collect())
+        }
+        _ => bail!("No overlays selected"),
     }
 }
 
@@ -787,17 +828,39 @@ pub(crate) fn apply_overlay(
         source_filter,
     )?;
 
+    // Handle multi-select from browse mode
+    let resolved = match resolved {
+        ResolvedSources::Single(single) => single,
+        ResolvedSources::Multiple(sources) => {
+            return apply_multiple_overlays(&sources, target, force_copy, dry_run);
+        }
+    };
+
     if dry_run {
         println!("{} Dry run - no changes made.", "Note:".yellow());
         println!("\nWould apply overlay from: {}", resolved.path.display());
         return Ok(());
     }
-    let source = &resolved.path;
-    debug!("resolved source path: {}", source.display());
 
     // Validate target exists and is a git repo
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
+
+    apply_resolved_overlay(&resolved, &target, force_copy, name_override)
+}
+
+/// Apply a single resolved overlay to a target repository.
+///
+/// This contains the core overlay application logic, separated from source resolution
+/// so it can be reused by both single-apply and multi-apply paths.
+fn apply_resolved_overlay(
+    resolved: &ResolvedSource,
+    target: &Path,
+    force_copy: bool,
+    name_override: Option<String>,
+) -> Result<()> {
+    let source = &resolved.path;
+    debug!("resolved source path: {}", source.display());
 
     // Determine link type
     let link_type = if force_copy || cfg!(windows) {
@@ -807,25 +870,10 @@ pub(crate) fn apply_overlay(
     };
 
     // Load overlay config (optional)
-    let config_path = source.join(CONFIG_FILE);
-    let config: OverlayConfig = if config_path.exists() {
-        let content = fs::read_to_string(&config_path)
-            .with_context(|| format!("Failed to read config: {}", config_path.display()))?;
-        sickle::from_str(&content)
-            .with_context(|| format!("Failed to parse config: {}", config_path.display()))?
-    } else {
-        OverlayConfig::default()
-    };
+    let config = load_overlay_config(source)?;
 
     // Determine overlay name (priority: CLI override > config > directory name)
-    let overlay_name = name_override
-        .or_else(|| config.overlay.name.clone())
-        .unwrap_or_else(|| {
-            source.file_name().map_or_else(
-                || "unnamed".to_string(),
-                |n| n.to_string_lossy().to_string(),
-            )
-        });
+    let overlay_name = resolve_overlay_display_name(&config, source, name_override);
     let normalized_name = normalize_overlay_name(&overlay_name)?;
 
     // Check if this specific overlay already exists
@@ -838,17 +886,13 @@ pub(crate) fn apply_overlay(
     }
 
     // Load all existing overlay targets to check for conflicts
-    let existing_targets = load_all_overlay_targets(&target)?;
+    let existing_targets = load_all_overlay_targets(target)?;
 
     println!("{} overlay: {}", "Applying".green().bold(), overlay_name);
 
     // Collect files to overlay and build state
-    let mut state = OverlayState::new(overlay_name.clone(), resolved.source_info);
+    let mut state = OverlayState::new(overlay_name.clone(), resolved.source_info.clone());
     let mut exclude_entries: Vec<String> = Vec::new();
-
-    // Build set of directories to symlink as units
-    let dir_set: std::collections::HashSet<PathBuf> =
-        config.directories.iter().map(PathBuf::from).collect();
 
     // Process directories first (symlink as units)
     for dir_name in &config.directories {
@@ -945,50 +989,10 @@ pub(crate) fn apply_overlay(
         exclude_entries.push(exclude_path);
     }
 
-    for entry in WalkDir::new(source)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.file_type().is_file())
-    {
-        let rel_path = entry.path().strip_prefix(source)?;
-
-        // Skip the config file
-        if rel_path == Path::new(CONFIG_FILE) {
-            continue;
-        }
-
-        // Skip git directory and cache metadata
-        let rel_str_check = rel_path.to_string_lossy();
-        if rel_str_check.starts_with(".git/")
-            || rel_str_check.starts_with(".git\\")
-            || rel_str_check == ".git"
-            || rel_str_check == ".repoverlay-cache-meta.ccl"
-        {
-            continue;
-        }
-
-        // Skip files that are within directories being symlinked as units
-        let mut skip_file = false;
-        for dir in &dir_set {
-            if rel_path.starts_with(dir) {
-                skip_file = true;
-                break;
-            }
-        }
-        if skip_file {
-            continue;
-        }
-
+    for (rel_path, target_rel_str) in collect_overlay_files(source, &config) {
         let rel_str = rel_path.to_string_lossy().to_string();
-
-        // Apply path mapping if defined
-        let target_rel = config
-            .mappings
-            .get(&rel_str)
-            .map_or_else(|| rel_path.to_path_buf(), PathBuf::from);
-
-        let target_rel_str = target_rel.to_string_lossy().to_string();
-        let source_file = entry.path().to_path_buf();
+        let target_rel = PathBuf::from(&target_rel_str);
+        let source_file = source.join(&rel_path);
         let target_file = target.join(&target_rel);
 
         // Validate that the target file is within the target directory (prevent path traversal)
@@ -997,13 +1001,13 @@ pub(crate) fn apply_overlay(
         // Alternative: check if the path contains .. that escapes the target.
         {
             // Normalize the path by iterating through components
-            let mut normalized = target.clone();
+            let mut normalized = target.to_path_buf();
             for component in target_rel.components() {
                 use std::path::Component;
                 match component {
                     Component::ParentDir => {
                         // Check if going up would escape the target directory
-                        if !normalized.starts_with(&target) || normalized == target {
+                        if !normalized.starts_with(target) || normalized == *target {
                             bail!(
                                 "Path traversal detected: mapping '{}' -> '{}' would escape target directory",
                                 rel_str,
@@ -1026,7 +1030,7 @@ pub(crate) fn apply_overlay(
                 }
             }
             // After processing, ensure we're still within target
-            if !normalized.starts_with(&target) {
+            if !normalized.starts_with(target) {
                 bail!(
                     "Path traversal detected: mapping '{}' -> '{}' would escape target directory",
                     rel_str,
@@ -1087,7 +1091,7 @@ pub(crate) fn apply_overlay(
         println!("  {} {}", "+".green(), target_rel.display());
 
         state.add_file(FileEntry {
-            source: rel_path.to_path_buf(),
+            source: rel_path.clone(),
             target: target_rel.clone(),
             link_type,
             entry_type: EntryType::File,
@@ -1103,7 +1107,7 @@ pub(crate) fn apply_overlay(
     }
 
     // Update .git/info/exclude with this overlay's entries
-    update_git_exclude(&target, &normalized_name, &exclude_entries, true)?;
+    update_git_exclude(target, &normalized_name, &exclude_entries, true)?;
 
     // Ensure state directories exist
     fs::create_dir_all(&overlays_dir)?;
@@ -1118,10 +1122,10 @@ pub(crate) fn apply_overlay(
     }
 
     // Save overlay state to in-repo location
-    save_overlay_state(&target, &state)?;
+    save_overlay_state(target, &state)?;
 
     // Save external backup for restore capability
-    if let Err(e) = save_external_state(&target, &normalized_name, &state) {
+    if let Err(e) = save_external_state(target, &normalized_name, &state) {
         eprintln!(
             "  {} Could not save external backup: {}",
             "Warning:".yellow(),
@@ -1135,6 +1139,310 @@ pub(crate) fn apply_overlay(
         state.file_count(),
         overlay_name
     );
+
+    Ok(())
+}
+
+/// Apply multiple overlays atomically.
+///
+/// Pre-checks for conflicts between the selected overlays and with existing overlays,
+/// then applies each overlay in sequence. If any overlay fails to apply, all previously
+/// applied overlays from this batch are rolled back.
+fn apply_multiple_overlays(
+    sources: &[ResolvedSource],
+    target: &Path,
+    force_copy: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let target = canonicalize_path(target, "Target directory")?;
+    validate_git_repo(&target)?;
+
+    println!(
+        "\n{} Preparing to apply {} overlay(s)...",
+        "Batch:".blue().bold(),
+        sources.len()
+    );
+
+    // Phase 1: Check for conflicts between selected overlays
+    check_overlay_conflicts(sources)?;
+
+    // Phase 2: Check for conflicts with already-applied overlays
+    let existing_targets = load_all_overlay_targets(&target)?;
+    for resolved in sources {
+        let config = load_overlay_config(&resolved.path)?;
+        let overlay_name = determine_overlay_name(&config, &resolved.path, None)?;
+
+        let overlay_state_path = target
+            .join(STATE_DIR)
+            .join(OVERLAYS_DIR)
+            .join(format!("{overlay_name}.ccl"));
+
+        if overlay_state_path.exists() {
+            bail!(
+                "Overlay '{overlay_name}' is already applied. \
+                 Run 'repoverlay remove {overlay_name}' first."
+            );
+        }
+
+        // Check files in this overlay against existing overlay targets
+        check_files_against_existing(&resolved.path, &config, &existing_targets)?;
+    }
+
+    if dry_run {
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+        println!("\nWould apply {} overlay(s):", sources.len());
+        for resolved in sources {
+            println!("  - {}", resolved.path.display());
+        }
+        return Ok(());
+    }
+
+    // Phase 3: Apply each overlay, tracking for rollback
+    let mut applied: Vec<String> = Vec::new();
+
+    for resolved in sources {
+        match apply_resolved_overlay(resolved, &target, force_copy, None) {
+            Ok(()) => {
+                let config = load_overlay_config(&resolved.path)?;
+                let name = determine_overlay_name(&config, &resolved.path, None)?;
+                applied.push(name);
+            }
+            Err(e) => {
+                // Rollback all previously applied overlays from this batch
+                eprintln!(
+                    "\n{} Failed to apply overlay from '{}': {e}",
+                    "Error:".red().bold(),
+                    resolved.path.display()
+                );
+
+                if !applied.is_empty() {
+                    eprintln!(
+                        "{} Rolling back {} previously applied overlay(s)...",
+                        "Rollback:".yellow().bold(),
+                        applied.len()
+                    );
+
+                    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+                    for name in &applied {
+                        if let Err(rollback_err) =
+                            remove_single_overlay(&target, &overlays_dir, name)
+                        {
+                            eprintln!(
+                                "  {} Failed to rollback '{name}': {rollback_err}",
+                                "Warning:".yellow()
+                            );
+                        }
+                    }
+
+                    // Clean up .repoverlay directory if no overlays remain
+                    let remaining = list_applied_overlays(&target).unwrap_or_default();
+                    if remaining.is_empty() {
+                        let _ = fs::remove_dir_all(target.join(STATE_DIR));
+                    }
+                }
+
+                bail!("Batch overlay application failed and was rolled back: {e}");
+            }
+        }
+    }
+
+    println!(
+        "\n{} Successfully applied {} overlay(s)",
+        "✓".green().bold(),
+        applied.len()
+    );
+
+    Ok(())
+}
+
+/// Collect overlay file entries, applying filtering and path mapping.
+///
+/// Walks the overlay source directory and returns `(source_rel_path, mapped_target_path)` pairs
+/// for each file that should be overlaid. Skips config files, `.git`, cache metadata, and files
+/// within directories being symlinked as units.
+fn collect_overlay_files(source: &Path, config: &OverlayConfig) -> Vec<(PathBuf, String)> {
+    let dir_set: std::collections::HashSet<PathBuf> =
+        config.directories.iter().map(PathBuf::from).collect();
+
+    let mut files = Vec::new();
+
+    for entry in WalkDir::new(source)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_file())
+    {
+        let Ok(rel_path) = entry.path().strip_prefix(source) else {
+            continue;
+        };
+
+        let rel_str = rel_path.to_string_lossy();
+        if rel_path == Path::new(CONFIG_FILE)
+            || rel_str.starts_with(".git/")
+            || rel_str.starts_with(".git\\")
+            || rel_str == ".git"
+            || rel_str == ".repoverlay-cache-meta.ccl"
+        {
+            continue;
+        }
+
+        if dir_set.iter().any(|dir| rel_path.starts_with(dir)) {
+            continue;
+        }
+
+        let rel_string = rel_str.to_string();
+        let target_rel = config
+            .mappings
+            .get(&rel_string)
+            .map_or_else(|| rel_string.clone(), Clone::clone);
+
+        files.push((rel_path.to_path_buf(), target_rel));
+    }
+
+    files
+}
+
+/// Check for file path conflicts across multiple overlay sources.
+///
+/// Walks each overlay's files and directories to build a map of target paths.
+/// Returns an error if any target path would be claimed by more than one overlay.
+fn check_overlay_conflicts(sources: &[ResolvedSource]) -> Result<()> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut target_files: HashMap<String, String> = HashMap::new();
+    let mut target_dirs: HashSet<String> = HashSet::new();
+
+    for resolved in sources {
+        let source = &resolved.path;
+        let config = load_overlay_config(source)?;
+        let overlay_name = determine_overlay_name(&config, source, None)?;
+
+        // Check configured directories
+        for dir_name in &config.directories {
+            let dir_str = dir_name.clone();
+            if let Some(conflicting) = target_files.get(&dir_str) {
+                bail!(
+                    "Conflict between selected overlays: directory '{dir_name}' is claimed by \
+                     both '{conflicting}' and '{overlay_name}'.\n\
+                     Cannot apply overlays with overlapping file paths."
+                );
+            }
+
+            // Check if any existing file falls under this directory
+            let dir_prefix = format!("{dir_str}/");
+            for (existing_file, existing_owner) in &target_files {
+                if existing_file.starts_with(&dir_prefix) {
+                    bail!(
+                        "Conflict between selected overlays: directory '{dir_name}' \
+                         (from '{overlay_name}') would overlap with file '{existing_file}' \
+                         (from '{existing_owner}').\n\
+                         Cannot apply overlays with overlapping file paths."
+                    );
+                }
+            }
+
+            target_files.insert(dir_str.clone(), overlay_name.clone());
+            target_dirs.insert(dir_str);
+        }
+
+        // Check individual files
+        for (_rel_path, target_rel) in collect_overlay_files(source, &config) {
+            if let Some(conflicting) = target_files.get(&target_rel) {
+                bail!(
+                    "Conflict between selected overlays: file '{target_rel}' is claimed by \
+                     both '{conflicting}' and '{overlay_name}'.\n\
+                     Cannot apply overlays with overlapping file paths."
+                );
+            }
+
+            // Check if this file falls under a directory claimed by another overlay
+            for dir in &target_dirs {
+                let dir_prefix = format!("{dir}/");
+                if target_rel.starts_with(&dir_prefix) {
+                    let dir_owner = &target_files[dir];
+                    if *dir_owner != overlay_name {
+                        bail!(
+                            "Conflict between selected overlays: file '{target_rel}' \
+                             (from '{overlay_name}') falls within directory '{dir}' \
+                             (from '{dir_owner}').\n\
+                             Cannot apply overlays with overlapping file paths."
+                        );
+                    }
+                }
+            }
+
+            target_files.insert(target_rel, overlay_name.clone());
+        }
+    }
+
+    Ok(())
+}
+
+/// Load an overlay configuration from a source directory.
+fn load_overlay_config(source: &Path) -> Result<OverlayConfig> {
+    let config_path = source.join(CONFIG_FILE);
+    if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .with_context(|| format!("Failed to read config: {}", config_path.display()))?;
+        sickle::from_str(&content)
+            .with_context(|| format!("Failed to parse config: {}", config_path.display()))
+    } else {
+        Ok(OverlayConfig::default())
+    }
+}
+
+/// Resolve the raw overlay display name from config and source path.
+///
+/// Priority: CLI override > config name > directory name.
+fn resolve_overlay_display_name(
+    config: &OverlayConfig,
+    source: &Path,
+    name_override: Option<String>,
+) -> String {
+    name_override
+        .or_else(|| config.overlay.name.clone())
+        .unwrap_or_else(|| {
+            source.file_name().map_or_else(
+                || "unnamed".to_string(),
+                |n| n.to_string_lossy().to_string(),
+            )
+        })
+}
+
+/// Determine the normalized overlay name from config and source path.
+fn determine_overlay_name(
+    config: &OverlayConfig,
+    source: &Path,
+    name_override: Option<String>,
+) -> Result<String> {
+    let overlay_name = resolve_overlay_display_name(config, source, name_override);
+    normalize_overlay_name(&overlay_name)
+}
+
+/// Check overlay files for conflicts with existing (already-applied) overlay targets.
+fn check_files_against_existing(
+    source: &Path,
+    config: &OverlayConfig,
+    existing_targets: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    // Check configured directories
+    for dir_name in &config.directories {
+        if let Some(conflicting) = existing_targets.get(dir_name.as_str()) {
+            bail!(
+                "Conflict: directory '{dir_name}' is already managed by overlay '{conflicting}'.\n\
+                 Remove that overlay first."
+            );
+        }
+    }
+
+    // Check individual files
+    for (_rel_path, target_rel) in collect_overlay_files(source, config) {
+        if let Some(conflicting) = existing_targets.get(&target_rel) {
+            bail!(
+                "Conflict: file '{target_rel}' is already managed by overlay '{conflicting}'.\n\
+                 Remove that overlay first."
+            );
+        }
+    }
 
     Ok(())
 }
@@ -3928,6 +4236,289 @@ mod tests {
             // (if git clean happened again)
             let ext_states = load_external_states(&canonical_repo_path).unwrap();
             assert_eq!(ext_states.len(), 1, "external state should be loadable");
+        }
+    }
+
+    mod check_overlay_conflicts_tests {
+        use super::*;
+
+        fn make_overlay(dir: &Path, files: &[&str]) {
+            for file in files {
+                let file_path = dir.join(file);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(file_path, "content").unwrap();
+            }
+        }
+
+        #[test]
+        fn no_conflicts_between_non_overlapping_overlays() {
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[".envrc"]);
+            make_overlay(overlay_b.path(), &["config.json"]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            assert!(check_overlay_conflicts(&sources).is_ok());
+        }
+
+        #[test]
+        fn detects_file_conflict_between_overlays() {
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[".envrc", "unique-a.txt"]);
+            make_overlay(overlay_b.path(), &[".envrc", "unique-b.txt"]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let result = check_overlay_conflicts(&sources);
+            assert!(result.is_err());
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains(".envrc"),
+                "error should mention conflicting file"
+            );
+            assert!(
+                err_msg.contains("Conflict"),
+                "error should mention conflict"
+            );
+        }
+
+        #[test]
+        fn detects_directory_conflict_between_overlays() {
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            // Both overlays declare ".claude" as a directory in their config
+            make_overlay(overlay_a.path(), &[".claude/CLAUDE.md"]);
+            make_overlay(overlay_b.path(), &[".claude/other.md"]);
+
+            let config_content = "overlay =\n  name = test\n\ndirectories =\n  = .claude\n";
+            fs::write(overlay_a.path().join(CONFIG_FILE), config_content).unwrap();
+            fs::write(overlay_b.path().join(CONFIG_FILE), config_content).unwrap();
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let result = check_overlay_conflicts(&sources);
+            assert!(result.is_err());
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains(".claude"),
+                "error should mention conflicting directory"
+            );
+        }
+
+        #[test]
+        fn skips_config_and_git_files_in_conflict_check() {
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            // Both overlays have repoverlay.ccl - should not conflict
+            make_overlay(overlay_a.path(), &["file-a.txt"]);
+            make_overlay(overlay_b.path(), &["file-b.txt"]);
+            fs::write(overlay_a.path().join(CONFIG_FILE), "").unwrap();
+            fs::write(overlay_b.path().join(CONFIG_FILE), "").unwrap();
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            assert!(check_overlay_conflicts(&sources).is_ok());
+        }
+    }
+
+    mod apply_multiple_overlays_tests {
+        use super::*;
+
+        fn make_overlay(dir: &Path, files: &[(&str, &str)]) {
+            for (name, content) in files {
+                let file_path = dir.join(name);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(file_path, content).unwrap();
+            }
+        }
+
+        #[test]
+        fn applies_multiple_non_conflicting_overlays() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+            make_overlay(overlay_b.path(), &[("config.json", "{}")]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_multiple_overlays(&sources, &canonical, false, false);
+            assert!(result.is_ok(), "multi-apply should succeed: {result:?}");
+
+            // Both overlays should be applied
+            let applied = list_applied_overlays(&canonical).unwrap();
+            assert_eq!(applied.len(), 2, "should have 2 applied overlays");
+
+            // Files should exist
+            assert!(canonical.join(".envrc").exists(), ".envrc should exist");
+            assert!(
+                canonical.join("config.json").exists(),
+                "config.json should exist"
+            );
+        }
+
+        #[test]
+        fn rejects_conflicting_overlays_before_applying() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            // Both overlays have the same file
+            make_overlay(overlay_a.path(), &[(".envrc", "version a")]);
+            make_overlay(overlay_b.path(), &[(".envrc", "version b")]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_multiple_overlays(&sources, &canonical, false, false);
+            assert!(result.is_err(), "should fail due to conflict");
+
+            // No overlays should be applied
+            let applied = list_applied_overlays(&canonical).unwrap();
+            assert!(
+                applied.is_empty(),
+                "no overlays should be applied after conflict"
+            );
+
+            // No files should exist
+            assert!(
+                !canonical.join(".envrc").exists(),
+                ".envrc should not exist"
+            );
+        }
+
+        #[test]
+        fn dry_run_does_not_apply() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+
+            let sources = vec![ResolvedSource {
+                path: overlay_a.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+            }];
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_multiple_overlays(&sources, &canonical, false, true);
+            assert!(result.is_ok(), "dry run should succeed");
+
+            // No files should be applied
+            assert!(
+                !canonical.join(".envrc").exists(),
+                ".envrc should not exist in dry run"
+            );
+        }
+
+        #[test]
+        fn rolls_back_on_failure() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+            make_overlay(overlay_b.path(), &[("config.json", "{}")]);
+
+            // Pre-create config.json in the repo to cause a conflict when the second
+            // overlay tries to apply (existing file conflict)
+            fs::write(repo.path().join("config.json"), "existing").unwrap();
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_multiple_overlays(&sources, &canonical, false, false);
+            assert!(
+                result.is_err(),
+                "should fail because config.json already exists"
+            );
+
+            // First overlay should be rolled back
+            let applied = list_applied_overlays(&canonical).unwrap();
+            assert!(
+                applied.is_empty(),
+                "first overlay should be rolled back, but found: {applied:?}"
+            );
+
+            // The first overlay's file should be cleaned up
+            assert!(
+                !canonical.join(".envrc").is_symlink(),
+                ".envrc symlink should be removed during rollback"
+            );
         }
     }
 }
