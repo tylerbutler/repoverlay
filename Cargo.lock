@@ -1506,9 +1506,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-update-check"
-version = "0.1.0"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5acedbb5e017cfcb45d7ec1b60415c7232dd481348734dbaeff4213cc1e7557"
+checksum = "357ed252d7a4b348687d2c949b849ebd75ad30a9910cd7b41b32842edd54edcc"
 dependencies = [
  "dirs",
  "semver",
