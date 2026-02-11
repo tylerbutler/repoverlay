@@ -3271,6 +3271,49 @@ mod tests {
         }
     }
 
+    // Tests for ResolvedSources enum
+    mod resolved_sources_tests {
+        use super::*;
+
+        #[test]
+        fn single_variant_holds_one_source() {
+            let source = ResolvedSource {
+                path: PathBuf::from("/some/path"),
+                source_info: OverlaySource::local(PathBuf::from("/origin")),
+            };
+            let resolved = ResolvedSources::Single(source);
+            match resolved {
+                ResolvedSources::Single(s) => {
+                    assert_eq!(s.path, PathBuf::from("/some/path"));
+                }
+                ResolvedSources::Multiple(_) => panic!("Expected Single variant"),
+            }
+        }
+
+        #[test]
+        fn multiple_variant_holds_vec_of_sources() {
+            let sources = vec![
+                ResolvedSource {
+                    path: PathBuf::from("/path/a"),
+                    source_info: OverlaySource::local(PathBuf::from("/origin-a")),
+                },
+                ResolvedSource {
+                    path: PathBuf::from("/path/b"),
+                    source_info: OverlaySource::local(PathBuf::from("/origin-b")),
+                },
+            ];
+            let resolved = ResolvedSources::Multiple(sources);
+            match resolved {
+                ResolvedSources::Multiple(v) => {
+                    assert_eq!(v.len(), 2);
+                    assert_eq!(v[0].path, PathBuf::from("/path/a"));
+                    assert_eq!(v[1].path, PathBuf::from("/path/b"));
+                }
+                ResolvedSources::Single(_) => panic!("Expected Multiple variant"),
+            }
+        }
+    }
+
     // Additional edge case tests for line ending handling
     mod line_ending_edge_cases {
         use super::*;
@@ -4365,6 +4408,189 @@ mod tests {
         }
     }
 
+    mod check_overlay_conflicts_edge_cases {
+        use super::*;
+
+        fn make_overlay(dir: &Path, files: &[&str]) {
+            for file in files {
+                let file_path = dir.join(file);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(file_path, "content").unwrap();
+            }
+        }
+
+        #[test]
+        fn detects_directory_overlapping_existing_file() {
+            // Overlay A has a file ".claude/settings.json"
+            // Overlay B declares ".claude" as a directory
+            // This should conflict because the directory subsumes the file
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[".claude/settings.json"]);
+            // Overlay B declares .claude as a managed directory
+            let config_b = "overlay =\n  name = overlay-b\n\ndirectories =\n  = .claude\n";
+            make_overlay(overlay_b.path(), &[".claude/other.md"]);
+            fs::write(overlay_b.path().join(CONFIG_FILE), config_b).unwrap();
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let result = check_overlay_conflicts(&sources);
+            assert!(
+                result.is_err(),
+                "should detect directory-over-file conflict"
+            );
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains(".claude"),
+                "error should mention the conflicting path: {err_msg}"
+            );
+        }
+
+        #[test]
+        fn detects_file_under_claimed_directory() {
+            // Overlay A declares ".claude" as a managed directory
+            // Overlay B has a file ".claude/commands.md"
+            // This should conflict
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            let config_a = "overlay =\n  name = overlay-a\n\ndirectories =\n  = .claude\n";
+            make_overlay(overlay_a.path(), &[".claude/settings.json"]);
+            fs::write(overlay_a.path().join(CONFIG_FILE), config_a).unwrap();
+
+            make_overlay(overlay_b.path(), &[".claude/commands.md"]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let result = check_overlay_conflicts(&sources);
+            assert!(
+                result.is_err(),
+                "should detect file-under-directory conflict"
+            );
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains(".claude"),
+                "error should mention the directory: {err_msg}"
+            );
+        }
+
+        #[test]
+        fn allows_file_under_own_directory() {
+            // Same overlay declares ".claude" as directory AND has files under it
+            // This is normal and should NOT conflict
+            let overlay_a = TempDir::new().unwrap();
+
+            let config_a = "overlay =\n  name = overlay-a\n\ndirectories =\n  = .claude\n";
+            make_overlay(overlay_a.path(), &[".claude/settings.json", ".envrc"]);
+            fs::write(overlay_a.path().join(CONFIG_FILE), config_a).unwrap();
+
+            let sources = vec![ResolvedSource {
+                path: overlay_a.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+            }];
+
+            assert!(
+                check_overlay_conflicts(&sources).is_ok(),
+                "files under own directory should not conflict"
+            );
+        }
+
+        #[test]
+        fn single_source_never_conflicts() {
+            let overlay = TempDir::new().unwrap();
+            make_overlay(
+                overlay.path(),
+                &[".envrc", "config.json", ".claude/settings.json"],
+            );
+
+            let sources = vec![ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay.path().to_path_buf()),
+            }];
+
+            assert!(check_overlay_conflicts(&sources).is_ok());
+        }
+
+        #[test]
+        fn three_overlays_no_conflict() {
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+            let overlay_c = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &["file-a.txt"]);
+            make_overlay(overlay_b.path(), &["file-b.txt"]);
+            make_overlay(overlay_c.path(), &["file-c.txt"]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_c.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_c.path().to_path_buf()),
+                },
+            ];
+
+            assert!(check_overlay_conflicts(&sources).is_ok());
+        }
+
+        #[test]
+        fn three_overlays_with_conflict_in_third() {
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+            let overlay_c = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &["file-a.txt"]);
+            make_overlay(overlay_b.path(), &["file-b.txt"]);
+            make_overlay(overlay_c.path(), &["file-a.txt"]); // conflicts with overlay_a
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_c.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_c.path().to_path_buf()),
+                },
+            ];
+
+            let result = check_overlay_conflicts(&sources);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("file-a.txt"));
+        }
+    }
+
     mod apply_multiple_overlays_tests {
         use super::*;
 
@@ -4518,6 +4744,188 @@ mod tests {
             assert!(
                 !canonical.join(".envrc").is_symlink(),
                 ".envrc symlink should be removed during rollback"
+            );
+        }
+    }
+
+    mod apply_multiple_overlays_edge_cases {
+        use super::*;
+
+        fn make_overlay(dir: &Path, files: &[(&str, &str)]) {
+            for (name, content) in files {
+                let file_path = dir.join(name);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(file_path, content).unwrap();
+            }
+        }
+
+        #[test]
+        fn rejects_already_applied_overlay() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+            make_overlay(overlay_b.path(), &[("config.json", "{}")]);
+
+            let canonical = repo.path().canonicalize().unwrap();
+
+            // First, apply overlay_a individually
+            let first_sources = vec![ResolvedSource {
+                path: overlay_a.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+            }];
+            let result = apply_multiple_overlays(&first_sources, &canonical, false, false);
+            assert!(result.is_ok(), "first apply should succeed: {result:?}");
+
+            // Now try to apply both, including the already-applied overlay_a
+            let second_sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+            let result = apply_multiple_overlays(&second_sources, &canonical, false, false);
+            assert!(
+                result.is_err(),
+                "should fail because overlay is already applied"
+            );
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("already applied"),
+                "error should mention already applied: {err_msg}"
+            );
+        }
+
+        #[test]
+        fn dry_run_with_multiple_overlays() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+            make_overlay(overlay_b.path(), &[("config.json", "{}")]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_multiple_overlays(&sources, &canonical, false, true);
+            assert!(
+                result.is_ok(),
+                "dry run with multiple should succeed: {result:?}"
+            );
+
+            // No files should be applied
+            assert!(
+                !canonical.join(".envrc").exists(),
+                ".envrc should not exist in dry run"
+            );
+            assert!(
+                !canonical.join("config.json").exists(),
+                "config.json should not exist in dry run"
+            );
+
+            // No overlays should be recorded
+            let applied = list_applied_overlays(&canonical).unwrap();
+            assert!(
+                applied.is_empty(),
+                "no overlays should be recorded in dry run"
+            );
+        }
+
+        #[test]
+        fn applies_three_overlays_successfully() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+            let overlay_c = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+            make_overlay(overlay_b.path(), &[("config.json", "{}")]);
+            make_overlay(overlay_c.path(), &[("setup.sh", "#!/bin/bash")]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_c.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_c.path().to_path_buf()),
+                },
+            ];
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_multiple_overlays(&sources, &canonical, false, false);
+            assert!(result.is_ok(), "three overlays should succeed: {result:?}");
+
+            let applied = list_applied_overlays(&canonical).unwrap();
+            assert_eq!(applied.len(), 3, "should have 3 applied overlays");
+
+            assert!(canonical.join(".envrc").exists());
+            assert!(canonical.join("config.json").exists());
+            assert!(canonical.join("setup.sh").exists());
+        }
+
+        #[test]
+        fn force_copy_applies_as_copies_not_symlinks() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+            make_overlay(overlay_b.path(), &[("config.json", "{}")]);
+
+            let sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_multiple_overlays(&sources, &canonical, true, false);
+            assert!(
+                result.is_ok(),
+                "force_copy multi-apply should succeed: {result:?}"
+            );
+
+            // Files should exist and NOT be symlinks (they should be copies)
+            let envrc_path = canonical.join(".envrc");
+            assert!(envrc_path.exists(), ".envrc should exist");
+            assert!(
+                !envrc_path.is_symlink(),
+                ".envrc should not be a symlink with force_copy"
+            );
+
+            let config_path = canonical.join("config.json");
+            assert!(config_path.exists(), "config.json should exist");
+            assert!(
+                !config_path.is_symlink(),
+                "config.json should not be a symlink with force_copy"
             );
         }
     }
