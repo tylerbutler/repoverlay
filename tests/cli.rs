@@ -1166,12 +1166,12 @@ fn source_add_rejects_empty_url() {
 #[test]
 fn source_add_rejects_trailing_slash_only_url() {
     let ctx = SourceTestContext::new();
-    // URL that results in empty name after parsing should be rejected
+    // "/" is not a valid URL or GitHub shorthand
     ctx.cmd()
         .args(["source", "add", "/"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Could not extract"));
+        .stderr(predicate::str::contains("Invalid source URL"));
 }
 
 #[test]

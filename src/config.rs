@@ -5,7 +5,7 @@
 //! Per-repo config: `.repoverlay/config.ccl`
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,7 +32,56 @@ pub struct Source {
     /// Name for this source (used in CLI output and `--source` flag).
     pub name: String,
     /// Git URL of the overlay repository.
+    /// Accepts full URLs or GitHub shorthand (`owner/repo`), which is expanded
+    /// to `https://github.com/owner/repo` during deserialization.
+    #[serde(deserialize_with = "deserialize_source_url")]
     pub url: String,
+}
+
+/// Check if a string looks like a git-cloneable URL.
+fn is_git_url(s: &str) -> bool {
+    s.contains("://") || s.starts_with("git@")
+}
+
+/// Check if a string is valid GitHub shorthand (`owner/repo`).
+fn is_github_shorthand(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('/').collect();
+    parts.len() == 2
+        && !parts[0].is_empty()
+        && !parts[1].is_empty()
+        && !parts[0].contains(char::is_whitespace)
+        && !parts[1].contains(char::is_whitespace)
+}
+
+/// Expand GitHub shorthand to a full URL.
+#[must_use]
+pub fn expand_github_shorthand(s: &str) -> String {
+    format!("https://github.com/{s}")
+}
+
+/// Validate and normalize a source URL string.
+///
+/// Accepts full git URLs or GitHub shorthand (`owner/repo`).
+/// Returns an error for invalid formats like bare words.
+pub fn validate_source_url(url: &str) -> std::result::Result<String, String> {
+    if is_git_url(url) {
+        Ok(url.to_string())
+    } else if is_github_shorthand(url) {
+        Ok(expand_github_shorthand(url))
+    } else {
+        Err(format!(
+            "Invalid source URL: '{url}'. Expected a git URL (https://...) or GitHub shorthand (owner/repo)."
+        ))
+    }
+}
+
+/// Custom deserializer that validates and expands source URLs.
+fn deserialize_source_url<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    validate_source_url(&raw).map_err(serde::de::Error::custom)
 }
 
 /// Configuration for a shared overlay repository.
@@ -865,5 +914,81 @@ sources =
 
         assert_eq!(source1, source2);
         assert_ne!(source1, source3);
+    }
+
+    // ==================== URL validation tests ====================
+
+    #[test]
+    fn test_validate_source_url_full_https() {
+        let result = validate_source_url("https://github.com/org/repo");
+        assert_eq!(result.unwrap(), "https://github.com/org/repo");
+    }
+
+    #[test]
+    fn test_validate_source_url_full_ssh() {
+        let result = validate_source_url("git@github.com:org/repo.git");
+        assert_eq!(result.unwrap(), "git@github.com:org/repo.git");
+    }
+
+    #[test]
+    fn test_validate_source_url_git_protocol() {
+        let result = validate_source_url("git://example.com/repo.git");
+        assert_eq!(result.unwrap(), "git://example.com/repo.git");
+    }
+
+    #[test]
+    fn test_validate_source_url_github_shorthand() {
+        let result = validate_source_url("tylerbutler/repo-overlays");
+        assert_eq!(
+            result.unwrap(),
+            "https://github.com/tylerbutler/repo-overlays"
+        );
+    }
+
+    #[test]
+    fn test_validate_source_url_bare_word_rejected() {
+        let result = validate_source_url("tylerbutler");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid source URL"));
+    }
+
+    #[test]
+    fn test_validate_source_url_empty_rejected() {
+        let result = validate_source_url("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_source_url_whitespace_rejected() {
+        let result = validate_source_url("owner /repo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_source_with_github_shorthand() {
+        let ccl = r"
+sources =
+  =
+    name = personal
+    url = tylerbutler/repo-overlays
+";
+        let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(
+            config.sources[0].url,
+            "https://github.com/tylerbutler/repo-overlays"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_source_with_bare_word_fails() {
+        let ccl = r"
+sources =
+  =
+    name = personal
+    url = tylerbutler
+";
+        let result: std::result::Result<RepoverlayConfig, _> = sickle::from_str(ccl);
+        assert!(result.is_err());
     }
 }
