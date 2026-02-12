@@ -18,6 +18,7 @@ pub struct RepoverlayConfig {
     pub sources: Vec<Source>,
     /// Legacy overlay repository configuration (for backwards compatibility).
     /// New configs should use `sources` instead.
+    /// Deprecated: will be removed in 1.0 (#79).
     #[serde(default)]
     pub overlay_repo: Option<OverlayRepoConfig>,
 }
@@ -35,6 +36,7 @@ pub struct Source {
 }
 
 /// Configuration for a shared overlay repository.
+/// Deprecated: will be removed in 1.0 (#79). Use `Source` instead.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OverlayRepoConfig {
     /// Git URL of the overlay repository.
@@ -49,7 +51,7 @@ pub struct OverlayRepoConfig {
 ///
 /// Returns `true` if the config has `overlay_repo` set but no `sources`.
 /// This indicates the config should be migrated to the new multi-source format.
-#[allow(dead_code)] // Will be used when migration is integrated
+/// Will be removed in 1.0 along with `overlay_repo` support (#79).
 #[must_use]
 pub const fn needs_migration(config: &RepoverlayConfig) -> bool {
     config.overlay_repo.is_some() && config.sources.is_empty()
@@ -59,7 +61,7 @@ pub const fn needs_migration(config: &RepoverlayConfig) -> bool {
 ///
 /// If the config uses the legacy `overlay_repo` key, converts it to a source
 /// named "default". Returns a message describing the migration if one occurred.
-#[allow(dead_code)] // Will be used when migration is integrated
+/// Will be removed in 1.0 along with `overlay_repo` support (#79).
 #[must_use]
 pub fn migrate_config(config: &mut RepoverlayConfig) -> Option<String> {
     if needs_migration(config) {
@@ -101,6 +103,8 @@ pub fn repo_config_path(repo_path: &Path) -> PathBuf {
 }
 
 /// Load the global configuration.
+///
+/// Automatically migrates legacy `overlay_repo` configs to the `sources` format.
 pub fn load_global_config() -> Result<RepoverlayConfig> {
     let config_path = global_config_path()?;
 
@@ -111,8 +115,17 @@ pub fn load_global_config() -> Result<RepoverlayConfig> {
     let content = fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
 
-    sickle::from_str(&content)
-        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))
+    let mut config: RepoverlayConfig = sickle::from_str(&content)
+        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+
+    // Auto-migrate legacy overlay_repo to sources format
+    if let Some(message) = migrate_config(&mut config) {
+        save_config(&config)?;
+        eprintln!("{message}");
+        eprintln!("Config updated: {}", config_path.display());
+    }
+
+    Ok(config)
 }
 
 /// Load the per-repo configuration.
@@ -170,7 +183,7 @@ pub fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
         }
     }
 
-    // Include legacy overlay_repo if present (for backwards compat)
+    // Include legacy overlay_repo if present. Will be removed in 1.0 (#79).
     if let Some(ref overlay_repo) = config.overlay_repo {
         if !config.sources.is_empty() {
             output.push_str(
@@ -635,6 +648,204 @@ sources =
         assert!(message.is_none());
         assert_eq!(config.sources.len(), 1);
         assert_eq!(config.sources[0].name, "existing");
+    }
+
+    // ==================== Auto-migration integration tests ====================
+
+    #[test]
+    fn test_auto_migration_rewrites_config_on_disk() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.ccl");
+
+        // Write a legacy config
+        fs::write(
+            &config_path,
+            "overlay_repo =\n  url = https://github.com/org/overlays\n",
+        )
+        .unwrap();
+
+        // Simulate what load_global_config does: parse, migrate, save
+        let content = fs::read_to_string(&config_path).unwrap();
+        let mut config: RepoverlayConfig = sickle::from_str(&content).unwrap();
+        assert!(config.overlay_repo.is_some());
+        assert!(config.sources.is_empty());
+
+        let message = migrate_config(&mut config);
+        assert!(message.is_some());
+
+        // Save migrated config
+        let output = generate_sources_config_ccl(&config);
+        fs::write(&config_path, &output).unwrap();
+
+        // Verify the result
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].name, "default");
+        assert_eq!(config.sources[0].url, "https://github.com/org/overlays");
+        assert!(config.overlay_repo.is_none());
+
+        // Verify the file on disk was rewritten with sources format
+        let rewritten = fs::read_to_string(&config_path).unwrap();
+        assert!(rewritten.contains("sources"));
+        assert!(rewritten.contains("default"));
+        assert!(!rewritten.contains("overlay_repo"));
+    }
+
+    #[test]
+    fn test_auto_migration_idempotent_on_reload() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.ccl");
+
+        // Write a legacy config
+        fs::write(
+            &config_path,
+            "overlay_repo =\n  url = https://github.com/org/overlays\n",
+        )
+        .unwrap();
+
+        // First load + migrate
+        let content = fs::read_to_string(&config_path).unwrap();
+        let mut config: RepoverlayConfig = sickle::from_str(&content).unwrap();
+        let message = migrate_config(&mut config);
+        assert!(message.is_some());
+        let output = generate_sources_config_ccl(&config);
+        fs::write(&config_path, &output).unwrap();
+
+        let content_after_first = fs::read_to_string(&config_path).unwrap();
+
+        // Second load should not trigger migration
+        let mut config2: RepoverlayConfig = sickle::from_str(&content_after_first).unwrap();
+        let message2 = migrate_config(&mut config2);
+        assert!(message2.is_none());
+        assert_eq!(config2.sources.len(), 1);
+        assert!(config2.overlay_repo.is_none());
+    }
+
+    #[test]
+    fn test_no_migration_when_already_sources_format() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.ccl");
+
+        let content =
+            "sources =\n  =\n    name = personal\n    url = https://github.com/me/overlays\n";
+        fs::write(&config_path, content).unwrap();
+
+        let mut config: RepoverlayConfig = sickle::from_str(content).unwrap();
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].name, "personal");
+        assert!(config.overlay_repo.is_none());
+
+        let message = migrate_config(&mut config);
+        assert!(message.is_none());
+    }
+
+    #[test]
+    fn test_needs_migration_with_both_sources_and_overlay_repo() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "existing".to_string(),
+                url: "https://github.com/existing/repo".to_string(),
+            }],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/legacy/repo".to_string(),
+                local_path: None,
+            }),
+        };
+        // Should NOT trigger migration when sources already exist
+        assert!(!needs_migration(&config));
+    }
+
+    #[test]
+    fn test_migrate_config_skips_when_both_present() {
+        let mut config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "existing".to_string(),
+                url: "https://github.com/existing/repo".to_string(),
+            }],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/legacy/repo".to_string(),
+                local_path: None,
+            }),
+        };
+
+        let message = migrate_config(&mut config);
+        assert!(message.is_none());
+        // Sources unchanged, overlay_repo left as-is
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].name, "existing");
+        assert!(config.overlay_repo.is_some());
+    }
+
+    #[test]
+    fn test_generate_config_after_migration() {
+        let mut config = RepoverlayConfig {
+            sources: vec![],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/org/overlays".to_string(),
+                local_path: None,
+            }),
+        };
+
+        let _ = migrate_config(&mut config);
+        let output = generate_sources_config_ccl(&config);
+
+        // Should have sources section
+        assert!(output.contains("sources"));
+        assert!(output.contains("default"));
+        assert!(output.contains("https://github.com/org/overlays"));
+        // Should NOT have legacy overlay_repo section
+        assert!(!output.contains("overlay_repo"));
+    }
+
+    #[test]
+    fn test_generate_config_with_legacy_and_sources() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "personal".to_string(),
+                url: "https://github.com/me/overlays".to_string(),
+            }],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/legacy/repo".to_string(),
+                local_path: None,
+            }),
+        };
+
+        let output = generate_sources_config_ccl(&config);
+
+        // Should include both sections
+        assert!(output.contains("sources"));
+        assert!(output.contains("personal"));
+        assert!(output.contains("overlay_repo"));
+        assert!(output.contains("deprecated"));
+    }
+
+    #[test]
+    fn test_migrated_config_roundtrips_through_save_load() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("config.ccl");
+
+        // Migrate in memory
+        let mut config = RepoverlayConfig {
+            sources: vec![],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/org/overlays".to_string(),
+                local_path: None,
+            }),
+        };
+        let _ = migrate_config(&mut config);
+
+        // Write using generate function
+        let content = generate_sources_config_ccl(&config);
+        fs::write(&config_path, &content).unwrap();
+
+        // Re-read and parse
+        let reloaded_content = fs::read_to_string(&config_path).unwrap();
+        let reloaded: RepoverlayConfig = sickle::from_str(&reloaded_content).unwrap();
+
+        assert_eq!(reloaded.sources.len(), 1);
+        assert_eq!(reloaded.sources[0].name, "default");
+        assert_eq!(reloaded.sources[0].url, "https://github.com/org/overlays");
+        assert!(reloaded.overlay_repo.is_none());
+        assert!(!needs_migration(&reloaded));
     }
 
     #[test]
