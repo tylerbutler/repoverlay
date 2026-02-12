@@ -582,7 +582,7 @@ fn resolve_three_part(
         );
     }
 
-    // Fall back to legacy overlay_repo config
+    // Fall back to legacy overlay_repo config. Will be removed in 1.0 (#79).
     let overlay_config = config.overlay_repo.ok_or_else(|| {
         anyhow::anyhow!(
             "Overlay repository not configured.\n\n\

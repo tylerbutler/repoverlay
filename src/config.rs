@@ -18,6 +18,7 @@ pub struct RepoverlayConfig {
     pub sources: Vec<Source>,
     /// Legacy overlay repository configuration (for backwards compatibility).
     /// New configs should use `sources` instead.
+    /// Deprecated: will be removed in 1.0 (#79).
     #[serde(default)]
     pub overlay_repo: Option<OverlayRepoConfig>,
 }
@@ -35,6 +36,7 @@ pub struct Source {
 }
 
 /// Configuration for a shared overlay repository.
+/// Deprecated: will be removed in 1.0 (#79). Use `Source` instead.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OverlayRepoConfig {
     /// Git URL of the overlay repository.
@@ -49,7 +51,7 @@ pub struct OverlayRepoConfig {
 ///
 /// Returns `true` if the config has `overlay_repo` set but no `sources`.
 /// This indicates the config should be migrated to the new multi-source format.
-#[allow(dead_code)] // Will be used when migration is integrated
+/// Will be removed in 1.0 along with `overlay_repo` support (#79).
 #[must_use]
 pub const fn needs_migration(config: &RepoverlayConfig) -> bool {
     config.overlay_repo.is_some() && config.sources.is_empty()
@@ -59,7 +61,7 @@ pub const fn needs_migration(config: &RepoverlayConfig) -> bool {
 ///
 /// If the config uses the legacy `overlay_repo` key, converts it to a source
 /// named "default". Returns a message describing the migration if one occurred.
-#[allow(dead_code)] // Will be used when migration is integrated
+/// Will be removed in 1.0 along with `overlay_repo` support (#79).
 #[must_use]
 pub fn migrate_config(config: &mut RepoverlayConfig) -> Option<String> {
     if needs_migration(config) {
@@ -101,6 +103,8 @@ pub fn repo_config_path(repo_path: &Path) -> PathBuf {
 }
 
 /// Load the global configuration.
+///
+/// Automatically migrates legacy `overlay_repo` configs to the `sources` format.
 pub fn load_global_config() -> Result<RepoverlayConfig> {
     let config_path = global_config_path()?;
 
@@ -111,8 +115,17 @@ pub fn load_global_config() -> Result<RepoverlayConfig> {
     let content = fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
 
-    sickle::from_str(&content)
-        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))
+    let mut config: RepoverlayConfig = sickle::from_str(&content)
+        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+
+    // Auto-migrate legacy overlay_repo to sources format
+    if let Some(message) = migrate_config(&mut config) {
+        save_config(&config)?;
+        eprintln!("{message}");
+        eprintln!("Config updated: {}", config_path.display());
+    }
+
+    Ok(config)
 }
 
 /// Load the per-repo configuration.
@@ -170,7 +183,7 @@ pub fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
         }
     }
 
-    // Include legacy overlay_repo if present (for backwards compat)
+    // Include legacy overlay_repo if present. Will be removed in 1.0 (#79).
     if let Some(ref overlay_repo) = config.overlay_repo {
         if !config.sources.is_empty() {
             output.push_str(
