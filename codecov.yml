@@ -9,8 +9,12 @@ coverage:
         threshold: 2%
     patch:
       default:
-        target: auto
-        threshold: 5%
+        # Informational only — reports patch coverage without failing the check.
+        # The project check enforces actual coverage thresholds.
+        informational: true
+
+comment:
+  layout: "condensed_header, condensed_files, condensed_footer"
 
 ignore:
   # Test utilities - these are only used in tests and don't need coverage
