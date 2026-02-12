@@ -640,10 +640,14 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                 anyhow::bail!("URL cannot be empty");
             }
 
-            // Extract name from URL if not provided
+            // Validate and normalize the URL (expands GitHub shorthand)
+            let validated_url =
+                config::validate_source_url(&url).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            // Extract name from validated URL if not provided
             let source_name = name.unwrap_or_else(|| {
-                // Try to extract repo name from URL
-                url.trim_end_matches('/')
+                validated_url
+                    .trim_end_matches('/')
                     .rsplit('/')
                     .next()
                     .unwrap_or("source")
@@ -665,7 +669,7 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
 
             let new_source = config::Source {
                 name: source_name.clone(),
-                url: url.clone(),
+                url: validated_url.clone(),
             };
 
             // Append to end of sources list
@@ -678,7 +682,7 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                 source_name,
                 config.sources.len()
             );
-            println!("       URL: {url}");
+            println!("       URL: {validated_url}");
         }
         SourceCommand::List => {
             if config.sources.is_empty() {
