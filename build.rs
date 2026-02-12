@@ -1,3 +1,4 @@
+use std::env;
 use std::process::Command;
 use vergen::{BuildBuilder, Emitter};
 
@@ -8,6 +9,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Capture git info directly to avoid vergen-gitcl version conflicts
     emit_git_info();
+
+    // Detect CI builds via common environment variables
+    let is_ci = env::var("CI").is_ok()
+        || env::var("GITHUB_ACTIONS").is_ok()
+        || env::var("GITLAB_CI").is_ok()
+        || env::var("CIRCLECI").is_ok()
+        || env::var("TRAVIS").is_ok();
+    println!("cargo:rustc-env=REPOVERLAY_CI_BUILD={is_ci}");
 
     Ok(())
 }
@@ -29,9 +38,7 @@ fn emit_git_info() {
     }
 
     // Check if dirty
-    let dirty = git_command(&["status", "--porcelain"])
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
+    let dirty = git_command(&["status", "--porcelain"]).is_some_and(|s| !s.is_empty());
     println!("cargo:rustc-env=VERGEN_GIT_DIRTY={dirty}");
 
     // Rerun if git HEAD changes

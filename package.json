@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:policy": "repopo check",
+    "fix:policy": "repopo check --fix"
+  },
+  "devDependencies": {
+    "repopo": "^0.9.0"
+  }
+}

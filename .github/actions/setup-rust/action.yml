@@ -1,0 +1,30 @@
+name: Setup Rust
+description: Standardized Rust toolchain setup with caching
+
+inputs:
+  toolchain:
+    description: Rust toolchain to install
+    default: stable
+  components:
+    description: Additional components (comma-separated)
+    default: ''
+  targets:
+    description: Compilation targets (comma-separated)
+    default: ''
+  cache:
+    description: Enable cargo caching
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+    - uses: Swatinem/rust-cache@v2
+      if: inputs.cache == 'true'
+      with:
+        shared-key: "rust-${{ runner.os }}-${{ inputs.toolchain }}"
+        cache-on-failure: true

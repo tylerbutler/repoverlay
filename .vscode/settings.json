@@ -1,0 +1,5 @@
+{
+  "markdown.marp.themes": [
+    "./docs/talks/themes/nord.css"
+  ]
+}

@@ -18,11 +18,10 @@ pub const STATE_DIR: &str = ".repoverlay";
 pub const OVERLAYS_DIR: &str = "overlays";
 pub const META_FILE: &str = "meta.ccl";
 pub const CONFIG_FILE: &str = "repoverlay.ccl";
-pub const GIT_EXCLUDE: &str = ".git/info/exclude";
 pub const MANAGED_SECTION_NAME: &str = "managed";
 
 /// How an overlay was resolved from a reference.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ResolvedVia {
     /// Resolved directly (exact org/repo match)
@@ -62,7 +61,7 @@ pub enum OverlaySource {
     OverlayRepo {
         /// Target organization (e.g., "microsoft")
         org: String,
-        /// Target repository (e.g., "FluidFramework")
+        /// Target repository (e.g., `FluidFramework`)
         repo: String,
         /// Overlay name (e.g., "claude-config")
         name: String,
@@ -71,13 +70,16 @@ pub enum OverlaySource {
         /// How this overlay was resolved (direct match or upstream fallback)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resolved_via: Option<ResolvedVia>,
+        /// Name of the source this overlay came from (for multi-source configs)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_name: Option<String>,
     },
 }
 
 impl OverlaySource {
     /// Create a new local source.
-    pub fn local(path: PathBuf) -> Self {
-        OverlaySource::Local { path }
+    pub const fn local(path: PathBuf) -> Self {
+        Self::Local { path }
     }
 
     /// Create a new GitHub source.
@@ -89,7 +91,7 @@ impl OverlaySource {
         commit: String,
         subpath: Option<String>,
     ) -> Self {
-        OverlaySource::GitHub {
+        Self::GitHub {
             url,
             owner,
             repo,
@@ -102,30 +104,51 @@ impl OverlaySource {
 
     /// Create a new overlay repository source.
     #[allow(dead_code)]
-    pub fn overlay_repo(org: String, repo: String, name: String, commit: String) -> Self {
-        OverlaySource::OverlayRepo {
+    pub const fn overlay_repo(org: String, repo: String, name: String, commit: String) -> Self {
+        Self::OverlayRepo {
             org,
             repo,
             name,
             commit,
             resolved_via: None,
+            source_name: None,
         }
     }
 
     /// Create a new overlay repository source with resolution info.
-    pub fn overlay_repo_with_resolution(
+    pub const fn overlay_repo_with_resolution(
         org: String,
         repo: String,
         name: String,
         commit: String,
         resolved_via: ResolvedVia,
     ) -> Self {
-        OverlaySource::OverlayRepo {
+        Self::OverlayRepo {
             org,
             repo,
             name,
             commit,
             resolved_via: Some(resolved_via),
+            source_name: None,
+        }
+    }
+
+    /// Create a new overlay repository source with full info (resolution + source name).
+    pub const fn overlay_repo_full(
+        org: String,
+        repo: String,
+        name: String,
+        commit: String,
+        resolved_via: ResolvedVia,
+        source_name: String,
+    ) -> Self {
+        Self::OverlayRepo {
+            org,
+            repo,
+            name,
+            commit,
+            resolved_via: Some(resolved_via),
+            source_name: Some(source_name),
         }
     }
 
@@ -133,8 +156,8 @@ impl OverlaySource {
     #[allow(dead_code)]
     pub fn display(&self) -> String {
         match self {
-            OverlaySource::Local { path } => path.display().to_string(),
-            OverlaySource::GitHub {
+            Self::Local { path } => path.display().to_string(),
+            Self::GitHub {
                 url,
                 git_ref,
                 commit,
@@ -142,23 +165,28 @@ impl OverlaySource {
             } => {
                 format!("{} ({}@{})", url, git_ref, &commit[..12.min(commit.len())])
             }
-            OverlaySource::OverlayRepo {
+            Self::OverlayRepo {
                 org,
                 repo,
                 name,
                 commit,
                 resolved_via,
+                source_name,
             } => {
                 let via = match resolved_via {
                     Some(ResolvedVia::Upstream) => " via upstream",
                     _ => "",
                 };
+                let source = source_name
+                    .as_ref()
+                    .map_or_else(String::new, |s| format!(" [{s}]"));
                 format!(
-                    "{}/{}/{}{} (@{})",
+                    "{}/{}/{}{}{} (@{})",
                     org,
                     repo,
                     name,
                     via,
+                    source,
                     &commit[..12.min(commit.len())]
                 )
             }
@@ -167,22 +195,22 @@ impl OverlaySource {
 
     /// Check if this is a GitHub source.
     #[allow(dead_code)]
-    pub fn is_github(&self) -> bool {
-        matches!(self, OverlaySource::GitHub { .. })
+    pub const fn is_github(&self) -> bool {
+        matches!(self, Self::GitHub { .. })
     }
 
     /// Check if this is an overlay repository source.
     #[allow(dead_code)]
-    pub fn is_overlay_repo(&self) -> bool {
-        matches!(self, OverlaySource::OverlayRepo { .. })
+    pub const fn is_overlay_repo(&self) -> bool {
+        matches!(self, Self::OverlayRepo { .. })
     }
 
     /// Get the local path for this source (for local sources only).
     #[allow(dead_code)]
     pub fn local_path(&self) -> Option<&Path> {
         match self {
-            OverlaySource::Local { path } => Some(path),
-            OverlaySource::GitHub { .. } | OverlaySource::OverlayRepo { .. } => None,
+            Self::Local { path } => Some(path),
+            Self::GitHub { .. } | Self::OverlayRepo { .. } => None,
         }
     }
 }
@@ -207,6 +235,10 @@ pub struct OverlayState {
     pub source: OverlaySource,
     #[serde(default)]
     pub files: Vec<FileEntry>,
+    /// When the overlay was explicitly removed (if set, overlay should not be restored).
+    /// This is only used in external state files to track removal intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_at: Option<DateTime<Utc>>,
 }
 
 impl OverlayState {
@@ -217,6 +249,7 @@ impl OverlayState {
             applied_at: Utc::now(),
             source,
             files: Vec::new(),
+            removed_at: None,
         }
     }
 
@@ -226,6 +259,7 @@ impl OverlayState {
     }
 
     /// Get the number of files in the overlay.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn file_count(&self) -> usize {
         self.files.len()
     }
@@ -249,7 +283,7 @@ pub struct FileEntry {
 }
 
 /// Type of file link.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LinkType {
     Symlink,
@@ -257,7 +291,7 @@ pub enum LinkType {
 }
 
 /// Type of entry (file or directory).
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryType {
     #[default]
@@ -310,7 +344,7 @@ pub fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
 
 /// Save overlay state to the external backup location.
 pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlayState) -> Result<()> {
-    debug!("save_external_state: {}", overlay_name);
+    debug!("save_external_state: {overlay_name}");
     let dir = external_state_dir_for_target(target)?;
     fs::create_dir_all(&dir)?;
 
@@ -320,31 +354,32 @@ pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlaySta
         fs::write(&marker_path, target.display().to_string())?;
     }
 
-    let state_file = dir.join(format!("{}.ccl", overlay_name));
+    let state_file = dir.join(format!("{overlay_name}.ccl"));
     let content = sickle::to_string(state).context("Failed to serialize state to CCL")?;
     fs::write(&state_file, content)?;
 
     Ok(())
 }
 
-/// Remove overlay state from the external backup location.
+/// Mark overlay state as removed in the external backup location.
+///
+/// Instead of deleting the external state, we mark it with a `removed_at` timestamp.
+/// This allows `restore` to distinguish between overlays that were intentionally
+/// removed vs. those that are missing due to `git clean`.
 pub fn remove_external_state(target: &Path, overlay_name: &str) -> Result<()> {
     let dir = external_state_dir_for_target(target)?;
-    let state_file = dir.join(format!("{}.ccl", overlay_name));
+    let state_file = dir.join(format!("{overlay_name}.ccl"));
 
     if state_file.exists() {
-        fs::remove_file(&state_file)?;
-    }
-
-    // Clean up the directory if empty (except for the marker file)
-    if dir.exists() {
-        let remaining: Vec<_> = fs::read_dir(&dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name() != ".target_path")
-            .collect();
-
-        if remaining.is_empty() {
-            fs::remove_dir_all(&dir)?;
+        // Read existing state and mark it as removed
+        let content = fs::read_to_string(&state_file)?;
+        if let Ok(mut state) = sickle::from_str::<OverlayState>(&content) {
+            state.removed_at = Some(Utc::now());
+            let updated_content = sickle::to_string(&state).context("Failed to serialize state")?;
+            fs::write(&state_file, updated_content)?;
+        } else {
+            // If we can't parse it, just delete it
+            fs::remove_file(&state_file)?;
         }
     }
 
@@ -352,6 +387,8 @@ pub fn remove_external_state(target: &Path, overlay_name: &str) -> Result<()> {
 }
 
 /// Load all overlay states from the external backup location for a target.
+///
+/// Only returns states that are eligible for restoration (not marked as removed).
 pub fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
     debug!("load_external_states: {}", target.display());
     let dir = external_state_dir_for_target(target)?;
@@ -367,11 +404,19 @@ pub fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.extension().map(|e| e == "ccl").unwrap_or(false)
+        if path.extension().is_some_and(|e| e == "ccl")
             && path.file_name() != Some(std::ffi::OsStr::new(".target_path"))
         {
             let content = fs::read_to_string(&path)?;
             if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
+                // Skip overlays that were explicitly removed
+                if state.removed_at.is_some() {
+                    debug!(
+                        "skipping removed overlay '{}' (removed at {:?})",
+                        state.name, state.removed_at
+                    );
+                    continue;
+                }
                 states.push(state);
             }
         }
@@ -389,12 +434,12 @@ fn hash_path(path: &Path) -> String {
 
 /// Generate the start marker for a git exclude section.
 pub fn exclude_marker_start(name: &str) -> String {
-    format!("# repoverlay:{} start", name)
+    format!("# repoverlay:{name} start")
 }
 
 /// Generate the end marker for a git exclude section.
 pub fn exclude_marker_end(name: &str) -> String {
-    format!("# repoverlay:{} end", name)
+    format!("# repoverlay:{name} end")
 }
 
 /// Validate and normalize overlay name for use as filename.
@@ -407,12 +452,12 @@ pub fn normalize_overlay_name(name: &str) -> Result<String> {
         .collect();
 
     if normalized.is_empty() {
-        anyhow::bail!("Invalid overlay name: '{}'", name);
+        anyhow::bail!("Invalid overlay name: '{name}'");
     }
     Ok(normalized)
 }
 
-/// Load all target paths from all applied overlays, returning a map of path -> overlay_name.
+/// Load all target paths from all applied overlays, returning a map of path -> `overlay_name`.
 pub fn load_all_overlay_targets(
     target: &Path,
 ) -> Result<std::collections::HashMap<String, String>> {
@@ -426,7 +471,7 @@ pub fn load_all_overlay_targets(
     for entry in fs::read_dir(&overlays_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().map(|e| e == "ccl").unwrap_or(false) {
+        if path.extension().is_some_and(|e| e == "ccl") {
             let content = fs::read_to_string(&path)?;
             if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
                 for file in &state.files {
@@ -451,13 +496,8 @@ pub fn list_applied_overlays(target: &Path) -> Result<Vec<String>> {
     }
 
     let mut names: Vec<String> = fs::read_dir(&overlays_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "ccl")
-                .unwrap_or(false)
-        })
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "ccl"))
         .filter_map(|e| {
             e.path()
                 .file_stem()
@@ -471,16 +511,16 @@ pub fn list_applied_overlays(target: &Path) -> Result<Vec<String>> {
 
 /// Load an overlay state from the in-repo state file.
 pub fn load_overlay_state(target: &Path, name: &str) -> Result<OverlayState> {
-    debug!("load_overlay_state: {}", name);
+    debug!("load_overlay_state: {name}");
     let state_file = target
         .join(STATE_DIR)
         .join(OVERLAYS_DIR)
-        .join(format!("{}.ccl", name));
+        .join(format!("{name}.ccl"));
 
     let content = fs::read_to_string(&state_file)
-        .with_context(|| format!("Failed to read overlay state: {}", name))?;
+        .with_context(|| format!("Failed to read overlay state: {name}"))?;
 
-    sickle::from_str(&content).with_context(|| format!("Failed to parse overlay state: {}", name))
+    sickle::from_str(&content).with_context(|| format!("Failed to parse overlay state: {name}"))
 }
 
 /// Save an overlay state to the in-repo state file.
@@ -489,7 +529,7 @@ pub fn save_overlay_state(target: &Path, state: &OverlayState) -> Result<()> {
     fs::create_dir_all(&overlays_dir)?;
 
     let normalized_name = normalize_overlay_name(&state.name)?;
-    let state_file = overlays_dir.join(format!("{}.ccl", normalized_name));
+    let state_file = overlays_dir.join(format!("{normalized_name}.ccl"));
 
     let content = sickle::to_string(state).context("Failed to serialize overlay state")?;
     fs::write(&state_file, content)?;
@@ -663,6 +703,7 @@ mod tests {
             name: "claude-config".to_string(),
             commit: "abc123".to_string(),
             resolved_via: Some(ResolvedVia::Upstream),
+            source_name: None,
         };
 
         let serialized = sickle::to_string(&source).unwrap();
@@ -684,6 +725,7 @@ mod tests {
             name: "claude-config".to_string(),
             commit: "abc123".to_string(),
             resolved_via: None,
+            source_name: None,
         };
 
         let serialized = sickle::to_string(&source).unwrap();
@@ -731,6 +773,7 @@ mod tests {
             name: "claude-config".to_string(),
             commit: "abc123def456".to_string(),
             resolved_via: Some(ResolvedVia::Upstream),
+            source_name: None,
         };
         let display = source.display();
         assert!(display.contains("via upstream"));
@@ -836,6 +879,7 @@ mod tests {
                     entry_type: EntryType::File,
                 },
             ],
+            removed_at: None,
         };
         let content = sickle::to_string(&state).unwrap();
         fs::write(overlays_dir.join("test-overlay.ccl"), content).unwrap();
@@ -1029,14 +1073,14 @@ mod tests {
 
     #[test]
     fn test_overlay_config_with_directories() {
-        let config_str = r#"
+        let config_str = r"
 overlay =
   name = test-overlay
 
 directories =
   = scratch
   = .claude
-"#;
+";
         let config: OverlayConfig = sickle::from_str(config_str).unwrap();
         assert_eq!(config.overlay.name, Some("test-overlay".to_string()));
         assert_eq!(config.directories.len(), 2);
@@ -1046,27 +1090,25 @@ directories =
 
     #[test]
     fn test_overlay_config_empty_directories() {
-        let config_str = r#"
+        let config_str = r"
 overlay =
   name = test-overlay
-"#;
+";
         let config: OverlayConfig = sickle::from_str(config_str).unwrap();
         assert!(config.directories.is_empty());
     }
 
-    // TODO: Enable once tylerbutler/santa#71 is fixed
-    // Forward slashes in map keys currently cause parsing errors in sickle
     #[test]
-    #[ignore]
+    #[ignore = "tylerbutler/santa#71: forward slashes in map keys cause parsing errors in sickle"]
     fn test_overlay_config_mappings_with_forward_slashes() {
-        let config_str = r#"
+        let config_str = r"
 overlay =
   name = test-overlay
 
 mappings =
   config/settings.json = .vscode/settings.json
   src/template.env = .env
-"#;
+";
         let config: OverlayConfig = sickle::from_str(config_str).unwrap();
         assert_eq!(config.mappings.len(), 2);
         assert_eq!(
@@ -1106,6 +1148,7 @@ mappings =
                     entry_type: EntryType::Directory,
                 },
             ],
+            removed_at: None,
         };
         let content = sickle::to_string(&state).unwrap();
         fs::write(overlays_dir.join("test-overlay.ccl"), content).unwrap();
@@ -1137,11 +1180,11 @@ mappings =
     #[test]
     fn test_backwards_compatible_entry_type() {
         // Old state files without entry_type should default to File
-        let old_format = r#"
+        let old_format = r"
 source = /some/path
 target = /some/target
 link_type = symlink
-"#;
+";
         let entry: FileEntry = sickle::from_str(old_format).unwrap();
         assert_eq!(entry.entry_type, EntryType::File);
     }
@@ -1150,10 +1193,10 @@ link_type = symlink
     #[test]
     fn test_overlay_config_missing_optional_sections() {
         // Config with only overlay section - mappings and directories should be empty
-        let config_str = r#"
+        let config_str = r"
 overlay =
   name = test
-"#;
+";
         let config: OverlayConfig = sickle::from_str(config_str).unwrap();
         assert!(config.mappings.is_empty());
         assert!(config.directories.is_empty());
@@ -1171,7 +1214,7 @@ overlay =
 
     #[test]
     fn test_overlay_config_with_all_fields() {
-        let config_str = r#"
+        let config_str = r"
 overlay =
   name = my-overlay
 
@@ -1182,7 +1225,7 @@ mappings =
 directories =
   = .claude
   = scratch
-"#;
+";
         let config: OverlayConfig = sickle::from_str(config_str).unwrap();
         assert_eq!(config.overlay.name, Some("my-overlay".to_string()));
         assert_eq!(config.mappings.len(), 2);
@@ -1205,6 +1248,7 @@ directories =
             source,
             applied_at: chrono::Utc::now(),
             files: vec![],
+            removed_at: None,
         };
 
         let serialized = sickle::to_string(&state).unwrap();
@@ -1241,6 +1285,7 @@ directories =
             source,
             applied_at: chrono::Utc::now(),
             files: vec![],
+            removed_at: None,
         };
 
         let serialized = sickle::to_string(&state).unwrap();
@@ -1277,6 +1322,7 @@ directories =
             source: OverlaySource::local(PathBuf::from("/source")),
             applied_at: chrono::Utc::now(),
             files: vec![],
+            removed_at: None,
         };
         fs::write(
             ext_dir.join("valid.ccl"),

@@ -1,0 +1,23 @@
+# Cargo configuration
+# See: https://doc.rust-lang.org/cargo/reference/config.html
+
+[alias]
+# Common shortcuts
+b = "build"
+c = "check"
+t = "test"
+r = "run"
+d = "doc"
+
+[build]
+# Use all available CPU cores for building
+jobs = -1
+
+[target.x86_64-unknown-linux-gnu]
+# Use mold linker if available (faster linking on Linux)
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[net]
+# Retry failed downloads
+retry = 3
