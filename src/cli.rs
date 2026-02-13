@@ -402,7 +402,7 @@ enum Commands {
 enum SourceCommand {
     /// Add a new overlay source
     Add {
-        /// Git URL of the overlay repository
+        /// Git URL, GitHub shorthand (owner/repo), or GitHub username
         url: String,
 
         /// Name for this source (defaults to repo name)
