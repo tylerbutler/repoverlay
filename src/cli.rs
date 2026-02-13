@@ -4670,6 +4670,53 @@ directories =
         }
 
         #[test]
+        fn apply_parses_force_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--force"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Apply {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_parses_skip_conflicts_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--skip-conflicts"])
+                .unwrap();
+
+            match cli.command {
+                Some(Commands::Apply {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_rejects_force_and_skip_conflicts_together() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "apply",
+                "./overlay",
+                "--force",
+                "--skip-conflicts",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
         fn apply_requires_source() {
             let result = Cli::try_parse_from(["repoverlay", "apply"]);
             assert!(result.is_err());
@@ -4777,6 +4824,47 @@ directories =
         }
 
         #[test]
+        fn restore_parses_force_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "restore", "--force"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Restore {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Restore command"),
+            }
+        }
+
+        #[test]
+        fn restore_parses_skip_conflicts_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "restore", "--skip-conflicts"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Restore {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Restore command"),
+            }
+        }
+
+        #[test]
+        fn restore_rejects_force_and_skip_conflicts_together() {
+            let result =
+                Cli::try_parse_from(["repoverlay", "restore", "--force", "--skip-conflicts"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
         fn update_parses_overlay_name() {
             let cli = Cli::try_parse_from(["repoverlay", "update", "my-overlay"]).unwrap();
 
@@ -4787,6 +4875,47 @@ directories =
                 }
                 _ => panic!("Expected Update command"),
             }
+        }
+
+        #[test]
+        fn update_parses_force_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "update", "--force"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Update {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Update command"),
+            }
+        }
+
+        #[test]
+        fn update_parses_skip_conflicts_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "update", "--skip-conflicts"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Update {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Update command"),
+            }
+        }
+
+        #[test]
+        fn update_rejects_force_and_skip_conflicts_together() {
+            let result =
+                Cli::try_parse_from(["repoverlay", "update", "--force", "--skip-conflicts"]);
+            assert!(result.is_err());
         }
 
         #[test]
@@ -4864,6 +4993,55 @@ directories =
                 }
                 _ => panic!("Expected Switch command"),
             }
+        }
+
+        #[test]
+        fn switch_parses_force_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "switch", "./overlay", "--force"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Switch {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Switch command"),
+            }
+        }
+
+        #[test]
+        fn switch_parses_skip_conflicts_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "switch", "./overlay", "--skip-conflicts"])
+                    .unwrap();
+
+            match cli.command {
+                Some(Commands::Switch {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Switch command"),
+            }
+        }
+
+        #[test]
+        fn switch_rejects_force_and_skip_conflicts_together() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "switch",
+                "./overlay",
+                "--force",
+                "--skip-conflicts",
+            ]);
+            assert!(result.is_err());
         }
 
         #[test]
