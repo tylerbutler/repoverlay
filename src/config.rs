@@ -23,6 +23,34 @@ pub struct RepoverlayConfig {
     pub overlay_repo: Option<OverlayRepoConfig>,
 }
 
+impl RepoverlayConfig {
+    /// Get an `OverlayRepoConfig` from the first configured source, falling
+    /// back to the legacy `overlay_repo` field.
+    ///
+    /// Commands that need a single overlay repo (create, inspect, sync, etc.)
+    /// should use this instead of accessing `overlay_repo` directly.
+    pub fn get_default_overlay_repo_config(&self) -> Result<OverlayRepoConfig> {
+        // Prefer new multi-source config
+        if let Some(source) = self.sources.first() {
+            let cache_dir = directories::ProjectDirs::from("", "", "repoverlay")
+                .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
+            let local_path = cache_dir.cache_dir().join("sources").join(&source.name);
+            return Ok(OverlayRepoConfig {
+                url: source.url.clone(),
+                local_path: Some(local_path),
+            });
+        }
+
+        // Fall back to legacy overlay_repo
+        self.overlay_repo.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Overlay repository not configured.\n\n\
+                 Run 'repoverlay source add <url>' to set up an overlay source."
+            )
+        })
+    }
+}
+
 /// An overlay source repository.
 ///
 /// Sources are checked in order when resolving overlay references.
@@ -989,6 +1017,70 @@ sources =
     url = tylerbutler
 ";
         let result: std::result::Result<RepoverlayConfig, _> = sickle::from_str(ccl);
+        assert!(result.is_err());
+    }
+
+    // ==================== get_default_overlay_repo_config tests ====================
+
+    #[test]
+    fn test_get_default_overlay_repo_config_from_sources() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "default".to_string(),
+                url: "https://github.com/test/overlays".to_string(),
+            }],
+            overlay_repo: None,
+        };
+
+        let result = config.get_default_overlay_repo_config();
+        assert!(result.is_ok());
+        let repo_config = result.unwrap();
+        assert_eq!(repo_config.url, "https://github.com/test/overlays");
+    }
+
+    #[test]
+    fn test_get_default_overlay_repo_config_from_legacy() {
+        let config = RepoverlayConfig {
+            sources: vec![],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/legacy/repo".to_string(),
+                local_path: None,
+            }),
+        };
+
+        let result = config.get_default_overlay_repo_config();
+        assert!(result.is_ok());
+        let repo_config = result.unwrap();
+        assert_eq!(repo_config.url, "https://github.com/legacy/repo");
+    }
+
+    #[test]
+    fn test_get_default_overlay_repo_config_prefers_sources() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "primary".to_string(),
+                url: "https://github.com/new/repo".to_string(),
+            }],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/old/repo".to_string(),
+                local_path: None,
+            }),
+        };
+
+        let result = config.get_default_overlay_repo_config();
+        assert!(result.is_ok());
+        let repo_config = result.unwrap();
+        assert_eq!(repo_config.url, "https://github.com/new/repo");
+    }
+
+    #[test]
+    fn test_get_default_overlay_repo_config_no_sources_no_legacy() {
+        let config = RepoverlayConfig {
+            sources: vec![],
+            overlay_repo: None,
+        };
+
+        let result = config.get_default_overlay_repo_config();
         assert!(result.is_err());
     }
 }

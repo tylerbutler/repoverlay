@@ -950,13 +950,7 @@ fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
 
     let config = load_config(None)?;
 
-    let overlay_config = config.overlay_repo.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Overlay repository not configured.\n\n\
-             Run 'repoverlay source add <url>' to set up an overlay source.\n\
-             Example: repoverlay source add https://github.com/tylerbutler/repo-overlays"
-        )
-    })?;
+    let overlay_config = config.get_default_overlay_repo_config()?;
 
     let manager = OverlayRepoManager::new(overlay_config)?;
     manager.ensure_cloned()?;
@@ -1036,12 +1030,7 @@ fn publish_overlay(
 
     // Load config
     let config = load_config(None)?;
-    let overlay_config = config.overlay_repo.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Overlay repository not configured.\n\n\
-             Run 'repoverlay source add <url>' to set up an overlay source."
-        )
-    })?;
+    let overlay_config = config.get_default_overlay_repo_config()?;
 
     // Determine target org/repo
     let (org, repo) = if let Some(t) = target {
@@ -1253,13 +1242,7 @@ fn create_overlay_command(
 
     // Load overlay repo config
     let config = load_config(None)?;
-    let overlay_config = config.overlay_repo.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Overlay repository not configured.\n\n\
-             Run 'repoverlay source add <url>' to set up an overlay source.\n\
-             Or use --local to write to a local directory."
-        )
-    })?;
+    let overlay_config = config.get_default_overlay_repo_config()?;
 
     // Create manager and ensure cloned
     let manager = OverlayRepoManager::new(overlay_config)?;
@@ -1465,12 +1448,7 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
 
     // Load overlay repo config
     let config = load_config(None)?;
-    let overlay_config = config.overlay_repo.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Overlay repository not configured.\n\n\
-             Run 'repoverlay source add <url>' to set up an overlay source."
-        )
-    })?;
+    let overlay_config = config.get_default_overlay_repo_config()?;
 
     // Create manager and ensure cloned
     let manager = OverlayRepoManager::new(overlay_config)?;
@@ -1645,12 +1623,7 @@ fn add_files_to_overlay(
 
     // Load overlay repo config
     let config = load_config(None)?;
-    let overlay_config = config.overlay_repo.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Overlay repository not configured.\n\n\
-             Run 'repoverlay source add <url>' to set up an overlay source."
-        )
-    })?;
+    let overlay_config = config.get_default_overlay_repo_config()?;
 
     // Create manager and ensure cloned
     let manager = OverlayRepoManager::new(overlay_config)?;
