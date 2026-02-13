@@ -2296,6 +2296,290 @@ mod tests {
         }
 
         #[test]
+        fn force_overwrites_existing_directory() {
+            let repo = create_test_repo();
+            // Create existing directory that will conflict
+            fs::create_dir_all(repo.path().join("scratch")).unwrap();
+            fs::write(repo.path().join("scratch/existing.txt"), "existing").unwrap();
+
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::Force,
+                None,
+                false,
+            );
+            assert!(
+                result.is_ok(),
+                "force should allow overwriting directory: {result:?}"
+            );
+
+            // scratch dir should now be a symlink to overlay
+            let scratch_dir = repo.path().join("scratch");
+            assert!(scratch_dir.is_symlink(), "scratch should be a symlink");
+        }
+
+        #[test]
+        fn skip_conflicts_skips_existing_directory() {
+            let repo = create_test_repo();
+            // Create existing directory that will conflict
+            fs::create_dir_all(repo.path().join("scratch")).unwrap();
+            fs::write(repo.path().join("scratch/existing.txt"), "existing").unwrap();
+
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+            // Also add a non-conflicting file
+            fs::write(overlay.path().join("other.txt"), "other content").unwrap();
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
+
+            // scratch should NOT be a symlink (kept existing)
+            let scratch_dir = repo.path().join("scratch");
+            assert!(!scratch_dir.is_symlink(), "scratch should NOT be a symlink");
+            assert_eq!(
+                fs::read_to_string(scratch_dir.join("existing.txt")).unwrap(),
+                "existing",
+                "existing file should be preserved"
+            );
+
+            // other.txt should be applied
+            let other = repo.path().join("other.txt");
+            assert!(other.exists(), "other.txt should exist");
+        }
+
+        #[test]
+        fn force_fails_on_cross_overlay_file_conflict() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with .envrc
+            let overlay1 = create_test_overlay(&[(".envrc", "first")]);
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("first".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Try to apply second overlay with same file using Force
+            let overlay2 = create_test_overlay(&[(".envrc", "second")]);
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("second".to_string()),
+                None,
+                false,
+                ConflictStrategy::Force,
+                None,
+                false,
+            );
+            assert!(
+                result.is_err(),
+                "force should still fail on cross-overlay conflict"
+            );
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("already managed by overlay"),
+                "error should mention cross-overlay conflict: {err}"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_skips_cross_overlay_file_conflict() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with .envrc
+            let overlay1 = create_test_overlay(&[(".envrc", "first")]);
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("first".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Apply second overlay with overlapping file + unique file using SkipConflicts
+            let overlay2 =
+                create_test_overlay(&[(".envrc", "second"), ("unique.txt", "unique content")]);
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("second".to_string()),
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
+
+            // unique.txt should be applied
+            assert!(
+                repo.path().join("unique.txt").exists(),
+                "unique.txt should be applied"
+            );
+        }
+
+        #[test]
+        fn force_fails_on_cross_overlay_directory_conflict() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with scratch directory
+            let overlay1 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay1.path().join("scratch")).unwrap();
+            fs::write(overlay1.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay1.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-a\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Try to apply second overlay with same directory using Force
+            let overlay2 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay2.path().join("scratch")).unwrap();
+            fs::write(overlay2.path().join("scratch/other.txt"), "other").unwrap();
+            fs::write(
+                overlay2.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-b\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::Force,
+                None,
+                false,
+            );
+            assert!(
+                result.is_err(),
+                "force should still fail on cross-overlay directory conflict"
+            );
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("already managed by overlay"),
+                "error should mention cross-overlay conflict: {err}"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_skips_cross_overlay_directory_conflict() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with scratch directory
+            let overlay1 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay1.path().join("scratch")).unwrap();
+            fs::write(overlay1.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay1.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-a\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Apply second overlay with same dir + unique file using SkipConflicts
+            let overlay2 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay2.path().join("scratch")).unwrap();
+            fs::write(overlay2.path().join("scratch/other.txt"), "other").unwrap();
+            fs::write(overlay2.path().join("unique.txt"), "content").unwrap();
+            fs::write(
+                overlay2.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-b\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
+
+            // unique.txt should be applied
+            assert!(
+                repo.path().join("unique.txt").exists(),
+                "unique.txt should be applied"
+            );
+        }
+
+        #[test]
         fn fails_on_empty_overlay() {
             let repo = create_test_repo();
             let overlay = TempDir::new().unwrap();
@@ -4210,6 +4494,96 @@ directories =
 
             // Verify new overlay is applied
             assert!(repo.path().join(".env.prod").exists());
+        }
+
+        #[test]
+        fn force_overwrites_existing_repo_file() {
+            let repo = create_test_repo();
+            // Create a file that will conflict with the new overlay
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let overlay = create_test_overlay(&[(".envrc", "overlay content")]);
+
+            let result = switch_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                ConflictStrategy::Force,
+            );
+            assert!(
+                result.is_ok(),
+                "switch with force should overwrite: {result:?}"
+            );
+
+            // File should now be a symlink to overlay
+            assert!(
+                repo.path().join(".envrc").is_symlink(),
+                ".envrc should be a symlink"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_skips_existing_repo_file() {
+            let repo = create_test_repo();
+            // Create a file that will conflict with the new overlay
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let overlay = create_test_overlay(&[
+                (".envrc", "overlay content"),
+                ("other.txt", "other content"),
+            ]);
+
+            let result = switch_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                ConflictStrategy::SkipConflicts,
+            );
+            assert!(
+                result.is_ok(),
+                "switch with skip_conflicts should succeed: {result:?}"
+            );
+
+            // .envrc should NOT be a symlink (kept existing)
+            let envrc = repo.path().join(".envrc");
+            assert!(!envrc.is_symlink(), ".envrc should NOT be a symlink");
+            assert_eq!(
+                fs::read_to_string(&envrc).unwrap(),
+                "existing content",
+                ".envrc should have original content"
+            );
+
+            // other.txt should be applied
+            assert!(
+                repo.path().join("other.txt").exists(),
+                "other.txt should exist"
+            );
+        }
+
+        #[test]
+        fn default_fails_on_existing_repo_file() {
+            let repo = create_test_repo();
+            // Create a file that will conflict with the new overlay
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let overlay = create_test_overlay(&[(".envrc", "overlay content")]);
+
+            let result = switch_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                ConflictStrategy::default(),
+            );
+            assert!(
+                result.is_err(),
+                "switch without flags should fail on conflict"
+            );
         }
     }
 

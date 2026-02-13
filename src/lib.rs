@@ -1324,9 +1324,10 @@ fn apply_multiple_overlays(
             }
         }
 
-        // Check files in this overlay against existing overlay targets
-        // (skip this check when using SkipConflicts since apply_resolved_overlay handles per-file skipping)
-        if conflict_strategy != ConflictStrategy::SkipConflicts {
+        // Check files in this overlay against existing overlay targets.
+        // Only run for Fail strategy — Force and SkipConflicts delegate to
+        // apply_resolved_overlay which loads fresh targets and handles per-file decisions.
+        if conflict_strategy == ConflictStrategy::Fail {
             check_files_against_existing(&resolved.path, &config, &existing_targets)?;
         }
     }
@@ -5153,6 +5154,250 @@ mod tests {
             assert!(
                 !config_path.is_symlink(),
                 "config.json should not be a symlink with force_copy"
+            );
+        }
+    }
+
+    mod apply_multiple_overlays_conflict_strategy {
+        use super::*;
+
+        fn make_overlay(dir: &Path, files: &[(&str, &str)]) {
+            for (name, content) in files {
+                let file_path = dir.join(name);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(file_path, content).unwrap();
+            }
+        }
+
+        #[test]
+        fn force_reapplies_already_applied_overlay_in_batch() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+            make_overlay(overlay_b.path(), &[("config.json", "{}")]);
+
+            let canonical = repo.path().canonicalize().unwrap();
+
+            // First, apply overlay_a individually
+            let first_sources = vec![ResolvedSource {
+                path: overlay_a.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+            }];
+            let result = apply_multiple_overlays(
+                &first_sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            );
+            assert!(result.is_ok(), "first apply should succeed: {result:?}");
+
+            // Now re-apply overlay_a along with overlay_b using Force
+            let second_sources = vec![
+                ResolvedSource {
+                    path: overlay_a.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+                },
+                ResolvedSource {
+                    path: overlay_b.path().to_path_buf(),
+                    source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+                },
+            ];
+            let result = apply_multiple_overlays(
+                &second_sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::Force,
+            );
+            assert!(
+                result.is_ok(),
+                "force should allow re-applying in batch: {result:?}"
+            );
+
+            let applied = list_applied_overlays(&canonical).unwrap();
+            assert_eq!(applied.len(), 2, "should have 2 applied overlays");
+        }
+
+        #[test]
+        fn force_overwrites_existing_repo_files_in_batch() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "overlay content")]);
+
+            // Create existing repo file
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+
+            let sources = vec![ResolvedSource {
+                path: overlay_a.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+            }];
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::Force,
+            );
+            assert!(
+                result.is_ok(),
+                "force should overwrite in batch: {result:?}"
+            );
+
+            // File should be a symlink now
+            assert!(
+                canonical.join(".envrc").is_symlink(),
+                ".envrc should be a symlink"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_skips_existing_repo_files_in_batch() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+
+            make_overlay(
+                overlay_a.path(),
+                &[(".envrc", "overlay content"), ("other.txt", "other")],
+            );
+
+            // Create existing repo file
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+
+            let sources = vec![ResolvedSource {
+                path: overlay_a.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+            }];
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::SkipConflicts,
+            );
+            assert!(
+                result.is_ok(),
+                "skip_conflicts should succeed in batch: {result:?}"
+            );
+
+            // .envrc should NOT be a symlink (kept existing)
+            assert!(
+                !canonical.join(".envrc").is_symlink(),
+                ".envrc should NOT be a symlink"
+            );
+            assert_eq!(
+                fs::read_to_string(canonical.join(".envrc")).unwrap(),
+                "existing content",
+                ".envrc should have original content"
+            );
+
+            // other.txt should be applied
+            assert!(
+                canonical.join("other.txt").exists(),
+                "other.txt should exist"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_still_rejects_already_applied_overlay_in_batch() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "export FOO=bar")]);
+
+            let canonical = repo.path().canonicalize().unwrap();
+
+            // First, apply overlay_a individually
+            let first_sources = vec![ResolvedSource {
+                path: overlay_a.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+            }];
+            let result = apply_multiple_overlays(
+                &first_sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            );
+            assert!(result.is_ok(), "first apply should succeed: {result:?}");
+
+            // Try re-applying with SkipConflicts — should still fail for same-name
+            let result = apply_multiple_overlays(
+                &first_sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::SkipConflicts,
+            );
+            assert!(
+                result.is_err(),
+                "skip_conflicts should fail on already-applied overlay"
+            );
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("already applied"),
+                "error should mention already applied: {err}"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_bypasses_cross_overlay_file_check_in_batch() {
+            let repo = create_test_repo();
+            let overlay_a = TempDir::new().unwrap();
+            let overlay_b = TempDir::new().unwrap();
+
+            make_overlay(overlay_a.path(), &[(".envrc", "first")]);
+            make_overlay(
+                overlay_b.path(),
+                &[(".envrc", "second"), ("unique.txt", "unique")],
+            );
+
+            let canonical = repo.path().canonicalize().unwrap();
+
+            // Apply overlay_a first
+            let first_sources = vec![ResolvedSource {
+                path: overlay_a.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
+            }];
+            apply_multiple_overlays(
+                &first_sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            )
+            .unwrap();
+
+            // Apply overlay_b with SkipConflicts — should skip .envrc but apply unique.txt
+            let second_sources = vec![ResolvedSource {
+                path: overlay_b.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
+            }];
+            let result = apply_multiple_overlays(
+                &second_sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::SkipConflicts,
+            );
+            assert!(
+                result.is_ok(),
+                "skip_conflicts should succeed with cross-overlay conflict: {result:?}"
+            );
+
+            // unique.txt should be applied
+            assert!(
+                canonical.join("unique.txt").exists(),
+                "unique.txt should be applied"
             );
         }
     }
