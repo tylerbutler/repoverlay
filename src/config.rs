@@ -66,6 +66,10 @@ pub struct Source {
     pub url: String,
 }
 
+/// Default overlay repository name for the one-part shorthand syntax.
+/// When user types `username`, it expands to `username/repo-overlays`.
+pub const DEFAULT_OVERLAY_REPO_NAME: &str = "repo-overlays";
+
 /// Check if a string looks like a git-cloneable URL.
 fn is_git_url(s: &str) -> bool {
     s.contains("://") || s.starts_with("git@")

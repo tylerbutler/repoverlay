@@ -74,10 +74,6 @@ pub(crate) enum ConflictStrategy {
     SkipConflicts,
 }
 
-/// Default overlay repository name for the one-part shorthand syntax.
-/// When user types `username`, it expands to `username/repo-overlays`.
-const DEFAULT_OVERLAY_REPO_NAME: &str = "repo-overlays";
-
 /// Canonicalize a path and return an error with a descriptive message if it fails.
 pub(crate) fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf> {
     path.canonicalize()
@@ -218,11 +214,12 @@ pub(crate) fn resolve_source(
         SourceReference::OnePart { username } => {
             // Phase C: Expand username to username/repo-overlays
             debug!(
-                "expanding one-part reference: {username} -> {username}/{DEFAULT_OVERLAY_REPO_NAME}"
+                "expanding one-part reference: {username} -> {username}/{}",
+                config::DEFAULT_OVERLAY_REPO_NAME
             );
             resolve_two_part(
                 &username,
-                DEFAULT_OVERLAY_REPO_NAME,
+                config::DEFAULT_OVERLAY_REPO_NAME,
                 ref_override,
                 update,
                 target_path,
