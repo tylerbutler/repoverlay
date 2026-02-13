@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/tylerbutler/repoverlay/compare/v0.3.3...v0.4.0) - 2026-02-12
+
+### Added
+
+- validate and expand source URLs at deserialization time ([#83](https://github.com/tylerbutler/repoverlay/pull/83))
+- auto-migrate legacy overlay_repo config to sources format ([#80](https://github.com/tylerbutler/repoverlay/pull/80))
+- support multi-overlay selection in browse mode apply ([#77](https://github.com/tylerbutler/repoverlay/pull/77))
+- add tree navigation with multi-level hierarchy for create UX ([#75](https://github.com/tylerbutler/repoverlay/pull/75))
+
+### Other
+
+- *(deps)* bump tiny-update-check from 0.1.0 to 1.0.0 ([#73](https://github.com/tylerbutler/repoverlay/pull/73))
+- gitignore
+
 ## [0.3.3](https://github.com/tylerbutler/repoverlay/compare/v0.3.2...v0.3.3) - 2026-02-08
 
 ### Other
