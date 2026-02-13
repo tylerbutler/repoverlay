@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{
-    CONFIG_FILE, CacheManager, OVERLAYS_DIR, STATE_DIR, apply_overlay, canonicalize_path, config,
-    list_applied_overlays, parse_github_owner_repo, remove_overlay, remove_single_overlay,
-    restore_overlays, show_status, switch_overlay, update_overlays,
+    CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, STATE_DIR, apply_overlay,
+    canonicalize_path, config, list_applied_overlays, parse_github_owner_repo, remove_overlay,
+    remove_single_overlay, restore_overlays, show_status, switch_overlay, update_overlays,
 };
 
 /// Build version string with git info for local builds
@@ -110,6 +110,14 @@ enum Commands {
         #[arg(long, help_heading = "GitHub Options")]
         update: bool,
 
+        /// Overwrite existing files and re-apply same-name overlays
+        #[arg(long, conflicts_with = "skip_conflicts")]
+        force: bool,
+
+        /// Skip conflicting files silently, continue with non-conflicting files
+        #[arg(long, conflicts_with = "force")]
+        skip_conflicts: bool,
+
         /// Use a specific overlay source instead of priority order (multi-source configs only)
         #[arg(long = "from", value_name = "SOURCE", help_heading = "GitHub Options")]
         from_source: Option<String>,
@@ -161,6 +169,14 @@ enum Commands {
         /// Show what would be restored without applying
         #[arg(long)]
         dry_run: bool,
+
+        /// Overwrite existing files during restore
+        #[arg(long, conflicts_with = "skip_conflicts")]
+        force: bool,
+
+        /// Skip conflicting files silently during restore
+        #[arg(long, conflicts_with = "force")]
+        skip_conflicts: bool,
     },
 
     /// Update applied overlays from remote sources
@@ -175,6 +191,14 @@ enum Commands {
         /// Check for updates without applying them
         #[arg(long)]
         dry_run: bool,
+
+        /// Overwrite existing files during update
+        #[arg(long, conflicts_with = "skip_conflicts")]
+        force: bool,
+
+        /// Skip conflicting files silently during update
+        #[arg(long, conflicts_with = "force")]
+        skip_conflicts: bool,
     },
 
     /// Create a new overlay from files in a repository
@@ -260,6 +284,14 @@ enum Commands {
         /// Git ref (branch, tag, or commit) to use (GitHub sources only)
         #[arg(short, long, value_name = "REF")]
         r#ref: Option<String>,
+
+        /// Overwrite existing repo files when applying the new overlay
+        #[arg(long, conflicts_with = "skip_conflicts")]
+        force: bool,
+
+        /// Skip conflicting repo files silently when applying the new overlay
+        #[arg(long, conflicts_with = "force")]
+        skip_conflicts: bool,
     },
 
     /// Manage the overlay cache
@@ -433,10 +465,19 @@ pub fn run() -> Result<()> {
             name,
             r#ref,
             update,
+            force,
+            skip_conflicts,
             from_source,
             dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
+            let conflict_strategy = if force {
+                ConflictStrategy::Force
+            } else if skip_conflicts {
+                ConflictStrategy::SkipConflicts
+            } else {
+                ConflictStrategy::Fail
+            };
             apply_overlay(
                 &source,
                 &target,
@@ -444,6 +485,7 @@ pub fn run() -> Result<()> {
                 name,
                 r#ref.as_deref(),
                 update,
+                conflict_strategy,
                 from_source.as_deref(),
                 dry_run,
             )?;
@@ -462,17 +504,38 @@ pub fn run() -> Result<()> {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             show_status(&target, name)?;
         }
-        Commands::Restore { target, dry_run } => {
+        Commands::Restore {
+            target,
+            dry_run,
+            force,
+            skip_conflicts,
+        } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            restore_overlays(&target, dry_run)?;
+            let conflict_strategy = if force {
+                ConflictStrategy::Force
+            } else if skip_conflicts {
+                ConflictStrategy::SkipConflicts
+            } else {
+                ConflictStrategy::Fail
+            };
+            restore_overlays(&target, dry_run, conflict_strategy)?;
         }
         Commands::Update {
             name,
             target,
             dry_run,
+            force,
+            skip_conflicts,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            update_overlays(&target, name, dry_run)?;
+            let conflict_strategy = if force {
+                ConflictStrategy::Force
+            } else if skip_conflicts {
+                ConflictStrategy::SkipConflicts
+            } else {
+                ConflictStrategy::Fail
+            };
+            update_overlays(&target, name, dry_run, conflict_strategy)?;
         }
         Commands::Create {
             name,
@@ -502,9 +565,25 @@ pub fn run() -> Result<()> {
             copy,
             name,
             r#ref,
+            force,
+            skip_conflicts,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            switch_overlay(&source, &target, copy, name, r#ref.as_deref())?;
+            let conflict_strategy = if force {
+                ConflictStrategy::Force
+            } else if skip_conflicts {
+                ConflictStrategy::SkipConflicts
+            } else {
+                ConflictStrategy::Fail
+            };
+            switch_overlay(
+                &source,
+                &target,
+                copy,
+                name,
+                r#ref.as_deref(),
+                conflict_strategy,
+            )?;
         }
         Commands::Cache { command } => {
             handle_cache_command(command)?;
@@ -1776,6 +1855,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -1810,6 +1890,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -1831,6 +1912,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -1856,6 +1938,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -1894,6 +1977,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -1926,6 +2010,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -1950,6 +2035,7 @@ mod tests {
                 Some("custom-name".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -1971,6 +2057,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -1996,6 +2083,7 @@ mod tests {
                 Some("my-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2008,6 +2096,7 @@ mod tests {
                 Some("my-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2029,6 +2118,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2049,6 +2139,7 @@ mod tests {
                 Some("first".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2061,12 +2152,431 @@ mod tests {
                 Some("second".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
             assert!(err.contains("Conflict") || err.contains("already managed"));
+        }
+
+        #[test]
+        fn force_overwrites_existing_file() {
+            let repo = create_test_repo();
+            // Create existing file
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let overlay = create_test_overlay(&[(".envrc", "overlay content")]);
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::Force,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "force should allow overwriting: {result:?}");
+
+            // File should now be a symlink to overlay
+            let target_file = repo.path().join(".envrc");
+            assert!(target_file.is_symlink(), ".envrc should be a symlink");
+        }
+
+        #[test]
+        fn force_reapplies_same_name_overlay() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "overlay content")]);
+
+            // Apply first time
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Apply again with same name using force
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::Force,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "force should allow re-applying: {result:?}");
+        }
+
+        #[test]
+        fn skip_conflicts_skips_existing_file() {
+            let repo = create_test_repo();
+            // Create existing file
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let overlay = create_test_overlay(&[
+                (".envrc", "overlay content"),
+                ("other.txt", "other content"),
+            ]);
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
+
+            // .envrc should NOT be a symlink (kept existing)
+            let envrc = repo.path().join(".envrc");
+            assert!(!envrc.is_symlink(), ".envrc should NOT be a symlink");
+            assert_eq!(
+                fs::read_to_string(&envrc).unwrap(),
+                "existing content",
+                ".envrc should have original content"
+            );
+
+            // other.txt should be applied
+            let other = repo.path().join("other.txt");
+            assert!(other.exists(), "other.txt should exist");
+            assert!(other.is_symlink(), "other.txt should be a symlink");
+        }
+
+        #[test]
+        fn skip_conflicts_fails_on_same_name_overlay() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[(".envrc", "content")]);
+
+            // Apply first time
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // skip_conflicts should NOT allow re-applying same name
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                None,
+                false,
+            );
+            assert!(result.is_err(), "skip_conflicts should fail on same-name");
+            assert!(result.unwrap_err().to_string().contains("already applied"));
+        }
+
+        #[test]
+        fn force_overwrites_existing_directory() {
+            let repo = create_test_repo();
+            // Create existing directory that will conflict
+            fs::create_dir_all(repo.path().join("scratch")).unwrap();
+            fs::write(repo.path().join("scratch/existing.txt"), "existing").unwrap();
+
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::Force,
+                None,
+                false,
+            );
+            assert!(
+                result.is_ok(),
+                "force should allow overwriting directory: {result:?}"
+            );
+
+            // scratch dir should now be a symlink to overlay
+            let scratch_dir = repo.path().join("scratch");
+            assert!(scratch_dir.is_symlink(), "scratch should be a symlink");
+        }
+
+        #[test]
+        fn skip_conflicts_skips_existing_directory() {
+            let repo = create_test_repo();
+            // Create existing directory that will conflict
+            fs::create_dir_all(repo.path().join("scratch")).unwrap();
+            fs::write(repo.path().join("scratch/existing.txt"), "existing").unwrap();
+
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join("scratch")).unwrap();
+            fs::write(overlay.path().join("scratch/notes.txt"), "notes").unwrap();
+            // Also add a non-conflicting file
+            fs::write(overlay.path().join("other.txt"), "other content").unwrap();
+            fs::write(
+                overlay.path().join("repoverlay.ccl"),
+                "overlay =\n  name = test-overlay\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
+
+            // scratch should NOT be a symlink (kept existing)
+            let scratch_dir = repo.path().join("scratch");
+            assert!(!scratch_dir.is_symlink(), "scratch should NOT be a symlink");
+            assert_eq!(
+                fs::read_to_string(scratch_dir.join("existing.txt")).unwrap(),
+                "existing",
+                "existing file should be preserved"
+            );
+
+            // other.txt should be applied
+            let other = repo.path().join("other.txt");
+            assert!(other.exists(), "other.txt should exist");
+        }
+
+        #[test]
+        fn force_fails_on_cross_overlay_file_conflict() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with .envrc
+            let overlay1 = create_test_overlay(&[(".envrc", "first")]);
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("first".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Try to apply second overlay with same file using Force
+            let overlay2 = create_test_overlay(&[(".envrc", "second")]);
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("second".to_string()),
+                None,
+                false,
+                ConflictStrategy::Force,
+                None,
+                false,
+            );
+            assert!(
+                result.is_err(),
+                "force should still fail on cross-overlay conflict"
+            );
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("already managed by overlay"),
+                "error should mention cross-overlay conflict: {err}"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_skips_cross_overlay_file_conflict() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with .envrc
+            let overlay1 = create_test_overlay(&[(".envrc", "first")]);
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("first".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Apply second overlay with overlapping file + unique file using SkipConflicts
+            let overlay2 =
+                create_test_overlay(&[(".envrc", "second"), ("unique.txt", "unique content")]);
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("second".to_string()),
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
+
+            // unique.txt should be applied
+            assert!(
+                repo.path().join("unique.txt").exists(),
+                "unique.txt should be applied"
+            );
+        }
+
+        #[test]
+        fn force_fails_on_cross_overlay_directory_conflict() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with scratch directory
+            let overlay1 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay1.path().join("scratch")).unwrap();
+            fs::write(overlay1.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay1.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-a\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Try to apply second overlay with same directory using Force
+            let overlay2 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay2.path().join("scratch")).unwrap();
+            fs::write(overlay2.path().join("scratch/other.txt"), "other").unwrap();
+            fs::write(
+                overlay2.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-b\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::Force,
+                None,
+                false,
+            );
+            assert!(
+                result.is_err(),
+                "force should still fail on cross-overlay directory conflict"
+            );
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("already managed by overlay"),
+                "error should mention cross-overlay conflict: {err}"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_skips_cross_overlay_directory_conflict() {
+            let repo = create_test_repo();
+
+            // Apply first overlay with scratch directory
+            let overlay1 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay1.path().join("scratch")).unwrap();
+            fs::write(overlay1.path().join("scratch/notes.txt"), "notes").unwrap();
+            fs::write(
+                overlay1.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-a\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::default(),
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Apply second overlay with same dir + unique file using SkipConflicts
+            let overlay2 = TempDir::new().unwrap();
+            fs::create_dir_all(overlay2.path().join("scratch")).unwrap();
+            fs::write(overlay2.path().join("scratch/other.txt"), "other").unwrap();
+            fs::write(overlay2.path().join("unique.txt"), "content").unwrap();
+            fs::write(
+                overlay2.path().join("repoverlay.ccl"),
+                "overlay =\n  name = overlay-b\n\ndirectories =\n  = scratch\n",
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                None,
+                false,
+            );
+            assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
+
+            // unique.txt should be applied
+            assert!(
+                repo.path().join("unique.txt").exists(),
+                "unique.txt should be applied"
+            );
         }
 
         #[test]
@@ -2081,6 +2591,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2098,6 +2609,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2128,6 +2640,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2173,6 +2686,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2215,6 +2729,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2251,6 +2766,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2288,6 +2804,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2317,6 +2834,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2339,6 +2857,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2367,6 +2886,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2401,6 +2921,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2438,6 +2959,7 @@ mod tests {
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2486,6 +3008,7 @@ directories =
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             );
@@ -2515,6 +3038,7 @@ directories =
                 Some("test-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 true, // dry_run
             );
@@ -2552,6 +3076,7 @@ directories =
                 Some("test-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2576,6 +3101,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2587,6 +3113,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2615,6 +3142,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2626,6 +3154,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2650,6 +3179,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2679,6 +3209,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2704,6 +3235,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2739,6 +3271,7 @@ directories =
                 Some("real-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2762,6 +3295,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2798,6 +3332,7 @@ directories =
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2837,6 +3372,7 @@ directories =
                 None,
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2867,6 +3403,7 @@ directories =
                 Some("test-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2900,6 +3437,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2911,6 +3449,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2957,6 +3496,7 @@ directories =
                 Some("test-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -2986,6 +3526,7 @@ directories =
                 Some("test-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3024,6 +3565,7 @@ directories =
                 Some("test".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3046,6 +3588,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3057,6 +3600,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3079,6 +3623,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3090,6 +3635,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3111,6 +3657,7 @@ directories =
                 Some("real".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3820,6 +4367,7 @@ directories =
                 Some("first-overlay".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3835,6 +4383,7 @@ directories =
                 false,
                 Some("second-overlay".to_string()),
                 None,
+                ConflictStrategy::default(),
             );
             assert!(result.is_ok(), "switch_overlay failed: {result:?}");
 
@@ -3862,6 +4411,7 @@ directories =
                 false,
                 Some("new-overlay".to_string()),
                 None,
+                ConflictStrategy::default(),
             );
             assert!(result.is_ok());
 
@@ -3879,6 +4429,7 @@ directories =
                 false,
                 None,
                 None,
+                ConflictStrategy::default(),
             );
             assert!(result.is_err());
             assert!(
@@ -3904,6 +4455,7 @@ directories =
                 Some("overlay-a".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3915,6 +4467,7 @@ directories =
                 Some("overlay-b".to_string()),
                 None,
                 false,
+                ConflictStrategy::default(),
                 None,
                 false,
             )
@@ -3931,6 +4484,7 @@ directories =
                 false,
                 Some("overlay-c".to_string()),
                 None,
+                ConflictStrategy::default(),
             )
             .unwrap();
 
@@ -3940,6 +4494,96 @@ directories =
 
             // Verify new overlay is applied
             assert!(repo.path().join(".env.prod").exists());
+        }
+
+        #[test]
+        fn force_overwrites_existing_repo_file() {
+            let repo = create_test_repo();
+            // Create a file that will conflict with the new overlay
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let overlay = create_test_overlay(&[(".envrc", "overlay content")]);
+
+            let result = switch_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                ConflictStrategy::Force,
+            );
+            assert!(
+                result.is_ok(),
+                "switch with force should overwrite: {result:?}"
+            );
+
+            // File should now be a symlink to overlay
+            assert!(
+                repo.path().join(".envrc").is_symlink(),
+                ".envrc should be a symlink"
+            );
+        }
+
+        #[test]
+        fn skip_conflicts_skips_existing_repo_file() {
+            let repo = create_test_repo();
+            // Create a file that will conflict with the new overlay
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let overlay = create_test_overlay(&[
+                (".envrc", "overlay content"),
+                ("other.txt", "other content"),
+            ]);
+
+            let result = switch_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                ConflictStrategy::SkipConflicts,
+            );
+            assert!(
+                result.is_ok(),
+                "switch with skip_conflicts should succeed: {result:?}"
+            );
+
+            // .envrc should NOT be a symlink (kept existing)
+            let envrc = repo.path().join(".envrc");
+            assert!(!envrc.is_symlink(), ".envrc should NOT be a symlink");
+            assert_eq!(
+                fs::read_to_string(&envrc).unwrap(),
+                "existing content",
+                ".envrc should have original content"
+            );
+
+            // other.txt should be applied
+            assert!(
+                repo.path().join("other.txt").exists(),
+                "other.txt should exist"
+            );
+        }
+
+        #[test]
+        fn default_fails_on_existing_repo_file() {
+            let repo = create_test_repo();
+            // Create a file that will conflict with the new overlay
+            fs::write(repo.path().join(".envrc"), "existing content").unwrap();
+
+            let overlay = create_test_overlay(&[(".envrc", "overlay content")]);
+
+            let result = switch_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("my-overlay".to_string()),
+                None,
+                ConflictStrategy::default(),
+            );
+            assert!(
+                result.is_err(),
+                "switch without flags should fail on conflict"
+            );
         }
     }
 
@@ -3992,6 +4636,8 @@ directories =
                     name,
                     r#ref,
                     update,
+                    force,
+                    skip_conflicts,
                     from_source,
                     dry_run,
                 }) => {
@@ -4001,6 +4647,8 @@ directories =
                     assert_eq!(name, Some("my-name".to_string()));
                     assert_eq!(r#ref, Some("main".to_string()));
                     assert!(update);
+                    assert!(!force);
+                    assert!(!skip_conflicts);
                     assert!(from_source.is_none());
                     assert!(!dry_run);
                 }
@@ -4019,6 +4667,53 @@ directories =
                 }
                 _ => panic!("Expected Apply command"),
             }
+        }
+
+        #[test]
+        fn apply_parses_force_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--force"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Apply {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_parses_skip_conflicts_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--skip-conflicts"])
+                .unwrap();
+
+            match cli.command {
+                Some(Commands::Apply {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_rejects_force_and_skip_conflicts_together() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "apply",
+                "./overlay",
+                "--force",
+                "--skip-conflicts",
+            ]);
+            assert!(result.is_err());
         }
 
         #[test]
@@ -4129,6 +4824,47 @@ directories =
         }
 
         #[test]
+        fn restore_parses_force_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "restore", "--force"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Restore {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Restore command"),
+            }
+        }
+
+        #[test]
+        fn restore_parses_skip_conflicts_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "restore", "--skip-conflicts"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Restore {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Restore command"),
+            }
+        }
+
+        #[test]
+        fn restore_rejects_force_and_skip_conflicts_together() {
+            let result =
+                Cli::try_parse_from(["repoverlay", "restore", "--force", "--skip-conflicts"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
         fn update_parses_overlay_name() {
             let cli = Cli::try_parse_from(["repoverlay", "update", "my-overlay"]).unwrap();
 
@@ -4139,6 +4875,47 @@ directories =
                 }
                 _ => panic!("Expected Update command"),
             }
+        }
+
+        #[test]
+        fn update_parses_force_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "update", "--force"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Update {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Update command"),
+            }
+        }
+
+        #[test]
+        fn update_parses_skip_conflicts_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "update", "--skip-conflicts"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Update {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Update command"),
+            }
+        }
+
+        #[test]
+        fn update_rejects_force_and_skip_conflicts_together() {
+            let result =
+                Cli::try_parse_from(["repoverlay", "update", "--force", "--skip-conflicts"]);
+            assert!(result.is_err());
         }
 
         #[test]
@@ -4216,6 +4993,55 @@ directories =
                 }
                 _ => panic!("Expected Switch command"),
             }
+        }
+
+        #[test]
+        fn switch_parses_force_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "switch", "./overlay", "--force"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Switch {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Switch command"),
+            }
+        }
+
+        #[test]
+        fn switch_parses_skip_conflicts_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "switch", "./overlay", "--skip-conflicts"])
+                    .unwrap();
+
+            match cli.command {
+                Some(Commands::Switch {
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Switch command"),
+            }
+        }
+
+        #[test]
+        fn switch_rejects_force_and_skip_conflicts_together() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "switch",
+                "./overlay",
+                "--force",
+                "--skip-conflicts",
+            ]);
+            assert!(result.is_err());
         }
 
         #[test]
