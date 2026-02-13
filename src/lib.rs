@@ -860,7 +860,13 @@ pub(crate) fn apply_overlay(
     let resolved = match resolved {
         ResolvedSources::Single(single) => single,
         ResolvedSources::Multiple(sources) => {
-            return apply_multiple_overlays(&sources, target, force_copy, dry_run);
+            return apply_multiple_overlays(
+                &sources,
+                target,
+                force_copy,
+                dry_run,
+                conflict_strategy,
+            );
         }
     };
 
@@ -1273,6 +1279,7 @@ fn apply_multiple_overlays(
     target: &Path,
     force_copy: bool,
     dry_run: bool,
+    conflict_strategy: ConflictStrategy,
 ) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
@@ -1298,14 +1305,30 @@ fn apply_multiple_overlays(
             .join(format!("{overlay_name}.ccl"));
 
         if overlay_state_path.exists() {
-            bail!(
-                "Overlay '{overlay_name}' is already applied. \
-                 Run 'repoverlay remove {overlay_name}' first."
-            );
+            match conflict_strategy {
+                ConflictStrategy::Force => {
+                    println!(
+                        "  {} Removing existing overlay '{}' (batch mode)",
+                        "Force:".yellow(),
+                        overlay_name
+                    );
+                    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+                    remove_single_overlay(&target, &overlays_dir, &overlay_name)?;
+                }
+                ConflictStrategy::Fail | ConflictStrategy::SkipConflicts => {
+                    bail!(
+                        "Overlay '{overlay_name}' is already applied. \
+                         Run 'repoverlay remove {overlay_name}' first, or use --force."
+                    );
+                }
+            }
         }
 
         // Check files in this overlay against existing overlay targets
-        check_files_against_existing(&resolved.path, &config, &existing_targets)?;
+        // (skip this check when using SkipConflicts since apply_resolved_overlay handles per-file skipping)
+        if conflict_strategy != ConflictStrategy::SkipConflicts {
+            check_files_against_existing(&resolved.path, &config, &existing_targets)?;
+        }
     }
 
     if dry_run {
@@ -1321,7 +1344,7 @@ fn apply_multiple_overlays(
     let mut applied: Vec<String> = Vec::new();
 
     for resolved in sources {
-        match apply_resolved_overlay(resolved, &target, force_copy, None, ConflictStrategy::Fail) {
+        match apply_resolved_overlay(resolved, &target, force_copy, None, conflict_strategy) {
             Ok(()) => {
                 let config = load_overlay_config(&resolved.path)?;
                 let name = determine_overlay_name(&config, &resolved.path, None)?;
@@ -2617,6 +2640,7 @@ pub(crate) fn switch_overlay(
     copy: bool,
     name: Option<String>,
     ref_override: Option<&str>,
+    conflict_strategy: ConflictStrategy,
 ) -> Result<()> {
     validate_git_repo(target)?;
 
@@ -2632,7 +2656,6 @@ pub(crate) fn switch_overlay(
 
     // Apply the new overlay
     println!("{} new overlay...", "Applying".blue().bold());
-    // Switch doesn't support conflict flags - it removes all overlays first
     apply_overlay(
         source,
         target,
@@ -2640,7 +2663,7 @@ pub(crate) fn switch_overlay(
         name,
         ref_override,
         false,
-        ConflictStrategy::Fail,
+        conflict_strategy,
         None,
         false,
     )?;
@@ -4775,7 +4798,13 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(&sources, &canonical, false, false);
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            );
             assert!(result.is_ok(), "multi-apply should succeed: {result:?}");
 
             // Both overlays should be applied
@@ -4812,7 +4841,13 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(&sources, &canonical, false, false);
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            );
             assert!(result.is_err(), "should fail due to conflict");
 
             // No overlays should be applied
@@ -4842,7 +4877,13 @@ mod tests {
             }];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(&sources, &canonical, false, true);
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                false,
+                true,
+                ConflictStrategy::default(),
+            );
             assert!(result.is_ok(), "dry run should succeed");
 
             // No files should be applied
@@ -4877,7 +4918,13 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(&sources, &canonical, false, false);
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            );
             assert!(
                 result.is_err(),
                 "should fail because config.json already exists"
@@ -4927,7 +4974,13 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            let result = apply_multiple_overlays(&first_sources, &canonical, false, false);
+            let result = apply_multiple_overlays(
+                &first_sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            );
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
             // Now try to apply both, including the already-applied overlay_a
@@ -4941,7 +4994,13 @@ mod tests {
                     source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
                 },
             ];
-            let result = apply_multiple_overlays(&second_sources, &canonical, false, false);
+            let result = apply_multiple_overlays(
+                &second_sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            );
             assert!(
                 result.is_err(),
                 "should fail because overlay is already applied"
@@ -4974,7 +5033,13 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(&sources, &canonical, false, true);
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                false,
+                true,
+                ConflictStrategy::default(),
+            );
             assert!(
                 result.is_ok(),
                 "dry run with multiple should succeed: {result:?}"
@@ -5025,7 +5090,13 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(&sources, &canonical, false, false);
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                false,
+                false,
+                ConflictStrategy::default(),
+            );
             assert!(result.is_ok(), "three overlays should succeed: {result:?}");
 
             let applied = list_applied_overlays(&canonical).unwrap();
@@ -5057,7 +5128,13 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(&sources, &canonical, true, false);
+            let result = apply_multiple_overlays(
+                &sources,
+                &canonical,
+                true,
+                false,
+                ConflictStrategy::default(),
+            );
             assert!(
                 result.is_ok(),
                 "force_copy multi-apply should succeed: {result:?}"

@@ -284,6 +284,14 @@ enum Commands {
         /// Git ref (branch, tag, or commit) to use (GitHub sources only)
         #[arg(short, long, value_name = "REF")]
         r#ref: Option<String>,
+
+        /// Overwrite existing repo files when applying the new overlay
+        #[arg(long, conflicts_with = "skip_conflicts")]
+        force: bool,
+
+        /// Skip conflicting repo files silently when applying the new overlay
+        #[arg(long, conflicts_with = "force")]
+        skip_conflicts: bool,
     },
 
     /// Manage the overlay cache
@@ -557,9 +565,25 @@ pub fn run() -> Result<()> {
             copy,
             name,
             r#ref,
+            force,
+            skip_conflicts,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            switch_overlay(&source, &target, copy, name, r#ref.as_deref())?;
+            let conflict_strategy = if force {
+                ConflictStrategy::Force
+            } else if skip_conflicts {
+                ConflictStrategy::SkipConflicts
+            } else {
+                ConflictStrategy::Fail
+            };
+            switch_overlay(
+                &source,
+                &target,
+                copy,
+                name,
+                r#ref.as_deref(),
+                conflict_strategy,
+            )?;
         }
         Commands::Cache { command } => {
             handle_cache_command(command)?;
@@ -4075,6 +4099,7 @@ directories =
                 false,
                 Some("second-overlay".to_string()),
                 None,
+                ConflictStrategy::default(),
             );
             assert!(result.is_ok(), "switch_overlay failed: {result:?}");
 
@@ -4102,6 +4127,7 @@ directories =
                 false,
                 Some("new-overlay".to_string()),
                 None,
+                ConflictStrategy::default(),
             );
             assert!(result.is_ok());
 
@@ -4119,6 +4145,7 @@ directories =
                 false,
                 None,
                 None,
+                ConflictStrategy::default(),
             );
             assert!(result.is_err());
             assert!(
@@ -4173,6 +4200,7 @@ directories =
                 false,
                 Some("overlay-c".to_string()),
                 None,
+                ConflictStrategy::default(),
             )
             .unwrap();
 
