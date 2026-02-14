@@ -1,0 +1,3 @@
+kind: Fixed
+body: Reload overlay targets after removing conflicting overlay during re-apply to prevent stale state
+time: 2026-02-14T15:37:39.000000-08:00

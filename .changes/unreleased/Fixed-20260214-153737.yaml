@@ -1,0 +1,3 @@
+kind: Fixed
+body: Reject git refs starting with `-` to prevent flag injection attacks in source URLs
+time: 2026-02-14T15:37:37.678001-08:00
