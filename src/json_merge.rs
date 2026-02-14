@@ -25,11 +25,11 @@ pub struct TypeMismatch {
 /// Objects are recursively merged.
 pub fn deep_merge(base: &Value, overlay: &Value) -> MergeResult {
     let mut result = MergeResult::default();
-    result.merged = merge_values(base, overlay, String::new(), &mut result);
+    result.merged = merge_values(base, overlay, "", &mut result);
     result
 }
 
-fn merge_values(base: &Value, overlay: &Value, path: String, stats: &mut MergeResult) -> Value {
+fn merge_values(base: &Value, overlay: &Value, path: &str, stats: &mut MergeResult) -> Value {
     if let (Value::Object(base_map), Value::Object(overlay_map)) = (base, overlay) {
         let mut merged = base_map.clone();
         for (key, overlay_val) in overlay_map {
@@ -39,7 +39,7 @@ fn merge_values(base: &Value, overlay: &Value, path: String, stats: &mut MergeRe
                 format!("{path}.{key}")
             };
             if let Some(base_val) = base_map.get(key) {
-                let merged_val = merge_values(base_val, overlay_val, key_path, stats);
+                let merged_val = merge_values(base_val, overlay_val, &key_path, stats);
                 merged.insert(key.clone(), merged_val);
             } else {
                 stats.keys_added += 1;
@@ -50,17 +50,12 @@ fn merge_values(base: &Value, overlay: &Value, path: String, stats: &mut MergeRe
     } else {
         // Non-object cases: overlay wins
         if base != overlay {
-            let current_path = if path.is_empty() {
-                "(root)".to_string()
-            } else {
-                path
-            };
-
             if std::mem::discriminant(base) == std::mem::discriminant(overlay) {
                 stats.keys_overridden += 1;
             } else {
+                let key_path = if path.is_empty() { "(root)" } else { path };
                 stats.type_mismatches.push(TypeMismatch {
-                    key_path: current_path,
+                    key_path: key_path.to_owned(),
                     base_type: json_type_name(base).to_string(),
                     overlay_type: json_type_name(overlay).to_string(),
                 });

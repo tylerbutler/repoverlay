@@ -1139,35 +1139,20 @@ fn apply_resolved_overlay(
         // Check for conflicts with existing overlays
         if let Some(conflicting_overlay) = existing_targets.get(&target_rel_str) {
             if merge && is_json_file(&target_rel) && target_file.exists() {
-                // Deep merge JSON files
                 eprintln!(
                     "  {} Merging '{}' (managed by overlay '{}')",
                     "Merge:".cyan(),
                     target_rel.display(),
                     conflicting_overlay
                 );
-                match merge_json_files(&target_file, &source_file, &target_file) {
-                    Ok(result) => {
-                        log_merge_result(&target_rel, &result);
-                        state.add_file(FileEntry {
-                            source: rel_path.clone(),
-                            target: target_rel.clone(),
-                            link_type: LinkType::Merged,
-                            entry_type: EntryType::File,
-                        });
-                        let exclude_path = target_rel.to_string_lossy().replace('\\', "/");
-                        exclude_entries.push(exclude_path);
-                        continue;
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "  {} JSON merge failed for '{}': {e}",
-                            "Warning:".yellow(),
-                            target_rel.display()
-                        );
-                        // Fall through to existing conflict handling
-                    }
+                if let Some((entry, exclude_path)) =
+                    try_merge_json(&target_file, &source_file, &target_rel, &rel_path)
+                {
+                    state.add_file(entry);
+                    exclude_entries.push(exclude_path);
+                    continue;
                 }
+                // Merge failed; fall through to existing conflict handling
             }
             match conflict_strategy {
                 ConflictStrategy::SkipConflicts => {
@@ -1198,28 +1183,14 @@ fn apply_resolved_overlay(
                     "Merge:".cyan(),
                     target_rel.display()
                 );
-                match merge_json_files(&target_file, &source_file, &target_file) {
-                    Ok(result) => {
-                        log_merge_result(&target_rel, &result);
-                        state.add_file(FileEntry {
-                            source: rel_path.clone(),
-                            target: target_rel.clone(),
-                            link_type: LinkType::Merged,
-                            entry_type: EntryType::File,
-                        });
-                        let exclude_path = target_rel.to_string_lossy().replace('\\', "/");
-                        exclude_entries.push(exclude_path);
-                        continue;
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "  {} JSON merge failed for '{}': {e}",
-                            "Warning:".yellow(),
-                            target_rel.display()
-                        );
-                        // Fall through to existing conflict handling
-                    }
+                if let Some((entry, exclude_path)) =
+                    try_merge_json(&target_file, &source_file, &target_rel, &rel_path)
+                {
+                    state.add_file(entry);
+                    exclude_entries.push(exclude_path);
+                    continue;
                 }
+                // Merge failed; fall through to existing conflict handling
             }
             match conflict_strategy {
                 ConflictStrategy::Force => {
@@ -2883,6 +2854,40 @@ pub(crate) fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
             )
         }
     })
+}
+
+/// Attempt to deep merge a JSON overlay file into an existing target file.
+///
+/// Returns `Some((file_entry, exclude_path))` on success, or `None` if the merge
+/// failed (with a warning printed to stderr). The caller should add the entry to
+/// state and the exclude path to the exclusion list when `Some` is returned.
+fn try_merge_json(
+    target_file: &Path,
+    source_file: &Path,
+    target_rel: &Path,
+    rel_path: &Path,
+) -> Option<(FileEntry, String)> {
+    match merge_json_files(target_file, source_file, target_file) {
+        Ok(result) => {
+            log_merge_result(target_rel, &result);
+            let entry = FileEntry {
+                source: rel_path.to_path_buf(),
+                target: target_rel.to_path_buf(),
+                link_type: LinkType::Merged,
+                entry_type: EntryType::File,
+            };
+            let exclude_path = target_rel.to_string_lossy().replace('\\', "/");
+            Some((entry, exclude_path))
+        }
+        Err(e) => {
+            eprintln!(
+                "  {} JSON merge failed for '{}': {e}",
+                "Warning:".yellow(),
+                target_rel.display()
+            );
+            None
+        }
+    }
 }
 
 /// Log detailed merge results for a JSON file.
