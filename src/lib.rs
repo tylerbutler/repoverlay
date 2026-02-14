@@ -8,7 +8,6 @@ mod config;
 mod detection;
 mod fuzzy;
 mod github;
-#[allow(dead_code)]
 mod json_merge;
 mod overlay_repo;
 mod reference;
@@ -38,6 +37,7 @@ use walkdir::WalkDir;
 use cache::CacheManager;
 use fuzzy::OverlayMatcher;
 use github::GitHubSource;
+use json_merge::{is_json_file, merge_json_files};
 use overlay_repo::copy_dir_recursive;
 use reference::SourceReference;
 use selection::is_interactive;
@@ -904,7 +904,7 @@ fn apply_resolved_overlay(
     force_copy: bool,
     name_override: Option<String>,
     conflict_strategy: ConflictStrategy,
-    _merge: bool,
+    merge: bool,
 ) -> Result<()> {
     let source = &resolved.path;
     debug!("resolved source path: {}", source.display());
@@ -1138,6 +1138,37 @@ fn apply_resolved_overlay(
 
         // Check for conflicts with existing overlays
         if let Some(conflicting_overlay) = existing_targets.get(&target_rel_str) {
+            if merge && is_json_file(&target_rel) && target_file.exists() {
+                // Deep merge JSON files
+                eprintln!(
+                    "  {} Merging '{}' (managed by overlay '{}')",
+                    "Merge:".cyan(),
+                    target_rel.display(),
+                    conflicting_overlay
+                );
+                match merge_json_files(&target_file, &source_file, &target_file) {
+                    Ok(result) => {
+                        log_merge_result(&target_rel, &result);
+                        state.add_file(FileEntry {
+                            source: rel_path.clone(),
+                            target: target_rel.clone(),
+                            link_type: LinkType::Merged,
+                            entry_type: EntryType::File,
+                        });
+                        let exclude_path = target_rel.to_string_lossy().replace('\\', "/");
+                        exclude_entries.push(exclude_path);
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "  {} JSON merge failed for '{}': {e}",
+                            "Warning:".yellow(),
+                            target_rel.display()
+                        );
+                        // Fall through to existing conflict handling
+                    }
+                }
+            }
             match conflict_strategy {
                 ConflictStrategy::SkipConflicts => {
                     eprintln!(
@@ -1161,6 +1192,35 @@ fn apply_resolved_overlay(
 
         // Check for conflicts with existing files in repo
         if target_file.exists() {
+            if merge && is_json_file(&target_rel) {
+                eprintln!(
+                    "  {} Merging '{}' with existing repo file",
+                    "Merge:".cyan(),
+                    target_rel.display()
+                );
+                match merge_json_files(&target_file, &source_file, &target_file) {
+                    Ok(result) => {
+                        log_merge_result(&target_rel, &result);
+                        state.add_file(FileEntry {
+                            source: rel_path.clone(),
+                            target: target_rel.clone(),
+                            link_type: LinkType::Merged,
+                            entry_type: EntryType::File,
+                        });
+                        let exclude_path = target_rel.to_string_lossy().replace('\\', "/");
+                        exclude_entries.push(exclude_path);
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "  {} JSON merge failed for '{}': {e}",
+                            "Warning:".yellow(),
+                            target_rel.display()
+                        );
+                        // Fall through to existing conflict handling
+                    }
+                }
+            }
             match conflict_strategy {
                 ConflictStrategy::Force => {
                     eprintln!(
@@ -2823,6 +2883,33 @@ pub(crate) fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
             )
         }
     })
+}
+
+/// Log detailed merge results for a JSON file.
+fn log_merge_result(path: &Path, result: &json_merge::MergeResult) {
+    println!(
+        "  {} {} ({} added, {} overridden, {} type {})",
+        "~".cyan(),
+        path.display(),
+        result.keys_added,
+        result.keys_overridden,
+        result.type_mismatches.len(),
+        if result.type_mismatches.len() == 1 {
+            "mismatch"
+        } else {
+            "mismatches"
+        }
+    );
+
+    for mismatch in &result.type_mismatches {
+        eprintln!(
+            "    {} Type mismatch at '{}': {} -> {} (overlay wins)",
+            "Warning:".yellow(),
+            mismatch.key_path,
+            mismatch.base_type,
+            mismatch.overlay_type
+        );
+    }
 }
 
 #[cfg(test)]
