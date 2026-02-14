@@ -826,7 +826,7 @@ fn format_not_found_error(
 /// - Overlay with same name already exists (unless using `Force` strategy)
 /// - File conflicts with existing overlay or repo file (unless using `Force` or `SkipConflicts`)
 /// - No files found in overlay source
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(crate) fn apply_overlay(
     source_str: &str,
     target: &Path,
@@ -835,6 +835,7 @@ pub(crate) fn apply_overlay(
     ref_override: Option<&str>,
     update_cache: bool,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
     source_filter: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
@@ -868,6 +869,7 @@ pub(crate) fn apply_overlay(
                 force_copy,
                 dry_run,
                 conflict_strategy,
+                merge,
             );
         }
     };
@@ -888,6 +890,7 @@ pub(crate) fn apply_overlay(
         force_copy,
         name_override,
         conflict_strategy,
+        merge,
     )
 }
 
@@ -901,6 +904,7 @@ fn apply_resolved_overlay(
     force_copy: bool,
     name_override: Option<String>,
     conflict_strategy: ConflictStrategy,
+    _merge: bool,
 ) -> Result<()> {
     let source = &resolved.path;
     debug!("resolved source path: {}", source.display());
@@ -1286,6 +1290,7 @@ fn apply_multiple_overlays(
     force_copy: bool,
     dry_run: bool,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
@@ -1351,7 +1356,14 @@ fn apply_multiple_overlays(
     let mut applied: Vec<String> = Vec::new();
 
     for resolved in sources {
-        match apply_resolved_overlay(resolved, &target, force_copy, None, conflict_strategy) {
+        match apply_resolved_overlay(
+            resolved,
+            &target,
+            force_copy,
+            None,
+            conflict_strategy,
+            merge,
+        ) {
             Ok(()) => {
                 let config = load_overlay_config(&resolved.path)?;
                 let name = determine_overlay_name(&config, &resolved.path, None)?;
@@ -1949,6 +1961,7 @@ pub(crate) fn restore_overlays(
     target: &Path,
     dry_run: bool,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     debug!(
         "restore_overlays: target={}, dry_run={}, conflict_strategy={:?}",
@@ -2031,6 +2044,7 @@ pub(crate) fn restore_overlays(
             ref_override,
             true, // Update cache
             conflict_strategy,
+            merge,
             None,  // Use default source resolution for restore
             false, // Not a dry run
         ) {
@@ -2065,6 +2079,7 @@ pub(crate) fn update_overlays(
     name: Option<String>,
     dry_run: bool,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     debug!(
         "update_overlays: target={}, name={:?}, dry_run={}, conflict_strategy={:?}",
@@ -2197,6 +2212,7 @@ pub(crate) fn update_overlays(
                 Some(git_ref.as_str()),
                 true,
                 conflict_strategy,
+                merge,
                 None,  // Use default source resolution for update
                 false, // Not a dry run
             )?;
@@ -2649,6 +2665,7 @@ pub(crate) fn switch_overlay(
     name: Option<String>,
     ref_override: Option<&str>,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     validate_git_repo(target)?;
 
@@ -2672,6 +2689,7 @@ pub(crate) fn switch_overlay(
         ref_override,
         false,
         conflict_strategy,
+        merge,
         None,
         false,
     )?;
@@ -4256,6 +4274,7 @@ mod tests {
                 None,  // no ref override
                 false, // don't update cache
                 ConflictStrategy::default(),
+                false,
                 None,  // default source resolution
                 false, // not dry run
             )
@@ -4320,7 +4339,7 @@ mod tests {
 
             // Step 3: Call restore - this SHOULD NOT restore the overlay
             // because it was explicitly removed (has removed_at marker).
-            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default())
+            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default(), false)
                 .expect("restore should succeed");
 
             // Step 4: Verify the overlay was NOT restored
@@ -4350,6 +4369,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4388,7 +4408,7 @@ mod tests {
             );
 
             // Step 3: Call restore - this SHOULD restore the overlay
-            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default())
+            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default(), false)
                 .expect("restore should succeed");
 
             // Step 4: Verify the overlay WAS restored
@@ -4415,6 +4435,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4443,6 +4464,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4812,6 +4834,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "multi-apply should succeed: {result:?}");
 
@@ -4855,6 +4878,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_err(), "should fail due to conflict");
 
@@ -4891,6 +4915,7 @@ mod tests {
                 false,
                 true,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "dry run should succeed");
 
@@ -4932,6 +4957,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_err(),
@@ -4988,6 +5014,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
@@ -5008,6 +5035,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_err(),
@@ -5047,6 +5075,7 @@ mod tests {
                 false,
                 true,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5104,6 +5133,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "three overlays should succeed: {result:?}");
 
@@ -5142,6 +5172,7 @@ mod tests {
                 true,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5200,6 +5231,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
@@ -5220,6 +5252,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::Force,
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5252,6 +5285,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::Force,
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5290,6 +5324,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5334,6 +5369,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
@@ -5344,6 +5380,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
             );
             assert!(
                 result.is_err(),
@@ -5381,6 +5418,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             )
             .unwrap();
 
@@ -5395,6 +5433,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
             );
             assert!(
                 result.is_ok(),

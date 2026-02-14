@@ -20,7 +20,7 @@ name = "repoverlay"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5.56", features = ["derive"] }
+clap = { version = "4.5.56", features = ["derive", "env"] }
 clap_complete = "4.5"
 clap-markdown = "0.1.5"
 env_logger = "0.11"
