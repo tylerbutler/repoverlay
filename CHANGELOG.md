@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/tylerbutler/repoverlay/compare/v0.4.0...v0.5.0) - 2026-02-14
+
+### Added
+
+- support bare owner names in source URL validation ([#89](https://github.com/tylerbutler/repoverlay/pull/89))
+- *(cli)* add --force and --skip-conflicts flags for conflict handling ([#36](https://github.com/tylerbutler/repoverlay/pull/36))
+
+### Fixed
+
+- resolve overlay repo config from sources instead of legacy field ([#86](https://github.com/tylerbutler/repoverlay/pull/86))
+
+### Other
+
+- add badges and streamline README ([#87](https://github.com/tylerbutler/repoverlay/pull/87))
+- *(deps)* bump taiki-e/install-action from 2.67.18 to 2.67.26 ([#71](https://github.com/tylerbutler/repoverlay/pull/71))
+- *(deps)* bump release-plz/action from 0.5.124 to 0.5.126 ([#72](https://github.com/tylerbutler/repoverlay/pull/72))
+
 ## [0.4.0](https://github.com/tylerbutler/repoverlay/compare/v0.3.3...v0.4.0) - 2026-02-12
 
 ### Added
