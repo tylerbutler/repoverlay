@@ -71,7 +71,7 @@ impl GitHubSource {
                     None
                 };
 
-                (ref_str.parse().unwrap(), subpath)
+                (ref_str.parse().map_err(|e: String| anyhow!(e))?, subpath)
             } else if segments[2] == "blob" {
                 // User pasted a file URL instead of tree URL
                 bail!(
@@ -132,23 +132,30 @@ impl GitHubSource {
     }
 
     /// Apply a ref override from CLI.
-    pub fn with_ref_override(mut self, ref_override: Option<&str>) -> Self {
+    pub fn with_ref_override(mut self, ref_override: Option<&str>) -> Result<Self> {
         if let Some(ref_str) = ref_override {
-            self.git_ref = ref_str.parse().unwrap();
+            self.git_ref = ref_str.parse().map_err(|e: String| anyhow!(e))?;
         }
-        self
+        Ok(self)
     }
 }
 
 impl FromStr for GitRef {
-    type Err = std::convert::Infallible;
+    type Err = String;
 
     /// Parse a ref string into the appropriate type.
     ///
     /// Heuristics:
     /// - 40 hex chars = commit SHA
     /// - Otherwise = branch name (can't distinguish branch from tag at parse time)
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    ///
+    /// Rejects refs starting with `-` to prevent git flag injection.
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if s.starts_with('-') {
+            return Err(format!(
+                "Invalid git ref: '{s}' starts with '-' (possible flag injection)"
+            ));
+        }
         if s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()) {
             Ok(Self::Commit(s.to_string()))
         } else {
@@ -354,7 +361,8 @@ mod tests {
     fn test_with_ref_override() {
         let source = GitHubSource::parse("https://github.com/owner/repo")
             .unwrap()
-            .with_ref_override(Some("develop"));
+            .with_ref_override(Some("develop"))
+            .unwrap();
         assert_eq!(source.git_ref, GitRef::Branch("develop".to_string()));
     }
 
@@ -447,7 +455,8 @@ mod tests {
     fn test_with_ref_override_none() {
         let source = GitHubSource::parse("https://github.com/owner/repo/tree/main")
             .unwrap()
-            .with_ref_override(None);
+            .with_ref_override(None)
+            .unwrap();
 
         // Should keep original ref
         assert_eq!(source.git_ref, GitRef::Branch("main".to_string()));
@@ -458,7 +467,8 @@ mod tests {
         // Use exactly 40 hex characters for a valid commit SHA
         let source = GitHubSource::parse("https://github.com/owner/repo")
             .unwrap()
-            .with_ref_override(Some("abcd1234abcd1234abcd1234abcd1234abcd1234"));
+            .with_ref_override(Some("abcd1234abcd1234abcd1234abcd1234abcd1234"))
+            .unwrap();
 
         // 40 hex chars is detected as commit
         if let GitRef::Commit(sha) = &source.git_ref {
@@ -476,6 +486,39 @@ mod tests {
 
         let git_ref: GitRef = "feature-branch".parse().unwrap();
         assert_eq!(git_ref, GitRef::Branch("feature-branch".to_string()));
+    }
+
+    #[test]
+    fn test_git_ref_rejects_flag_injection() {
+        // Refs starting with '-' could be interpreted as git flags
+        assert!("--upload-pack=evil".parse::<GitRef>().is_err());
+        assert!("-branch".parse::<GitRef>().is_err());
+        assert!("--".parse::<GitRef>().is_err());
+        assert!("-".parse::<GitRef>().is_err());
+    }
+
+    #[test]
+    fn test_parse_url_rejects_flag_ref() {
+        let result = GitHubSource::parse("https://github.com/owner/repo/tree/--upload-pack=evil");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_with_ref_override_rejects_flag() {
+        let result = GitHubSource::parse("https://github.com/owner/repo")
+            .unwrap()
+            .with_ref_override(Some("--upload-pack=evil"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_git_ref_allows_hyphen_not_at_start() {
+        // Hyphens are fine when not at the start
+        let git_ref: GitRef = "valid-branch".parse().unwrap();
+        assert_eq!(git_ref, GitRef::Branch("valid-branch".to_string()));
+
+        let git_ref: GitRef = "feature/my-branch".parse().unwrap();
+        assert_eq!(git_ref, GitRef::Branch("feature/my-branch".to_string()));
     }
 
     #[test]
