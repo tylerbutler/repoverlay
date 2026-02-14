@@ -1,14 +1,10 @@
 [workspace]
-# Changelog configuration
-changelog_update = true
-# Treat feature commits as minor releases even before 1.0
-features_always_increment_minor = true
+# Changelog is managed by changie, not release-plz
+changelog_update = false
 
-# PR configuration
-pr_draft = false
-pr_labels = ["release"]
+# PR creation is handled by changie-release workflow
+pr_enabled = false
 
-# Git configuration
 # Disable GitHub release creation - cargo-dist handles this with binary assets
 git_release_enable = false
 # Enable git tag creation - this triggers cargo-dist release workflow
