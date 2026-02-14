@@ -3,3 +3,4 @@
 lcov.info
 **/.claude/settings.local.json
 node_modules/
+.worktrees/
