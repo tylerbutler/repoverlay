@@ -1160,7 +1160,7 @@ fn source_add_rejects_empty_url() {
         .args(["source", "add", ""])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("URL cannot be empty"));
+        .stderr(predicate::str::contains("input cannot be empty"));
 }
 
 #[test]

@@ -403,7 +403,7 @@ enum SourceCommand {
     /// Add a new overlay source
     Add {
         /// Git URL, GitHub shorthand (owner/repo), or GitHub username
-        url: String,
+        url: config::SourceUrlInput,
 
         /// Name for this source (defaults to repo name)
         #[arg(long)]
@@ -659,14 +659,8 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
 
     match command {
         SourceCommand::Add { url, name } => {
-            // Validate URL is not empty
-            if url.is_empty() {
-                anyhow::bail!("URL cannot be empty");
-            }
-
-            // Validate and normalize the URL (expands GitHub shorthand)
-            let validated_url =
-                config::validate_source_url(&url).map_err(|e| anyhow::anyhow!("{e}"))?;
+            // URL is already validated and parsed by clap via FromStr
+            let validated_url = url.to_url();
 
             // Extract name from validated URL if not provided
             let source_name = name.unwrap_or_else(|| {
