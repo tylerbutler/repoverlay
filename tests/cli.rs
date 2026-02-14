@@ -1320,3 +1320,109 @@ fn source_add_strips_git_suffix_from_name() {
         .success()
         .stdout(predicate::str::contains("source 'git-suffix'"));
 }
+
+// ============================================================================
+// JSON Deep Merge Tests
+// ============================================================================
+
+#[test]
+fn merge_json_with_existing_repo_file() {
+    let ctx = TestContext::new().with_overlay(&[(
+        "settings.json",
+        r#"{"overlay_key": "overlay_value", "shared": "from_overlay"}"#,
+    )]);
+
+    // Create existing JSON in repo
+    ctx.create_repo_file(
+        "settings.json",
+        r#"{"repo_key": "repo_value", "shared": "from_repo"}"#,
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--copy", "--merge"])
+        .assert()
+        .success();
+
+    let content: serde_json::Value = serde_json::from_str(&ctx.read_file("settings.json")).unwrap();
+    assert_eq!(content["repo_key"], "repo_value"); // preserved from base
+    assert_eq!(content["overlay_key"], "overlay_value"); // added from overlay
+    assert_eq!(content["shared"], "from_overlay"); // overlay wins
+}
+
+#[test]
+fn json_conflict_without_merge_flag_fails() {
+    let ctx = TestContext::new().with_overlay(&[("settings.json", r#"{"key": "value"}"#)]);
+
+    ctx.create_repo_file("settings.json", r#"{"existing": true}"#);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .arg("--copy")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Conflict").or(predicate::str::contains("exists")));
+}
+
+#[test]
+fn merge_flag_ignored_for_non_json_files() {
+    let ctx = TestContext::new().with_overlay(&[("config.txt", "overlay content")]);
+
+    ctx.create_repo_file("config.txt", "repo content");
+
+    // --merge doesn't help non-JSON files, still fails
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--copy", "--merge"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Conflict").or(predicate::str::contains("exists")));
+}
+
+#[test]
+fn merge_with_force_merges_json_and_forces_others() {
+    let ctx = TestContext::new().with_overlay(&[
+        ("settings.json", r#"{"overlay": true}"#),
+        ("readme.txt", "overlay readme"),
+    ]);
+
+    ctx.create_repo_file("settings.json", r#"{"repo": true}"#);
+    ctx.create_repo_file("readme.txt", "repo readme");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--copy", "--merge", "--force"])
+        .assert()
+        .success();
+
+    // JSON was merged
+    let json: serde_json::Value = serde_json::from_str(&ctx.read_file("settings.json")).unwrap();
+    assert_eq!(json["repo"], true);
+    assert_eq!(json["overlay"], true);
+
+    // Non-JSON was force-overwritten
+    assert_eq!(ctx.read_file("readme.txt"), "overlay readme");
+}
+
+#[test]
+fn repoverlay_merge_env_var_enables_merge() {
+    let ctx = TestContext::new().with_overlay(&[("settings.json", r#"{"overlay": true}"#)]);
+
+    ctx.create_repo_file("settings.json", r#"{"repo": true}"#);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .arg("--copy")
+        .env("REPOVERLAY_MERGE", "true")
+        .assert()
+        .success();
+
+    let json: serde_json::Value = serde_json::from_str(&ctx.read_file("settings.json")).unwrap();
+    assert_eq!(json["repo"], true);
+    assert_eq!(json["overlay"], true);
+}
