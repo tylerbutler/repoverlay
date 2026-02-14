@@ -1676,7 +1676,7 @@ fn add_files_to_overlay(
                     || format!("Failed to create symlink: {}", target_file.display()),
                 )?;
             }
-            LinkType::Copy => {
+            LinkType::Copy | LinkType::Merged => {
                 fs::copy(&overlay_file, &target_file)
                     .with_context(|| format!("Failed to copy file: {}", target_file.display()))?;
             }

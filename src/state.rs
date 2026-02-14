@@ -288,6 +288,7 @@ pub struct FileEntry {
 pub enum LinkType {
     Symlink,
     Copy,
+    Merged,
 }
 
 /// Type of entry (file or directory).

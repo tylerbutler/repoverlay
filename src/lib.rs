@@ -1057,8 +1057,8 @@ fn apply_resolved_overlay(
                     )
                 })?;
             }
-            LinkType::Copy => {
-                // For copy mode, create the target directory and recursively copy contents
+            LinkType::Copy | LinkType::Merged => {
+                // For copy/merged mode, create the target directory and recursively copy contents
                 fs::create_dir_all(&target_dir).with_context(|| {
                     format!("Failed to create directory: {}", target_dir.display())
                 })?;
@@ -1213,6 +1213,10 @@ fn apply_resolved_overlay(
             LinkType::Copy => {
                 fs::copy(&source_file, &target_file)
                     .with_context(|| format!("Failed to copy file: {}", target_file.display()))?;
+            }
+            LinkType::Merged => {
+                // Merged files are handled earlier in the conflict resolution path.
+                unreachable!("Merged link type should not reach file copy path");
             }
         }
 
@@ -1911,6 +1915,7 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
         let type_str = match entry.link_type {
             LinkType::Symlink => "symlink",
             LinkType::Copy => "copy",
+            LinkType::Merged => "merged",
         };
 
         // Add trailing slash and [dir] marker for directories
