@@ -1,6 +1,6 @@
 changesDir: .changes
 unreleasedDir: unreleased
-headerPath: ""
+headerPath: header.md
 changelogPath: CHANGELOG.md
 versionHeaderPath: ""
 versionFooterPath: ""

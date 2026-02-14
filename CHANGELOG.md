@@ -5,9 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-## [0.5.0](https://github.com/tylerbutler/repoverlay/compare/v0.4.0...v0.5.0) - 2026-02-14
+## v0.5.0 - 2026-02-14
 
 ### Added
 
@@ -24,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(deps)* bump taiki-e/install-action from 2.67.18 to 2.67.26 ([#71](https://github.com/tylerbutler/repoverlay/pull/71))
 - *(deps)* bump release-plz/action from 0.5.124 to 0.5.126 ([#72](https://github.com/tylerbutler/repoverlay/pull/72))
 
-## [0.4.0](https://github.com/tylerbutler/repoverlay/compare/v0.3.3...v0.4.0) - 2026-02-12
+## v0.4.0 - 2026-02-12
 
 ### Added
 
@@ -38,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(deps)* bump tiny-update-check from 0.1.0 to 1.0.0 ([#73](https://github.com/tylerbutler/repoverlay/pull/73))
 - gitignore
 
-## [0.3.3](https://github.com/tylerbutler/repoverlay/compare/v0.3.2...v0.3.3) - 2026-02-08
+## v0.3.3 - 2026-02-08
 
 ### Other
 
@@ -48,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - bump deps to address vulnerabilities
 
-## [0.3.2](https://github.com/tylerbutler/repoverlay/compare/v0.3.1...v0.3.2) - 2026-02-04
+## v0.3.2 - 2026-02-04
 
 ### Fixed
 
@@ -58,13 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - add Marp presentation slides for repoverlay ([#63](https://github.com/tylerbutler/repoverlay/pull/63))
 
-## [0.3.1](https://github.com/tylerbutler/repoverlay/compare/v0.3.0...v0.3.1) - 2026-02-04
+## v0.3.1 - 2026-02-04
 
 ### Fixed
 
 - support git worktrees for exclude file management ([#65](https://github.com/tylerbutler/repoverlay/pull/65))
 
-## [0.3.0](https://github.com/tylerbutler/repoverlay/compare/v0.2.1...v0.3.0) - 2026-02-03
+## v0.3.0 - 2026-02-03
 
 ### Added
 
@@ -99,14 +97,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add rust toolchain and formatting configuration ([#37](https://github.com/tylerbutler/repoverlay/pull/37))
 - add cargo binstall command
 
-## [0.2.1](https://github.com/tylerbutler/repoverlay/compare/v0.2.0...v0.2.1) - 2026-01-28
+## v0.2.1 - 2026-01-28
 
 ### Added
 
 - *(overlay)* add directory symlink support ([#31](https://github.com/tylerbutler/repoverlay/pull/31))
 - *(cli)* add subcommand to add files to existing overlays ([#30](https://github.com/tylerbutler/repoverlay/pull/30))
 
-## [0.2.0](https://github.com/tylerbutler/repoverlay/compare/v0.1.6...v0.2.0) - 2026-01-26
+## v0.2.0 - 2026-01-26
 
 ### Added
 
@@ -119,7 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add license
 - add Claude Code configuration and skills ([#22](https://github.com/tylerbutler/repoverlay/pull/22))
 
-## [0.1.6](https://github.com/tylerbutler/repoverlay/compare/v0.1.5...v0.1.6) - 2026-01-22
+## v0.1.6 - 2026-01-22
 
 ### Added
 
@@ -138,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - improve code coverage for cache, lib, and main modules ([#20](https://github.com/tylerbutler/repoverlay/pull/20))
 - *(deps)* upgrade dependencies ([#19](https://github.com/tylerbutler/repoverlay/pull/19))
 
-## [0.1.5](https://github.com/tylerbutler/repoverlay/compare/v0.1.4...v0.1.5) - 2026-01-21
+## v0.1.5 - 2026-01-21
 
 ### Other
 
@@ -147,7 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - document decision to use git CLI over git library
 - extract library crate and reorganize tests ([#8](https://github.com/tylerbutler/repoverlay/pull/8))
 
-## [0.1.4](https://github.com/tylerbutler/repoverlay/compare/v0.1.3...v0.1.4) - 2026-01-15
+## v0.1.4 - 2026-01-15
 
 ### Added
 
@@ -167,27 +165,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add code coverage, security audit, and documentation checks
 - extract helper functions to reduce code duplication
 
-## [0.1.3](https://github.com/tylerbutler/repoverlay/compare/v0.1.2...v0.1.3) - 2026-01-07
+## v0.1.3 - 2026-01-07
 
 ### Other
 
 - use PAT for release-plz to trigger release workflow
 
-## [0.1.2](https://github.com/tylerbutler/repoverlay/compare/v0.1.1...v0.1.2) - 2026-01-07
+## v0.1.2 - 2026-01-07
 
 ### Other
 
 - fix release-plz config to create tags for cargo-dist
 - add automatic tag creation on release PR merge
 
-## [0.1.1](https://github.com/tylerbutler/repoverlay/compare/v0.1.0...v0.1.1) - 2026-01-07
+## v0.1.1 - 2026-01-07
 
 ### Other
 
 - add installation methods to README
 - add cargo-dist for binary releases and Homebrew distribution
 
-## [0.1.0](https://github.com/tylerbutler/repoverlay/releases/tag/v0.1.0) - 2026-01-07
+## v0.1.0 - 2026-01-07
 
 ### Added
 
@@ -201,3 +199,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix workflow action names and release-plz config
 - add README, DEV guide, and Claude Code instructions
 - add CI/CD workflows and release automation
+
