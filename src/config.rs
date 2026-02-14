@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 /// Global repoverlay configuration.
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -66,6 +67,94 @@ pub struct Source {
     pub url: String,
 }
 
+/// Default overlay repository name for the one-part shorthand syntax.
+/// When user types `username`, it expands to `username/repo-overlays`.
+pub const DEFAULT_OVERLAY_REPO_NAME: &str = "repo-overlays";
+
+/// Returns the overlay repository name for the one-part shorthand syntax.
+///
+/// Checks `REPOVERLAY_DEFAULT_REPO_NAME` env var first, falling back to
+/// [`DEFAULT_OVERLAY_REPO_NAME`].
+#[must_use]
+pub fn default_overlay_repo_name() -> String {
+    std::env::var("REPOVERLAY_DEFAULT_REPO_NAME")
+        .unwrap_or_else(|_| DEFAULT_OVERLAY_REPO_NAME.to_string())
+}
+
+/// Parsed source URL input from the CLI.
+///
+/// Represents the three valid input formats for overlay source URLs:
+/// - Full git URL (`https://...`, `git@...`)
+/// - GitHub shorthand (`owner/repo`)
+/// - Bare GitHub owner/username (`owner`)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceUrlInput {
+    /// A full git-cloneable URL.
+    GitUrl(String),
+    /// GitHub shorthand (`owner/repo`), expanded to `https://github.com/owner/repo`.
+    GitHubShorthand { owner: String, repo: String },
+    /// Bare owner name, expanded to `https://github.com/owner/{default_repo}`.
+    BareOwner(String),
+}
+
+impl SourceUrlInput {
+    /// Returns the expanded git URL for this input.
+    #[must_use]
+    pub fn to_url(&self) -> String {
+        match self {
+            Self::GitUrl(url) => url.clone(),
+            Self::GitHubShorthand { owner, repo } => {
+                expand_github_shorthand(&format!("{owner}/{repo}"))
+            }
+            Self::BareOwner(owner) => {
+                let repo_name = default_overlay_repo_name();
+                expand_github_shorthand(&format!("{owner}/{repo_name}"))
+            }
+        }
+    }
+}
+
+impl FromStr for SourceUrlInput {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if s.is_empty() || s.chars().all(char::is_whitespace) {
+            return Err(
+                "Invalid source URL: input cannot be empty. Expected a git URL (https://...), \
+                 GitHub shorthand (owner/repo), or a GitHub username (owner)."
+                    .to_string(),
+            );
+        }
+
+        if is_git_url(s) {
+            Ok(Self::GitUrl(s.to_string()))
+        } else if is_github_shorthand(s) {
+            let parts: Vec<&str> = s.split('/').collect();
+            Ok(Self::GitHubShorthand {
+                owner: parts[0].to_string(),
+                repo: parts[1].to_string(),
+            })
+        } else if is_bare_owner(s) {
+            Ok(Self::BareOwner(s.to_string()))
+        } else {
+            Err(format!(
+                "Invalid source URL: '{s}'. Expected a git URL (https://...), \
+                 GitHub shorthand (owner/repo), or a GitHub username (owner)."
+            ))
+        }
+    }
+}
+
+impl std::fmt::Display for SourceUrlInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GitUrl(url) => write!(f, "{url}"),
+            Self::GitHubShorthand { owner, repo } => write!(f, "{owner}/{repo}"),
+            Self::BareOwner(owner) => write!(f, "{owner}"),
+        }
+    }
+}
+
 /// Check if a string looks like a git-cloneable URL.
 fn is_git_url(s: &str) -> bool {
     s.contains("://") || s.starts_with("git@")
@@ -81,6 +170,14 @@ fn is_github_shorthand(s: &str) -> bool {
         && !parts[1].contains(char::is_whitespace)
 }
 
+/// Check if a string is a bare owner name (single word, no slashes).
+///
+/// Valid: `tylerbutler`, `my-org`, `user123`
+/// Invalid: empty, whitespace, contains `/`
+fn is_bare_owner(s: &str) -> bool {
+    !s.is_empty() && !s.contains('/') && !s.contains(char::is_whitespace)
+}
+
 /// Expand GitHub shorthand to a full URL.
 #[must_use]
 pub fn expand_github_shorthand(s: &str) -> String {
@@ -89,16 +186,24 @@ pub fn expand_github_shorthand(s: &str) -> String {
 
 /// Validate and normalize a source URL string.
 ///
-/// Accepts full git URLs or GitHub shorthand (`owner/repo`).
-/// Returns an error for invalid formats like bare words.
+/// Accepts:
+/// - Full git URLs (`https://...`, `git@...`)
+/// - GitHub shorthand (`owner/repo`) - expanded to `https://github.com/owner/repo`
+/// - Bare owner name (`owner`) - expanded to `https://github.com/owner/repo-overlays`
+///
+/// Returns an error for invalid formats (empty, whitespace).
 pub fn validate_source_url(url: &str) -> std::result::Result<String, String> {
     if is_git_url(url) {
         Ok(url.to_string())
     } else if is_github_shorthand(url) {
         Ok(expand_github_shorthand(url))
+    } else if is_bare_owner(url) {
+        let repo_name = default_overlay_repo_name();
+        Ok(expand_github_shorthand(&format!("{url}/{repo_name}")))
     } else {
         Err(format!(
-            "Invalid source URL: '{url}'. Expected a git URL (https://...) or GitHub shorthand (owner/repo)."
+            "Invalid source URL: '{url}'. Expected a git URL (https://...), \
+             GitHub shorthand (owner/repo), or a GitHub username (owner)."
         ))
     }
 }
@@ -974,10 +1079,12 @@ sources =
     }
 
     #[test]
-    fn test_validate_source_url_bare_word_rejected() {
+    fn test_validate_source_url_bare_owner_expanded() {
         let result = validate_source_url("tylerbutler");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid source URL"));
+        assert_eq!(
+            result.unwrap(),
+            "https://github.com/tylerbutler/repo-overlays"
+        );
     }
 
     #[test]
@@ -989,6 +1096,24 @@ sources =
     #[test]
     fn test_validate_source_url_whitespace_rejected() {
         let result = validate_source_url("owner /repo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_source_url_bare_owner_with_hyphens() {
+        let result = validate_source_url("my-org");
+        assert_eq!(result.unwrap(), "https://github.com/my-org/repo-overlays");
+    }
+
+    #[test]
+    fn test_validate_source_url_whitespace_only_rejected() {
+        let result = validate_source_url("  ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_source_url_bare_owner_with_whitespace_rejected() {
+        let result = validate_source_url("tyler butler");
         assert!(result.is_err());
     }
 
@@ -1009,15 +1134,19 @@ sources =
     }
 
     #[test]
-    fn test_deserialize_source_with_bare_word_fails() {
+    fn test_deserialize_source_with_bare_owner_expands() {
         let ccl = r"
 sources =
   =
     name = personal
     url = tylerbutler
 ";
-        let result: std::result::Result<RepoverlayConfig, _> = sickle::from_str(ccl);
-        assert!(result.is_err());
+        let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(
+            config.sources[0].url,
+            "https://github.com/tylerbutler/repo-overlays"
+        );
     }
 
     // ==================== get_default_overlay_repo_config tests ====================
@@ -1082,5 +1211,141 @@ sources =
 
         let result = config.get_default_overlay_repo_config();
         assert!(result.is_err());
+    }
+
+    // ==================== SourceUrlInput tests ====================
+
+    #[test]
+    fn test_source_url_input_git_url() {
+        let input: SourceUrlInput = "https://github.com/org/repo".parse().unwrap();
+        assert_eq!(
+            input,
+            SourceUrlInput::GitUrl("https://github.com/org/repo".to_string())
+        );
+        assert_eq!(input.to_url(), "https://github.com/org/repo");
+    }
+
+    #[test]
+    fn test_source_url_input_ssh_url() {
+        let input: SourceUrlInput = "git@github.com:org/repo.git".parse().unwrap();
+        assert_eq!(
+            input,
+            SourceUrlInput::GitUrl("git@github.com:org/repo.git".to_string())
+        );
+        assert_eq!(input.to_url(), "git@github.com:org/repo.git");
+    }
+
+    #[test]
+    fn test_source_url_input_github_shorthand() {
+        let input: SourceUrlInput = "owner/repo".parse().unwrap();
+        assert_eq!(
+            input,
+            SourceUrlInput::GitHubShorthand {
+                owner: "owner".to_string(),
+                repo: "repo".to_string()
+            }
+        );
+        assert_eq!(input.to_url(), "https://github.com/owner/repo");
+    }
+
+    #[test]
+    fn test_source_url_input_bare_owner() {
+        let input: SourceUrlInput = "tylerbutler".parse().unwrap();
+        assert_eq!(input, SourceUrlInput::BareOwner("tylerbutler".to_string()));
+        assert_eq!(
+            input.to_url(),
+            "https://github.com/tylerbutler/repo-overlays"
+        );
+    }
+
+    #[test]
+    fn test_source_url_input_empty_rejected() {
+        let result: std::result::Result<SourceUrlInput, _> = "".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_source_url_input_whitespace_rejected() {
+        let result: std::result::Result<SourceUrlInput, _> = "  ".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_source_url_input_display() {
+        let git: SourceUrlInput = "https://github.com/a/b".parse().unwrap();
+        assert_eq!(format!("{git}"), "https://github.com/a/b");
+
+        let shorthand: SourceUrlInput = "owner/repo".parse().unwrap();
+        assert_eq!(format!("{shorthand}"), "owner/repo");
+
+        let bare: SourceUrlInput = "user".parse().unwrap();
+        assert_eq!(format!("{bare}"), "user");
+    }
+
+    // ==================== default_overlay_repo_name env var tests ====================
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn test_default_overlay_repo_name_uses_env_var() {
+        let original = std::env::var("REPOVERLAY_DEFAULT_REPO_NAME").ok();
+
+        // SAFETY: Tests are run serially with cargo test, and we restore the value after
+        unsafe {
+            std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", "my-overlays");
+        }
+
+        let result = default_overlay_repo_name();
+        assert_eq!(result, "my-overlays");
+
+        // Restore original value
+        unsafe {
+            match original {
+                Some(val) => std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", val),
+                None => std::env::remove_var("REPOVERLAY_DEFAULT_REPO_NAME"),
+            }
+        }
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn test_default_overlay_repo_name_falls_back_to_constant() {
+        let original = std::env::var("REPOVERLAY_DEFAULT_REPO_NAME").ok();
+
+        // SAFETY: Tests are run serially with cargo test, and we restore the value after
+        unsafe {
+            std::env::remove_var("REPOVERLAY_DEFAULT_REPO_NAME");
+        }
+
+        let result = default_overlay_repo_name();
+        assert_eq!(result, "repo-overlays");
+
+        // Restore original value
+        unsafe {
+            if let Some(val) = original {
+                std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", val);
+            }
+        }
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn test_source_url_input_bare_owner_uses_env_var() {
+        let original = std::env::var("REPOVERLAY_DEFAULT_REPO_NAME").ok();
+
+        // SAFETY: Tests are run serially with cargo test, and we restore the value after
+        unsafe {
+            std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", "custom-overlays");
+        }
+
+        let input: SourceUrlInput = "myuser".parse().unwrap();
+        assert_eq!(input.to_url(), "https://github.com/myuser/custom-overlays");
+
+        // Restore original value
+        unsafe {
+            match original {
+                Some(val) => std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", val),
+                None => std::env::remove_var("REPOVERLAY_DEFAULT_REPO_NAME"),
+            }
+        }
     }
 }
