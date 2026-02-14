@@ -8,6 +8,8 @@ mod config;
 mod detection;
 mod fuzzy;
 mod github;
+#[allow(dead_code)]
+mod json_merge;
 mod overlay_repo;
 mod reference;
 mod selection;
