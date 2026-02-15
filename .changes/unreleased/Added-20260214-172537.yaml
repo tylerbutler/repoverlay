@@ -1,0 +1,9 @@
+kind: Added
+body: |-
+    Add `edit` command for modifying existing overlays
+
+    New `edit` command with `--add`, `--remove`, and `--interactive` flags for modifying applied
+    overlays. `--add` adds files to an overlay, `--remove` removes specific files without removing the
+    whole overlay, and `--interactive` re-runs the file selection UI with currently-applied files
+    pre-selected. The existing `add` command is deprecated in favor of `edit --add`.
+time: 2026-02-14T17:25:37.330434-08:00
