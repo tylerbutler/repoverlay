@@ -8,7 +8,13 @@ versionExt: md
 envPrefix: CHANGIE
 versionFormat: '## {{.Version}} - {{.Time.Format "2006-01-02"}}'
 kindFormat: '### {{.Kind}}'
-changeFormat: '- {{.Body}}'
+changeFormat: |-
+    #### {{(splitn "\n" 2 .Body)._0}}{{with (splitn "\n" 2 .Body)._1 | trim}}
+
+    {{.}}{{end}}
+body:
+    block: true
+    minLength: 1
 kinds:
     - label: Added
       auto: minor
