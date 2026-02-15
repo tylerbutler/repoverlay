@@ -536,37 +536,36 @@ fn format_overlay_path(path: &str) -> String {
 }
 
 /// Present an interactive multi-select picker for overlays.
-///
-/// Uses `dialoguer::MultiSelect` to allow selecting one or more overlays.
-/// Space toggles selection, Enter confirms.
 fn select_overlays_interactive(
     owner: &str,
     repo: &str,
     overlays: &[String],
 ) -> Result<Vec<String>> {
-    use dialoguer::{MultiSelect, theme::ColorfulTheme};
+    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
 
-    println!(
-        "\n{} Select overlay(s) from {}/{} (Space to toggle, Enter to confirm):\n",
-        "?".cyan().bold(),
-        owner,
-        repo
-    );
+    let items: Vec<SelectableItem> = overlays
+        .iter()
+        .map(|o| SelectableItem {
+            id: o.clone(),
+            label: format_overlay_path(o),
+            description: None,
+            preselected: false,
+            disabled: false,
+        })
+        .collect();
 
-    // Format overlays for display with bold overlay names
-    let display_items: Vec<String> = overlays.iter().map(|o| format_overlay_path(o)).collect();
+    let result = select_flat(
+        &items,
+        &FlatSelectionConfig {
+            prompt: format!("Select overlay(s) from {owner}/{repo}:"),
+        },
+    )?;
 
-    let selections = MultiSelect::with_theme(&ColorfulTheme::default())
-        .items(&display_items)
-        .interact_opt()
-        .context("Failed to show overlay picker")?;
-
-    match selections {
-        Some(indices) if !indices.is_empty() => {
-            Ok(indices.into_iter().map(|i| overlays[i].clone()).collect())
-        }
-        _ => bail!("No overlays selected"),
+    if result.cancelled || result.selected_ids.is_empty() {
+        bail!("No overlays selected");
     }
+
+    Ok(result.selected_ids)
 }
 
 /// Resolve a three-part overlay reference (`org/repo/overlay`).

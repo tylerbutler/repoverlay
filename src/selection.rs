@@ -37,6 +37,130 @@ pub struct SelectionResult {
     pub cancelled: bool,
 }
 
+/// An item in a flat (non-tree) selection list.
+#[derive(Debug, Clone)]
+pub struct SelectableItem {
+    /// Unique identifier for this item (used in results).
+    pub id: String,
+    /// Display label shown to the user.
+    pub label: String,
+    /// Optional secondary description (shown dimmed after label).
+    pub description: Option<String>,
+    /// Whether this item starts selected.
+    pub preselected: bool,
+    /// Whether this item is disabled (visible but cannot be toggled).
+    pub disabled: bool,
+}
+
+/// Result of a flat selection.
+pub struct FlatSelectionResult {
+    /// IDs of the selected items.
+    pub selected_ids: Vec<String>,
+    /// Whether the selection was cancelled.
+    pub cancelled: bool,
+}
+
+/// Configuration for the flat selection UI.
+pub struct FlatSelectionConfig {
+    /// Prompt text shown at the top.
+    pub prompt: String,
+}
+
+/// Internal state for the flat list selector.
+struct FlatSelectionState {
+    items: Vec<SelectableItem>,
+    selections: HashSet<String>,
+    search_query: String,
+    mode: Mode,
+    cursor: usize,
+    scroll_offset: usize,
+}
+
+impl FlatSelectionState {
+    fn new(items: Vec<SelectableItem>) -> Self {
+        let selections: HashSet<String> = items
+            .iter()
+            .filter(|i| i.preselected && !i.disabled)
+            .map(|i| i.id.clone())
+            .collect();
+        Self {
+            items,
+            selections,
+            search_query: String::new(),
+            mode: Mode::Selection,
+            cursor: 0,
+            scroll_offset: 0,
+        }
+    }
+
+    fn visible_items(&self) -> Vec<&SelectableItem> {
+        self.items
+            .iter()
+            .filter(|i| {
+                if self.search_query.is_empty() {
+                    true
+                } else {
+                    i.label
+                        .to_lowercase()
+                        .contains(&self.search_query.to_lowercase())
+                }
+            })
+            .collect()
+    }
+
+    fn toggle_selection(&mut self, visible_index: usize) {
+        let visible = self.visible_items();
+        if let Some(item) = visible.get(visible_index) {
+            if item.disabled {
+                return;
+            }
+            let id = item.id.clone();
+            drop(visible);
+            if self.selections.contains(&id) {
+                self.selections.remove(&id);
+            } else {
+                self.selections.insert(id);
+            }
+        }
+    }
+
+    fn select_all_visible(&mut self) {
+        let ids: Vec<(String, bool)> = self
+            .visible_items()
+            .iter()
+            .map(|i| (i.id.clone(), i.disabled))
+            .collect();
+
+        let all_enabled_selected = ids
+            .iter()
+            .filter(|(_, disabled)| !disabled)
+            .all(|(id, _)| self.selections.contains(id));
+
+        if all_enabled_selected {
+            for (id, disabled) in &ids {
+                if !disabled {
+                    self.selections.remove(id);
+                }
+            }
+        } else {
+            for (id, disabled) in ids {
+                if !disabled {
+                    self.selections.insert(id);
+                }
+            }
+        }
+    }
+
+    fn clamp_cursor(&mut self) {
+        let len = self.visible_items().len();
+        if len == 0 {
+            self.cursor = 0;
+        } else if self.cursor >= len {
+            self.cursor = len - 1;
+        }
+    }
+}
+
 /// Configuration for the selection UI.
 pub struct SelectionConfig {
     /// Prompt text shown at the top.
@@ -537,11 +661,371 @@ pub fn select_files(
         cursor::MoveTo(0, 0),
         terminal::Clear(ClearType::All),
     )?;
-    // Print newline to ensure clean state for dialoguer
+    // Print newline to ensure clean state for subsequent prompts
     println!();
     stdout.flush()?;
 
     result
+}
+
+/// Run the interactive flat list selection UI.
+///
+/// Returns the selected item IDs, or a cancelled result if the user aborts.
+///
+/// # Non-TTY Fallback
+///
+/// If stdin is not a TTY, returns all preselected (non-disabled) items.
+pub fn select_flat(
+    items: &[SelectableItem],
+    config: &FlatSelectionConfig,
+) -> anyhow::Result<FlatSelectionResult> {
+    if !is_interactive() {
+        let selected: Vec<String> = items
+            .iter()
+            .filter(|i| i.preselected && !i.disabled)
+            .map(|i| i.id.clone())
+            .collect();
+        return Ok(FlatSelectionResult {
+            selected_ids: selected,
+            cancelled: false,
+        });
+    }
+
+    if items.is_empty() {
+        return Ok(FlatSelectionResult {
+            selected_ids: Vec::new(),
+            cancelled: false,
+        });
+    }
+
+    let mut state = FlatSelectionState::new(items.to_vec());
+
+    terminal::enable_raw_mode()?;
+    let result = run_flat_loop(&mut state, &config.prompt);
+    terminal::disable_raw_mode()?;
+
+    let mut stdout = io::stdout();
+    execute!(
+        stdout,
+        cursor::Show,
+        cursor::MoveTo(0, 0),
+        terminal::Clear(ClearType::All),
+    )?;
+    println!();
+    stdout.flush()?;
+
+    result
+}
+
+fn run_flat_loop(
+    state: &mut FlatSelectionState,
+    prompt: &str,
+) -> anyhow::Result<FlatSelectionResult> {
+    let mut stdout = io::stdout();
+    execute!(stdout, cursor::Hide, terminal::Clear(ClearType::All))?;
+
+    loop {
+        render_flat_ui(&mut stdout, state, prompt)?;
+
+        if let Event::Key(key) = event::read()? {
+            match state.mode {
+                Mode::Search => {
+                    if handle_flat_search_key(key, state) {
+                        state.mode = Mode::Selection;
+                    }
+                }
+                Mode::Selection => match key.code {
+                    KeyCode::Esc => {
+                        return Ok(FlatSelectionResult {
+                            selected_ids: Vec::new(),
+                            cancelled: true,
+                        });
+                    }
+                    KeyCode::Enter => {
+                        let selected: Vec<String> = state
+                            .items
+                            .iter()
+                            .filter(|i| state.selections.contains(&i.id))
+                            .map(|i| i.id.clone())
+                            .collect();
+                        return Ok(FlatSelectionResult {
+                            selected_ids: selected,
+                            cancelled: false,
+                        });
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(FlatSelectionResult {
+                            selected_ids: Vec::new(),
+                            cancelled: true,
+                        });
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if state.cursor > 0 {
+                            state.cursor -= 1;
+                        }
+                        adjust_flat_scroll(state);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        let len = state.visible_items().len();
+                        if state.cursor + 1 < len {
+                            state.cursor += 1;
+                        }
+                        adjust_flat_scroll(state);
+                    }
+                    KeyCode::Char(' ') => {
+                        state.toggle_selection(state.cursor);
+                    }
+                    KeyCode::Char('a') => {
+                        state.select_all_visible();
+                    }
+                    KeyCode::Char('/') => {
+                        state.mode = Mode::Search;
+                    }
+                    _ => {}
+                },
+            }
+        }
+    }
+}
+
+#[allow(clippy::missing_const_for_fn)]
+fn adjust_flat_scroll(state: &mut FlatSelectionState) {
+    let max_visible = 15;
+    if state.cursor < state.scroll_offset {
+        state.scroll_offset = state.cursor;
+    } else if state.cursor >= state.scroll_offset + max_visible {
+        state.scroll_offset = state.cursor - max_visible + 1;
+    }
+}
+
+fn handle_flat_search_key(key: KeyEvent, state: &mut FlatSelectionState) -> bool {
+    match key.code {
+        KeyCode::Esc | KeyCode::Enter => {
+            state.clamp_cursor();
+            true
+        }
+        KeyCode::Backspace => {
+            state.search_query.pop();
+            state.clamp_cursor();
+            false
+        }
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.search_query.push(c);
+            state.clamp_cursor();
+            false
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.search_query.clear();
+            state.clamp_cursor();
+            true
+        }
+        _ => false,
+    }
+}
+
+fn render_flat_ui(
+    stdout: &mut io::Stdout,
+    state: &FlatSelectionState,
+    prompt: &str,
+) -> io::Result<()> {
+    execute!(
+        stdout,
+        cursor::MoveTo(0, 0),
+        terminal::Clear(ClearType::FromCursorDown)
+    )?;
+
+    // Prompt
+    execute!(
+        stdout,
+        SetForegroundColor(Color::Cyan),
+        Print(prompt),
+        ResetColor,
+        Print("\r\n\r\n")
+    )?;
+
+    // Search line
+    render_search_line_flat(stdout, state)?;
+
+    // Count summary
+    let enabled_count = state.items.iter().filter(|i| !i.disabled).count();
+    let selected_count = state.selections.len();
+    execute!(
+        stdout,
+        Print("Selected: "),
+        Print(format!("{selected_count}/{enabled_count}")),
+        Print("\r\n\r\n")
+    )?;
+
+    // Item list
+    render_flat_items(stdout, state)?;
+
+    // Help
+    render_flat_help(stdout, state)?;
+
+    stdout.flush()
+}
+
+fn render_search_line_flat(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
+    execute!(stdout, Print("Search: "))?;
+    if state.mode == Mode::Search {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::Yellow),
+            Print(&state.search_query),
+            Print("_"),
+            ResetColor
+        )?;
+    } else if state.search_query.is_empty() {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::DarkGrey),
+            Print("(press / to search)"),
+            ResetColor
+        )?;
+    } else {
+        execute!(
+            stdout,
+            Print(&state.search_query),
+            SetForegroundColor(Color::DarkGrey),
+            Print(" (Esc to clear)"),
+            ResetColor
+        )?;
+    }
+    execute!(stdout, Print("\r\n"))
+}
+
+fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
+    let visible = state.visible_items();
+    let max_visible = 15;
+
+    if visible.is_empty() {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::DarkGrey),
+            Print("  No items match the current search\r\n"),
+            ResetColor
+        )?;
+        return Ok(());
+    }
+
+    if state.scroll_offset > 0 {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::DarkGrey),
+            Print(format!(
+                "  ↑ {} more above\r\n",
+                humanize_count(state.scroll_offset)
+            )),
+            ResetColor
+        )?;
+    }
+
+    for (i, item) in visible
+        .iter()
+        .enumerate()
+        .skip(state.scroll_offset)
+        .take(max_visible)
+    {
+        let is_cursor = i == state.cursor;
+        let is_selected = state.selections.contains(&item.id);
+
+        // Cursor
+        if is_cursor {
+            execute!(stdout, SetForegroundColor(Color::Cyan), Print("> "))?;
+        } else {
+            execute!(stdout, Print("  "))?;
+        }
+
+        // Checkbox
+        if item.disabled {
+            execute!(
+                stdout,
+                SetForegroundColor(Color::DarkGrey),
+                Print("[✓] "),
+                ResetColor
+            )?;
+        } else if is_selected {
+            execute!(
+                stdout,
+                SetForegroundColor(Color::Green),
+                Print("[✓] "),
+                ResetColor
+            )?;
+        } else {
+            execute!(stdout, Print("[ ] "))?;
+        }
+
+        // Label
+        if item.disabled {
+            execute!(
+                stdout,
+                SetForegroundColor(Color::DarkGrey),
+                Print(&item.label),
+            )?;
+        } else if is_cursor {
+            execute!(stdout, SetForegroundColor(Color::Cyan), Print(&item.label),)?;
+        } else {
+            execute!(stdout, Print(&item.label))?;
+        }
+
+        // Description
+        if let Some(desc) = &item.description {
+            execute!(
+                stdout,
+                SetForegroundColor(Color::DarkGrey),
+                Print(format!("  ({desc})")),
+            )?;
+        }
+
+        execute!(stdout, ResetColor, Print("\r\n"))?;
+    }
+
+    let remaining = visible
+        .len()
+        .saturating_sub(state.scroll_offset + max_visible);
+    if remaining > 0 {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::DarkGrey),
+            Print(format!("  ↓ {} more below\r\n", humanize_count(remaining))),
+            ResetColor
+        )?;
+    }
+
+    Ok(())
+}
+
+fn render_flat_help(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
+    execute!(stdout, Print("\r\n"))?;
+    if state.mode == Mode::Search {
+        execute!(
+            stdout,
+            SetForegroundColor(Color::DarkGrey),
+            Print("Type to search "),
+            ResetColor
+        )?;
+        execute!(
+            stdout,
+            SetForegroundColor(Color::DarkGrey),
+            Print("| "),
+            ResetColor
+        )?;
+        render_key_hint(stdout, "Enter/Esc", "done")?;
+        execute!(
+            stdout,
+            SetForegroundColor(Color::DarkGrey),
+            Print("| "),
+            ResetColor
+        )?;
+        render_key_hint(stdout, "Ctrl+C", "clear")
+    } else {
+        render_key_hint(stdout, "↑↓", "move")?;
+        render_key_hint(stdout, "Space", "toggle")?;
+        render_key_hint(stdout, "Enter", "confirm")?;
+        render_key_hint(stdout, "a", "all")?;
+        render_key_hint(stdout, "/", "search")?;
+        render_key_hint(stdout, "Esc", "cancel")
+    }
 }
 
 /// Check if the terminal is interactive.
@@ -2339,4 +2823,109 @@ mod tests {
     // Note: Tests for env var handling are skipped because set_var/remove_var
     // are unsafe in Rust 2024 edition. The is_interactive_returns_false_in_tests
     // test verifies the test detection path works correctly.
+
+    #[test]
+    fn test_flat_state_new_sets_preselections() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "Alpha".into(),
+                description: None,
+                preselected: true,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "Beta".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let state = FlatSelectionState::new(items);
+        assert!(state.selections.contains("a"));
+        assert!(!state.selections.contains("b"));
+    }
+
+    #[test]
+    fn test_flat_state_toggle_skips_disabled() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "Alpha".into(),
+                description: None,
+                preselected: false,
+                disabled: true,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "Beta".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.toggle_selection(0); // "a" is disabled, should not toggle
+        assert!(!state.selections.contains("a"));
+        state.toggle_selection(1); // "b" is enabled, should toggle
+        assert!(state.selections.contains("b"));
+    }
+
+    #[test]
+    fn test_flat_state_search_filters() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "Alpha overlay".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "Beta config".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.search_query = "alpha".into();
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "a");
+    }
+
+    #[test]
+    fn test_flat_state_select_all_skips_disabled() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "Alpha".into(),
+                description: None,
+                preselected: false,
+                disabled: true,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "Beta".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "c".into(),
+                label: "Gamma".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.select_all_visible();
+        assert!(!state.selections.contains("a")); // disabled
+        assert!(state.selections.contains("b"));
+        assert!(state.selections.contains("c"));
+    }
 }
