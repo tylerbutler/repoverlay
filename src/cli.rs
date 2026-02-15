@@ -832,6 +832,8 @@ fn handle_remove(
     dry_run: bool,
     interactive: bool,
 ) -> Result<()> {
+    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+
     // If name or --all is specified, use direct removal
     if remove_all || name.is_some() {
         return remove_overlay(target, name, remove_all, dry_run);
@@ -861,68 +863,51 @@ fn handle_remove(
         bail!("No overlays are currently applied in: {}", target.display());
     }
 
-    println!("{}", "Select overlay to remove:".bold());
-    println!();
-    for (i, name) in applied_overlays.iter().enumerate() {
-        println!("  {}. {}", i + 1, name);
+    let items: Vec<SelectableItem> = applied_overlays
+        .iter()
+        .map(|name| SelectableItem {
+            id: name.clone(),
+            label: name.clone(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        })
+        .collect();
+
+    let result = select_flat(
+        &items,
+        &FlatSelectionConfig {
+            prompt: "Select overlay(s) to remove:".into(),
+        },
+    )?;
+
+    if result.cancelled || result.selected_ids.is_empty() {
+        bail!("No overlays selected for removal");
     }
-    println!(
-        "  {}. {} (remove all)",
-        applied_overlays.len() + 1,
-        "all".bold()
-    );
-    println!();
 
-    print!("Enter selection (1-{}): ", applied_overlays.len() + 1);
-    io::stdout().flush()?;
+    let remove_all = result.selected_ids.len() == applied_overlays.len();
 
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let input = input.trim();
+    for overlay_name in &result.selected_ids {
+        if dry_run {
+            println!(
+                "{} Dry run - would remove overlay '{overlay_name}'",
+                "Note:".yellow()
+            );
+        } else {
+            remove_single_overlay(&target, &overlays_dir, overlay_name)?;
+        }
+    }
 
-    if let Ok(selection) = input.parse::<usize>() {
-        if selection == applied_overlays.len() + 1 {
-            // Remove all
-            if dry_run {
-                println!("\n{} Dry run - would remove all overlays", "Note:".yellow());
-                return Ok(());
-            }
-            for overlay_name in &applied_overlays {
-                remove_single_overlay(&target, &overlays_dir, overlay_name)?;
-            }
+    if !dry_run {
+        if remove_all {
             fs::remove_dir_all(target.join(STATE_DIR))?;
             println!("\n{} Removed all overlays", "✓".green().bold());
-        } else if selection >= 1 && selection <= applied_overlays.len() {
-            let overlay_name = &applied_overlays[selection - 1];
-            if dry_run {
-                println!(
-                    "\n{} Dry run - would remove overlay '{}'",
-                    "Note:".yellow(),
-                    overlay_name
-                );
-                return Ok(());
-            }
-            remove_single_overlay(&target, &overlays_dir, overlay_name)?;
-
+        } else {
             let remaining = list_applied_overlays(&target)?;
             if remaining.is_empty() {
                 fs::remove_dir_all(target.join(STATE_DIR))?;
             }
-        } else {
-            bail!("Invalid selection: {selection}");
         }
-    } else if input.eq_ignore_ascii_case("all") {
-        if dry_run {
-            println!("\n{} Dry run - would remove all overlays", "Note:".yellow());
-            return Ok(());
-        }
-        for overlay_name in &applied_overlays {
-            remove_single_overlay(&target, &overlays_dir, overlay_name)?;
-        }
-        fs::remove_dir_all(target.join(STATE_DIR))?;
-        println!("\n{} Removed all overlays", "✓".green().bold());
-    } else {
-        bail!("Invalid selection: {input}");
     }
 
     Ok(())
