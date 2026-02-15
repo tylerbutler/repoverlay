@@ -1621,9 +1621,208 @@ fn edit_overlay(
         remove_files_from_overlay(name_arg, target, remove_files, dry_run)?;
     }
 
-    // Interactive mode (stub for now)
+    // Interactive mode
     if interactive {
-        bail!("Interactive edit mode is not yet implemented");
+        interactive_edit_overlay(name_arg, target, dry_run)?;
+    }
+
+    Ok(())
+}
+
+/// Resolve an overlay's source to a local filesystem path.
+///
+/// For local overlays, returns the stored path directly.
+/// For overlay repo overlays, reconstructs the path from the overlay repo.
+/// For GitHub overlays, returns an error (not supported for interactive edit).
+fn resolve_overlay_source_path(state: &crate::state::OverlayState) -> Result<PathBuf> {
+    use crate::state::OverlaySource;
+
+    match &state.source {
+        OverlaySource::Local { path } => Ok(path.clone()),
+        OverlaySource::OverlayRepo {
+            org, repo, name, ..
+        } => {
+            use crate::config::load_config;
+            use crate::overlay_repo::OverlayRepoManager;
+
+            let config = load_config(None)?;
+            let overlay_config = config.get_default_overlay_repo_config()?;
+            let manager = OverlayRepoManager::new(overlay_config)?;
+            manager.ensure_cloned()?;
+            Ok(manager.path().join(org).join(repo).join(name))
+        }
+        OverlaySource::GitHub { .. } => {
+            bail!(
+                "Interactive edit is not supported for GitHub overlays.\n\n\
+                 GitHub overlays are cached read-only. Use --add and --remove flags instead."
+            );
+        }
+    }
+}
+
+/// Interactively re-select which files from an overlay source should be applied.
+///
+/// Shows the selection UI with all files from the overlay source directory,
+/// pre-selecting the currently applied files. Computes the diff between the
+/// old and new selections and applies adds/removes accordingly.
+fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
+    use crate::detection::{DetectedFile, FileCategory};
+    use crate::selection::{SelectionConfig, select_files};
+    use crate::{list_applied_overlays, load_overlay_state, normalize_overlay_name};
+    use std::collections::HashSet;
+    use walkdir::WalkDir;
+
+    let target = canonicalize_path(target, "Target directory")?;
+    if !target.join(".git").exists() {
+        bail!(
+            "Target directory is not a git repository: {}",
+            target.display()
+        );
+    }
+
+    // Parse overlay name and verify it's applied
+    let overlay_name = if name_arg.contains('/') {
+        let parts: Vec<&str> = name_arg.split('/').collect();
+        if parts.len() == 3 {
+            parts[2].to_string()
+        } else {
+            bail!("Invalid overlay path: {name_arg}");
+        }
+    } else {
+        name_arg.to_string()
+    };
+
+    let normalized_name = normalize_overlay_name(&overlay_name)?;
+    let applied_overlays = list_applied_overlays(&target)?;
+    if !applied_overlays.contains(&normalized_name) {
+        bail!("Overlay '{overlay_name}' is not currently applied.");
+    }
+
+    let state = load_overlay_state(&target, &normalized_name)?;
+
+    // Resolve overlay source to a local directory
+    let source_path = resolve_overlay_source_path(&state)?;
+
+    if !source_path.exists() {
+        bail!(
+            "Overlay source directory not found: {}\n\n\
+             Interactive edit requires access to the overlay source files.",
+            source_path.display()
+        );
+    }
+
+    // Collect current overlay file paths for pre-selection
+    let current_files: HashSet<PathBuf> = state
+        .file_entries()
+        .iter()
+        .map(|e| e.target.clone())
+        .collect();
+
+    // Walk the overlay source directory to find all available files
+    let mut detected_files: Vec<DetectedFile> = Vec::new();
+    for entry in WalkDir::new(&source_path)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|e| {
+            // Skip hidden directories like .git, but allow hidden files
+            !e.file_type().is_dir()
+                || !e.file_name().to_string_lossy().starts_with('.')
+                || e.depth() == 0
+        })
+        .filter_map(Result::ok)
+    {
+        if entry.file_type().is_file() {
+            let relative = entry
+                .path()
+                .strip_prefix(&source_path)
+                .unwrap_or_else(|_| entry.path())
+                .to_path_buf();
+
+            let is_currently_applied = current_files.contains(&relative);
+
+            detected_files.push(DetectedFile {
+                path: relative,
+                category: FileCategory::Untracked, // Generic category for overlay files
+                preselected: is_currently_applied,
+                depth: 0,
+                parent_dir: None,
+            });
+        }
+    }
+
+    if detected_files.is_empty() {
+        bail!(
+            "No files found in overlay source: {}",
+            source_path.display()
+        );
+    }
+
+    // Sort by path for consistent display
+    detected_files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // Configure selection UI - don't hide any categories
+    let config = SelectionConfig {
+        prompt: format!("Edit overlay '{normalized_name}' \u{2014} select files to include"),
+        default_hidden_categories: HashSet::new(),
+    };
+
+    let result = select_files(&detected_files, config)?;
+
+    if result.cancelled {
+        println!("{} Selection cancelled, no changes made.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // Compute diff: what to add and what to remove
+    let new_selection: HashSet<PathBuf> = result.selected_files.into_iter().collect();
+
+    let to_add: Vec<PathBuf> = new_selection.difference(&current_files).cloned().collect();
+    let to_remove: Vec<PathBuf> = current_files.difference(&new_selection).cloned().collect();
+
+    if to_add.is_empty() && to_remove.is_empty() {
+        println!("{} No changes to apply.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // Print summary
+    println!("{} overlay: {}", "Editing".blue().bold(), normalized_name);
+    if !to_add.is_empty() {
+        println!("\nFiles to add:");
+        for f in &to_add {
+            println!("  {} {}", "+".green(), f.display());
+        }
+    }
+    if !to_remove.is_empty() {
+        println!("\nFiles to remove:");
+        for f in &to_remove {
+            println!("  {} {}", "-".red(), f.display());
+        }
+    }
+
+    if dry_run {
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // Apply removals first, then additions
+    if !to_remove.is_empty() {
+        remove_files_from_overlay(name_arg, &target, &to_remove, false)?;
+    }
+    if !to_add.is_empty() {
+        // Copy files from overlay source to target, then add to overlay.
+        // The files exist in the overlay source but not in the target repo.
+        // add_files_to_overlay expects them to exist in the target first.
+        for file in &to_add {
+            let source_file = source_path.join(file);
+            let target_file = target.join(file);
+            if let Some(parent) = target_file.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source_file, &target_file).with_context(|| {
+                format!("Failed to copy {} from overlay source", file.display())
+            })?;
+        }
+        add_files_to_overlay(name_arg, &target, &to_add, false)?;
     }
 
     Ok(())

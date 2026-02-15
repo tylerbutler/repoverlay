@@ -1594,3 +1594,40 @@ fn edit_remove_multiple_files() {
     assert!(!ctx.file_exists("b.txt"));
     assert!(ctx.file_exists(".envrc"));
 }
+
+#[test]
+fn edit_interactive_fails_for_non_applied_overlay() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "nonexistent", "--interactive"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not currently applied"));
+}
+
+#[test]
+fn edit_interactive_non_tty_uses_preselected() {
+    // When not a TTY, select_files returns preselected files.
+    // This means interactive mode in non-TTY returns current files (no change).
+    let ctx = TestContext::new()
+        .with_overlay(&[(".envrc", "export FOO=bar"), ("extra.txt", "extra content")]);
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // In non-TTY mode, interactive should report "No changes" because
+    // preselected = currently applied, so diff is empty
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--interactive"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes"));
+}
