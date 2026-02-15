@@ -1,3 +1,0 @@
-kind: Fixed
-body: Remove unsafe env var manipulation in tests by refactoring to testable inner functions
-time: 2026-02-14T15:37:38.000000-08:00
