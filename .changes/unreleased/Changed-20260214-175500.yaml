@@ -1,0 +1,8 @@
+kind: Changed
+body: |-
+    `remove` defaults to interactive selection when no arguments given
+
+    Running `repoverlay remove` in an interactive terminal now launches the
+    interactive overlay selection instead of printing a usage error. Non-interactive
+    environments (CI, piped stdin, TERM=dumb) are unaffected.
+time: 2026-02-14T17:55:00.000000-08:00
