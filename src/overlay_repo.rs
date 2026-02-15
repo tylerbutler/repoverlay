@@ -18,6 +18,18 @@ use crate::upstream::UpstreamInfo;
 /// Default subdirectory name for the overlay repo clone.
 const OVERLAY_REPO_DIR: &str = "overlay-repo";
 
+/// Validate that a path component (org, repo, or overlay name) does not contain
+/// path traversal characters that could escape the overlay repository directory.
+fn validate_path_component(s: &str, label: &str) -> Result<()> {
+    if s.contains("..") || s.contains('/') || s.contains('\\') || s.starts_with('.') {
+        bail!("Invalid {label}: '{s}' contains path traversal characters");
+    }
+    if s.is_empty() {
+        bail!("Invalid {label}: must not be empty");
+    }
+    Ok(())
+}
+
 /// Metadata file name for the overlay repo.
 const OVERLAY_REPO_META: &str = ".repoverlay-overlay-repo-meta.ccl";
 
@@ -84,13 +96,30 @@ impl OverlayRepoManager {
 
     /// Clone the overlay repository.
     fn clone_repo(&self) -> Result<()> {
+        // Validate URL doesn't look like a flag (defense in depth)
+        if self.config.url.starts_with('-') {
+            bail!(
+                "Invalid overlay repository URL: '{}' starts with '-' (possible flag injection)",
+                self.config.url
+            );
+        }
+
+        // Only allow HTTPS and SSH URLs to prevent local file access via file:// scheme
+        let url = &self.config.url;
+        if !url.starts_with("https://") && !url.starts_with("git@") && !url.starts_with("ssh://") {
+            bail!(
+                "Unsupported URL scheme: '{url}'. Only https://, ssh://, and git@ URLs are allowed"
+            );
+        }
+
         // Create parent directories
         if let Some(parent) = self.repo_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
         let output = Command::new("git")
-            .args(["clone", "--depth", "1", &self.config.url])
+            .args(["clone", "--depth", "1", "--"])
+            .arg(&self.config.url)
             .arg(&self.repo_path)
             .output()
             .context("Failed to execute git clone")?;
@@ -232,6 +261,9 @@ impl OverlayRepoManager {
     /// Get the path to a specific overlay.
     #[allow(dead_code)]
     pub fn get_overlay_path(&self, org: &str, repo: &str, name: &str) -> Result<PathBuf> {
+        validate_path_component(org, "org")?;
+        validate_path_component(repo, "repo")?;
+        validate_path_component(name, "overlay name")?;
         let path = self.repo_path.join(org).join(repo).join(name);
 
         if !path.exists() {
@@ -255,6 +287,9 @@ impl OverlayRepoManager {
         name: &str,
         upstream: Option<&UpstreamInfo>,
     ) -> Result<(PathBuf, ResolvedVia)> {
+        validate_path_component(org, "org")?;
+        validate_path_component(repo, "repo")?;
+        validate_path_component(name, "overlay name")?;
         // Try exact match first
         let direct_path = self.repo_path.join(org).join(repo).join(name);
         if direct_path.exists() {
@@ -263,6 +298,8 @@ impl OverlayRepoManager {
 
         // Try upstream fallback if available
         if let Some(up) = upstream {
+            validate_path_component(&up.org, "upstream org")?;
+            validate_path_component(&up.repo, "upstream repo")?;
             let upstream_path = self.repo_path.join(&up.org).join(&up.repo).join(name);
             if upstream_path.exists() {
                 return Ok((upstream_path, ResolvedVia::Upstream));
@@ -291,6 +328,9 @@ impl OverlayRepoManager {
         name: &str,
         source_dir: &Path,
     ) -> Result<PathBuf> {
+        validate_path_component(org, "org")?;
+        validate_path_component(repo, "repo")?;
+        validate_path_component(name, "overlay name")?;
         let dest_path = self.repo_path.join(org).join(repo).join(name);
 
         // Create destination directory
@@ -370,8 +410,26 @@ pub fn default_overlay_repo_path() -> Result<PathBuf> {
     Ok(crate::config::config_dir()?.join(OVERLAY_REPO_DIR))
 }
 
+/// Maximum recursion depth for directory copying to prevent stack overflow
+/// from circular symlinks or excessively nested directories.
+const MAX_COPY_DEPTH: usize = 64;
+
 /// Copy a directory recursively.
+///
+/// Rejects symlinks that point outside the source root to prevent
+/// exfiltration of files from the host filesystem via malicious overlays.
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    copy_dir_recursive_inner(src, dst, src, 0)
+}
+
+fn copy_dir_recursive_inner(src: &Path, dst: &Path, root: &Path, depth: usize) -> Result<()> {
+    if depth > MAX_COPY_DEPTH {
+        bail!(
+            "Maximum directory depth ({MAX_COPY_DEPTH}) exceeded copying {}: possible circular symlinks",
+            src.display()
+        );
+    }
+
     if !src.is_dir() {
         bail!("Source is not a directory: {}", src.display());
     }
@@ -381,13 +439,31 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
-        if src_path.is_dir() {
+        // Check for symlinks that escape the source root
+        let metadata = fs::symlink_metadata(&src_path)
+            .with_context(|| format!("Failed to read metadata: {}", src_path.display()))?;
+        if metadata.file_type().is_symlink() {
+            let canonical = src_path
+                .canonicalize()
+                .with_context(|| format!("Failed to resolve symlink: {}", src_path.display()))?;
+            let canonical_root = root.canonicalize().with_context(|| {
+                format!("Failed to canonicalize source root: {}", root.display())
+            })?;
+            if !canonical.starts_with(&canonical_root) {
+                bail!(
+                    "Symlink escape detected: {} points outside source directory",
+                    src_path.display()
+                );
+            }
+        }
+
+        if metadata.is_dir() || (metadata.file_type().is_symlink() && src_path.is_dir()) {
             // Skip .git directory
             if entry.file_name() == ".git" {
                 continue;
             }
             fs::create_dir_all(&dst_path)?;
-            copy_dir_recursive(&src_path, &dst_path)?;
+            copy_dir_recursive_inner(&src_path, &dst_path, root, depth + 1)?;
         } else {
             fs::copy(&src_path, &dst_path)?;
         }
@@ -982,5 +1058,175 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    // --- Security fix tests ---
+
+    #[test]
+    fn test_validate_path_component_rejects_traversal() {
+        assert!(validate_path_component("..", "test").is_err());
+        assert!(validate_path_component("../etc", "test").is_err());
+        assert!(validate_path_component("foo/..", "test").is_err());
+        assert!(validate_path_component(".hidden", "test").is_err());
+        assert!(validate_path_component("foo/bar", "test").is_err());
+        assert!(validate_path_component("foo\\bar", "test").is_err());
+        assert!(validate_path_component("", "test").is_err());
+    }
+
+    #[test]
+    fn test_validate_path_component_allows_valid() {
+        assert!(validate_path_component("microsoft", "test").is_ok());
+        assert!(validate_path_component("FluidFramework", "test").is_ok());
+        assert!(validate_path_component("claude-config", "test").is_ok());
+        assert!(validate_path_component("my_overlay", "test").is_ok());
+    }
+
+    #[test]
+    fn test_get_overlay_path_rejects_traversal() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        assert!(manager.get_overlay_path("..", "repo", "name").is_err());
+        assert!(manager.get_overlay_path("org", "..", "name").is_err());
+        assert!(manager.get_overlay_path("org", "repo", "..").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_rejects_symlink_escape() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("safe.txt"), "safe").unwrap();
+
+        // Create a symlink that escapes the source directory
+        std::os::unix::fs::symlink("/etc/hosts", src.join("escape.txt")).unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        let result = copy_dir_recursive(&src, &dst);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Symlink escape detected") || err.contains("points outside"),
+            "Expected symlink escape error, got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_allows_internal_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+
+        fs::create_dir_all(src.join("subdir")).unwrap();
+        fs::write(src.join("subdir/target.txt"), "content").unwrap();
+
+        // Create a symlink within the source directory
+        std::os::unix::fs::symlink(src.join("subdir/target.txt"), src.join("internal-link.txt"))
+            .unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        let result = copy_dir_recursive(&src, &dst);
+        assert!(result.is_ok());
+        assert!(dst.join("internal-link.txt").exists());
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_depth_limit() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+
+        // Create deeply nested directories exceeding MAX_COPY_DEPTH
+        let mut deepest = src.clone();
+        for i in 0..=MAX_COPY_DEPTH + 1 {
+            deepest = deepest.join(format!("level{i}"));
+        }
+        fs::create_dir_all(&deepest).unwrap();
+        fs::write(deepest.join("deep.txt"), "deep").unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        let result = copy_dir_recursive(&src, &dst);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Maximum directory depth")
+        );
+    }
+
+    #[test]
+    fn test_overlay_repo_clone_rejects_flag_url() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "--upload-pack=evil".to_string(),
+            local_path: Some(temp.path().join("overlay-repo")),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let result = manager.clone_repo();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("flag injection"));
+    }
+
+    #[test]
+    fn test_overlay_repo_clone_rejects_file_url() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "file:///etc/shadow".to_string(),
+            local_path: Some(temp.path().join("overlay-repo")),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let result = manager.clone_repo();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported URL scheme")
+        );
+    }
+
+    #[test]
+    fn test_overlay_repo_clone_allows_https_url() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/repo.git".to_string(),
+            local_path: Some(temp.path().join("overlay-repo")),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        // This will fail because the repo doesn't exist, but it should get past validation
+        let result = manager.clone_repo();
+        // Should fail with a git error, not a validation error
+        let err = result.unwrap_err().to_string();
+        assert!(!err.contains("flag injection"));
+        assert!(!err.contains("Unsupported URL scheme"));
+    }
+
+    #[test]
+    fn test_overlay_repo_clone_allows_ssh_url() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "git@github.com:org/repo.git".to_string(),
+            local_path: Some(temp.path().join("overlay-repo")),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let result = manager.clone_repo();
+        let err = result.unwrap_err().to_string();
+        assert!(!err.contains("Unsupported URL scheme"));
     }
 }
