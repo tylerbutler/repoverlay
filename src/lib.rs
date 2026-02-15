@@ -5563,6 +5563,7 @@ mod tests {
                 true,
                 None,
                 ConflictStrategy::default(),
+                false,
             )
         }
 
@@ -5667,6 +5668,7 @@ mod tests {
                 true,
                 None,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "apply should succeed: {result:?}");
 
