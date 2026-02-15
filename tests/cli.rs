@@ -1426,3 +1426,59 @@ fn repoverlay_merge_env_var_enables_merge() {
     assert_eq!(json["repo"], true);
     assert_eq!(json["overlay"], true);
 }
+
+// ─── Edit command tests ──────────────────────────────────────────────────────
+
+#[test]
+fn edit_add_fails_when_overlay_not_applied() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "edit",
+            "org/repo/nonexistent-overlay",
+            "--add",
+            "some-file.txt",
+        ])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not currently applied"));
+}
+
+#[test]
+fn edit_add_fails_when_file_does_not_exist() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "edit",
+            "org/repo/test-overlay",
+            "--add",
+            "nonexistent-file.txt",
+        ])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("File does not exist"));
+}
+
+#[test]
+fn edit_fails_when_no_operation_specified() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "org/repo/my-overlay"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("specify at least one"));
+}

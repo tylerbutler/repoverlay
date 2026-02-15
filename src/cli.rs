@@ -1601,15 +1601,41 @@ fn edit_overlay(
     interactive: bool,
     dry_run: bool,
 ) -> Result<()> {
-    let _ = (
-        name_arg,
-        target,
-        add_files,
-        remove_files,
-        interactive,
-        dry_run,
-    );
-    bail!("edit command not yet implemented");
+    // Validate at least one operation
+    if add_files.is_empty() && remove_files.is_empty() && !interactive {
+        bail!(
+            "No operation specified. Please specify at least one of:\n  \
+             --add <file>      Add files to the overlay\n  \
+             --remove <file>   Remove files from the overlay\n  \
+             --interactive     Re-select files interactively"
+        );
+    }
+
+    // Handle add
+    if !add_files.is_empty() {
+        add_files_to_overlay(name_arg, target, add_files, dry_run)?;
+    }
+
+    // Handle remove (stub for now)
+    if !remove_files.is_empty() {
+        remove_files_from_overlay(name_arg, target, remove_files, dry_run)?;
+    }
+
+    // Interactive mode (stub for now)
+    if interactive {
+        bail!("Interactive edit mode is not yet implemented");
+    }
+
+    Ok(())
+}
+
+fn remove_files_from_overlay(
+    _name_arg: &str,
+    _target: &std::path::Path,
+    _files: &[PathBuf],
+    _dry_run: bool,
+) -> Result<()> {
+    bail!("remove from overlay not yet implemented");
 }
 
 /// Add files to an existing applied overlay.
