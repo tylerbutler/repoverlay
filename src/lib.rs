@@ -318,7 +318,7 @@ fn resolve_two_part(
     repo: &str,
     ref_override: Option<&str>,
     update: bool,
-    _target_path: Option<&Path>,
+    target_path: Option<&Path>,
     _source_filter: Option<&str>,
 ) -> Result<ResolvedSources> {
     debug!("resolving two-part reference (GitHub browse mode): {owner}/{repo}");
@@ -353,8 +353,11 @@ fn resolve_two_part(
     }
 
     // Select overlays based on interactivity
+    let applied = target_path
+        .map(|p| list_applied_overlays(p).unwrap_or_default())
+        .unwrap_or_default();
     let selected_overlays = if is_interactive() {
-        select_overlays_interactive(owner, repo, &available_overlays)?
+        select_overlays_interactive(owner, repo, &available_overlays, &applied)?
     } else {
         // Non-interactive mode - error with available overlays
         let overlay_list = available_overlays
@@ -536,21 +539,34 @@ fn format_overlay_path(path: &str) -> String {
 }
 
 /// Present an interactive multi-select picker for overlays.
+///
+/// Already-applied overlays appear dimmed and cannot be selected.
 fn select_overlays_interactive(
     owner: &str,
     repo: &str,
     overlays: &[String],
+    applied_overlays: &[String],
 ) -> Result<Vec<String>> {
     use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
 
+    let applied_set: std::collections::HashSet<&str> =
+        applied_overlays.iter().map(String::as_str).collect();
+
     let items: Vec<SelectableItem> = overlays
         .iter()
-        .map(|o| SelectableItem {
-            id: o.clone(),
-            label: format_overlay_path(o),
-            description: None,
-            preselected: false,
-            disabled: false,
+        .map(|o| {
+            let disabled = applied_set.contains(o.as_str());
+            SelectableItem {
+                id: o.clone(),
+                label: format_overlay_path(o),
+                description: if disabled {
+                    Some("already applied".into())
+                } else {
+                    None
+                },
+                preselected: false,
+                disabled,
+            }
         })
         .collect();
 
@@ -5682,5 +5698,29 @@ mod tests {
                 "symlink should not be copied to target"
             );
         }
+    }
+
+    #[test]
+    fn test_overlay_items_mark_applied_as_disabled() {
+        let available = [
+            "org/repo/a".to_string(),
+            "org/repo/b".to_string(),
+            "org/repo/c".to_string(),
+        ];
+        let applied = ["org/repo/b".to_string()];
+        let applied_set: std::collections::HashSet<&str> =
+            applied.iter().map(String::as_str).collect();
+
+        let items: Vec<_> = available
+            .iter()
+            .map(|o| {
+                let disabled = applied_set.contains(o.as_str());
+                (o.clone(), disabled)
+            })
+            .collect();
+
+        assert!(!items[0].1); // a not disabled
+        assert!(items[1].1); // b disabled (already applied)
+        assert!(!items[2].1); // c not disabled
     }
 }
