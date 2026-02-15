@@ -77,8 +77,13 @@ pub const DEFAULT_OVERLAY_REPO_NAME: &str = "repo-overlays";
 /// [`DEFAULT_OVERLAY_REPO_NAME`].
 #[must_use]
 pub fn default_overlay_repo_name() -> String {
-    std::env::var("REPOVERLAY_DEFAULT_REPO_NAME")
-        .unwrap_or_else(|_| DEFAULT_OVERLAY_REPO_NAME.to_string())
+    default_overlay_repo_name_with_env(std::env::var("REPOVERLAY_DEFAULT_REPO_NAME").ok())
+}
+
+/// Testable inner function: resolve default overlay repo name from an optional env value.
+#[must_use]
+fn default_overlay_repo_name_with_env(env_val: Option<String>) -> String {
+    env_val.unwrap_or_else(|| DEFAULT_OVERLAY_REPO_NAME.to_string())
 }
 
 /// Parsed source URL input from the CLI.
@@ -101,15 +106,18 @@ impl SourceUrlInput {
     /// Returns the expanded git URL for this input.
     #[must_use]
     pub fn to_url(&self) -> String {
+        self.to_url_with_repo_name(&default_overlay_repo_name())
+    }
+
+    /// Testable version that accepts the default repo name as a parameter.
+    #[must_use]
+    fn to_url_with_repo_name(&self, default_repo: &str) -> String {
         match self {
             Self::GitUrl(url) => url.clone(),
             Self::GitHubShorthand { owner, repo } => {
                 expand_github_shorthand(&format!("{owner}/{repo}"))
             }
-            Self::BareOwner(owner) => {
-                let repo_name = default_overlay_repo_name();
-                expand_github_shorthand(&format!("{owner}/{repo_name}"))
-            }
+            Self::BareOwner(owner) => expand_github_shorthand(&format!("{owner}/{default_repo}")),
         }
     }
 }
@@ -263,7 +271,12 @@ pub fn migrate_config(config: &mut RepoverlayConfig) -> Option<String> {
 /// Returns `~/.config/repoverlay/` on all Unix-like systems.
 /// Respects `XDG_CONFIG_HOME` if set.
 pub fn config_dir() -> Result<PathBuf> {
-    let base = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+    config_dir_with_env(std::env::var("XDG_CONFIG_HOME").ok().as_deref())
+}
+
+/// Testable inner function: resolve config dir from an optional XDG value.
+fn config_dir_with_env(xdg: Option<&str>) -> Result<PathBuf> {
+    let base = if let Some(xdg) = xdg {
         PathBuf::from(xdg)
     } else {
         dirs::home_dir()
@@ -549,30 +562,17 @@ overlay_repo =
     }
 
     #[test]
-    #[allow(unsafe_code)]
-    fn test_config_dir_with_xdg_config_home() {
-        // Save original value
-        let original = std::env::var("XDG_CONFIG_HOME").ok();
+    fn test_config_dir_with_xdg_value() {
+        let dir = config_dir_with_env(Some("/custom/xdg")).unwrap();
+        assert_eq!(dir, PathBuf::from("/custom/xdg/repoverlay"));
+    }
 
-        // Set custom XDG_CONFIG_HOME
-        let temp = TempDir::new().unwrap();
-        // SAFETY: Tests are run serially with cargo test, and we restore the value after
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", temp.path());
-        }
-
-        let dir = config_dir().unwrap();
-        assert!(dir.starts_with(temp.path()));
+    #[test]
+    fn test_config_dir_without_xdg_uses_home() {
+        let dir = config_dir_with_env(None).unwrap();
+        // Should fall back to ~/.config/repoverlay
         assert!(dir.ends_with("repoverlay"));
-
-        // Restore original value
-        // SAFETY: Tests are run serially with cargo test
-        unsafe {
-            match original {
-                Some(val) => std::env::set_var("XDG_CONFIG_HOME", val),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-        }
+        assert!(dir.to_string_lossy().contains(".config"));
     }
 
     // Additional edge case tests for config parsing
@@ -1282,70 +1282,24 @@ sources =
         assert_eq!(format!("{bare}"), "user");
     }
 
-    // ==================== default_overlay_repo_name env var tests ====================
+    // ==================== default_overlay_repo_name tests ====================
 
     #[test]
-    #[allow(unsafe_code)]
-    fn test_default_overlay_repo_name_uses_env_var() {
-        let original = std::env::var("REPOVERLAY_DEFAULT_REPO_NAME").ok();
-
-        // SAFETY: Tests are run serially with cargo test, and we restore the value after
-        unsafe {
-            std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", "my-overlays");
-        }
-
-        let result = default_overlay_repo_name();
+    fn test_default_overlay_repo_name_with_env_uses_value() {
+        let result = default_overlay_repo_name_with_env(Some("my-overlays".to_string()));
         assert_eq!(result, "my-overlays");
-
-        // Restore original value
-        unsafe {
-            match original {
-                Some(val) => std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", val),
-                None => std::env::remove_var("REPOVERLAY_DEFAULT_REPO_NAME"),
-            }
-        }
     }
 
     #[test]
-    #[allow(unsafe_code)]
-    fn test_default_overlay_repo_name_falls_back_to_constant() {
-        let original = std::env::var("REPOVERLAY_DEFAULT_REPO_NAME").ok();
-
-        // SAFETY: Tests are run serially with cargo test, and we restore the value after
-        unsafe {
-            std::env::remove_var("REPOVERLAY_DEFAULT_REPO_NAME");
-        }
-
-        let result = default_overlay_repo_name();
+    fn test_default_overlay_repo_name_with_env_falls_back_to_constant() {
+        let result = default_overlay_repo_name_with_env(None);
         assert_eq!(result, "repo-overlays");
-
-        // Restore original value
-        unsafe {
-            if let Some(val) = original {
-                std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", val);
-            }
-        }
     }
 
     #[test]
-    #[allow(unsafe_code)]
-    fn test_source_url_input_bare_owner_uses_env_var() {
-        let original = std::env::var("REPOVERLAY_DEFAULT_REPO_NAME").ok();
-
-        // SAFETY: Tests are run serially with cargo test, and we restore the value after
-        unsafe {
-            std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", "custom-overlays");
-        }
-
-        let input: SourceUrlInput = "myuser".parse().unwrap();
-        assert_eq!(input.to_url(), "https://github.com/myuser/custom-overlays");
-
-        // Restore original value
-        unsafe {
-            match original {
-                Some(val) => std::env::set_var("REPOVERLAY_DEFAULT_REPO_NAME", val),
-                None => std::env::remove_var("REPOVERLAY_DEFAULT_REPO_NAME"),
-            }
-        }
+    fn test_bare_owner_to_url_uses_custom_repo_name() {
+        let input = SourceUrlInput::BareOwner("myuser".to_string());
+        let url = input.to_url_with_repo_name("custom-overlays");
+        assert_eq!(url, "https://github.com/myuser/custom-overlays");
     }
 }

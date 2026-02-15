@@ -1,0 +1,8 @@
+kind: Security
+body: |-
+    Reject git refs starting with `-` to prevent flag injection
+
+    Source URLs with refs like `--upload-pack=evil` could be passed through to git commands
+    as flags. `GitRef::from_str` now rejects any ref beginning with `-` and
+    `with_ref_override` propagates the error instead of panicking via `.unwrap()`.
+time: 2026-02-14T15:37:37.678001-08:00
