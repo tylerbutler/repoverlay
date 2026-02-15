@@ -6,3 +6,4 @@ body: |-
     interactive overlay selection instead of printing a usage error. Non-interactive
     environments (CI, piped stdin, TERM=dumb) are unaffected.
 time: 2026-02-14T17:55:00.000000-08:00
+component: remove

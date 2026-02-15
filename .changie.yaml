@@ -30,6 +30,21 @@ kinds:
       auto: patch
     - label: Security
       auto: patch
+componentFormat: '### {{.Component}}'
+components:
+    - apply
+    - cache
+    - create
+    - create-local
+    - edit
+    - list
+    - remove
+    - restore
+    - source
+    - status
+    - switch
+    - sync
+    - update
 newlines:
     afterChangelogHeader: 1
     afterChangelogVersion: 1

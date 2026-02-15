@@ -1603,8 +1603,9 @@ fn edit_overlay(
     interactive: bool,
     dry_run: bool,
 ) -> Result<()> {
-    // Validate at least one operation
-    if add_files.is_empty() && remove_files.is_empty() && !interactive {
+    // Validate at least one operation.
+    // In an interactive terminal, default to interactive mode automatically.
+    if add_files.is_empty() && remove_files.is_empty() && !interactive && !is_interactive() {
         bail!(
             "No operation specified. Please specify at least one of:\n  \
              --add <file>      Add files to the overlay\n  \
@@ -1623,8 +1624,8 @@ fn edit_overlay(
         remove_files_from_overlay(name_arg, target, remove_files, dry_run)?;
     }
 
-    // Interactive mode
-    if interactive {
+    // Interactive mode (explicit flag or auto-detected interactive terminal with no other ops)
+    if interactive || (add_files.is_empty() && remove_files.is_empty() && is_interactive()) {
         interactive_edit_overlay(name_arg, target, dry_run)?;
     }
 
