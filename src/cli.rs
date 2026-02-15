@@ -350,10 +350,8 @@ enum Commands {
 
     /// Add files to an existing applied overlay
     ///
-    /// Examples:
-    ///   repoverlay add my-overlay newfile.txt
-    ///   repoverlay add my-overlay file1.txt file2.txt
-    ///   repoverlay add org/repo/my-overlay path/to/file.txt
+    /// Deprecated: use `repoverlay edit --add` instead.
+    #[command(hide = true)]
     Add {
         /// Overlay name or full path (org/repo/name)
         ///
@@ -369,6 +367,41 @@ enum Commands {
         target: Option<PathBuf>,
 
         /// Show what would be added without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Edit an existing applied overlay (add files, remove files, or re-select interactively)
+    ///
+    /// Examples:
+    ///   repoverlay edit my-overlay --add newfile.txt
+    ///   repoverlay edit my-overlay --remove oldfile.txt
+    ///   repoverlay edit my-overlay --add new.txt --remove old.txt
+    ///   repoverlay edit org/repo/my-overlay --interactive
+    Edit {
+        /// Overlay name or full path (org/repo/name)
+        ///
+        /// Short form: `my-overlay` - detects org/repo from git remote
+        /// Full form: `org/repo/name` - uses explicit values
+        name: String,
+
+        /// Files to add to the overlay
+        #[arg(short, long, value_name = "FILE", num_args = 1..)]
+        add: Vec<PathBuf>,
+
+        /// Files to remove from the overlay
+        #[arg(short, long, value_name = "FILE", num_args = 1..)]
+        remove: Vec<PathBuf>,
+
+        /// Re-run interactive file selection with current files pre-selected
+        #[arg(short, long, conflicts_with_all = ["add", "remove"])]
+        interactive: bool,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Show what would change without making changes
         #[arg(long)]
         dry_run: bool,
     },
@@ -621,12 +654,28 @@ pub fn run() -> Result<()> {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             sync_overlay(&name, &target, dry_run)?;
         }
+        Commands::Edit {
+            name,
+            add,
+            remove,
+            interactive,
+            target,
+            dry_run,
+        } => {
+            let target = target.unwrap_or_else(|| PathBuf::from("."));
+            edit_overlay(&name, &target, &add, &remove, interactive, dry_run)?;
+        }
         Commands::Add {
             name,
             files,
             target,
             dry_run,
         } => {
+            eprintln!(
+                "{} 'repoverlay add' is deprecated. Use 'repoverlay edit --add' instead.",
+                "Warning:".yellow().bold()
+            );
+            eprintln!();
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             add_files_to_overlay(&name, &target, &files, dry_run)?;
         }
@@ -1541,6 +1590,26 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
     auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
 
     Ok(())
+}
+
+/// Edit an existing applied overlay (add files, remove files, or re-select interactively).
+fn edit_overlay(
+    name_arg: &str,
+    target: &std::path::Path,
+    add_files: &[PathBuf],
+    remove_files: &[PathBuf],
+    interactive: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let _ = (
+        name_arg,
+        target,
+        add_files,
+        remove_files,
+        interactive,
+        dry_run,
+    );
+    bail!("edit command not yet implemented");
 }
 
 /// Add files to an existing applied overlay.
@@ -5440,6 +5509,149 @@ directories =
                     assert!(target.is_none());
                 }
                 _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn edit_requires_name() {
+            let result = Cli::try_parse_from(["repoverlay", "edit"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn edit_parses_add_flag() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--add",
+                "file1.txt",
+                "file2.txt",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit {
+                    name,
+                    add,
+                    remove,
+                    interactive,
+                    dry_run,
+                    ..
+                }) => {
+                    assert_eq!(name, "my-overlay");
+                    assert_eq!(
+                        add,
+                        vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")]
+                    );
+                    assert!(remove.is_empty());
+                    assert!(!interactive);
+                    assert!(!dry_run);
+                }
+                _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn edit_parses_remove_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "edit", "my-overlay", "--remove", "file1.txt"])
+                    .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit { remove, .. }) => {
+                    assert_eq!(remove, vec![PathBuf::from("file1.txt")]);
+                }
+                _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn edit_parses_combined_add_remove() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--add",
+                "new.txt",
+                "--remove",
+                "old.txt",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit { add, remove, .. }) => {
+                    assert_eq!(add, vec![PathBuf::from("new.txt")]);
+                    assert_eq!(remove, vec![PathBuf::from("old.txt")]);
+                }
+                _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn edit_interactive_conflicts_with_add() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--interactive",
+                "--add",
+                "file.txt",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn edit_interactive_conflicts_with_remove() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--interactive",
+                "--remove",
+                "file.txt",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn edit_parses_dry_run() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--add",
+                "f.txt",
+                "--dry-run",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit { dry_run, .. }) => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn edit_parses_target_flag() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--add",
+                "f.txt",
+                "-t",
+                "/repo",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit { target, .. }) => {
+                    assert_eq!(target, Some(PathBuf::from("/repo")));
+                }
+                _ => panic!("Expected Edit command"),
             }
         }
     }
