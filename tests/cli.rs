@@ -863,6 +863,18 @@ fn workflow_apply_delete_restore() {
 // ============================================================================
 
 #[test]
+fn add_shows_deprecation_warning() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["add", "org/repo/nonexistent-overlay", "some-file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("deprecated"));
+}
+
+#[test]
 fn add_help_displays() {
     cargo_bin_cmd!("repoverlay")
         .args(["add", "--help"])
