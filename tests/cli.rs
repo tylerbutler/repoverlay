@@ -1482,3 +1482,115 @@ fn edit_fails_when_no_operation_specified() {
         .failure()
         .stderr(predicate::str::contains("specify at least one"));
 }
+
+// ──────────────────────────────────────────────
+// Edit --remove tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_remove_removes_file_from_overlay() {
+    let ctx = TestContext::new()
+        .with_overlay(&[(".envrc", "export FOO=bar"), ("extra.txt", "extra content")]);
+
+    // Apply overlay with both files
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.file_exists("extra.txt"));
+
+    // Remove one file
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--remove", "extra.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 1 file"));
+
+    // Verify extra.txt is gone but .envrc remains
+    assert!(!ctx.file_exists("extra.txt"));
+    assert!(ctx.file_exists(".envrc"));
+
+    // Verify overlay state still exists (overlay not fully removed)
+    assert!(ctx.overlay_state_exists("test-overlay"));
+
+    // Verify git exclude still has .envrc but not extra.txt
+    let exclude = ctx.git_exclude_content();
+    assert!(exclude.contains(".envrc"));
+    assert!(!exclude.contains("extra.txt"));
+}
+
+#[test]
+fn edit_remove_fails_when_file_not_in_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--remove", "nonexistent.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not managed by overlay"));
+}
+
+#[test]
+fn edit_remove_dry_run_does_not_modify() {
+    let ctx = TestContext::new()
+        .with_overlay(&[(".envrc", "export FOO=bar"), ("extra.txt", "extra content")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Dry run remove
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--remove", "extra.txt", "--dry-run"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+
+    // File should still exist
+    assert!(ctx.file_exists("extra.txt"));
+}
+
+#[test]
+fn edit_remove_multiple_files() {
+    let ctx = TestContext::new().with_overlay(&[
+        (".envrc", "export FOO=bar"),
+        ("a.txt", "content a"),
+        ("b.txt", "content b"),
+    ]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Remove two files at once
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--remove", "a.txt", "b.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 2 file"));
+
+    assert!(!ctx.file_exists("a.txt"));
+    assert!(!ctx.file_exists("b.txt"));
+    assert!(ctx.file_exists(".envrc"));
+}

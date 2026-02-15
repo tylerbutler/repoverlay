@@ -1630,12 +1630,199 @@ fn edit_overlay(
 }
 
 fn remove_files_from_overlay(
-    _name_arg: &str,
-    _target: &std::path::Path,
-    _files: &[PathBuf],
-    _dry_run: bool,
+    name_arg: &str,
+    target: &std::path::Path,
+    files: &[PathBuf],
+    dry_run: bool,
 ) -> Result<()> {
-    bail!("remove from overlay not yet implemented");
+    use crate::state::EntryType;
+    use crate::{
+        load_overlay_state, normalize_overlay_name, save_external_state, save_overlay_state,
+        update_git_exclude,
+    };
+
+    let target = canonicalize_path(target, "Target directory")?;
+    if !target.join(".git").exists() {
+        bail!(
+            "Target directory is not a git repository: {}",
+            target.display()
+        );
+    }
+
+    // Extract overlay name from the argument (handles both short and full forms)
+    let overlay_name = if name_arg.contains('/') {
+        let parts: Vec<&str> = name_arg.split('/').collect();
+        if parts.len() == 3 {
+            parts[2].to_string()
+        } else {
+            bail!(
+                "Invalid overlay path format: {name_arg}\n\n\
+                 Use one of:\n  \
+                 - my-overlay (detects org/repo from git remote)\n  \
+                 - org/repo/my-overlay (explicit)"
+            );
+        }
+    } else {
+        name_arg.to_string()
+    };
+
+    let normalized_name = normalize_overlay_name(&overlay_name)?;
+    let applied_overlays = list_applied_overlays(&target)?;
+
+    if !applied_overlays.contains(&normalized_name) {
+        bail!(
+            "Overlay '{}' is not currently applied.\n\n\
+             Applied overlays: {}",
+            overlay_name,
+            if applied_overlays.is_empty() {
+                "(none)".to_string()
+            } else {
+                applied_overlays.join(", ")
+            }
+        );
+    }
+
+    let mut state = load_overlay_state(&target, &normalized_name)?;
+
+    // Validate all files are managed by this overlay
+    for file in files {
+        let file_normalized = file.to_string_lossy().replace('\\', "/");
+        if !state
+            .file_entries()
+            .iter()
+            .any(|e| e.target.to_string_lossy().replace('\\', "/") == file_normalized)
+        {
+            let managed: Vec<String> = state
+                .file_entries()
+                .iter()
+                .map(|e| e.target.to_string_lossy().into_owned())
+                .collect();
+            bail!(
+                "File '{}' is not managed by overlay '{}'.\n\n\
+                 Files in this overlay: {}",
+                file.display(),
+                normalized_name,
+                managed.join(", ")
+            );
+        }
+    }
+
+    println!(
+        "{} files from overlay: {}",
+        "Removing".red().bold(),
+        normalized_name
+    );
+
+    if dry_run {
+        println!("  Target: {}", target.display());
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+        println!("\nFiles that would be removed:");
+        for file in files {
+            println!("  {} {}", "-".red(), file.display());
+        }
+        return Ok(());
+    }
+
+    let mut removed_count = 0;
+
+    for file in files {
+        let file_path = target.join(file);
+
+        if file_path.exists() || file_path.is_symlink() {
+            // Find entry type from state before removing
+            let is_directory = state
+                .file_entries()
+                .iter()
+                .any(|e| e.target == *file && e.entry_type == EntryType::Directory);
+
+            if is_directory {
+                if file_path.is_symlink() {
+                    #[cfg(unix)]
+                    fs::remove_file(&file_path).with_context(|| {
+                        format!(
+                            "Failed to remove directory symlink: {}",
+                            file_path.display()
+                        )
+                    })?;
+                    #[cfg(windows)]
+                    fs::remove_dir(&file_path).with_context(|| {
+                        format!(
+                            "Failed to remove directory symlink: {}",
+                            file_path.display()
+                        )
+                    })?;
+                } else {
+                    fs::remove_dir_all(&file_path).with_context(|| {
+                        format!("Failed to remove directory: {}", file_path.display())
+                    })?;
+                }
+                println!("  {} {}/", "-".red(), file.display());
+            } else {
+                fs::remove_file(&file_path)
+                    .with_context(|| format!("Failed to remove: {}", file_path.display()))?;
+                println!("  {} {}", "-".red(), file.display());
+            }
+
+            // Clean up empty parent directories
+            let mut parent = file_path.parent();
+            while let Some(dir) = parent {
+                if dir == target {
+                    break;
+                }
+                if dir
+                    .read_dir()
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(false)
+                {
+                    fs::remove_dir(dir).ok();
+                    parent = dir.parent();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Remove from state
+        state.remove_file(file);
+        removed_count += 1;
+    }
+
+    // Rebuild exclude entries from remaining files
+    let remaining_entries: Vec<String> = state
+        .file_entries()
+        .iter()
+        .map(|e| {
+            let path = e.target.to_string_lossy().replace('\\', "/");
+            match e.entry_type {
+                EntryType::Directory => format!("{path}/"),
+                EntryType::File => path,
+            }
+        })
+        .collect();
+
+    // Rewrite git exclude with remaining entries
+    update_git_exclude(&target, &normalized_name, &remaining_entries, true)?;
+
+    // Save updated state
+    save_overlay_state(&target, &state)?;
+
+    // Save external backup
+    if let Err(e) = save_external_state(&target, &normalized_name, &state) {
+        eprintln!(
+            "  {} Could not save external backup: {}",
+            "Warning:".yellow(),
+            e
+        );
+    }
+
+    println!(
+        "\n{} Removed {} file(s) from overlay '{}'",
+        "done".green().bold(),
+        removed_count,
+        normalized_name
+    );
+
+    Ok(())
 }
 
 /// Add files to an existing applied overlay.
