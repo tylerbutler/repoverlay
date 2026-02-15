@@ -11,7 +11,8 @@ use std::sync::LazyLock;
 use crate::{
     CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, STATE_DIR, apply_overlay,
     canonicalize_path, config, list_applied_overlays, parse_github_owner_repo, remove_overlay,
-    remove_single_overlay, restore_overlays, show_status, switch_overlay, update_overlays,
+    remove_single_overlay, restore_overlays, selection::is_interactive, show_status,
+    switch_overlay, update_overlays,
 };
 
 /// Build version string with git info for local builds
@@ -788,8 +789,9 @@ fn handle_remove(
         return remove_overlay(target, name, remove_all, dry_run);
     }
 
-    // If not interactive and no name specified, require explicit action
-    if !interactive {
+    // If not interactive and no name specified, require explicit action.
+    // In an interactive terminal, default to interactive mode automatically.
+    if !interactive && !is_interactive() {
         bail!(
             "No overlay name specified.\n\n\
              Usage:\n  \
