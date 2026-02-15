@@ -146,7 +146,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: tylerbutler/actions/changie-check@00ea1c92c9bad35e0475a2763073290e5cc14363 # ratchet:tylerbutler/actions/changie-check@main
+      - uses: tylerbutler/actions/changie-check@0cd4fabe8b59a48fe3f84cbbadf6805244d299e6 # ratchet:tylerbutler/actions/changie-check@main
         id: changelog
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
