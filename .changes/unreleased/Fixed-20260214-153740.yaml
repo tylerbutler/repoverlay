@@ -1,0 +1,9 @@
+kind: Security
+body: |-
+    Validate overlay mapping destinations against path traversal
+
+    Overlay configs with mappings like `secret.txt = ../etc/passwd` could write files
+    outside the target repository. Mapping destinations are now canonicalized and verified
+    to stay within the target directory before any files are copied. Symlinks in overlay
+    sources are also skipped to prevent symlink-based escapes.
+time: 2026-02-14T15:37:40.000000-08:00

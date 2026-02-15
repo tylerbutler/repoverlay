@@ -2,9 +2,6 @@
 # Changelog is managed by changie, not release-plz
 changelog_update = false
 
-# PR creation is handled by changie-release workflow
-pr_enabled = false
-
 # Disable GitHub release creation - cargo-dist handles this with binary assets
 git_release_enable = false
 # Enable git tag creation - this triggers cargo-dist release workflow

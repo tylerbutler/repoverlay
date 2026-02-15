@@ -240,7 +240,7 @@ fn resolve_github_url(
 
     // Apply ref override if provided
     if let Some(ref_str) = ref_override {
-        github_source = github_source.with_ref_override(Some(ref_str));
+        github_source = github_source.with_ref_override(Some(ref_str))?;
     }
 
     // Ensure cached and get path
@@ -328,7 +328,7 @@ fn resolve_two_part(
     let mut github_source = GitHubSource::parse(&github_url)?;
 
     if let Some(ref_str) = ref_override {
-        github_source = github_source.with_ref_override(Some(ref_str));
+        github_source = github_source.with_ref_override(Some(ref_str))?;
     }
 
     // Fetch/cache the repository
@@ -1331,7 +1331,7 @@ fn apply_multiple_overlays(
     check_overlay_conflicts(sources)?;
 
     // Phase 2: Check for conflicts with already-applied overlays
-    let existing_targets = load_all_overlay_targets(&target)?;
+    let mut existing_targets = load_all_overlay_targets(&target)?;
     for resolved in sources {
         let config = load_overlay_config(&resolved.path)?;
         let overlay_name = determine_overlay_name(&config, &resolved.path, None)?;
@@ -1351,6 +1351,8 @@ fn apply_multiple_overlays(
                     );
                     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
                     remove_single_overlay(&target, &overlays_dir, &overlay_name)?;
+                    // Reload targets so subsequent conflict checks see fresh state
+                    existing_targets = load_all_overlay_targets(&target)?;
                 }
                 ConflictStrategy::Fail | ConflictStrategy::SkipConflicts => {
                     bail!(
@@ -2161,7 +2163,7 @@ pub(crate) fn update_overlays(
             let source = GitHubSource {
                 owner: owner.clone(),
                 repo: repo.clone(),
-                git_ref: git_ref.parse().unwrap(),
+                git_ref: git_ref.parse().map_err(|e: String| anyhow::anyhow!(e))?,
                 subpath: subpath.as_ref().map(PathBuf::from),
             };
 
@@ -5531,6 +5533,154 @@ mod tests {
             assert!(
                 canonical.join("unique.txt").exists(),
                 "unique.txt should be applied"
+            );
+        }
+    }
+
+    mod path_traversal_tests {
+        use super::*;
+
+        fn make_overlay_with_config(dir: &Path, files: &[(&str, &str)], config: &str) {
+            for (name, content) in files {
+                let file_path = dir.join(name);
+                if let Some(parent) = file_path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(file_path, content).unwrap();
+            }
+            fs::write(dir.join("repoverlay.ccl"), config).unwrap();
+        }
+
+        fn try_apply(overlay: &Path, target: &Path) -> Result<()> {
+            let resolved = ResolvedSource {
+                path: overlay.to_path_buf(),
+                source_info: OverlaySource::local(overlay.to_path_buf()),
+            };
+            let canonical = target.canonicalize().unwrap();
+            apply_resolved_overlay(
+                &resolved,
+                &canonical,
+                true,
+                None,
+                ConflictStrategy::default(),
+                false,
+            )
+        }
+
+        #[test]
+        fn rejects_escape_at_root() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            make_overlay_with_config(
+                overlay.path(),
+                &[("secret.txt", "payload")],
+                "mappings =\n  secret.txt = ../etc/passwd\n",
+            );
+
+            let result = try_apply(overlay.path(), repo.path());
+            assert!(result.is_err(), "should reject ../etc/passwd mapping");
+            assert!(
+                result.unwrap_err().to_string().contains("Path traversal"),
+                "error should mention path traversal"
+            );
+        }
+
+        #[test]
+        fn rejects_escape_through_parent() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            make_overlay_with_config(
+                overlay.path(),
+                &[("secret.txt", "payload")],
+                "mappings =\n  secret.txt = foo/../../etc/passwd\n",
+            );
+
+            let result = try_apply(overlay.path(), repo.path());
+            assert!(
+                result.is_err(),
+                "should reject foo/../../etc/passwd mapping"
+            );
+        }
+
+        #[test]
+        fn allows_traversal_within_target() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            make_overlay_with_config(
+                overlay.path(),
+                &[("file.txt", "content")],
+                "mappings =\n  file.txt = foo/../bar\n",
+            );
+
+            let result = try_apply(overlay.path(), repo.path());
+            assert!(result.is_ok(), "foo/../bar should be allowed: {result:?}");
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(
+                canonical.join("bar").exists(),
+                "bar should exist after apply"
+            );
+        }
+
+        #[test]
+        fn allows_deeper_traversal_within_target() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            make_overlay_with_config(
+                overlay.path(),
+                &[("file.txt", "content")],
+                "mappings =\n  file.txt = foo/bar/../../baz\n",
+            );
+
+            let result = try_apply(overlay.path(), repo.path());
+            assert!(
+                result.is_ok(),
+                "foo/bar/../../baz should be allowed: {result:?}"
+            );
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(
+                canonical.join("baz").exists(),
+                "baz should exist after apply"
+            );
+        }
+    }
+
+    mod symlink_escape_tests {
+        use super::*;
+
+        #[test]
+        #[cfg(unix)]
+        fn symlinks_in_overlay_source_are_not_copied() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+
+            // Create a real file and a symlink in the overlay
+            fs::write(overlay.path().join("real.txt"), "real content").unwrap();
+            std::os::unix::fs::symlink("/etc/passwd", overlay.path().join("evil_link")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay.path().to_path_buf()),
+            };
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_resolved_overlay(
+                &resolved,
+                &canonical,
+                true,
+                None,
+                ConflictStrategy::default(),
+                false,
+            );
+            assert!(result.is_ok(), "apply should succeed: {result:?}");
+
+            // Real file should be copied
+            assert!(
+                canonical.join("real.txt").exists(),
+                "real.txt should be applied"
+            );
+            // Symlink should NOT be copied (WalkDir skips symlinks by default)
+            assert!(
+                !canonical.join("evil_link").exists(),
+                "symlink should not be copied to target"
             );
         }
     }
