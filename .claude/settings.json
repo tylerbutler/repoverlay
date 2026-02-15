@@ -12,5 +12,31 @@
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true,
     "context7@claude-plugins-official": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo fmt --all -- --quiet 2>/dev/null || true",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE_PATH=$(cat | jq -r '.tool_input.file_path // empty') && case \"$FILE_PATH\" in *Cargo.lock*|*.github/workflows/*|*.changes/v*) echo 'BLOCK: Do not edit generated, CI, or released changelog files directly' >&2; exit 2;; esac",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
   }
 }
