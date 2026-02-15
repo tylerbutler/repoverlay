@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
 
-      - uses: tylerbutler/actions/changie-release@84a793038df3b338852564c5986911cbfe45c94b # ratchet:tylerbutler/actions/changie-release@main
+      - uses: tylerbutler/actions/changie-release@0cd4fabe8b59a48fe3f84cbbadf6805244d299e6 # ratchet:tylerbutler/actions/changie-release@main
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -118,6 +118,10 @@ enum Commands {
         #[arg(long, conflicts_with = "force")]
         skip_conflicts: bool,
 
+        /// Deep merge conflicting JSON files instead of failing
+        #[arg(long, env = "REPOVERLAY_MERGE")]
+        merge: bool,
+
         /// Use a specific overlay source instead of priority order (multi-source configs only)
         #[arg(long = "from", value_name = "SOURCE", help_heading = "GitHub Options")]
         from_source: Option<String>,
@@ -177,6 +181,10 @@ enum Commands {
         /// Skip conflicting files silently during restore
         #[arg(long, conflicts_with = "force")]
         skip_conflicts: bool,
+
+        /// Deep merge conflicting JSON files instead of failing
+        #[arg(long, env = "REPOVERLAY_MERGE")]
+        merge: bool,
     },
 
     /// Update applied overlays from remote sources
@@ -199,6 +207,10 @@ enum Commands {
         /// Skip conflicting files silently during update
         #[arg(long, conflicts_with = "force")]
         skip_conflicts: bool,
+
+        /// Deep merge conflicting JSON files instead of failing
+        #[arg(long, env = "REPOVERLAY_MERGE")]
+        merge: bool,
     },
 
     /// Create a new overlay from files in a repository
@@ -292,6 +304,10 @@ enum Commands {
         /// Skip conflicting repo files silently when applying the new overlay
         #[arg(long, conflicts_with = "force")]
         skip_conflicts: bool,
+
+        /// Deep merge conflicting JSON files instead of failing
+        #[arg(long, env = "REPOVERLAY_MERGE")]
+        merge: bool,
     },
 
     /// Manage the overlay cache
@@ -467,6 +483,7 @@ pub fn run() -> Result<()> {
             update,
             force,
             skip_conflicts,
+            merge,
             from_source,
             dry_run,
         } => {
@@ -486,6 +503,7 @@ pub fn run() -> Result<()> {
                 r#ref.as_deref(),
                 update,
                 conflict_strategy,
+                merge,
                 from_source.as_deref(),
                 dry_run,
             )?;
@@ -509,6 +527,7 @@ pub fn run() -> Result<()> {
             dry_run,
             force,
             skip_conflicts,
+            merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = if force {
@@ -518,7 +537,7 @@ pub fn run() -> Result<()> {
             } else {
                 ConflictStrategy::Fail
             };
-            restore_overlays(&target, dry_run, conflict_strategy)?;
+            restore_overlays(&target, dry_run, conflict_strategy, merge)?;
         }
         Commands::Update {
             name,
@@ -526,6 +545,7 @@ pub fn run() -> Result<()> {
             dry_run,
             force,
             skip_conflicts,
+            merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = if force {
@@ -535,7 +555,7 @@ pub fn run() -> Result<()> {
             } else {
                 ConflictStrategy::Fail
             };
-            update_overlays(&target, name, dry_run, conflict_strategy)?;
+            update_overlays(&target, name, dry_run, conflict_strategy, merge)?;
         }
         Commands::Create {
             name,
@@ -567,6 +587,7 @@ pub fn run() -> Result<()> {
             r#ref,
             force,
             skip_conflicts,
+            merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = if force {
@@ -583,6 +604,7 @@ pub fn run() -> Result<()> {
                 name,
                 r#ref.as_deref(),
                 conflict_strategy,
+                merge,
             )?;
         }
         Commands::Cache { command } => {
@@ -1670,7 +1692,7 @@ fn add_files_to_overlay(
                     || format!("Failed to create symlink: {}", target_file.display()),
                 )?;
             }
-            LinkType::Copy => {
+            LinkType::Copy | LinkType::Merged => {
                 fs::copy(&overlay_file, &target_file)
                     .with_context(|| format!("Failed to copy file: {}", target_file.display()))?;
             }
@@ -1823,6 +1845,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -1858,6 +1881,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -1880,6 +1904,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -1906,6 +1931,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -1945,6 +1971,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -1978,6 +2005,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2003,6 +2031,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2025,6 +2054,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2051,6 +2081,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2064,6 +2095,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2086,6 +2118,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2107,6 +2140,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2120,6 +2154,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2144,6 +2179,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::Force,
+                false,
                 None,
                 false,
             );
@@ -2168,6 +2204,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2182,6 +2219,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::Force,
+                false,
                 None,
                 false,
             );
@@ -2207,6 +2245,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
                 None,
                 false,
             );
@@ -2241,6 +2280,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2255,6 +2295,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
                 None,
                 false,
             );
@@ -2286,6 +2327,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::Force,
+                false,
                 None,
                 false,
             );
@@ -2325,6 +2367,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
                 None,
                 false,
             );
@@ -2358,6 +2401,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2373,6 +2417,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::Force,
+                false,
                 None,
                 false,
             );
@@ -2401,6 +2446,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2417,6 +2463,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
                 None,
                 false,
             );
@@ -2451,6 +2498,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2474,6 +2522,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::Force,
+                false,
                 None,
                 false,
             );
@@ -2510,6 +2559,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2534,6 +2584,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
                 None,
                 false,
             );
@@ -2559,6 +2610,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2577,6 +2629,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2608,6 +2661,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2654,6 +2708,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2697,6 +2752,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2734,6 +2790,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2772,6 +2829,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2802,6 +2860,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2825,6 +2884,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2854,6 +2914,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -2889,6 +2950,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2927,6 +2989,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -2976,6 +3039,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             );
@@ -3006,6 +3070,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 true, // dry_run
             );
@@ -3044,6 +3109,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3069,6 +3135,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3081,6 +3148,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3110,6 +3178,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3122,6 +3191,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3147,6 +3217,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3177,6 +3248,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3203,6 +3275,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3239,6 +3312,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3263,6 +3337,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3300,6 +3375,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3340,6 +3416,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3371,6 +3448,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3405,6 +3483,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3417,6 +3496,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3464,6 +3544,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3494,6 +3575,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3533,6 +3615,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3556,6 +3639,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3568,6 +3652,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3591,6 +3676,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3603,6 +3689,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -3625,6 +3712,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4335,6 +4423,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4351,6 +4440,7 @@ directories =
                 Some("second-overlay".to_string()),
                 None,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "switch_overlay failed: {result:?}");
 
@@ -4379,6 +4469,7 @@ directories =
                 Some("new-overlay".to_string()),
                 None,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok());
 
@@ -4397,6 +4488,7 @@ directories =
                 None,
                 None,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_err());
             assert!(
@@ -4423,6 +4515,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4435,6 +4528,7 @@ directories =
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4452,6 +4546,7 @@ directories =
                 Some("overlay-c".to_string()),
                 None,
                 ConflictStrategy::default(),
+                false,
             )
             .unwrap();
 
@@ -4478,6 +4573,7 @@ directories =
                 Some("my-overlay".to_string()),
                 None,
                 ConflictStrategy::Force,
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -4509,6 +4605,7 @@ directories =
                 Some("my-overlay".to_string()),
                 None,
                 ConflictStrategy::SkipConflicts,
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -4546,6 +4643,7 @@ directories =
                 Some("my-overlay".to_string()),
                 None,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_err(),
@@ -4605,6 +4703,7 @@ directories =
                     update,
                     force,
                     skip_conflicts,
+                    merge: _,
                     from_source,
                     dry_run,
                 }) => {
@@ -4681,6 +4780,54 @@ directories =
                 "--skip-conflicts",
             ]);
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn apply_parses_merge_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--merge"]).unwrap();
+            match cli.command {
+                Some(Commands::Apply { merge, .. }) => {
+                    assert!(merge);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_merge_combinable_with_force() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--merge", "--force"])
+                    .unwrap();
+            match cli.command {
+                Some(Commands::Apply { merge, force, .. }) => {
+                    assert!(merge);
+                    assert!(force);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_merge_combinable_with_skip_conflicts() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "apply",
+                "./overlay",
+                "--merge",
+                "--skip-conflicts",
+            ])
+            .unwrap();
+            match cli.command {
+                Some(Commands::Apply {
+                    merge,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(merge);
+                    assert!(skip_conflicts);
+                }
+                _ => panic!("Expected Apply command"),
+            }
         }
 
         #[test]

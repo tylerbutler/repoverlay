@@ -8,6 +8,7 @@ mod config;
 mod detection;
 mod fuzzy;
 mod github;
+mod json_merge;
 mod overlay_repo;
 mod reference;
 mod selection;
@@ -36,6 +37,7 @@ use walkdir::WalkDir;
 use cache::CacheManager;
 use fuzzy::OverlayMatcher;
 use github::GitHubSource;
+use json_merge::{is_json_file, merge_json_files};
 use overlay_repo::copy_dir_recursive;
 use reference::SourceReference;
 use selection::is_interactive;
@@ -819,7 +821,7 @@ fn format_not_found_error(
 /// - Overlay with same name already exists (unless using `Force` strategy)
 /// - File conflicts with existing overlay or repo file (unless using `Force` or `SkipConflicts`)
 /// - No files found in overlay source
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(crate) fn apply_overlay(
     source_str: &str,
     target: &Path,
@@ -828,6 +830,7 @@ pub(crate) fn apply_overlay(
     ref_override: Option<&str>,
     update_cache: bool,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
     source_filter: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
@@ -861,6 +864,7 @@ pub(crate) fn apply_overlay(
                 force_copy,
                 dry_run,
                 conflict_strategy,
+                merge,
             );
         }
     };
@@ -881,6 +885,7 @@ pub(crate) fn apply_overlay(
         force_copy,
         name_override,
         conflict_strategy,
+        merge,
     )
 }
 
@@ -894,6 +899,7 @@ fn apply_resolved_overlay(
     force_copy: bool,
     name_override: Option<String>,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     let source = &resolved.path;
     debug!("resolved source path: {}", source.display());
@@ -1050,8 +1056,8 @@ fn apply_resolved_overlay(
                     )
                 })?;
             }
-            LinkType::Copy => {
-                // For copy mode, create the target directory and recursively copy contents
+            LinkType::Copy | LinkType::Merged => {
+                // For copy/merged mode, create the target directory and recursively copy contents
                 fs::create_dir_all(&target_dir).with_context(|| {
                     format!("Failed to create directory: {}", target_dir.display())
                 })?;
@@ -1127,6 +1133,22 @@ fn apply_resolved_overlay(
 
         // Check for conflicts with existing overlays
         if let Some(conflicting_overlay) = existing_targets.get(&target_rel_str) {
+            if merge && is_json_file(&target_rel) && target_file.exists() {
+                eprintln!(
+                    "  {} Merging '{}' (managed by overlay '{}')",
+                    "Merge:".cyan(),
+                    target_rel.display(),
+                    conflicting_overlay
+                );
+                if let Some((entry, exclude_path)) =
+                    try_merge_json(&target_file, &source_file, &target_rel, &rel_path)
+                {
+                    state.add_file(entry);
+                    exclude_entries.push(exclude_path);
+                    continue;
+                }
+                // Merge failed; fall through to existing conflict handling
+            }
             match conflict_strategy {
                 ConflictStrategy::SkipConflicts => {
                     eprintln!(
@@ -1150,6 +1172,21 @@ fn apply_resolved_overlay(
 
         // Check for conflicts with existing files in repo
         if target_file.exists() {
+            if merge && is_json_file(&target_rel) {
+                eprintln!(
+                    "  {} Merging '{}' with existing repo file",
+                    "Merge:".cyan(),
+                    target_rel.display()
+                );
+                if let Some((entry, exclude_path)) =
+                    try_merge_json(&target_file, &source_file, &target_rel, &rel_path)
+                {
+                    state.add_file(entry);
+                    exclude_entries.push(exclude_path);
+                    continue;
+                }
+                // Merge failed; fall through to existing conflict handling
+            }
             match conflict_strategy {
                 ConflictStrategy::Force => {
                     eprintln!(
@@ -1206,6 +1243,10 @@ fn apply_resolved_overlay(
             LinkType::Copy => {
                 fs::copy(&source_file, &target_file)
                     .with_context(|| format!("Failed to copy file: {}", target_file.display()))?;
+            }
+            LinkType::Merged => {
+                // Merged files are handled earlier in the conflict resolution path.
+                unreachable!("Merged link type should not reach file copy path");
             }
         }
 
@@ -1275,6 +1316,7 @@ fn apply_multiple_overlays(
     force_copy: bool,
     dry_run: bool,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
@@ -1342,7 +1384,14 @@ fn apply_multiple_overlays(
     let mut applied: Vec<String> = Vec::new();
 
     for resolved in sources {
-        match apply_resolved_overlay(resolved, &target, force_copy, None, conflict_strategy) {
+        match apply_resolved_overlay(
+            resolved,
+            &target,
+            force_copy,
+            None,
+            conflict_strategy,
+            merge,
+        ) {
             Ok(()) => {
                 let config = load_overlay_config(&resolved.path)?;
                 let name = determine_overlay_name(&config, &resolved.path, None)?;
@@ -1906,6 +1955,7 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
         let type_str = match entry.link_type {
             LinkType::Symlink => "symlink",
             LinkType::Copy => "copy",
+            LinkType::Merged => "merged",
         };
 
         // Add trailing slash and [dir] marker for directories
@@ -1939,6 +1989,7 @@ pub(crate) fn restore_overlays(
     target: &Path,
     dry_run: bool,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     debug!(
         "restore_overlays: target={}, dry_run={}, conflict_strategy={:?}",
@@ -2021,6 +2072,7 @@ pub(crate) fn restore_overlays(
             ref_override,
             true, // Update cache
             conflict_strategy,
+            merge,
             None,  // Use default source resolution for restore
             false, // Not a dry run
         ) {
@@ -2055,6 +2107,7 @@ pub(crate) fn update_overlays(
     name: Option<String>,
     dry_run: bool,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     debug!(
         "update_overlays: target={}, name={:?}, dry_run={}, conflict_strategy={:?}",
@@ -2187,6 +2240,7 @@ pub(crate) fn update_overlays(
                 Some(git_ref.as_str()),
                 true,
                 conflict_strategy,
+                merge,
                 None,  // Use default source resolution for update
                 false, // Not a dry run
             )?;
@@ -2639,6 +2693,7 @@ pub(crate) fn switch_overlay(
     name: Option<String>,
     ref_override: Option<&str>,
     conflict_strategy: ConflictStrategy,
+    merge: bool,
 ) -> Result<()> {
     validate_git_repo(target)?;
 
@@ -2662,6 +2717,7 @@ pub(crate) fn switch_overlay(
         ref_override,
         false,
         conflict_strategy,
+        merge,
         None,
         false,
     )?;
@@ -2795,6 +2851,67 @@ pub(crate) fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
             )
         }
     })
+}
+
+/// Attempt to deep merge a JSON overlay file into an existing target file.
+///
+/// Returns `Some((file_entry, exclude_path))` on success, or `None` if the merge
+/// failed (with a warning printed to stderr). The caller should add the entry to
+/// state and the exclude path to the exclusion list when `Some` is returned.
+fn try_merge_json(
+    target_file: &Path,
+    source_file: &Path,
+    target_rel: &Path,
+    rel_path: &Path,
+) -> Option<(FileEntry, String)> {
+    match merge_json_files(target_file, source_file, target_file) {
+        Ok(result) => {
+            log_merge_result(target_rel, &result);
+            let entry = FileEntry {
+                source: rel_path.to_path_buf(),
+                target: target_rel.to_path_buf(),
+                link_type: LinkType::Merged,
+                entry_type: EntryType::File,
+            };
+            let exclude_path = target_rel.to_string_lossy().replace('\\', "/");
+            Some((entry, exclude_path))
+        }
+        Err(e) => {
+            eprintln!(
+                "  {} JSON merge failed for '{}': {e}",
+                "Warning:".yellow(),
+                target_rel.display()
+            );
+            None
+        }
+    }
+}
+
+/// Log detailed merge results for a JSON file.
+fn log_merge_result(path: &Path, result: &json_merge::MergeResult) {
+    println!(
+        "  {} {} ({} added, {} overridden, {} type {})",
+        "~".cyan(),
+        path.display(),
+        result.keys_added,
+        result.keys_overridden,
+        result.type_mismatches.len(),
+        if result.type_mismatches.len() == 1 {
+            "mismatch"
+        } else {
+            "mismatches"
+        }
+    );
+
+    for mismatch in &result.type_mismatches {
+        eprintln!(
+            "    {} Type mismatch at '{}': {} -> {} (overlay wins)",
+            "Warning:".yellow(),
+            mismatch.key_path,
+            mismatch.base_type,
+            mismatch.overlay_type
+        );
+    }
 }
 
 #[cfg(test)]
@@ -4246,6 +4363,7 @@ mod tests {
                 None,  // no ref override
                 false, // don't update cache
                 ConflictStrategy::default(),
+                false,
                 None,  // default source resolution
                 false, // not dry run
             )
@@ -4310,7 +4428,7 @@ mod tests {
 
             // Step 3: Call restore - this SHOULD NOT restore the overlay
             // because it was explicitly removed (has removed_at marker).
-            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default())
+            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default(), false)
                 .expect("restore should succeed");
 
             // Step 4: Verify the overlay was NOT restored
@@ -4340,6 +4458,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4378,7 +4497,7 @@ mod tests {
             );
 
             // Step 3: Call restore - this SHOULD restore the overlay
-            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default())
+            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default(), false)
                 .expect("restore should succeed");
 
             // Step 4: Verify the overlay WAS restored
@@ -4405,6 +4524,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4433,6 +4553,7 @@ mod tests {
                 None,
                 false,
                 ConflictStrategy::default(),
+                false,
                 None,
                 false,
             )
@@ -4802,6 +4923,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "multi-apply should succeed: {result:?}");
 
@@ -4845,6 +4967,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_err(), "should fail due to conflict");
 
@@ -4881,6 +5004,7 @@ mod tests {
                 false,
                 true,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "dry run should succeed");
 
@@ -4922,6 +5046,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_err(),
@@ -4978,6 +5103,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
@@ -4998,6 +5124,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_err(),
@@ -5037,6 +5164,7 @@ mod tests {
                 false,
                 true,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5094,6 +5222,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "three overlays should succeed: {result:?}");
 
@@ -5132,6 +5261,7 @@ mod tests {
                 true,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5190,6 +5320,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
@@ -5210,6 +5341,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::Force,
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5242,6 +5374,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::Force,
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5280,6 +5413,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
             );
             assert!(
                 result.is_ok(),
@@ -5324,6 +5458,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             );
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
@@ -5334,6 +5469,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
             );
             assert!(
                 result.is_err(),
@@ -5371,6 +5507,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::default(),
+                false,
             )
             .unwrap();
 
@@ -5385,6 +5522,7 @@ mod tests {
                 false,
                 false,
                 ConflictStrategy::SkipConflicts,
+                false,
             );
             assert!(
                 result.is_ok(),
