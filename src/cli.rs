@@ -216,14 +216,16 @@ enum Commands {
     /// Create a new overlay from files in a repository
     ///
     /// Examples:
-    ///   repoverlay create my-overlay          # Detects org/repo from git remote
-    ///   repoverlay create org/repo/my-overlay # Explicit target
+    ///   repoverlay create my-overlay              # Detects org/repo from git remote
+    ///   repoverlay create org/repo/my-overlay     # Explicit target
+    ///   repoverlay create --output ./output        # Write to local directory
     Create {
         /// Overlay name or full path (org/repo/name)
         ///
         /// Short form: `my-overlay` - detects org/repo from git remote
         /// Full form: `org/repo/name` - uses explicit target
-        name: String,
+        /// Omit when using --output for local directory output
+        name: Option<String>,
 
         /// Include specific files or directories (can be specified multiple times)
         #[arg(short, long)]
@@ -232,6 +234,10 @@ enum Commands {
         /// Source repository to extract files from (defaults to current directory)
         #[arg(short, long)]
         source: Option<PathBuf>,
+
+        /// Output directory for local overlay creation (no overlay repo required)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
 
         /// Show what would be created without creating files
         #[arg(long)]
@@ -250,7 +256,7 @@ enum Commands {
     ///
     /// Examples:
     ///   repoverlay create-local ./output      # Write to local directory
-    #[command(name = "create-local")]
+    #[command(name = "create-local", hide = true)]
     CreateLocal {
         /// Output directory for the overlay
         output: PathBuf,
@@ -316,7 +322,20 @@ enum Commands {
         command: CacheCommand,
     },
 
+    /// Browse available overlays from the overlay repository
+    #[command(name = "browse")]
+    Browse {
+        /// Filter by target repository (format: org/repo)
+        #[arg(short = 'f', long, alias = "target")]
+        filter: Option<String>,
+
+        /// Update overlay repo before listing
+        #[arg(long)]
+        update: bool,
+    },
+
     /// List available overlays from the overlay repository
+    #[command(name = "list", hide = true)]
     List {
         /// Filter by target repository (format: org/repo)
         #[arg(short = 'f', long, alias = "target")]
@@ -442,16 +461,26 @@ enum CacheCommand {
     List,
 
     /// Clear all cached repositories
+    #[command(hide = true)]
     Clear {
         /// Skip confirmation prompt
         #[arg(short = 'y', long)]
         yes: bool,
     },
 
-    /// Remove a specific cached repository
+    /// Remove cached repositories
     Remove {
         /// Repository to remove (format: owner/repo)
-        repo: String,
+        #[arg(conflicts_with = "all")]
+        repo: Option<String>,
+
+        /// Remove all cached repositories
+        #[arg(short, long)]
+        all: bool,
+
+        /// Skip confirmation prompt (used with --all)
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Show cache location
@@ -561,12 +590,13 @@ pub fn run() -> Result<()> {
             name,
             include,
             source,
+            output,
             dry_run,
             yes,
             force,
         } => {
             let source = source.unwrap_or_else(|| PathBuf::from("."));
-            create_overlay_command(&source, Some(name), None, &include, dry_run, yes, force)?;
+            create_overlay_command(&source, name, output, &include, dry_run, yes, force)?;
         }
         Commands::CreateLocal {
             output,
@@ -576,6 +606,13 @@ pub fn run() -> Result<()> {
             yes,
             force: _,
         } => {
+            eprintln!(
+                "{} 'repoverlay create-local' is deprecated and will be removed in a future version.",
+                "Warning:".yellow().bold()
+            );
+            eprintln!("         Use 'repoverlay create --output <path>' instead.");
+            eprintln!();
+
             let source = source.unwrap_or_else(|| PathBuf::from("."));
             crate::create_overlay(&source, Some(output), &include, None, dry_run, yes)?;
         }
@@ -610,7 +647,17 @@ pub fn run() -> Result<()> {
         Commands::Cache { command } => {
             handle_cache_command(command)?;
         }
+        Commands::Browse { filter, update } => {
+            list_overlays(filter.as_deref(), update)?;
+        }
         Commands::List { filter, update } => {
+            eprintln!(
+                "{} 'repoverlay list' is deprecated and will be removed in a future version.",
+                "Warning:".yellow().bold()
+            );
+            eprintln!("         Use 'repoverlay browse' instead.");
+            eprintln!();
+
             list_overlays(filter.as_deref(), update)?;
         }
         Commands::Sync {
@@ -910,44 +957,44 @@ fn handle_cache_command(command: CacheCommand) -> Result<()> {
         }
 
         CacheCommand::Clear { yes } => {
-            if !yes {
-                print!("Clear entire cache? [y/N] ");
-                io::stdout().flush()?;
-
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
-
-                if !input.trim().eq_ignore_ascii_case("y") {
-                    println!("Cancelled.");
-                    return Ok(());
-                }
-            }
-
-            let count = cache.clear_cache()?;
-            println!(
-                "{} Cleared {} cached repository(s).",
-                "✓".green().bold(),
-                count
+            eprintln!(
+                "{} 'repoverlay cache clear' is deprecated and will be removed in a future version.",
+                "Warning:".yellow().bold()
             );
+            eprintln!("         Use 'repoverlay cache remove --all' instead.");
+            eprintln!();
+
+            clear_cache(&cache, yes)?;
         }
 
-        CacheCommand::Remove { repo } => {
-            let parts: Vec<&str> = repo.split('/').collect();
-            if parts.len() != 2 {
-                bail!("Invalid repository format. Use: owner/repo");
-            }
+        CacheCommand::Remove { repo, all, yes } => {
+            if all {
+                clear_cache(&cache, yes)?;
+            } else if let Some(repo) = repo {
+                let parts: Vec<&str> = repo.split('/').collect();
+                if parts.len() != 2 {
+                    bail!("Invalid repository format. Use: owner/repo");
+                }
 
-            let (owner, repo_name) = (parts[0], parts[1]);
+                let (owner, repo_name) = (parts[0], parts[1]);
 
-            if cache.remove_cached(owner, repo_name)? {
-                println!(
-                    "{} Removed {}/{} from cache.",
-                    "✓".green().bold(),
-                    owner,
-                    repo_name
-                );
+                if cache.remove_cached(owner, repo_name)? {
+                    println!(
+                        "{} Removed {}/{} from cache.",
+                        "✓".green().bold(),
+                        owner,
+                        repo_name
+                    );
+                } else {
+                    println!("{owner}/{repo_name} is not cached.");
+                }
             } else {
-                println!("{owner}/{repo_name} is not cached.");
+                bail!(
+                    "Specify a repository to remove or use --all.\n\n\
+                     Usage:\n  \
+                     repoverlay cache remove <owner/repo>  # Remove specific repo\n  \
+                     repoverlay cache remove --all          # Remove all cached repos"
+                );
             }
         }
 
@@ -956,6 +1003,30 @@ fn handle_cache_command(command: CacheCommand) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Clear the entire cache with optional confirmation prompt.
+fn clear_cache(cache: &CacheManager, skip_confirm: bool) -> Result<()> {
+    if !skip_confirm {
+        print!("Remove all cached repositories? [y/N] ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    let count = cache.clear_cache()?;
+    println!(
+        "{} Removed {} cached repository(s).",
+        "✓".green().bold(),
+        count
+    );
     Ok(())
 }
 
@@ -1249,7 +1320,7 @@ fn create_overlay_command(
              Usage:\n  \
              repoverlay create my-overlay          # Detects org/repo from git remote\n  \
              repoverlay create org/repo/my-overlay # Explicit target\n  \
-             repoverlay create --local ./output    # Write to local directory"
+             repoverlay create --output ./output   # Write to local directory"
         )
     })?;
 
@@ -4378,7 +4449,9 @@ directories =
         fn cache_remove_fails_on_invalid_format() {
             // Invalid format (no slash)
             let result = handle_cache_command(CacheCommand::Remove {
-                repo: "invalid".to_string(),
+                repo: Some("invalid".to_string()),
+                all: false,
+                yes: false,
             });
             assert!(result.is_err());
             assert!(
@@ -4392,7 +4465,9 @@ directories =
         #[test]
         fn cache_remove_fails_on_too_many_slashes() {
             let result = handle_cache_command(CacheCommand::Remove {
-                repo: "a/b/c".to_string(),
+                repo: Some("a/b/c".to_string()),
+                all: false,
+                yes: false,
             });
             assert!(result.is_err());
             assert!(
@@ -4400,6 +4475,22 @@ directories =
                     .unwrap_err()
                     .to_string()
                     .contains("Invalid repository format")
+            );
+        }
+
+        #[test]
+        fn cache_remove_fails_when_no_repo_or_all() {
+            let result = handle_cache_command(CacheCommand::Remove {
+                repo: None,
+                all: false,
+                yes: false,
+            });
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Specify a repository")
             );
         }
     }
@@ -5055,7 +5146,7 @@ directories =
                     yes,
                     ..
                 }) => {
-                    assert_eq!(name, "my-overlay");
+                    assert_eq!(name, Some("my-overlay".to_string()));
                     assert_eq!(include.len(), 2);
                     assert!(force);
                     assert!(yes);
@@ -5065,9 +5156,31 @@ directories =
         }
 
         #[test]
-        fn create_requires_name() {
-            let result = Cli::try_parse_from(["repoverlay", "create"]);
-            assert!(result.is_err());
+        fn create_with_output_flag() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "create",
+                "--output",
+                "./output",
+                "--include",
+                ".envrc",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Create { name, output, .. }) => {
+                    assert!(name.is_none());
+                    assert_eq!(output, Some(PathBuf::from("./output")));
+                }
+                _ => panic!("Expected Create command"),
+            }
+        }
+
+        #[test]
+        fn create_accepts_no_args() {
+            // create without name or --output is valid at parse time (error at runtime)
+            let cli = Cli::try_parse_from(["repoverlay", "create"]);
+            assert!(cli.is_ok());
         }
 
         #[test]
@@ -5227,9 +5340,10 @@ directories =
         }
 
         #[test]
-        fn cache_remove_requires_repo() {
-            let result = Cli::try_parse_from(["repoverlay", "cache", "remove"]);
-            assert!(result.is_err());
+        fn cache_remove_no_args_parses_ok() {
+            // No args is valid at parse time (error at runtime)
+            let cli = Cli::try_parse_from(["repoverlay", "cache", "remove"]);
+            assert!(cli.is_ok());
         }
 
         #[test]
@@ -5238,8 +5352,27 @@ directories =
 
             match cli.command {
                 Some(Commands::Cache { command }) => match command {
-                    CacheCommand::Remove { repo } => {
-                        assert_eq!(repo, "owner/repo");
+                    CacheCommand::Remove { repo, all, .. } => {
+                        assert_eq!(repo, Some("owner/repo".to_string()));
+                        assert!(!all);
+                    }
+                    _ => panic!("Expected Cache Remove subcommand"),
+                },
+                _ => panic!("Expected Cache command"),
+            }
+        }
+
+        #[test]
+        fn cache_remove_all_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "cache", "remove", "--all", "--yes"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Cache { command }) => match command {
+                    CacheCommand::Remove { repo, all, yes } => {
+                        assert!(repo.is_none());
+                        assert!(all);
+                        assert!(yes);
                     }
                     _ => panic!("Expected Cache Remove subcommand"),
                 },
