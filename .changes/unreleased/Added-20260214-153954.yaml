@@ -8,3 +8,4 @@ body: |-
     and type mismatches are logged with full dotted key paths. Merged files are tracked with a new
     `Merged` link type in overlay state for correct cleanup on remove/update.
 time: 2026-02-14T15:39:54.999439-08:00
+component: apply

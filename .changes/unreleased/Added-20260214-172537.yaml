@@ -7,3 +7,4 @@ body: |-
     whole overlay, and `--interactive` re-runs the file selection UI with currently-applied files
     pre-selected. The existing `add` command is deprecated in favor of `edit --add`.
 time: 2026-02-14T17:25:37.330434-08:00
+component: edit
