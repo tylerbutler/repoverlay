@@ -350,10 +350,8 @@ enum Commands {
 
     /// Add files to an existing applied overlay
     ///
-    /// Examples:
-    ///   repoverlay add my-overlay newfile.txt
-    ///   repoverlay add my-overlay file1.txt file2.txt
-    ///   repoverlay add org/repo/my-overlay path/to/file.txt
+    /// Deprecated: use `repoverlay edit --add` instead.
+    #[command(hide = true)]
     Add {
         /// Overlay name or full path (org/repo/name)
         ///
@@ -369,6 +367,41 @@ enum Commands {
         target: Option<PathBuf>,
 
         /// Show what would be added without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Edit an existing applied overlay (add files, remove files, or re-select interactively)
+    ///
+    /// Examples:
+    ///   repoverlay edit my-overlay --add newfile.txt
+    ///   repoverlay edit my-overlay --remove oldfile.txt
+    ///   repoverlay edit my-overlay --add new.txt --remove old.txt
+    ///   repoverlay edit org/repo/my-overlay --interactive
+    Edit {
+        /// Overlay name or full path (org/repo/name)
+        ///
+        /// Short form: `my-overlay` - detects org/repo from git remote
+        /// Full form: `org/repo/name` - uses explicit values
+        name: String,
+
+        /// Files to add to the overlay
+        #[arg(short, long, value_name = "FILE", num_args = 1..)]
+        add: Vec<PathBuf>,
+
+        /// Files to remove from the overlay
+        #[arg(short, long, value_name = "FILE", num_args = 1..)]
+        remove: Vec<PathBuf>,
+
+        /// Re-run interactive file selection with current files pre-selected
+        #[arg(short, long, conflicts_with_all = ["add", "remove"])]
+        interactive: bool,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Show what would change without making changes
         #[arg(long)]
         dry_run: bool,
     },
@@ -621,12 +654,28 @@ pub fn run() -> Result<()> {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             sync_overlay(&name, &target, dry_run)?;
         }
+        Commands::Edit {
+            name,
+            add,
+            remove,
+            interactive,
+            target,
+            dry_run,
+        } => {
+            let target = target.unwrap_or_else(|| PathBuf::from("."));
+            edit_overlay(&name, &target, &add, &remove, interactive, dry_run)?;
+        }
         Commands::Add {
             name,
             files,
             target,
             dry_run,
         } => {
+            eprintln!(
+                "{} 'repoverlay add' is deprecated. Use 'repoverlay edit --add' instead.",
+                "Warning:".yellow().bold()
+            );
+            eprintln!();
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             add_files_to_overlay(&name, &target, &files, dry_run)?;
         }
@@ -1539,6 +1588,438 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
 
     // Auto-commit
     auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
+
+    Ok(())
+}
+
+/// Edit an existing applied overlay (add files, remove files, or re-select interactively).
+fn edit_overlay(
+    name_arg: &str,
+    target: &std::path::Path,
+    add_files: &[PathBuf],
+    remove_files: &[PathBuf],
+    interactive: bool,
+    dry_run: bool,
+) -> Result<()> {
+    // Validate at least one operation
+    if add_files.is_empty() && remove_files.is_empty() && !interactive {
+        bail!(
+            "No operation specified. Please specify at least one of:\n  \
+             --add <file>      Add files to the overlay\n  \
+             --remove <file>   Remove files from the overlay\n  \
+             --interactive     Re-select files interactively"
+        );
+    }
+
+    // Handle add
+    if !add_files.is_empty() {
+        add_files_to_overlay(name_arg, target, add_files, dry_run)?;
+    }
+
+    // Handle remove (stub for now)
+    if !remove_files.is_empty() {
+        remove_files_from_overlay(name_arg, target, remove_files, dry_run)?;
+    }
+
+    // Interactive mode
+    if interactive {
+        interactive_edit_overlay(name_arg, target, dry_run)?;
+    }
+
+    Ok(())
+}
+
+/// Resolve an overlay's source to a local filesystem path.
+///
+/// For local overlays, returns the stored path directly.
+/// For overlay repo overlays, reconstructs the path from the overlay repo.
+/// For GitHub overlays, returns an error (not supported for interactive edit).
+fn resolve_overlay_source_path(state: &crate::state::OverlayState) -> Result<PathBuf> {
+    use crate::state::OverlaySource;
+
+    match &state.source {
+        OverlaySource::Local { path } => Ok(path.clone()),
+        OverlaySource::OverlayRepo {
+            org, repo, name, ..
+        } => {
+            use crate::config::load_config;
+            use crate::overlay_repo::OverlayRepoManager;
+
+            let config = load_config(None)?;
+            let overlay_config = config.get_default_overlay_repo_config()?;
+            let manager = OverlayRepoManager::new(overlay_config)?;
+            manager.ensure_cloned()?;
+            Ok(manager.path().join(org).join(repo).join(name))
+        }
+        OverlaySource::GitHub { .. } => {
+            bail!(
+                "Interactive edit is not supported for GitHub overlays.\n\n\
+                 GitHub overlays are cached read-only. Use --add and --remove flags instead."
+            );
+        }
+    }
+}
+
+/// Interactively re-select which files from an overlay source should be applied.
+///
+/// Shows the selection UI with all files from the overlay source directory,
+/// pre-selecting the currently applied files. Computes the diff between the
+/// old and new selections and applies adds/removes accordingly.
+fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
+    use crate::detection::{DetectedFile, FileCategory};
+    use crate::selection::{SelectionConfig, select_files};
+    use crate::{list_applied_overlays, load_overlay_state, normalize_overlay_name};
+    use std::collections::HashSet;
+    use walkdir::WalkDir;
+
+    let target = canonicalize_path(target, "Target directory")?;
+    if !target.join(".git").exists() {
+        bail!(
+            "Target directory is not a git repository: {}",
+            target.display()
+        );
+    }
+
+    // Parse overlay name and verify it's applied
+    let overlay_name = if name_arg.contains('/') {
+        let parts: Vec<&str> = name_arg.split('/').collect();
+        if parts.len() == 3 {
+            parts[2].to_string()
+        } else {
+            bail!("Invalid overlay path: {name_arg}");
+        }
+    } else {
+        name_arg.to_string()
+    };
+
+    let normalized_name = normalize_overlay_name(&overlay_name)?;
+    let applied_overlays = list_applied_overlays(&target)?;
+    if !applied_overlays.contains(&normalized_name) {
+        bail!("Overlay '{overlay_name}' is not currently applied.");
+    }
+
+    let state = load_overlay_state(&target, &normalized_name)?;
+
+    // Resolve overlay source to a local directory
+    let source_path = resolve_overlay_source_path(&state)?;
+
+    if !source_path.exists() {
+        bail!(
+            "Overlay source directory not found: {}\n\n\
+             Interactive edit requires access to the overlay source files.",
+            source_path.display()
+        );
+    }
+
+    // Collect current overlay file paths for pre-selection
+    let current_files: HashSet<PathBuf> = state
+        .file_entries()
+        .iter()
+        .map(|e| e.target.clone())
+        .collect();
+
+    // Walk the overlay source directory to find all available files
+    let mut detected_files: Vec<DetectedFile> = Vec::new();
+    for entry in WalkDir::new(&source_path)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|e| {
+            // Skip hidden directories like .git, but allow hidden files
+            !e.file_type().is_dir()
+                || !e.file_name().to_string_lossy().starts_with('.')
+                || e.depth() == 0
+        })
+        .filter_map(Result::ok)
+    {
+        if entry.file_type().is_file() {
+            let relative = entry
+                .path()
+                .strip_prefix(&source_path)
+                .unwrap_or_else(|_| entry.path())
+                .to_path_buf();
+
+            let is_currently_applied = current_files.contains(&relative);
+
+            detected_files.push(DetectedFile {
+                path: relative,
+                category: FileCategory::Untracked, // Generic category for overlay files
+                preselected: is_currently_applied,
+                depth: 0,
+                parent_dir: None,
+            });
+        }
+    }
+
+    if detected_files.is_empty() {
+        bail!(
+            "No files found in overlay source: {}",
+            source_path.display()
+        );
+    }
+
+    // Sort by path for consistent display
+    detected_files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // Configure selection UI - don't hide any categories
+    let config = SelectionConfig {
+        prompt: format!("Edit overlay '{normalized_name}' \u{2014} select files to include"),
+        default_hidden_categories: HashSet::new(),
+    };
+
+    let result = select_files(&detected_files, config)?;
+
+    if result.cancelled {
+        println!("{} Selection cancelled, no changes made.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // Compute diff: what to add and what to remove
+    let new_selection: HashSet<PathBuf> = result.selected_files.into_iter().collect();
+
+    let to_add: Vec<PathBuf> = new_selection.difference(&current_files).cloned().collect();
+    let to_remove: Vec<PathBuf> = current_files.difference(&new_selection).cloned().collect();
+
+    if to_add.is_empty() && to_remove.is_empty() {
+        println!("{} No changes to apply.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // Print summary
+    println!("{} overlay: {}", "Editing".blue().bold(), normalized_name);
+    if !to_add.is_empty() {
+        println!("\nFiles to add:");
+        for f in &to_add {
+            println!("  {} {}", "+".green(), f.display());
+        }
+    }
+    if !to_remove.is_empty() {
+        println!("\nFiles to remove:");
+        for f in &to_remove {
+            println!("  {} {}", "-".red(), f.display());
+        }
+    }
+
+    if dry_run {
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+        return Ok(());
+    }
+
+    // Apply removals first, then additions
+    if !to_remove.is_empty() {
+        remove_files_from_overlay(name_arg, &target, &to_remove, false)?;
+    }
+    if !to_add.is_empty() {
+        // Copy files from overlay source to target, then add to overlay.
+        // The files exist in the overlay source but not in the target repo.
+        // add_files_to_overlay expects them to exist in the target first.
+        for file in &to_add {
+            let source_file = source_path.join(file);
+            let target_file = target.join(file);
+            if let Some(parent) = target_file.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source_file, &target_file).with_context(|| {
+                format!("Failed to copy {} from overlay source", file.display())
+            })?;
+        }
+        add_files_to_overlay(name_arg, &target, &to_add, false)?;
+    }
+
+    Ok(())
+}
+
+fn remove_files_from_overlay(
+    name_arg: &str,
+    target: &std::path::Path,
+    files: &[PathBuf],
+    dry_run: bool,
+) -> Result<()> {
+    use crate::state::EntryType;
+    use crate::{
+        load_overlay_state, normalize_overlay_name, save_external_state, save_overlay_state,
+        update_git_exclude,
+    };
+
+    let target = canonicalize_path(target, "Target directory")?;
+    if !target.join(".git").exists() {
+        bail!(
+            "Target directory is not a git repository: {}",
+            target.display()
+        );
+    }
+
+    // Extract overlay name from the argument (handles both short and full forms)
+    let overlay_name = if name_arg.contains('/') {
+        let parts: Vec<&str> = name_arg.split('/').collect();
+        if parts.len() == 3 {
+            parts[2].to_string()
+        } else {
+            bail!(
+                "Invalid overlay path format: {name_arg}\n\n\
+                 Use one of:\n  \
+                 - my-overlay (detects org/repo from git remote)\n  \
+                 - org/repo/my-overlay (explicit)"
+            );
+        }
+    } else {
+        name_arg.to_string()
+    };
+
+    let normalized_name = normalize_overlay_name(&overlay_name)?;
+    let applied_overlays = list_applied_overlays(&target)?;
+
+    if !applied_overlays.contains(&normalized_name) {
+        bail!(
+            "Overlay '{}' is not currently applied.\n\n\
+             Applied overlays: {}",
+            overlay_name,
+            if applied_overlays.is_empty() {
+                "(none)".to_string()
+            } else {
+                applied_overlays.join(", ")
+            }
+        );
+    }
+
+    let mut state = load_overlay_state(&target, &normalized_name)?;
+
+    // Validate all files are managed by this overlay
+    for file in files {
+        let file_normalized = file.to_string_lossy().replace('\\', "/");
+        if !state
+            .file_entries()
+            .iter()
+            .any(|e| e.target.to_string_lossy().replace('\\', "/") == file_normalized)
+        {
+            let managed: Vec<String> = state
+                .file_entries()
+                .iter()
+                .map(|e| e.target.to_string_lossy().into_owned())
+                .collect();
+            bail!(
+                "File '{}' is not managed by overlay '{}'.\n\n\
+                 Files in this overlay: {}",
+                file.display(),
+                normalized_name,
+                managed.join(", ")
+            );
+        }
+    }
+
+    println!(
+        "{} files from overlay: {}",
+        "Removing".red().bold(),
+        normalized_name
+    );
+
+    if dry_run {
+        println!("  Target: {}", target.display());
+        println!("\n{} Dry run - no changes made.", "Note:".yellow());
+        println!("\nFiles that would be removed:");
+        for file in files {
+            println!("  {} {}", "-".red(), file.display());
+        }
+        return Ok(());
+    }
+
+    let mut removed_count = 0;
+
+    for file in files {
+        let file_path = target.join(file);
+
+        if file_path.exists() || file_path.is_symlink() {
+            // Find entry type from state before removing
+            let is_directory = state
+                .file_entries()
+                .iter()
+                .any(|e| e.target == *file && e.entry_type == EntryType::Directory);
+
+            if is_directory {
+                if file_path.is_symlink() {
+                    #[cfg(unix)]
+                    fs::remove_file(&file_path).with_context(|| {
+                        format!(
+                            "Failed to remove directory symlink: {}",
+                            file_path.display()
+                        )
+                    })?;
+                    #[cfg(windows)]
+                    fs::remove_dir(&file_path).with_context(|| {
+                        format!(
+                            "Failed to remove directory symlink: {}",
+                            file_path.display()
+                        )
+                    })?;
+                } else {
+                    fs::remove_dir_all(&file_path).with_context(|| {
+                        format!("Failed to remove directory: {}", file_path.display())
+                    })?;
+                }
+                println!("  {} {}/", "-".red(), file.display());
+            } else {
+                fs::remove_file(&file_path)
+                    .with_context(|| format!("Failed to remove: {}", file_path.display()))?;
+                println!("  {} {}", "-".red(), file.display());
+            }
+
+            // Clean up empty parent directories
+            let mut parent = file_path.parent();
+            while let Some(dir) = parent {
+                if dir == target {
+                    break;
+                }
+                if dir
+                    .read_dir()
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(false)
+                {
+                    fs::remove_dir(dir).ok();
+                    parent = dir.parent();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Remove from state
+        state.remove_file(file);
+        removed_count += 1;
+    }
+
+    // Rebuild exclude entries from remaining files
+    let remaining_entries: Vec<String> = state
+        .file_entries()
+        .iter()
+        .map(|e| {
+            let path = e.target.to_string_lossy().replace('\\', "/");
+            match e.entry_type {
+                EntryType::Directory => format!("{path}/"),
+                EntryType::File => path,
+            }
+        })
+        .collect();
+
+    // Rewrite git exclude with remaining entries
+    update_git_exclude(&target, &normalized_name, &remaining_entries, true)?;
+
+    // Save updated state
+    save_overlay_state(&target, &state)?;
+
+    // Save external backup
+    if let Err(e) = save_external_state(&target, &normalized_name, &state) {
+        eprintln!(
+            "  {} Could not save external backup: {}",
+            "Warning:".yellow(),
+            e
+        );
+    }
+
+    println!(
+        "\n{} Removed {} file(s) from overlay '{}'",
+        "done".green().bold(),
+        removed_count,
+        normalized_name
+    );
 
     Ok(())
 }
@@ -5440,6 +5921,149 @@ directories =
                     assert!(target.is_none());
                 }
                 _ => panic!("Expected Add command"),
+            }
+        }
+
+        #[test]
+        fn edit_requires_name() {
+            let result = Cli::try_parse_from(["repoverlay", "edit"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn edit_parses_add_flag() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--add",
+                "file1.txt",
+                "file2.txt",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit {
+                    name,
+                    add,
+                    remove,
+                    interactive,
+                    dry_run,
+                    ..
+                }) => {
+                    assert_eq!(name, "my-overlay");
+                    assert_eq!(
+                        add,
+                        vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")]
+                    );
+                    assert!(remove.is_empty());
+                    assert!(!interactive);
+                    assert!(!dry_run);
+                }
+                _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn edit_parses_remove_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "edit", "my-overlay", "--remove", "file1.txt"])
+                    .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit { remove, .. }) => {
+                    assert_eq!(remove, vec![PathBuf::from("file1.txt")]);
+                }
+                _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn edit_parses_combined_add_remove() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--add",
+                "new.txt",
+                "--remove",
+                "old.txt",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit { add, remove, .. }) => {
+                    assert_eq!(add, vec![PathBuf::from("new.txt")]);
+                    assert_eq!(remove, vec![PathBuf::from("old.txt")]);
+                }
+                _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn edit_interactive_conflicts_with_add() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--interactive",
+                "--add",
+                "file.txt",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn edit_interactive_conflicts_with_remove() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--interactive",
+                "--remove",
+                "file.txt",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn edit_parses_dry_run() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--add",
+                "f.txt",
+                "--dry-run",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit { dry_run, .. }) => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn edit_parses_target_flag() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "my-overlay",
+                "--add",
+                "f.txt",
+                "-t",
+                "/repo",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit { target, .. }) => {
+                    assert_eq!(target, Some(PathBuf::from("/repo")));
+                }
+                _ => panic!("Expected Edit command"),
             }
         }
     }
