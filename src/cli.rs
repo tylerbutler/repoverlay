@@ -6055,4 +6055,43 @@ directories =
             }
         }
     }
+
+    // Additional parse_overlay_name_arg edge cases
+    mod parse_overlay_name_arg_additional_tests {
+        use super::*;
+        use std::path::Path;
+
+        #[test]
+        fn two_slash_path_with_hyphens_and_underscores() {
+            let result =
+                parse_overlay_name_arg("my-org/my_repo/my-overlay_v2", Path::new("/tmp")).unwrap();
+            assert_eq!(
+                result,
+                (
+                    "my-org".to_string(),
+                    "my_repo".to_string(),
+                    "my-overlay_v2".to_string()
+                )
+            );
+        }
+
+        #[test]
+        fn five_slash_path_errors() {
+            let source = create_test_repo();
+            let result = parse_overlay_name_arg("a/b/c/d/e", source.path());
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid overlay path format")
+            );
+        }
+
+        #[test]
+        fn empty_name_in_full_form() {
+            let result = parse_overlay_name_arg("org/repo/", Path::new("/tmp"));
+            assert!(result.is_err());
+        }
+    }
 }

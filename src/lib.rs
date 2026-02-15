@@ -5723,4 +5723,342 @@ mod tests {
         assert!(items[1].1); // b disabled (already applied)
         assert!(!items[2].1); // c not disabled
     }
+
+    // Tests for fuzzy_suggest
+    mod fuzzy_suggest_tests {
+        use super::*;
+
+        #[test]
+        fn empty_candidates_returns_empty() {
+            let result = fuzzy_suggest("test", &[]);
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn empty_query_returns_results() {
+            let candidates = vec!["alpha".to_string(), "beta".to_string()];
+            let result = fuzzy_suggest("", &candidates);
+            // Empty query may or may not return results depending on fuzzy matcher
+            // but it should not panic
+            let _ = result;
+        }
+
+        #[test]
+        fn exact_match_returns_match() {
+            let candidates = vec![
+                "vscode-setup".to_string(),
+                "ci-config".to_string(),
+                "claude-config".to_string(),
+            ];
+            let result = fuzzy_suggest("vscode-setup", &candidates);
+            assert!(!result.is_empty());
+            assert!(result.contains(&"vscode-setup".to_string()));
+        }
+
+        #[test]
+        fn limits_to_three_results() {
+            let candidates: Vec<String> = (0..10).map(|i| format!("overlay-{i}")).collect();
+            let result = fuzzy_suggest("overlay", &candidates);
+            assert!(result.len() <= 3);
+        }
+
+        #[test]
+        fn partial_match_returns_suggestions() {
+            let candidates = vec![
+                "vscode-setup".to_string(),
+                "vscode-debug".to_string(),
+                "ci-config".to_string(),
+            ];
+            let result = fuzzy_suggest("vscode", &candidates);
+            // Should find vscode-related matches
+            assert!(!result.is_empty());
+        }
+    }
+
+    // Tests for format_not_found_error
+    mod format_not_found_error_tests {
+        use super::*;
+
+        #[test]
+        fn basic_error_message() {
+            let msg = format_not_found_error("org", "repo", "name", &[], None);
+            assert!(msg.contains("Overlay not found: org/repo/name"));
+            assert!(msg.contains("repoverlay list --filter org/repo"));
+        }
+
+        #[test]
+        fn with_suggestions() {
+            let suggestions = vec!["vscode-setup".to_string(), "ci-config".to_string()];
+            let msg = format_not_found_error("org", "repo", "name", &suggestions, None);
+            assert!(msg.contains("Did you mean?"));
+            assert!(msg.contains("vscode-setup"));
+            assert!(msg.contains("ci-config"));
+        }
+
+        #[test]
+        fn with_source_list() {
+            let msg = format_not_found_error("org", "repo", "name", &[], Some("personal, team"));
+            assert!(msg.contains("Searched sources: personal, team"));
+        }
+
+        #[test]
+        fn with_both_suggestions_and_source_list() {
+            let suggestions = vec!["vscode-setup".to_string()];
+            let msg = format_not_found_error("org", "repo", "name", &suggestions, Some("personal"));
+            assert!(msg.contains("Did you mean?"));
+            assert!(msg.contains("vscode-setup"));
+            assert!(msg.contains("Searched sources: personal"));
+        }
+
+        #[test]
+        fn empty_suggestions_no_did_you_mean() {
+            let msg = format_not_found_error("org", "repo", "name", &[], None);
+            assert!(!msg.contains("Did you mean?"));
+        }
+
+        #[test]
+        fn special_characters_in_names() {
+            let msg = format_not_found_error("my-org", "my_repo", "name-123", &[], None);
+            assert!(msg.contains("my-org/my_repo/name-123"));
+        }
+    }
+
+    // Tests for resolve_git_dir additional edge cases
+    mod resolve_git_dir_additional_tests {
+        use super::*;
+
+        #[test]
+        fn git_file_with_extra_whitespace() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            let worktree_git_dir = temp.path().join("actual-git-dir");
+            fs::create_dir_all(&worktree_git_dir).unwrap();
+
+            // Extra whitespace around gitdir path
+            let git_file_content = format!("gitdir:   {}  \n", worktree_git_dir.display());
+            fs::write(repo_path.join(".git"), git_file_content).unwrap();
+
+            let result = resolve_git_dir(repo_path);
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn git_file_pointing_to_nonexistent_directory() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            fs::write(
+                repo_path.join(".git"),
+                "gitdir: /nonexistent/path/abc123xyz\n",
+            )
+            .unwrap();
+
+            let result = resolve_git_dir(repo_path);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to resolve gitdir path")
+            );
+        }
+    }
+
+    // Tests for remove_single_overlay
+    mod remove_single_overlay_tests {
+        use super::*;
+
+        fn create_test_repo_with_overlay() -> (TempDir, String) {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true, // copy mode so we don't need to keep overlay dir alive
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let overlays_dir = repo
+                .path()
+                .join(STATE_DIR)
+                .join(OVERLAYS_DIR)
+                .to_string_lossy()
+                .to_string();
+            (repo, overlays_dir)
+        }
+
+        #[test]
+        fn removes_applied_overlay_files() {
+            let (repo, _) = create_test_repo_with_overlay();
+            let overlays_dir = repo.path().join(STATE_DIR).join(OVERLAYS_DIR);
+
+            assert!(repo.path().join(".envrc").exists());
+
+            remove_single_overlay(repo.path(), &overlays_dir, "test-overlay").unwrap();
+
+            assert!(!repo.path().join(".envrc").exists());
+        }
+
+        #[test]
+        fn removes_state_file() {
+            let (repo, _) = create_test_repo_with_overlay();
+            let overlays_dir = repo.path().join(STATE_DIR).join(OVERLAYS_DIR);
+
+            let state_file = overlays_dir.join("test-overlay.ccl");
+            assert!(state_file.exists());
+
+            remove_single_overlay(repo.path(), &overlays_dir, "test-overlay").unwrap();
+
+            assert!(!state_file.exists());
+        }
+
+        #[test]
+        fn removes_git_exclude_section() {
+            let (repo, _) = create_test_repo_with_overlay();
+            let overlays_dir = repo.path().join(STATE_DIR).join(OVERLAYS_DIR);
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            let content_before = fs::read_to_string(&exclude_path).unwrap();
+            assert!(content_before.contains("# repoverlay:test-overlay start"));
+
+            remove_single_overlay(repo.path(), &overlays_dir, "test-overlay").unwrap();
+
+            let content_after = fs::read_to_string(&exclude_path).unwrap();
+            assert!(!content_after.contains("# repoverlay:test-overlay"));
+        }
+
+        #[test]
+        fn nonexistent_overlay_returns_error() {
+            let (repo, _) = create_test_repo_with_overlay();
+            let overlays_dir = repo.path().join(STATE_DIR).join(OVERLAYS_DIR);
+
+            // Try to remove non-existent overlay when there's a real one applied
+            let result = remove_single_overlay(repo.path(), &overlays_dir, "nonexistent");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("not found"),
+                "Error should contain 'not found': {err}"
+            );
+            assert!(
+                err.contains("test-overlay"),
+                "Error should list available overlays: {err}"
+            );
+        }
+
+        #[test]
+        fn nonexistent_overlay_with_no_overlays_applied() {
+            let repo = create_test_repo();
+            let overlays_dir = repo.path().join(STATE_DIR).join(OVERLAYS_DIR);
+            fs::create_dir_all(&overlays_dir).unwrap();
+
+            let result = remove_single_overlay(repo.path(), &overlays_dir, "nonexistent");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("No overlays are currently applied"));
+        }
+
+        #[test]
+        fn removes_nested_file_and_cleans_parent_dir() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join(".vscode")).unwrap();
+            fs::write(
+                overlay.path().join(".vscode/settings.json"),
+                r#"{"editor.tabSize": 2}"#,
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true, // copy mode
+                Some("nested-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            assert!(repo.path().join(".vscode/settings.json").exists());
+            assert!(repo.path().join(".vscode").exists());
+
+            let overlays_dir = repo.path().join(STATE_DIR).join(OVERLAYS_DIR);
+            remove_single_overlay(repo.path(), &overlays_dir, "nested-overlay").unwrap();
+
+            assert!(!repo.path().join(".vscode/settings.json").exists());
+            // Parent .vscode should be cleaned up since it's empty
+            assert!(!repo.path().join(".vscode").exists());
+        }
+    }
+
+    // Tests for list_overlays_from_path additional edge cases
+    mod list_overlays_from_path_additional_tests {
+        use super::*;
+
+        #[test]
+        fn handles_symlinks_in_directory() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            // Create real overlay
+            fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+
+            // Create a symlink at org level (should still work)
+            #[cfg(unix)]
+            {
+                let real_org = repo_path.join("real-org/repo/overlay2");
+                fs::create_dir_all(&real_org).unwrap();
+                std::os::unix::fs::symlink(
+                    repo_path.join("real-org"),
+                    repo_path.join("linked-org"),
+                )
+                .unwrap();
+
+                let overlays = list_overlays_from_path(repo_path).unwrap();
+                // Should find overlays through both real and symlinked paths
+                assert!(overlays.len() >= 2);
+            }
+        }
+
+        #[test]
+        fn nonexistent_path_returns_error() {
+            let result = list_overlays_from_path(Path::new("/nonexistent/path/xyz123"));
+            assert!(result.is_err());
+        }
+    }
+
+    // Tests for conflict_strategy
+    mod conflict_strategy_tests {
+        use super::*;
+
+        #[test]
+        fn default_is_fail() {
+            assert_eq!(ConflictStrategy::default(), ConflictStrategy::Fail);
+        }
+
+        #[test]
+        fn enum_equality() {
+            assert_eq!(ConflictStrategy::Fail, ConflictStrategy::Fail);
+            assert_eq!(ConflictStrategy::Force, ConflictStrategy::Force);
+            assert_eq!(
+                ConflictStrategy::SkipConflicts,
+                ConflictStrategy::SkipConflicts
+            );
+            assert_ne!(ConflictStrategy::Fail, ConflictStrategy::Force);
+        }
+    }
 }

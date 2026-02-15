@@ -2928,4 +2928,421 @@ mod tests {
         assert!(state.selections.contains("b"));
         assert!(state.selections.contains("c"));
     }
+
+    #[test]
+    fn test_expand_current_on_already_expanded_directory() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // .claude is already expanded; move cursor to it
+        state.cursor_down();
+        assert_eq!(
+            state.visible_files()[state.cursor].path,
+            PathBuf::from(".claude")
+        );
+
+        let expanded_before = state.expanded_dirs.len();
+        state.expand_current(); // no-op since already expanded
+        assert_eq!(state.expanded_dirs.len(), expanded_before);
+    }
+
+    #[test]
+    fn test_collapse_current_on_top_level_file_is_noop() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Cursor on CLAUDE.md (no parent_dir)
+        assert_eq!(state.cursor, 0);
+        state.collapse_current();
+        // Should not crash, cursor stays at 0
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_dir_selection_state_empty_dir() {
+        // Directory with no descendants
+        let files = vec![
+            DetectedFile {
+                path: PathBuf::from("CLAUDE.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                depth: 0,
+                parent_dir: None,
+            },
+            DetectedFile {
+                path: PathBuf::from(".empty-dir"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                depth: 0,
+                parent_dir: None,
+            },
+        ];
+        let state = SelectionState::new(files, HashSet::new());
+
+        // Directory with no children returns None
+        assert_eq!(
+            state.dir_selection_state(Path::new(".empty-dir")),
+            DirSelectionState::None
+        );
+    }
+
+    #[test]
+    fn test_descendants_of_nonexistent_dir() {
+        let files = make_test_files_with_children();
+        let state = SelectionState::new(files, HashSet::new());
+
+        // Non-existent directory has no descendants
+        let descendants = state.descendants_of(Path::new("nonexistent-dir"));
+        assert!(descendants.is_empty());
+    }
+
+    #[test]
+    fn test_all_ancestors_expanded_root_level() {
+        let files = make_test_files_with_children();
+        let state = SelectionState::new(files, HashSet::new());
+
+        // Root-level files (parent_dir: None) always have all ancestors expanded
+        assert!(state.all_ancestors_expanded(&state.all_files[0])); // CLAUDE.md
+        assert!(state.all_ancestors_expanded(&state.all_files[5])); // .envrc
+    }
+
+    #[test]
+    fn test_resolve_paths_no_selections() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.selections.clear();
+
+        let resolved = state.resolve_selected_paths();
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn test_flat_state_new_excludes_disabled_from_preselection() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "Alpha".into(),
+                description: None,
+                preselected: true,
+                disabled: true,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "Beta".into(),
+                description: None,
+                preselected: true,
+                disabled: false,
+            },
+        ];
+        let state = FlatSelectionState::new(items);
+        assert!(!state.selections.contains("a")); // disabled, even though preselected
+        assert!(state.selections.contains("b"));
+    }
+
+    #[test]
+    fn test_flat_state_visible_items_empty_query() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "Alpha".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "Beta".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let state = FlatSelectionState::new(items);
+        assert_eq!(state.visible_items().len(), 2);
+    }
+
+    #[test]
+    fn test_flat_state_visible_items_case_insensitive() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "ALPHA".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "beta".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.search_query = "alpha".into();
+        let visible = state.visible_items();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "a");
+    }
+
+    #[test]
+    fn test_flat_state_toggle_on_and_off() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        assert!(!state.selections.contains("a"));
+
+        state.toggle_selection(0);
+        assert!(state.selections.contains("a"));
+
+        state.toggle_selection(0);
+        assert!(!state.selections.contains("a"));
+    }
+
+    #[test]
+    fn test_flat_state_toggle_out_of_bounds() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        // Out of bounds should not panic
+        state.toggle_selection(5);
+        assert!(!state.selections.contains("a"));
+    }
+
+    #[test]
+    fn test_flat_state_select_all_visible_deselects_when_all_selected() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "Alpha".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "Beta".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        // Select all
+        state.select_all_visible();
+        assert!(state.selections.contains("a"));
+        assert!(state.selections.contains("b"));
+
+        // Select all again should deselect all (toggle behavior)
+        state.select_all_visible();
+        assert!(!state.selections.contains("a"));
+        assert!(!state.selections.contains("b"));
+    }
+
+    #[test]
+    fn test_flat_state_clamp_cursor_empty() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        state.cursor = 5;
+        state.search_query = "nonexistent".into();
+        state.clamp_cursor();
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_flat_state_clamp_cursor_within_range() {
+        let items = vec![
+            SelectableItem {
+                id: "a".into(),
+                label: "Alpha".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "b".into(),
+                label: "Beta".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.cursor = 10;
+        state.clamp_cursor();
+        assert_eq!(state.cursor, 1); // clamped to len - 1
+    }
+
+    #[test]
+    fn test_adjust_flat_scroll_cursor_above_viewport() {
+        let items: Vec<_> = (0..20)
+            .map(|i| SelectableItem {
+                id: format!("item{i}"),
+                label: format!("Item {i}"),
+                description: None,
+                preselected: false,
+                disabled: false,
+            })
+            .collect();
+        let mut state = FlatSelectionState::new(items);
+        state.scroll_offset = 10;
+        state.cursor = 5;
+        adjust_flat_scroll(&mut state);
+        assert_eq!(state.scroll_offset, 5);
+    }
+
+    #[test]
+    fn test_adjust_flat_scroll_cursor_below_viewport() {
+        let items: Vec<_> = (0..20)
+            .map(|i| SelectableItem {
+                id: format!("item{i}"),
+                label: format!("Item {i}"),
+                description: None,
+                preselected: false,
+                disabled: false,
+            })
+            .collect();
+        let mut state = FlatSelectionState::new(items);
+        state.scroll_offset = 0;
+        state.cursor = 18;
+        adjust_flat_scroll(&mut state);
+        // max_visible = 15, so scroll_offset = 18 - 15 + 1 = 4
+        assert_eq!(state.scroll_offset, 4);
+    }
+
+    #[test]
+    fn test_handle_flat_search_key_esc_returns_true() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+        let exit_search = handle_flat_search_key(key, &mut state);
+        assert!(exit_search);
+    }
+
+    #[test]
+    fn test_handle_flat_search_key_enter_returns_true() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        let exit_search = handle_flat_search_key(key, &mut state);
+        assert!(exit_search);
+    }
+
+    #[test]
+    fn test_handle_flat_search_key_char_appends() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty());
+        let exit_search = handle_flat_search_key(key, &mut state);
+        assert!(!exit_search);
+        assert_eq!(state.search_query, "x");
+    }
+
+    #[test]
+    fn test_handle_flat_search_key_backspace_pops() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        state.search_query = "ab".into();
+        let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty());
+        let exit_search = handle_flat_search_key(key, &mut state);
+        assert!(!exit_search);
+        assert_eq!(state.search_query, "a");
+    }
+
+    #[test]
+    fn test_handle_flat_search_key_ctrl_c_clears() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        state.search_query = "hello".into();
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let exit_search = handle_flat_search_key(key, &mut state);
+        assert!(exit_search);
+        assert!(state.search_query.is_empty());
+    }
+
+    #[test]
+    fn test_flat_state_with_descriptions() {
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "Alpha".into(),
+            description: Some("already applied".into()),
+            preselected: false,
+            disabled: true,
+        }];
+        let state = FlatSelectionState::new(items);
+        assert_eq!(state.items[0].description, Some("already applied".into()));
+        assert!(state.items[0].disabled);
+    }
+
+    #[test]
+    fn test_flat_selection_result_fields() {
+        let result = FlatSelectionResult {
+            selected_ids: vec!["a".into(), "b".into()],
+            cancelled: false,
+        };
+        assert_eq!(result.selected_ids.len(), 2);
+        assert!(!result.cancelled);
+
+        let cancelled = FlatSelectionResult {
+            selected_ids: Vec::new(),
+            cancelled: true,
+        };
+        assert!(cancelled.cancelled);
+        assert!(cancelled.selected_ids.is_empty());
+    }
+
+    #[test]
+    fn test_flat_selection_config_fields() {
+        let config = FlatSelectionConfig {
+            prompt: "Choose overlays".into(),
+        };
+        assert_eq!(config.prompt, "Choose overlays");
+    }
 }
