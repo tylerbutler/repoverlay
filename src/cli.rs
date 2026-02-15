@@ -11,7 +11,8 @@ use std::sync::LazyLock;
 use crate::{
     CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, STATE_DIR, apply_overlay,
     canonicalize_path, config, list_applied_overlays, parse_github_owner_repo, remove_overlay,
-    remove_single_overlay, restore_overlays, show_status, switch_overlay, update_overlays,
+    remove_single_overlay, restore_overlays, selection::is_interactive, show_status,
+    switch_overlay, update_overlays,
 };
 
 /// Build version string with git info for local builds
@@ -837,8 +838,9 @@ fn handle_remove(
         return remove_overlay(target, name, remove_all, dry_run);
     }
 
-    // If not interactive and no name specified, require explicit action
-    if !interactive {
+    // If not interactive and no name specified, require explicit action.
+    // In an interactive terminal, default to interactive mode automatically.
+    if !interactive && !is_interactive() {
         bail!(
             "No overlay name specified.\n\n\
              Usage:\n  \
@@ -1601,8 +1603,9 @@ fn edit_overlay(
     interactive: bool,
     dry_run: bool,
 ) -> Result<()> {
-    // Validate at least one operation
-    if add_files.is_empty() && remove_files.is_empty() && !interactive {
+    // Validate at least one operation.
+    // In an interactive terminal, default to interactive mode automatically.
+    if add_files.is_empty() && remove_files.is_empty() && !interactive && !is_interactive() {
         bail!(
             "No operation specified. Please specify at least one of:\n  \
              --add <file>      Add files to the overlay\n  \
@@ -1621,8 +1624,8 @@ fn edit_overlay(
         remove_files_from_overlay(name_arg, target, remove_files, dry_run)?;
     }
 
-    // Interactive mode
-    if interactive {
+    // Interactive mode (explicit flag or auto-detected interactive terminal with no other ops)
+    if interactive || (add_files.is_empty() && remove_files.is_empty() && is_interactive()) {
         interactive_edit_overlay(name_arg, target, dry_run)?;
     }
 

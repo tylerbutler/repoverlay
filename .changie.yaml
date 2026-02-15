@@ -7,11 +7,11 @@ versionFooterPath: ""
 versionExt: md
 envPrefix: CHANGIE
 versionFormat: '## {{.Version}} - {{.Time.Format "2006-01-02"}}'
-kindFormat: '### {{.Kind}}'
+kindFormat: '#### {{.Kind}}'
 changeFormat: |-
-    #### {{(splitn "\n" 2 .Body)._0}}{{with (splitn "\n" 2 .Body)._1 | default "" | trim}}
+    - {{(splitn "\n" 2 .Body)._0}}{{with (splitn "\n" 2 .Body)._1 | default "" | trim}}
 
-    {{.}}{{end}}
+      {{.}}{{end}}
 body:
     block: true
     minLength: 1
@@ -30,10 +30,27 @@ kinds:
       auto: patch
     - label: Security
       auto: patch
+componentFormat: '{{if .Component}}### Command: `{{.Component}}`{{end}}'
+components:
+    - apply
+    - cache
+    - create
+    - create-local
+    - edit
+    - list
+    - remove
+    - restore
+    - source
+    - status
+    - switch
+    - sync
+    - update
 newlines:
     afterChangelogHeader: 1
     afterChangelogVersion: 1
+    afterComponent: 1
     afterKind: 1
     afterVersion: 1
+    beforeComponent: 1
     beforeKind: 1
     endOfVersion: 1

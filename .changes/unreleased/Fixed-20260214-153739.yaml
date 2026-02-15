@@ -6,3 +6,4 @@ body: |-
     target set was stale, causing subsequent conflict checks in the same batch to see
     phantom conflicts. The target set is now reloaded after each forced removal.
 time: 2026-02-14T15:37:39.000000-08:00
+component: apply
