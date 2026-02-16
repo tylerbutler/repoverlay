@@ -1,0 +1,38 @@
+{
+	"name": "repoverlay-docs",
+	"version": "0.0.1",
+	"private": true,
+	"bugs": "https://github.com/tylerbutler/repoverlay/issues",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/tylerbutler/repoverlay.git",
+		"directory": "website"
+	},
+	"license": "MIT",
+	"author": "Tyler Butler <tyler@tylerbutler.com>",
+	"type": "module",
+	"scripts": {
+		"astro": "astro",
+		"build:site": "astro build",
+		"check:astro": "astro check",
+		"clean": "rimraf dist *.tsbuildinfo *.done.build.log .astro .netlify",
+		"dev": "astro dev",
+		"preview": "astro preview",
+		"start": "astro dev"
+	},
+	"dependencies": {
+		"@astrojs/check": "^0.9.6",
+		"@astrojs/netlify": "^6.6.3",
+		"@astrojs/starlight": "^0.37.0",
+		"@fontsource/metropolis": "^5.2.5",
+		"astro": "^5.17.1",
+		"sharp": "^0.34.5",
+		"starlight-links-validator": "^0.19.1",
+		"typescript": "~5.9.3",
+		"zod": "^4.3.5"
+	},
+	"devDependencies": {
+		"@fec/remark-a11y-emoji": "^4.0.2",
+		"@hashicorp/platform-remark-plugins": "^0.2.1"
+	}
+}

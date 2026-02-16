@@ -1,0 +1,52 @@
+---
+title: Quick Start
+---
+
+Get up and running with repoverlay in under two minutes.
+
+## 1. Install repoverlay
+
+See [Installation](/installation/) for all options. The quickest way:
+
+```bash
+# macOS/Linux
+brew install tylerbutler/tap/repoverlay
+
+# Or with cargo
+cargo binstall repoverlay
+```
+
+## 2. Apply an overlay
+
+Navigate to a git repository and apply an overlay from a local directory:
+
+```bash
+cd ~/projects/my-repo
+repoverlay apply ~/my-overlays/ai-config
+```
+
+Or apply directly from a GitHub repository:
+
+```bash
+repoverlay apply https://github.com/user/shared-configs
+```
+
+## 3. Check status
+
+See what overlays are applied:
+
+```bash
+repoverlay status
+```
+
+## 4. Remove when done
+
+```bash
+repoverlay remove ai-config
+```
+
+## Next steps
+
+- Learn [how overlays work](/concepts/how-overlays-work/) under the hood
+- Explore [different source types](/concepts/sources/) (local, GitHub, overlay repos)
+- Follow the [applying overlays guide](/guides/applying/) for advanced usage
