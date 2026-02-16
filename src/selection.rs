@@ -17,6 +17,9 @@ use crossterm::{
 
 use crate::detection::{DetectedFile, FileCategory};
 
+/// Maximum number of items visible in the scrollable viewport.
+const MAX_VISIBLE_ITEMS: usize = 15;
+
 /// Format a number in a human-readable way (e.g., 1.2K, 3.5M).
 #[allow(clippy::cast_precision_loss)]
 pub fn humanize_count(n: usize) -> String {
@@ -94,17 +97,13 @@ impl FlatSelectionState {
     }
 
     fn visible_items(&self) -> Vec<&SelectableItem> {
+        if self.search_query.is_empty() {
+            return self.items.iter().collect();
+        }
+        let query = self.search_query.to_lowercase();
         self.items
             .iter()
-            .filter(|i| {
-                if self.search_query.is_empty() {
-                    true
-                } else {
-                    i.label
-                        .to_lowercase()
-                        .contains(&self.search_query.to_lowercase())
-                }
-            })
+            .filter(|i| i.label.to_lowercase().contains(&query))
             .collect()
     }
 
@@ -450,7 +449,7 @@ impl SelectionState {
     /// Adjust scroll offset to keep cursor visible.
     #[allow(clippy::missing_const_for_fn)]
     fn adjust_scroll(&mut self) {
-        let max_visible = 15; // Max files to show at once
+        let max_visible = MAX_VISIBLE_ITEMS;
         if self.cursor < self.scroll_offset {
             self.scroll_offset = self.cursor;
         } else if self.cursor >= self.scroll_offset + max_visible {
@@ -613,6 +612,23 @@ impl SelectionState {
     }
 }
 
+/// Restore terminal state after raw mode UI.
+///
+/// Shows the cursor, clears the screen, and flushes stdout.
+fn restore_terminal() -> anyhow::Result<()> {
+    let mut stdout = io::stdout();
+    execute!(
+        stdout,
+        cursor::Show,
+        cursor::MoveTo(0, 0),
+        terminal::Clear(ClearType::All),
+    )?;
+    // Print newline to ensure clean state for subsequent prompts
+    println!();
+    stdout.flush()?;
+    Ok(())
+}
+
 /// Run the interactive file selection UI.
 ///
 /// Returns the selected files, or a cancelled result if the user aborts.
@@ -648,22 +664,10 @@ pub fn select_files(
 
     let mut state = SelectionState::new(files.to_vec(), config.default_hidden_categories);
 
-    // Enter raw mode for keyboard input
     terminal::enable_raw_mode()?;
     let result = run_selection_loop(&mut state, &config.prompt);
     terminal::disable_raw_mode()?;
-
-    // Restore terminal state for subsequent prompts
-    let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        cursor::Show,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::All),
-    )?;
-    // Print newline to ensure clean state for subsequent prompts
-    println!();
-    stdout.flush()?;
+    restore_terminal()?;
 
     result
 }
@@ -703,16 +707,7 @@ pub fn select_flat(
     terminal::enable_raw_mode()?;
     let result = run_flat_loop(&mut state, &config.prompt);
     terminal::disable_raw_mode()?;
-
-    let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        cursor::Show,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::All),
-    )?;
-    println!();
-    stdout.flush()?;
+    restore_terminal()?;
 
     result
 }
@@ -788,9 +783,8 @@ fn run_flat_loop(
     }
 }
 
-#[allow(clippy::missing_const_for_fn)]
-fn adjust_flat_scroll(state: &mut FlatSelectionState) {
-    let max_visible = 15;
+const fn adjust_flat_scroll(state: &mut FlatSelectionState) {
+    let max_visible = MAX_VISIBLE_ITEMS;
     if state.cursor < state.scroll_offset {
         state.scroll_offset = state.cursor;
     } else if state.cursor >= state.scroll_offset + max_visible {
@@ -896,7 +890,7 @@ fn render_search_line_flat(stdout: &mut io::Stdout, state: &FlatSelectionState) 
 
 fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
     let visible = state.visible_items();
-    let max_visible = 15;
+    let max_visible = MAX_VISIBLE_ITEMS;
 
     if visible.is_empty() {
         execute!(
@@ -1001,13 +995,7 @@ fn render_flat_help(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::
         execute!(
             stdout,
             SetForegroundColor(Color::DarkGrey),
-            Print("Type to search "),
-            ResetColor
-        )?;
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("| "),
+            Print("Type to search | "),
             ResetColor
         )?;
         render_key_hint(stdout, "Enter/Esc", "done")?;
@@ -1413,7 +1401,7 @@ fn render_selection_summary(stdout: &mut io::Stdout, state: &SelectionState) -> 
 /// Render the file list.
 fn render_file_list(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
     let visible = state.visible_files();
-    let max_visible = 15;
+    let max_visible = MAX_VISIBLE_ITEMS;
 
     if visible.is_empty() {
         execute!(
@@ -1580,13 +1568,7 @@ fn render_help_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Resu
         execute!(
             stdout,
             SetForegroundColor(Color::DarkGrey),
-            Print("Type to search "),
-            ResetColor
-        )?;
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("| "),
+            Print("Type to search | "),
             ResetColor
         )?;
         render_key_hint(stdout, "Enter/Esc", "done")?;
@@ -2025,7 +2007,7 @@ mod tests {
         assert_eq!(state.cursor, 0);
         assert_eq!(state.scroll_offset, 0);
 
-        // Move down past visible area (max_visible = 15)
+        // Move down past visible area (MAX_VISIBLE_ITEMS = 15)
         for _ in 0..16 {
             state.cursor_down();
         }
@@ -3223,7 +3205,7 @@ mod tests {
         state.scroll_offset = 0;
         state.cursor = 18;
         adjust_flat_scroll(&mut state);
-        // max_visible = 15, so scroll_offset = 18 - 15 + 1 = 4
+        // MAX_VISIBLE_ITEMS = 15, so scroll_offset = 18 - 15 + 1 = 4
         assert_eq!(state.scroll_offset, 4);
     }
 

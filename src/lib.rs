@@ -559,11 +559,7 @@ fn select_overlays_interactive(
             SelectableItem {
                 id: o.clone(),
                 label: format_overlay_path(o),
-                description: if disabled {
-                    Some("already applied".into())
-                } else {
-                    None
-                },
+                description: disabled.then(|| "already applied".into()),
                 preselected: false,
                 disabled,
             }
