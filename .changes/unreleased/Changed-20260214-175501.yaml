@@ -1,9 +1,0 @@
-kind: Changed
-body: |-
-    `edit` defaults to interactive file selection when no flags given
-
-    Running `repoverlay edit <name>` without `--add`, `--remove`, or `--interactive`
-    in an interactive terminal now launches interactive file re-selection automatically.
-    Non-interactive environments are unaffected.
-time: 2026-02-14T17:55:01.000000-08:00
-component: edit
