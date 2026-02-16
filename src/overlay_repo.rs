@@ -96,16 +96,16 @@ impl OverlayRepoManager {
 
     /// Clone the overlay repository.
     fn clone_repo(&self) -> Result<()> {
+        let url = &self.config.url;
+
         // Validate URL doesn't look like a flag (defense in depth)
-        if self.config.url.starts_with('-') {
+        if url.starts_with('-') {
             bail!(
-                "Invalid overlay repository URL: '{}' starts with '-' (possible flag injection)",
-                self.config.url
+                "Invalid overlay repository URL: '{url}' starts with '-' (possible flag injection)"
             );
         }
 
         // Only allow HTTPS and SSH URLs to prevent local file access via file:// scheme
-        let url = &self.config.url;
         if !url.starts_with("https://") && !url.starts_with("git@") && !url.starts_with("ssh://") {
             bail!(
                 "Unsupported URL scheme: '{url}'. Only https://, ssh://, and git@ URLs are allowed"
@@ -419,10 +419,18 @@ const MAX_COPY_DEPTH: usize = 64;
 /// Rejects symlinks that point outside the source root to prevent
 /// exfiltration of files from the host filesystem via malicious overlays.
 pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    copy_dir_recursive_inner(src, dst, src, 0)
+    let canonical_root = src
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize source root: {}", src.display()))?;
+    copy_dir_recursive_inner(src, dst, &canonical_root, 0)
 }
 
-fn copy_dir_recursive_inner(src: &Path, dst: &Path, root: &Path, depth: usize) -> Result<()> {
+fn copy_dir_recursive_inner(
+    src: &Path,
+    dst: &Path,
+    canonical_root: &Path,
+    depth: usize,
+) -> Result<()> {
     if depth > MAX_COPY_DEPTH {
         bail!(
             "Maximum directory depth ({MAX_COPY_DEPTH}) exceeded copying {}: possible circular symlinks",
@@ -445,10 +453,7 @@ fn copy_dir_recursive_inner(src: &Path, dst: &Path, root: &Path, depth: usize) -
         if metadata.file_type().is_symlink() {
             match src_path.canonicalize() {
                 Ok(canonical) => {
-                    let canonical_root = root.canonicalize().with_context(|| {
-                        format!("Failed to canonicalize source root: {}", root.display())
-                    })?;
-                    if !canonical.starts_with(&canonical_root) {
+                    if !canonical.starts_with(canonical_root) {
                         bail!(
                             "Symlink escape detected: {} points outside source directory",
                             src_path.display()
@@ -463,13 +468,13 @@ fn copy_dir_recursive_inner(src: &Path, dst: &Path, root: &Path, depth: usize) -
             }
         }
 
-        if metadata.is_dir() || (metadata.file_type().is_symlink() && src_path.is_dir()) {
+        if src_path.is_dir() {
             // Skip .git directory
             if entry.file_name() == ".git" {
                 continue;
             }
             fs::create_dir_all(&dst_path)?;
-            copy_dir_recursive_inner(&src_path, &dst_path, root, depth + 1)?;
+            copy_dir_recursive_inner(&src_path, &dst_path, canonical_root, depth + 1)?;
         } else {
             fs::copy(&src_path, &dst_path)?;
         }
