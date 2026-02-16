@@ -1,8 +1,9 @@
-import netlify from "@astrojs/netlify";
 import starlight from "@astrojs/starlight";
+import starlightCatppuccin from "@catppuccin/starlight";
 import a11yEmoji from "@fec/remark-a11y-emoji";
 import { includeMarkdown } from "@hashicorp/platform-remark-plugins";
 import { defineConfig } from "astro/config";
+import { remarkShiftHeadings } from "remark-shift-headings";
 import starlightLinksValidator from "starlight-links-validator";
 
 // Get the directory name from the script URL
@@ -10,19 +11,7 @@ const rootDir = new URL(".", import.meta.url).pathname;
 
 // https://astro.build/config
 export default defineConfig({
-	output: "server",
-	adapter: netlify({
-		imageCDN: false,
-	}),
 	site: "https://repoverlay.tylerbutler.com",
-	// Prevent zod from being externalized to avoid conflicts between
-	// Astro's bundled zod v3 and user-installed zod v4
-	// See: https://github.com/withastro/astro/issues/14117
-	vite: {
-		ssr: {
-			noExternal: ["zod"],
-		},
-	},
 	integrations: [
 		starlight({
 			title: "repoverlay",
@@ -34,7 +23,10 @@ export default defineConfig({
 				"@fontsource/metropolis/600.css",
 				"./src/styles/custom.css",
 			],
-			plugins: [starlightLinksValidator()],
+			plugins: [starlightCatppuccin({
+				dark: { flavor: "mocha", accent: "blue" },
+				light: { flavor: "latte", accent: "blue" },
+			}), starlightLinksValidator()],
 			social: [
 				{
 					icon: "github",
@@ -76,9 +68,11 @@ export default defineConfig({
 		}),
 	],
 	markdown: {
+		smartypants: false,
 		remarkPlugins: [
 			a11yEmoji,
 			[includeMarkdown, { resolveMdx: true, resolveFrom: rootDir }],
+			remarkShiftHeadings,
 		],
 	},
 });

@@ -15,24 +15,25 @@
 		"astro": "astro",
 		"build:site": "astro build",
 		"check:astro": "astro check",
-		"clean": "rimraf dist *.tsbuildinfo *.done.build.log .astro .netlify",
+		"clean": "rimraf dist *.tsbuildinfo *.done.build.log .astro",
 		"dev": "astro dev",
 		"preview": "astro preview",
 		"start": "astro dev"
 	},
 	"dependencies": {
 		"@astrojs/check": "^0.9.6",
-		"@astrojs/netlify": "^6.6.3",
 		"@astrojs/starlight": "^0.37.0",
+		"@catppuccin/starlight": "^1.1.1",
 		"@fontsource/metropolis": "^5.2.5",
 		"astro": "^5.17.1",
 		"sharp": "^0.34.5",
 		"starlight-links-validator": "^0.19.1",
-		"typescript": "~5.9.3",
-		"zod": "^4.3.5"
+		"typescript": "~5.9.3"
 	},
 	"devDependencies": {
 		"@fec/remark-a11y-emoji": "^4.0.2",
-		"@hashicorp/platform-remark-plugins": "^0.2.1"
+		"@hashicorp/platform-remark-plugins": "^0.2.1",
+		"remark-shift-headings": "^0.1.1",
+		"rimraf": "^6.0.0"
 	}
 }
