@@ -105,8 +105,13 @@ impl OverlayRepoManager {
             );
         }
 
-        // Only allow HTTPS and SSH URLs to prevent local file access via file:// scheme
-        if !url.starts_with("https://") && !url.starts_with("git@") && !url.starts_with("ssh://") {
+        // Only allow HTTPS and SSH URLs to prevent local file access via file:// scheme.
+        // Normalize to lowercase for comparison since URL schemes are case-insensitive (RFC 3986).
+        let url_lower = url.to_ascii_lowercase();
+        if !url_lower.starts_with("https://")
+            && !url_lower.starts_with("git@")
+            && !url_lower.starts_with("ssh://")
+        {
             bail!(
                 "Unsupported URL scheme: '{url}'. Only https://, ssh://, and git@ URLs are allowed"
             );
@@ -259,7 +264,6 @@ impl OverlayRepoManager {
     }
 
     /// Get the path to a specific overlay.
-    #[allow(dead_code)]
     pub fn get_overlay_path(&self, org: &str, repo: &str, name: &str) -> Result<PathBuf> {
         validate_path_component(org, "org")?;
         validate_path_component(repo, "repo")?;
