@@ -21,11 +21,11 @@ const OVERLAY_REPO_DIR: &str = "overlay-repo";
 /// Validate that a path component (org, repo, or overlay name) does not contain
 /// path traversal characters that could escape the overlay repository directory.
 fn validate_path_component(s: &str, label: &str) -> Result<()> {
-    if s.contains("..") || s.contains('/') || s.contains('\\') || s.starts_with('.') {
-        bail!("Invalid {label}: '{s}' contains path traversal characters");
-    }
     if s.is_empty() {
         bail!("Invalid {label}: must not be empty");
+    }
+    if s == "." || s == ".." || s.contains('/') || s.contains('\\') {
+        bail!("Invalid {label}: '{s}' contains path traversal characters");
     }
     Ok(())
 }
@@ -443,17 +443,23 @@ fn copy_dir_recursive_inner(src: &Path, dst: &Path, root: &Path, depth: usize) -
         let metadata = fs::symlink_metadata(&src_path)
             .with_context(|| format!("Failed to read metadata: {}", src_path.display()))?;
         if metadata.file_type().is_symlink() {
-            let canonical = src_path
-                .canonicalize()
-                .with_context(|| format!("Failed to resolve symlink: {}", src_path.display()))?;
-            let canonical_root = root.canonicalize().with_context(|| {
-                format!("Failed to canonicalize source root: {}", root.display())
-            })?;
-            if !canonical.starts_with(&canonical_root) {
-                bail!(
-                    "Symlink escape detected: {} points outside source directory",
-                    src_path.display()
-                );
+            match src_path.canonicalize() {
+                Ok(canonical) => {
+                    let canonical_root = root.canonicalize().with_context(|| {
+                        format!("Failed to canonicalize source root: {}", root.display())
+                    })?;
+                    if !canonical.starts_with(&canonical_root) {
+                        bail!(
+                            "Symlink escape detected: {} points outside source directory",
+                            src_path.display()
+                        );
+                    }
+                }
+                Err(_) => {
+                    // Dangling symlink - target doesn't exist. Skip it rather than
+                    // failing the entire copy, since a broken symlink can't exfiltrate data.
+                    continue;
+                }
             }
         }
 
@@ -1065,9 +1071,9 @@ mod tests {
     #[test]
     fn test_validate_path_component_rejects_traversal() {
         assert!(validate_path_component("..", "test").is_err());
+        assert!(validate_path_component(".", "test").is_err());
         assert!(validate_path_component("../etc", "test").is_err());
         assert!(validate_path_component("foo/..", "test").is_err());
-        assert!(validate_path_component(".hidden", "test").is_err());
         assert!(validate_path_component("foo/bar", "test").is_err());
         assert!(validate_path_component("foo\\bar", "test").is_err());
         assert!(validate_path_component("", "test").is_err());
@@ -1079,6 +1085,8 @@ mod tests {
         assert!(validate_path_component("FluidFramework", "test").is_ok());
         assert!(validate_path_component("claude-config", "test").is_ok());
         assert!(validate_path_component("my_overlay", "test").is_ok());
+        assert!(validate_path_component(".github", "test").is_ok());
+        assert!(validate_path_component(".hidden", "test").is_ok());
     }
 
     #[test]
@@ -1139,6 +1147,32 @@ mod tests {
         let result = copy_dir_recursive(&src, &dst);
         assert!(result.is_ok());
         assert!(dst.join("internal-link.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_copy_dir_recursive_skips_dangling_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dst = temp.path().join("dst");
+
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("real.txt"), "content").unwrap();
+
+        // Create a symlink to a non-existent target within the source tree
+        std::os::unix::fs::symlink(src.join("nonexistent.txt"), src.join("dangling.txt")).unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        let result = copy_dir_recursive(&src, &dst);
+        assert!(
+            result.is_ok(),
+            "Dangling symlinks should be skipped, not cause failure"
+        );
+        assert!(dst.join("real.txt").exists());
+        assert!(
+            !dst.join("dangling.txt").exists(),
+            "Dangling symlink should not be copied"
+        );
     }
 
     #[test]
