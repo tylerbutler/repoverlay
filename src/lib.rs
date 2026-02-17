@@ -9,6 +9,7 @@ mod detection;
 mod fuzzy;
 mod github;
 mod json_merge;
+mod overlay_name;
 mod overlay_repo;
 mod reference;
 mod selection;
@@ -38,6 +39,7 @@ use cache::CacheManager;
 use fuzzy::OverlayMatcher;
 use github::GitHubSource;
 use json_merge::{is_json_file, merge_json_files};
+pub(crate) use overlay_name::OverlayName;
 use overlay_repo::{AvailableOverlay, copy_dir_recursive};
 use reference::SourceReference;
 use selection::is_interactive;
@@ -1668,7 +1670,7 @@ pub(crate) fn remove_overlay(
     if remove_all {
         // Remove all overlays
         for overlay_name in &applied_overlays {
-            remove_single_overlay(&target, &overlays_dir, overlay_name)?;
+            remove_single_overlay(&target, &overlays_dir, overlay_name.as_str())?;
         }
 
         // Clean up .repoverlay directory entirely
@@ -1705,10 +1707,11 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
         if available.is_empty() {
             bail!("No overlays are currently applied");
         }
+        let names: Vec<&str> = available.iter().map(OverlayName::as_str).collect();
         bail!(
             "Overlay '{}' not found. Available overlays: {}",
             name,
-            available.join(", ")
+            names.join(", ")
         );
     }
 
@@ -1834,11 +1837,12 @@ pub(crate) fn show_status(target: &Path, filter_name: Option<String>) -> Result<
     if let Some(filter) = filter_name {
         let normalized = normalize_overlay_name(&filter)?;
 
-        if !applied_overlays.contains(&normalized) {
+        if !applied_overlays.contains(&OverlayName::new(&normalized)) {
+            let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
             bail!(
                 "Overlay '{}' is not applied. Available: {}",
                 filter,
-                applied_overlays.join(", ")
+                names.join(", ")
             );
         }
 
@@ -1855,7 +1859,7 @@ pub(crate) fn show_status(target: &Path, filter_name: Option<String>) -> Result<
     println!();
 
     for overlay_name in &applied_overlays {
-        show_single_overlay_status(&target, overlay_name)?;
+        show_single_overlay_status(&target, overlay_name.as_str())?;
         println!();
     }
 
@@ -2102,16 +2106,17 @@ pub(crate) fn update_overlays(
     }
 
     // Filter to just the specified overlay if name provided
-    let overlays_to_check: Vec<_> = if let Some(ref name) = name {
+    let overlays_to_check: Vec<OverlayName> = if let Some(ref name) = name {
         let normalized = normalize_overlay_name(name)?;
-        if !applied_overlays.contains(&normalized) {
+        if !applied_overlays.contains(&OverlayName::new(&normalized)) {
+            let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
             bail!(
                 "Overlay '{}' is not applied. Available: {}",
                 name,
-                applied_overlays.join(", ")
+                names.join(", ")
             );
         }
-        vec![normalized]
+        vec![OverlayName::new(normalized)]
     } else {
         applied_overlays
     };
@@ -2121,7 +2126,7 @@ pub(crate) fn update_overlays(
 
     // Check for updates
     for overlay_name in &overlays_to_check {
-        let state = load_overlay_state(&target, overlay_name)?;
+        let state = load_overlay_state(&target, overlay_name.as_str())?;
 
         if let OverlaySource::GitHub {
             owner,
@@ -2197,12 +2202,12 @@ pub(crate) fn update_overlays(
 
     // Apply updates
     for (normalized_name, _, _, _, _) in &updates_available {
-        let state = load_overlay_state(&target, normalized_name)?;
+        let state = load_overlay_state(&target, normalized_name.as_str())?;
 
         if let OverlaySource::GitHub { url, git_ref, .. } = &state.source {
             // Remove old overlay
             let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-            remove_single_overlay(&target, &overlays_dir, normalized_name)?;
+            remove_single_overlay(&target, &overlays_dir, normalized_name.as_str())?;
 
             // Re-apply with update
             apply_overlay(
@@ -4317,13 +4322,18 @@ mod tests {
             );
             let overlay_name = &applied[0];
 
-            remove_overlay(ctx.repo_path(), Some(overlay_name.clone()), false, false)
-                .expect("remove should succeed");
+            remove_overlay(
+                ctx.repo_path(),
+                Some(overlay_name.to_string()),
+                false,
+                false,
+            )
+            .expect("remove should succeed");
 
             // Verify overlay was removed from in-repo state
             assert!(!ctx.file_exists(".envrc"), "overlay file should be removed");
             assert!(
-                !ctx.overlay_state_exists(overlay_name),
+                !ctx.overlay_state_exists(overlay_name.as_str()),
                 "in-repo state should be removed"
             );
 
@@ -4459,8 +4469,13 @@ mod tests {
             let overlay_name = &applied[0];
 
             // Step 2: Remove the overlay (marks removed_at)
-            remove_overlay(ctx.repo_path(), Some(overlay_name.clone()), false, false)
-                .expect("remove should succeed");
+            remove_overlay(
+                ctx.repo_path(),
+                Some(overlay_name.to_string()),
+                false,
+                false,
+            )
+            .expect("remove should succeed");
 
             // Verify removed_at is set
             let ext_dir = external_state_dir_for_target(&canonical_repo_path).unwrap();

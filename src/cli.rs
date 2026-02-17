@@ -9,10 +9,10 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{
-    CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, STATE_DIR, apply_overlay,
-    canonicalize_path, config, list_applied_overlays, parse_github_owner_repo, remove_overlay,
-    remove_single_overlay, restore_overlays, selection::is_interactive, show_status,
-    switch_overlay, update_overlays,
+    CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, STATE_DIR,
+    apply_overlay, canonicalize_path, config, list_applied_overlays, parse_github_owner_repo,
+    remove_overlay, remove_single_overlay, restore_overlays, selection::is_interactive,
+    show_status, switch_overlay, update_overlays,
 };
 
 /// Build version string with git info for local builds
@@ -890,7 +890,7 @@ fn handle_remove(
                 return Ok(());
             }
             for overlay_name in &applied_overlays {
-                remove_single_overlay(&target, &overlays_dir, overlay_name)?;
+                remove_single_overlay(&target, &overlays_dir, overlay_name.as_str())?;
             }
             fs::remove_dir_all(target.join(STATE_DIR))?;
             println!("\n{} Removed all overlays", "✓".green().bold());
@@ -904,7 +904,7 @@ fn handle_remove(
                 );
                 return Ok(());
             }
-            remove_single_overlay(&target, &overlays_dir, overlay_name)?;
+            remove_single_overlay(&target, &overlays_dir, overlay_name.as_str())?;
 
             let remaining = list_applied_overlays(&target)?;
             if remaining.is_empty() {
@@ -919,7 +919,7 @@ fn handle_remove(
             return Ok(());
         }
         for overlay_name in &applied_overlays {
-            remove_single_overlay(&target, &overlays_dir, overlay_name)?;
+            remove_single_overlay(&target, &overlays_dir, overlay_name.as_str())?;
         }
         fs::remove_dir_all(target.join(STATE_DIR))?;
         println!("\n{} Removed all overlays", "✓".green().bold());
@@ -1503,7 +1503,7 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
 
-    if !applied_overlays.contains(&normalized_name) {
+    if !applied_overlays.contains(&OverlayName::new(&normalized_name)) {
         bail!(
             "Overlay '{overlay_name}' is not currently applied.\n\n\
              To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
@@ -1670,6 +1670,7 @@ fn resolve_overlay_source_path(state: &crate::state::OverlayState) -> Result<Pat
 /// old and new selections and applies adds/removes accordingly.
 fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
     use crate::detection::{DetectedFile, FileCategory};
+    use crate::overlay_name::OverlayName;
     use crate::selection::{SelectionConfig, select_files};
     use crate::{list_applied_overlays, load_overlay_state, normalize_overlay_name};
     use std::collections::HashSet;
@@ -1697,7 +1698,7 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
 
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
-    if !applied_overlays.contains(&normalized_name) {
+    if !applied_overlays.contains(&OverlayName::new(&normalized_name)) {
         bail!("Overlay '{overlay_name}' is not currently applied.");
     }
 
@@ -1871,7 +1872,8 @@ fn remove_files_from_overlay(
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
 
-    if !applied_overlays.contains(&normalized_name) {
+    if !applied_overlays.contains(&OverlayName::new(&normalized_name)) {
+        let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
         bail!(
             "Overlay '{}' is not currently applied.\n\n\
              Applied overlays: {}",
@@ -1879,7 +1881,7 @@ fn remove_files_from_overlay(
             if applied_overlays.is_empty() {
                 "(none)".to_string()
             } else {
-                applied_overlays.join(", ")
+                names.join(", ")
             }
         );
     }
@@ -2067,7 +2069,7 @@ fn add_files_to_overlay(
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
 
-    if !applied_overlays.contains(&normalized_name) {
+    if !applied_overlays.contains(&OverlayName::new(&normalized_name)) {
         bail!(
             "Overlay '{overlay_name}' is not currently applied.\n\n\
              To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
