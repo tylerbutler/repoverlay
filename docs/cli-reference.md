@@ -287,9 +287,9 @@ List available overlays from the overlay repository
 
 Sync changes from an applied overlay back to the overlay repo
 
-Examples: repoverlay sync my-overlay          # Detects org/repo from git remote repoverlay sync org/repo/my-overlay # Explicit target
+Examples: repoverlay sync my-overlay          # Detects org/repo from git remote repoverlay sync org/repo/my-overlay # Explicit target repoverlay sync --all               # Sync all applied overlays
 
-**Usage:** `repoverlay sync [OPTIONS] <NAME>`
+**Usage:** `repoverlay sync [OPTIONS] [NAME]`
 
 ###### **Arguments:**
 
@@ -300,6 +300,7 @@ Examples: repoverlay sync my-overlay          # Detects org/repo from git remote
 ###### **Options:**
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `--all` — Sync all applied overlays from the overlay repo
 * `--dry-run` — Show what would be synced without making changes
 
 

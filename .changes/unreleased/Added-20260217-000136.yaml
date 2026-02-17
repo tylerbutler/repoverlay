@@ -1,0 +1,9 @@
+kind: Added
+body: |-
+    Show already-applied overlays as disabled in the overlay picker
+
+    The interactive overlay picker now displays already-applied overlays as
+    dimmed, non-selectable entries so users can see what's active without
+    leaving the selection UI.
+time: 2026-02-17T00:01:36Z
+component: apply

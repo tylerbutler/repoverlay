@@ -825,4 +825,221 @@ mod tests {
         let names = manager.source_names();
         assert_eq!(names, vec!["personal", "team"]);
     }
+
+    #[test]
+    fn test_get_source_found() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path();
+
+        let sources = vec![
+            Source {
+                name: "personal".to_string(),
+                url: "https://github.com/user/overlays".to_string(),
+            },
+            Source {
+                name: "team".to_string(),
+                url: "https://github.com/team/overlays".to_string(),
+            },
+        ];
+
+        let manager = SourceManager {
+            sources: sources
+                .into_iter()
+                .map(|source| {
+                    let local_path = cache_dir.join(&source.name);
+                    let config = OverlayRepoConfig {
+                        url: source.url.clone(),
+                        local_path: Some(local_path),
+                    };
+                    ManagedSource {
+                        source,
+                        manager: OverlayRepoManager::new(config).unwrap(),
+                    }
+                })
+                .collect(),
+        };
+
+        let source = manager.get_source("personal");
+        assert!(source.is_some());
+        let source = source.unwrap();
+        assert_eq!(source.name, "personal");
+        assert_eq!(source.url, "https://github.com/user/overlays");
+    }
+
+    #[test]
+    fn test_get_source_not_found() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path();
+
+        let sources = vec![Source {
+            name: "personal".to_string(),
+            url: "file://dummy".to_string(),
+        }];
+
+        let manager = SourceManager {
+            sources: sources
+                .into_iter()
+                .map(|source| {
+                    let local_path = cache_dir.join(&source.name);
+                    let config = OverlayRepoConfig {
+                        url: source.url.clone(),
+                        local_path: Some(local_path),
+                    };
+                    ManagedSource {
+                        source,
+                        manager: OverlayRepoManager::new(config).unwrap(),
+                    }
+                })
+                .collect(),
+        };
+
+        let source = manager.get_source("nonexistent");
+        assert!(source.is_none());
+    }
+
+    #[test]
+    fn test_list_overlays_for_repo_with_mixed_sources() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path();
+
+        // Source 1 is cloned and has overlays
+        let source1_path = cache_dir.join("personal");
+        fs::create_dir_all(&source1_path).unwrap();
+        create_mock_source(
+            &source1_path,
+            &[
+                ("microsoft", "FluidFramework", "claude-config"),
+                ("microsoft", "FluidFramework", "vscode-settings"),
+            ],
+        );
+
+        // Source 2 is NOT cloned (directory doesn't exist)
+
+        let sources = vec![
+            Source {
+                name: "personal".to_string(),
+                url: "file://dummy".to_string(),
+            },
+            Source {
+                name: "team".to_string(),
+                url: "file://dummy".to_string(),
+            },
+        ];
+
+        let manager = SourceManager {
+            sources: sources
+                .into_iter()
+                .map(|source| {
+                    let local_path = cache_dir.join(&source.name);
+                    let config = OverlayRepoConfig {
+                        url: source.url.clone(),
+                        local_path: Some(local_path),
+                    };
+                    ManagedSource {
+                        source,
+                        manager: OverlayRepoManager::new(config).unwrap(),
+                    }
+                })
+                .collect(),
+        };
+
+        // Should find overlays from cloned source, skip uncloned source
+        let overlays = manager.list_overlays_for_repo("microsoft", "FluidFramework");
+        assert_eq!(overlays.len(), 2);
+        assert!(overlays.contains(&OverlayName::new("claude-config")));
+        assert!(overlays.contains(&OverlayName::new("vscode-settings")));
+    }
+
+    #[test]
+    fn test_list_overlays_for_repo_deduplication() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path();
+
+        // Both sources have the same overlay
+        let source1_path = cache_dir.join("personal");
+        let source2_path = cache_dir.join("team");
+        fs::create_dir_all(&source1_path).unwrap();
+        fs::create_dir_all(&source2_path).unwrap();
+
+        create_mock_source(
+            &source1_path,
+            &[("microsoft", "FluidFramework", "claude-config")],
+        );
+        create_mock_source(
+            &source2_path,
+            &[("microsoft", "FluidFramework", "claude-config")],
+        );
+
+        let sources = vec![
+            Source {
+                name: "personal".to_string(),
+                url: "file://dummy".to_string(),
+            },
+            Source {
+                name: "team".to_string(),
+                url: "file://dummy".to_string(),
+            },
+        ];
+
+        let manager = SourceManager {
+            sources: sources
+                .into_iter()
+                .map(|source| {
+                    let local_path = cache_dir.join(&source.name);
+                    let config = OverlayRepoConfig {
+                        url: source.url.clone(),
+                        local_path: Some(local_path),
+                    };
+                    ManagedSource {
+                        source,
+                        manager: OverlayRepoManager::new(config).unwrap(),
+                    }
+                })
+                .collect(),
+        };
+
+        // Should deduplicate across sources
+        let overlays = manager.list_overlays_for_repo("microsoft", "FluidFramework");
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0], "claude-config");
+    }
+
+    #[test]
+    fn test_list_overlays_for_repo_no_matches() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path();
+
+        let source_path = cache_dir.join("personal");
+        fs::create_dir_all(&source_path).unwrap();
+        create_mock_source(
+            &source_path,
+            &[("microsoft", "FluidFramework", "claude-config")],
+        );
+
+        let sources = vec![Source {
+            name: "personal".to_string(),
+            url: "file://dummy".to_string(),
+        }];
+
+        let manager = SourceManager {
+            sources: sources
+                .into_iter()
+                .map(|source| {
+                    let local_path = cache_dir.join(&source.name);
+                    let config = OverlayRepoConfig {
+                        url: source.url.clone(),
+                        local_path: Some(local_path),
+                    };
+                    ManagedSource {
+                        source,
+                        manager: OverlayRepoManager::new(config).unwrap(),
+                    }
+                })
+                .collect(),
+        };
+
+        // Different repo should return empty
+        let overlays = manager.list_overlays_for_repo("google", "chromium");
+        assert!(overlays.is_empty());
+    }
 }
