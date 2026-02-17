@@ -13,9 +13,17 @@ const rootDir = new URL(".", import.meta.url).pathname;
 // https://astro.build/config
 export default defineConfig({
 	site: "https://repoverlay.tylerbutler.com",
+	prefetch: {
+		defaultStrategy: "hover",
+		prefetchAll: true,
+	},
 	integrations: [
 		starlight({
 			title: "repoverlay",
+			editLink: {
+				baseUrl:
+					"https://github.com/tylerbutler/repoverlay/edit/main/website/",
+			},
 			logo: {
 				src: "./src/assets/repoverlay.svg",
 			},

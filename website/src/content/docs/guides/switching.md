@@ -20,6 +20,10 @@ repoverlay switch https://github.com/user/ai-configs/tree/main/rust
 1. All currently applied overlays are **removed** (files, git excludes, state)
 2. The new overlay is **applied** in their place
 
+:::caution
+Switch removes **all** existing overlays before applying the new one. If you want to keep some overlays and add another, use `repoverlay apply` instead.
+:::
+
 This is equivalent to running `repoverlay remove --all` followed by `repoverlay apply`, but as a single atomic operation.
 
 ## When to use switch

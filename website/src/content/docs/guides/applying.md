@@ -50,6 +50,10 @@ repoverlay apply ./overlay --copy
 
 This is useful when symlinks aren't supported or when you want independent copies that won't change when the source is modified.
 
+:::tip
+Use `--copy` on Windows if your project doesn't support symlinks, or in CI environments where symlinks may not behave as expected.
+:::
+
 ## GitHub-specific options
 
 ### Branches and tags
@@ -74,4 +78,6 @@ repoverlay apply https://github.com/owner/repo/tree/main/overlays/rust
 
 <!-- TODO: Document conflict strategies and --force behavior -->
 
+:::caution
 If an overlay file conflicts with an existing file in the repo, repoverlay will warn you and skip the conflicting file by default.
+:::

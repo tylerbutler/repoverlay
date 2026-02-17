@@ -24,7 +24,11 @@ repoverlay restore --dry-run
 
 ## How backups work
 
-Every time an overlay is applied, repoverlay saves a copy of the overlay state to an **external backup location** outside the git repository. This backup survives `git clean` and other operations that remove untracked files.
+:::tip
+Backups are stored outside the git repository, so they survive `git clean`, branch switches, and other operations that remove untracked files. You don't need to do anything to enable backups — they happen automatically.
+:::
+
+Every time an overlay is applied, repoverlay saves a copy of the overlay state to an **external backup location** outside the git repository.
 
 The external backup stores:
 - The overlay name and source

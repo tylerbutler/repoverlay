@@ -36,4 +36,6 @@ repoverlay update --dry-run
 - When you want to pick up config changes shared by your team
 - Periodically, to stay in sync with upstream overlay changes
 
-Local overlays don't need updating — symlinks already reflect the latest source files.
+:::note
+Local overlays don't need updating — symlinks already point to the source files, so changes are reflected immediately.
+:::
