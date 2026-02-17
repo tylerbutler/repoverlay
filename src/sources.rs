@@ -6,6 +6,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
+use crate::OverlayName;
 use crate::config::{OverlayRepoConfig, Source};
 use crate::overlay_repo::{AvailableOverlay, OverlayRepoManager};
 use crate::state::ResolvedVia;
@@ -196,7 +197,7 @@ impl SourceManager {
     ///
     /// Returns unique overlay names (deduplicated across sources).
     #[must_use]
-    pub fn list_overlays_for_repo(&self, org: &str, repo: &str) -> Vec<String> {
+    pub fn list_overlays_for_repo(&self, org: &str, repo: &str) -> Vec<OverlayName> {
         let mut names = std::collections::HashSet::new();
 
         for ms in &self.sources {
@@ -207,7 +208,7 @@ impl SourceManager {
 
             if let Ok(overlays) = ms.manager.list_overlays_for_repo(org, repo) {
                 for overlay in overlays {
-                    names.insert(overlay.name);
+                    names.insert(OverlayName::new(overlay.name));
                 }
             }
         }
@@ -945,8 +946,8 @@ mod tests {
         // Should find overlays from cloned source, skip uncloned source
         let overlays = manager.list_overlays_for_repo("microsoft", "FluidFramework");
         assert_eq!(overlays.len(), 2);
-        assert!(overlays.contains(&"claude-config".to_string()));
-        assert!(overlays.contains(&"vscode-settings".to_string()));
+        assert!(overlays.contains(&OverlayName::new("claude-config")));
+        assert!(overlays.contains(&OverlayName::new("vscode-settings")));
     }
 
     #[test]

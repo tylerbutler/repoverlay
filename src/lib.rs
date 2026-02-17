@@ -9,6 +9,7 @@ mod detection;
 mod fuzzy;
 mod github;
 mod json_merge;
+mod overlay_name;
 mod overlay_repo;
 mod reference;
 mod selection;
@@ -38,7 +39,8 @@ use cache::CacheManager;
 use fuzzy::OverlayMatcher;
 use github::GitHubSource;
 use json_merge::{is_json_file, merge_json_files};
-use overlay_repo::copy_dir_recursive;
+pub(crate) use overlay_name::OverlayName;
+use overlay_repo::{AvailableOverlay, copy_dir_recursive};
 use reference::SourceReference;
 use selection::is_interactive;
 use state::{
@@ -341,7 +343,7 @@ fn resolve_two_part(
     );
     let cached = cache.ensure_cached(&github_source, update)?;
 
-    // List available overlays (returns full paths like "microsoft/FluidFramework/overlay-name")
+    // List available overlays
     let available_overlays = list_overlays_from_cached_repo(owner, repo)?;
 
     if available_overlays.is_empty() {
@@ -362,7 +364,7 @@ fn resolve_two_part(
         // Non-interactive mode - error with available overlays
         let overlay_list = available_overlays
             .iter()
-            .map(|o| format!("  {}", format_overlay_path(o)))
+            .map(|o| format!("  {}", o.display_bold()))
             .collect::<Vec<_>>()
             .join("\n");
         bail!(
@@ -375,7 +377,7 @@ fn resolve_two_part(
         println!(
             "{} overlay: {}",
             "Selected".green().bold(),
-            format_overlay_path(&selected_overlays[0])
+            selected_overlays[0].display_bold()
         );
     } else {
         println!(
@@ -383,8 +385,8 @@ fn resolve_two_part(
             "Selected".green().bold(),
             selected_overlays.len()
         );
-        for overlay_path in &selected_overlays {
-            println!("  - {}", format_overlay_path(overlay_path));
+        for selected in &selected_overlays {
+            println!("  - {}", selected.display_bold());
         }
     }
 
@@ -394,20 +396,12 @@ fn resolve_two_part(
 
     let mut resolved_sources = Vec::with_capacity(selected_overlays.len());
 
-    for selected_overlay in &selected_overlays {
-        let (target_org, target_repo, overlay_name) = parse_overlay_path(selected_overlay)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid overlay path format: {selected_overlay}\n\
-                     Expected: <target-org>/<target-repo>/<overlay-name>"
-                )
-            })?;
-
+    for selected in &selected_overlays {
         let overlay_path = cached
             .path
-            .join(target_org)
-            .join(target_repo)
-            .join(overlay_name);
+            .join(&selected.org)
+            .join(&selected.repo)
+            .join(&selected.name);
 
         if !overlay_path.exists() {
             bail!("Overlay directory not found: {}", overlay_path.display());
@@ -421,7 +415,7 @@ fn resolve_two_part(
                 repo.to_string(),
                 git_ref_str.clone(),
                 commit.clone(),
-                Some(format!("{target_org}/{target_repo}/{overlay_name}")),
+                Some(selected.to_string()),
             ),
         });
     }
@@ -458,11 +452,11 @@ fn get_cached_repo_commit(repo_path: &Path) -> Option<String> {
 /// directly-specified GitHub repo (e.g., `tylerbutler/repo-overlays`).
 ///
 /// Overlay repos have a nested structure: `target_org/target_repo/overlay_name/`
-/// Returns full paths like `microsoft/FluidFramework/vscode-setup`.
+/// Returns `AvailableOverlay` structs with org, repo, and overlay name.
 ///
 /// Note: This is the same structure used by `OverlayRepoManager::list_overlays()`,
 /// but operates on the GitHub cache instead of managed overlay repositories.
-fn list_overlays_from_cached_repo(owner: &str, repo: &str) -> Result<Vec<String>> {
+fn list_overlays_from_cached_repo(owner: &str, repo: &str) -> Result<Vec<AvailableOverlay>> {
     debug!("listing overlays from cached GitHub repo: {owner}/{repo}");
 
     let cache = CacheManager::new()?;
@@ -479,19 +473,24 @@ fn list_overlays_from_cached_repo(owner: &str, repo: &str) -> Result<Vec<String>
 /// List overlays from a directory with nested org/repo/overlay structure.
 ///
 /// This is the core logic for listing overlays, extracted for testability.
-fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<String>> {
+fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableOverlay>> {
     let mut overlays = Vec::new();
 
-    // Walk the three-level structure: org/repo/overlay
     for (org_path, org_name) in visible_subdirs(repo_path)? {
-        for (repo_path, repo_name) in visible_subdirs(&org_path)? {
-            for (_overlay_path, overlay_name) in visible_subdirs(&repo_path)? {
-                overlays.push(format!("{org_name}/{repo_name}/{overlay_name}"));
+        for (repo_dir, repo_name) in visible_subdirs(&org_path)? {
+            for (overlay_path, overlay_name) in visible_subdirs(&repo_dir)? {
+                let has_config = overlay_path.join("repoverlay.ccl").exists();
+                overlays.push(AvailableOverlay {
+                    org: org_name.clone(),
+                    repo: repo_name.clone(),
+                    name: overlay_name,
+                    has_config,
+                });
             }
         }
     }
 
-    overlays.sort();
+    overlays.sort_by(|a, b| (&a.org, &a.repo, &a.name).cmp(&(&b.org, &b.repo, &b.name)));
     debug!("found {} overlays in path", overlays.len());
     Ok(overlays)
 }
@@ -512,57 +511,28 @@ fn visible_subdirs(path: &Path) -> Result<Vec<(PathBuf, String)>> {
     Ok(results)
 }
 
-/// Parse an overlay path string into `(org, repo, overlay_name)` components.
-///
-/// Returns None if the path doesn't have exactly 3 components.
-fn parse_overlay_path(path: &str) -> Option<(&str, &str, &str)> {
-    let (org, rest) = path.split_once('/')?;
-    let (repo, overlay) = rest.split_once('/')?;
-    // Reject paths with more than 3 components
-    if overlay.contains('/') {
-        None
-    } else {
-        Some((org, repo, overlay))
-    }
-}
-
-/// Format an overlay path for display with the overlay name in bold.
-///
-/// Input: `"microsoft/FluidFramework/vscode-setup"`
-/// Output: `"microsoft/FluidFramework/vscode-setup"` (with "vscode-setup" in bold)
-fn format_overlay_path(path: &str) -> String {
-    if let Some((org, repo, overlay)) = parse_overlay_path(path) {
-        format!("{org}/{repo}/{}", overlay.bold())
-    } else {
-        path.to_string()
-    }
-}
-
 /// Present an interactive multi-select picker for overlays.
 ///
 /// Already-applied overlays appear dimmed and cannot be selected.
 fn select_overlays_interactive(
     owner: &str,
     repo: &str,
-    overlays: &[String],
-    applied_overlays: &[String],
-) -> Result<Vec<String>> {
+    overlays: &[AvailableOverlay],
+    applied_overlays: &[OverlayName],
+) -> Result<Vec<AvailableOverlay>> {
     use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
-
-    let applied_set: std::collections::HashSet<&str> =
-        applied_overlays.iter().map(String::as_str).collect();
 
     let items: Vec<SelectableItem> = overlays
         .iter()
         .map(|o| {
-            // Compare the overlay name component (3rd part of org/repo/name)
-            // against applied overlay names (which are normalized file stems)
-            let disabled = parse_overlay_path(o)
-                .and_then(|(_, _, name)| normalize_overlay_name(name).ok())
-                .is_some_and(|normalized| applied_set.contains(normalized.as_str()));
+            let disabled = normalize_overlay_name(&o.name)
+                .ok()
+                .is_some_and(|normalized| {
+                    applied_overlays.iter().any(|n| n == normalized.as_str())
+                });
             SelectableItem {
-                id: o.clone(),
-                label: format_overlay_path(o),
+                id: o.to_string(),
+                label: o.display_bold(),
                 description: disabled.then(|| "already applied".into()),
                 preselected: false,
                 disabled,
@@ -581,7 +551,14 @@ fn select_overlays_interactive(
         bail!("No overlays selected");
     }
 
-    Ok(result.selected_ids)
+    // Map selected IDs back to AvailableOverlay values
+    let selected: Vec<AvailableOverlay> = result
+        .selected_ids
+        .iter()
+        .filter_map(|id| overlays.iter().find(|o| o.to_string() == *id).cloned())
+        .collect();
+
+    Ok(selected)
 }
 
 /// Resolve a three-part overlay reference (`org/repo/overlay`).
@@ -770,7 +747,11 @@ fn get_fuzzy_suggestions_multi_source(
     repo: &str,
     query: &str,
 ) -> Vec<String> {
-    let available = manager.list_overlays_for_repo(org, repo);
+    let available: Vec<String> = manager
+        .list_overlays_for_repo(org, repo)
+        .into_iter()
+        .map(|n| n.to_string())
+        .collect();
     fuzzy_suggest(query, &available)
 }
 
@@ -1710,7 +1691,7 @@ pub(crate) fn remove_overlay(
     if remove_all {
         // Remove all overlays
         for overlay_name in &applied_overlays {
-            remove_single_overlay(&target, &overlays_dir, overlay_name)?;
+            remove_single_overlay(&target, &overlays_dir, overlay_name.as_str())?;
         }
 
         // Clean up .repoverlay directory entirely
@@ -1747,10 +1728,11 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
         if available.is_empty() {
             bail!("No overlays are currently applied");
         }
+        let names: Vec<&str> = available.iter().map(OverlayName::as_str).collect();
         bail!(
             "Overlay '{}' not found. Available overlays: {}",
             name,
-            available.join(", ")
+            names.join(", ")
         );
     }
 
@@ -1876,11 +1858,12 @@ pub(crate) fn show_status(target: &Path, filter_name: Option<String>) -> Result<
     if let Some(filter) = filter_name {
         let normalized = normalize_overlay_name(&filter)?;
 
-        if !applied_overlays.contains(&normalized) {
+        if !applied_overlays.iter().any(|n| n == normalized.as_str()) {
+            let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
             bail!(
                 "Overlay '{}' is not applied. Available: {}",
                 filter,
-                applied_overlays.join(", ")
+                names.join(", ")
             );
         }
 
@@ -1897,7 +1880,7 @@ pub(crate) fn show_status(target: &Path, filter_name: Option<String>) -> Result<
     println!();
 
     for overlay_name in &applied_overlays {
-        show_single_overlay_status(&target, overlay_name)?;
+        show_single_overlay_status(&target, overlay_name.as_str())?;
         println!();
     }
 
@@ -2144,16 +2127,17 @@ pub(crate) fn update_overlays(
     }
 
     // Filter to just the specified overlay if name provided
-    let overlays_to_check: Vec<_> = if let Some(ref name) = name {
+    let overlays_to_check: Vec<OverlayName> = if let Some(ref name) = name {
         let normalized = normalize_overlay_name(name)?;
-        if !applied_overlays.contains(&normalized) {
+        if !applied_overlays.iter().any(|n| n == normalized.as_str()) {
+            let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
             bail!(
                 "Overlay '{}' is not applied. Available: {}",
                 name,
-                applied_overlays.join(", ")
+                names.join(", ")
             );
         }
-        vec![normalized]
+        vec![OverlayName::new(normalized)]
     } else {
         applied_overlays
     };
@@ -2163,7 +2147,7 @@ pub(crate) fn update_overlays(
 
     // Check for updates
     for overlay_name in &overlays_to_check {
-        let state = load_overlay_state(&target, overlay_name)?;
+        let state = load_overlay_state(&target, overlay_name.as_str())?;
 
         if let OverlaySource::GitHub {
             owner,
@@ -2239,12 +2223,12 @@ pub(crate) fn update_overlays(
 
     // Apply updates
     for (normalized_name, _, _, _, _) in &updates_available {
-        let state = load_overlay_state(&target, normalized_name)?;
+        let state = load_overlay_state(&target, normalized_name.as_str())?;
 
         if let OverlaySource::GitHub { url, git_ref, .. } = &state.source {
             // Remove old overlay
             let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-            remove_single_overlay(&target, &overlays_dir, normalized_name)?;
+            remove_single_overlay(&target, &overlays_dir, normalized_name.as_str())?;
 
             // Re-apply with update
             apply_overlay(
@@ -3904,7 +3888,10 @@ mod tests {
                 "list_overlays_from_cached_repo should find overlays at the path returned by CacheManager::repo_path()"
             );
             assert_eq!(overlays.len(), 1);
-            assert_eq!(overlays[0], "target-org/target-repo/test-overlay");
+            assert_eq!(
+                overlays[0].to_string(),
+                "target-org/target-repo/test-overlay"
+            );
         }
 
         #[test]
@@ -3953,9 +3940,15 @@ mod tests {
 
             assert_eq!(overlays.len(), 3);
             // Results should be sorted
-            assert_eq!(overlays[0], "microsoft/FluidFramework/ci-config");
-            assert_eq!(overlays[1], "microsoft/FluidFramework/vscode-setup");
-            assert_eq!(overlays[2], "tylerbutler/some-repo/my-overlay");
+            assert_eq!(
+                overlays[0].to_string(),
+                "microsoft/FluidFramework/ci-config"
+            );
+            assert_eq!(
+                overlays[1].to_string(),
+                "microsoft/FluidFramework/vscode-setup"
+            );
+            assert_eq!(overlays[2].to_string(), "tylerbutler/some-repo/my-overlay");
         }
 
         #[test]
@@ -3973,7 +3966,7 @@ mod tests {
 
             // Only the non-hidden overlay should be found
             assert_eq!(overlays.len(), 1);
-            assert_eq!(overlays[0], "org/repo/overlay");
+            assert_eq!(overlays[0].to_string(), "org/repo/overlay");
         }
 
         #[test]
@@ -3992,7 +3985,7 @@ mod tests {
             let overlays = list_overlays_from_path(repo_path).unwrap();
 
             assert_eq!(overlays.len(), 1);
-            assert_eq!(overlays[0], "org/repo/overlay");
+            assert_eq!(overlays[0].to_string(), "org/repo/overlay");
         }
 
         #[test]
@@ -4018,32 +4011,7 @@ mod tests {
 
             // Only the complete three-level path should be found
             assert_eq!(overlays.len(), 1);
-            assert_eq!(overlays[0], "org/repo/overlay");
-        }
-
-        #[test]
-        fn parse_overlay_path_valid_three_parts() {
-            let result = parse_overlay_path("microsoft/FluidFramework/vscode-setup");
-            assert_eq!(
-                result,
-                Some(("microsoft", "FluidFramework", "vscode-setup"))
-            );
-        }
-
-        #[test]
-        fn parse_overlay_path_too_few_parts() {
-            assert_eq!(parse_overlay_path("only-one"), None);
-            assert_eq!(parse_overlay_path("only/two"), None);
-        }
-
-        #[test]
-        fn parse_overlay_path_too_many_parts() {
-            assert_eq!(parse_overlay_path("one/two/three/four"), None);
-        }
-
-        #[test]
-        fn parse_overlay_path_empty() {
-            assert_eq!(parse_overlay_path(""), None);
+            assert_eq!(overlays[0].to_string(), "org/repo/overlay");
         }
 
         #[test]
@@ -4201,38 +4169,6 @@ mod tests {
             let (path, name) = &result[0];
             assert_eq!(name, "subdir");
             assert!(path.ends_with("subdir"));
-        }
-    }
-
-    // Tests for format_overlay_path
-    mod format_overlay_path_tests {
-        use super::*;
-
-        #[test]
-        fn formats_valid_three_part_path() {
-            let result = format_overlay_path("microsoft/FluidFramework/vscode-setup");
-            // Should contain all parts
-            assert!(result.contains("microsoft"));
-            assert!(result.contains("FluidFramework"));
-            assert!(result.contains("vscode-setup"));
-        }
-
-        #[test]
-        fn returns_unchanged_for_invalid_path() {
-            let result = format_overlay_path("just-one-part");
-            assert_eq!(result, "just-one-part");
-        }
-
-        #[test]
-        fn returns_unchanged_for_two_parts() {
-            let result = format_overlay_path("only/two");
-            assert_eq!(result, "only/two");
-        }
-
-        #[test]
-        fn returns_unchanged_for_empty_string() {
-            let result = format_overlay_path("");
-            assert_eq!(result, "");
         }
     }
 
@@ -4407,13 +4343,18 @@ mod tests {
             );
             let overlay_name = &applied[0];
 
-            remove_overlay(ctx.repo_path(), Some(overlay_name.clone()), false, false)
-                .expect("remove should succeed");
+            remove_overlay(
+                ctx.repo_path(),
+                Some(overlay_name.to_string()),
+                false,
+                false,
+            )
+            .expect("remove should succeed");
 
             // Verify overlay was removed from in-repo state
             assert!(!ctx.file_exists(".envrc"), "overlay file should be removed");
             assert!(
-                !ctx.overlay_state_exists(overlay_name),
+                !ctx.overlay_state_exists(overlay_name.as_str()),
                 "in-repo state should be removed"
             );
 
@@ -4549,8 +4490,13 @@ mod tests {
             let overlay_name = &applied[0];
 
             // Step 2: Remove the overlay (marks removed_at)
-            remove_overlay(ctx.repo_path(), Some(overlay_name.clone()), false, false)
-                .expect("remove should succeed");
+            remove_overlay(
+                ctx.repo_path(),
+                Some(overlay_name.to_string()),
+                false,
+                false,
+            )
+            .expect("remove should succeed");
 
             // Verify removed_at is set
             let ext_dir = external_state_dir_for_target(&canonical_repo_path).unwrap();
