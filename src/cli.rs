@@ -333,16 +333,21 @@ enum Commands {
     /// Examples:
     ///   repoverlay sync my-overlay          # Detects org/repo from git remote
     ///   repoverlay sync org/repo/my-overlay # Explicit target
+    ///   repoverlay sync --all               # Sync all applied overlays
     Sync {
         /// Overlay name or full path (org/repo/name)
         ///
         /// Short form: `my-overlay` - detects org/repo from git remote
         /// Full form: `org/repo/name` - uses explicit values
-        name: String,
+        name: Option<String>,
 
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
         target: Option<PathBuf>,
+
+        /// Sync all applied overlays from the overlay repo
+        #[arg(long)]
+        all: bool,
 
         /// Show what would be synced without making changes
         #[arg(long)]
@@ -650,10 +655,11 @@ pub fn run() -> Result<()> {
         Commands::Sync {
             name,
             target,
+            all,
             dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            sync_overlay(&name, &target, dry_run)?;
+            handle_sync(&target, name, all, dry_run)?;
         }
         Commands::Edit {
             name,
@@ -1480,13 +1486,16 @@ fn auto_commit_overlay(
     Ok(())
 }
 
-/// Sync changes from an applied overlay back to the overlay repo.
-///
-/// This copies changed files from the target repository back to the overlay repo
-/// and auto-commits the changes.
-fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
+/// Handle the sync command, dispatching to single or all-overlay sync.
+fn handle_sync(
+    target: &std::path::Path,
+    name: Option<String>,
+    sync_all: bool,
+    dry_run: bool,
+) -> Result<()> {
     use crate::config::load_config;
     use crate::overlay_repo::OverlayRepoManager;
+    use crate::state::OverlaySource;
     use crate::{load_overlay_state, normalize_overlay_name};
 
     // Validate target is a git repo
@@ -1496,38 +1505,123 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
         bail!("Target directory is not a git repository: {target_display}");
     }
 
-    // Parse the name argument to get org/repo/name
-    let (org, repo, overlay_name) = parse_overlay_name_arg(name_arg, &target)?;
+    if sync_all {
+        let applied_overlays = list_applied_overlays(&target)?;
+        if applied_overlays.is_empty() {
+            println!("{} No overlays are currently applied.", "Note:".yellow());
+            return Ok(());
+        }
 
-    // Verify the overlay is currently applied
-    let normalized_name = normalize_overlay_name(&overlay_name)?;
-    let applied_overlays = list_applied_overlays(&target)?;
+        // Load overlay repo config and manager once for all overlays
+        let config = load_config(None)?;
+        let overlay_config = config.get_default_overlay_repo_config()?;
+        let manager = OverlayRepoManager::new(overlay_config)?;
+        manager.ensure_cloned()?;
 
-    if !applied_overlays.contains(&normalized_name) {
+        let mut synced = 0u32;
+        let mut skipped = 0u32;
+
+        for overlay_name in &applied_overlays {
+            let state = load_overlay_state(&target, overlay_name)?;
+
+            match &state.source {
+                OverlaySource::OverlayRepo {
+                    org, repo, name, ..
+                } => {
+                    sync_single_overlay(&target, org, name, repo, &state, &manager, dry_run)?;
+                    if !dry_run {
+                        auto_commit_overlay(&manager, org, repo, name, false)?;
+                    }
+                    synced += 1;
+                }
+                OverlaySource::Local { .. } => {
+                    println!(
+                        "{} Skipping '{}' (local source, not syncable to overlay repo)",
+                        "Warning:".yellow(),
+                        overlay_name
+                    );
+                    skipped += 1;
+                }
+                OverlaySource::GitHub { .. } => {
+                    println!(
+                        "{} Skipping '{}' (GitHub source, not syncable to overlay repo)",
+                        "Warning:".yellow(),
+                        overlay_name
+                    );
+                    skipped += 1;
+                }
+            }
+        }
+
+        println!();
+        let check = "✓".green().bold();
+        println!("{check} Synced {synced} overlay(s), skipped {skipped}");
+    } else if let Some(name_arg) = name {
+        // Parse the name argument to get org/repo/name
+        let (org, repo, overlay_name) = parse_overlay_name_arg(&name_arg, &target)?;
+
+        // Verify the overlay is currently applied
+        let normalized_name = normalize_overlay_name(&overlay_name)?;
+        let applied_overlays = list_applied_overlays(&target)?;
+
+        if !applied_overlays.contains(&normalized_name) {
+            bail!(
+                "Overlay '{overlay_name}' is not currently applied.\n\n\
+                 To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
+            );
+        }
+
+        // Load overlay state to get file mappings
+        let state = load_overlay_state(&target, &normalized_name)?;
+
+        // Load overlay repo config
+        let config = load_config(None)?;
+        let overlay_config = config.get_default_overlay_repo_config()?;
+
+        // Create manager and ensure cloned
+        let manager = OverlayRepoManager::new(overlay_config)?;
+        manager.ensure_cloned()?;
+
+        sync_single_overlay(
+            &target,
+            &org,
+            &overlay_name,
+            &repo,
+            &state,
+            &manager,
+            dry_run,
+        )?;
+
+        // Auto-commit
+        auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
+    } else {
         bail!(
-            "Overlay '{overlay_name}' is not currently applied.\n\n\
-             To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
+            "Must specify an overlay name or use --all.\n\n\
+             Usage:\n  \
+             repoverlay sync my-overlay\n  \
+             repoverlay sync --all"
         );
     }
 
-    // Load overlay state to get file mappings
-    let state = load_overlay_state(&target, &normalized_name)?;
+    Ok(())
+}
 
-    // Load overlay repo config
-    let config = load_config(None)?;
-    let overlay_config = config.get_default_overlay_repo_config()?;
-
-    // Create manager and ensure cloned
-    let manager = OverlayRepoManager::new(overlay_config)?;
-    manager.ensure_cloned()?;
-
-    // Get the overlay path in the overlay repo
-    let overlay_repo_path = manager.path().join(&org).join(&repo).join(&overlay_name);
+/// Sync a single overlay's files from the target repo back to the overlay repo.
+fn sync_single_overlay(
+    target: &std::path::Path,
+    org: &str,
+    overlay_name: &str,
+    repo: &str,
+    state: &crate::state::OverlayState,
+    manager: &crate::overlay_repo::OverlayRepoManager,
+    dry_run: bool,
+) -> Result<()> {
+    let overlay_repo_path = manager.path().join(org).join(repo).join(overlay_name);
 
     if !overlay_repo_path.exists() {
         bail!(
             "Overlay '{org}/{repo}/{overlay_name}' does not exist in overlay repo.\n\n\
-             Did you mean to use 'repoverlay create {name_arg}' instead?"
+             Did you mean to use 'repoverlay create {org}/{repo}/{overlay_name}' instead?"
         );
     }
 
@@ -1585,11 +1679,7 @@ fn sync_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Resu
 
     if synced_count == 0 {
         println!("{} No files to sync.", "Note:".yellow());
-        return Ok(());
     }
-
-    // Auto-commit
-    auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
 
     Ok(())
 }
@@ -6067,6 +6157,87 @@ directories =
                     assert_eq!(target, Some(PathBuf::from("/repo")));
                 }
                 _ => panic!("Expected Edit command"),
+            }
+        }
+
+        #[test]
+        fn sync_parses_name() {
+            let cli = Cli::try_parse_from(["repoverlay", "sync", "my-overlay"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Sync { name, all, .. }) => {
+                    assert_eq!(name, Some("my-overlay".to_string()));
+                    assert!(!all);
+                }
+                _ => panic!("Expected Sync command"),
+            }
+        }
+
+        #[test]
+        fn sync_parses_all_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "sync", "--all"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Sync { name, all, .. }) => {
+                    assert!(name.is_none());
+                    assert!(all);
+                }
+                _ => panic!("Expected Sync command"),
+            }
+        }
+
+        #[test]
+        fn sync_parses_dry_run() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "sync", "my-overlay", "--dry-run"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Sync { dry_run, .. }) => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Sync command"),
+            }
+        }
+
+        #[test]
+        fn sync_parses_all_with_dry_run() {
+            let cli = Cli::try_parse_from(["repoverlay", "sync", "--all", "--dry-run"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Sync {
+                    name, all, dry_run, ..
+                }) => {
+                    assert!(name.is_none());
+                    assert!(all);
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Sync command"),
+            }
+        }
+
+        #[test]
+        fn sync_parses_no_args() {
+            let cli = Cli::try_parse_from(["repoverlay", "sync"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Sync { name, all, .. }) => {
+                    assert!(name.is_none());
+                    assert!(!all);
+                }
+                _ => panic!("Expected Sync command"),
+            }
+        }
+
+        #[test]
+        fn sync_parses_target_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "sync", "--all", "-t", "/repo"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Sync { target, all, .. }) => {
+                    assert_eq!(target, Some(PathBuf::from("/repo")));
+                    assert!(all);
+                }
+                _ => panic!("Expected Sync command"),
             }
         }
     }
