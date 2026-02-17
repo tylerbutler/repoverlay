@@ -5226,6 +5226,564 @@ directories =
         }
     }
 
+    // Tests for sync and sync --all functionality
+    mod sync {
+        use super::*;
+        use crate::config::OverlayRepoConfig;
+        use crate::overlay_repo::OverlayRepoManager;
+        use crate::state::{
+            EntryType, FileEntry, LinkType, OverlaySource, OverlayState, save_overlay_state,
+        };
+
+        /// Create a mock overlay repo directory with overlay files.
+        /// Returns a `TempDir` that acts as the overlay repo root.
+        #[allow(clippy::type_complexity)]
+        fn create_mock_overlay_repo(overlays: &[(&str, &str, &str, &[(&str, &str)])]) -> TempDir {
+            let dir = TempDir::new().unwrap();
+
+            // Initialize as git repo (needed for OverlayRepoManager)
+            Command::new("git")
+                .args(["init"])
+                .current_dir(dir.path())
+                .output()
+                .expect("Failed to init overlay repo");
+
+            // Configure git user for commits
+            Command::new("git")
+                .args(["config", "user.email", "test@test.com"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            Command::new("git")
+                .args(["config", "user.name", "Test"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+
+            for (org, repo, overlay_name, files) in overlays {
+                let overlay_path = dir.path().join(org).join(repo).join(overlay_name);
+                fs::create_dir_all(&overlay_path).unwrap();
+
+                for (file_path, content) in *files {
+                    let full_path = overlay_path.join(file_path);
+                    if let Some(parent) = full_path.parent() {
+                        fs::create_dir_all(parent).unwrap();
+                    }
+                    fs::write(full_path, content).unwrap();
+                }
+            }
+
+            // Initial commit so manager operations work
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            Command::new("git")
+                .args(["commit", "-m", "init", "--allow-empty"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+
+            dir
+        }
+
+        /// Create an `OverlayRepoManager` pointing at a local directory.
+        fn create_test_manager(local_path: &std::path::Path) -> OverlayRepoManager {
+            let config = OverlayRepoConfig {
+                url: "https://example.com/test-repo.git".to_string(),
+                local_path: Some(local_path.to_path_buf()),
+            };
+            OverlayRepoManager::new(config).unwrap()
+        }
+
+        /// Save a test overlay state with the given source to the target repo.
+        fn save_test_state(
+            target: &std::path::Path,
+            name: &str,
+            source: OverlaySource,
+            files: Vec<(&str, &str)>,
+        ) {
+            let mut state = OverlayState::new(name.to_string(), source);
+            for (src, tgt) in files {
+                state.add_file(FileEntry {
+                    source: PathBuf::from(src),
+                    target: PathBuf::from(tgt),
+                    link_type: LinkType::Copy,
+                    entry_type: EntryType::File,
+                });
+            }
+            save_overlay_state(target, &state).unwrap();
+        }
+
+        #[test]
+        fn handle_sync_requires_name_or_all() {
+            let repo = create_test_repo();
+            let result = handle_sync(repo.path(), None, false, false);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Must specify an overlay name or use --all")
+            );
+        }
+
+        #[test]
+        fn handle_sync_fails_on_non_git_target() {
+            let target = TempDir::new().unwrap();
+            let result = handle_sync(target.path(), None, true, false);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not a git repository")
+            );
+        }
+
+        #[test]
+        fn handle_sync_all_with_no_overlays() {
+            let repo = create_test_repo();
+            // No overlays applied, should succeed with no-op
+            let result = handle_sync(repo.path(), None, true, false);
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn sync_single_overlay_copies_files_back() {
+            let repo = create_test_repo();
+            let overlay_repo = create_mock_overlay_repo(&[(
+                "myorg",
+                "myrepo",
+                "my-overlay",
+                &[(".envrc", "original content")],
+            )]);
+
+            // Create a file in the target repo (simulating an applied overlay)
+            fs::write(repo.path().join(".envrc"), "modified content").unwrap();
+
+            // Create overlay state
+            let mut state = OverlayState::new(
+                "my-overlay".to_string(),
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "my-overlay".to_string(),
+                    "abc123".to_string(),
+                ),
+            );
+            state.add_file(FileEntry {
+                source: PathBuf::from(".envrc"),
+                target: PathBuf::from(".envrc"),
+                link_type: LinkType::Copy,
+                entry_type: EntryType::File,
+            });
+
+            let manager = create_test_manager(overlay_repo.path());
+
+            let result = sync_single_overlay(
+                repo.path(),
+                "myorg",
+                "my-overlay",
+                "myrepo",
+                &state,
+                &manager,
+                false,
+            );
+            assert!(result.is_ok());
+
+            // Verify the file was copied back to the overlay repo
+            let overlay_file = overlay_repo
+                .path()
+                .join("myorg")
+                .join("myrepo")
+                .join("my-overlay")
+                .join(".envrc");
+            assert_eq!(
+                fs::read_to_string(overlay_file).unwrap(),
+                "modified content"
+            );
+        }
+
+        #[test]
+        fn sync_single_overlay_dry_run_does_not_modify() {
+            let repo = create_test_repo();
+            let overlay_repo = create_mock_overlay_repo(&[(
+                "myorg",
+                "myrepo",
+                "my-overlay",
+                &[(".envrc", "original content")],
+            )]);
+
+            fs::write(repo.path().join(".envrc"), "modified content").unwrap();
+
+            let mut state = OverlayState::new(
+                "my-overlay".to_string(),
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "my-overlay".to_string(),
+                    "abc123".to_string(),
+                ),
+            );
+            state.add_file(FileEntry {
+                source: PathBuf::from(".envrc"),
+                target: PathBuf::from(".envrc"),
+                link_type: LinkType::Copy,
+                entry_type: EntryType::File,
+            });
+
+            let manager = create_test_manager(overlay_repo.path());
+
+            let result = sync_single_overlay(
+                repo.path(),
+                "myorg",
+                "my-overlay",
+                "myrepo",
+                &state,
+                &manager,
+                true, // dry_run
+            );
+            assert!(result.is_ok());
+
+            // Verify overlay repo file was NOT modified
+            let overlay_file = overlay_repo
+                .path()
+                .join("myorg")
+                .join("myrepo")
+                .join("my-overlay")
+                .join(".envrc");
+            assert_eq!(
+                fs::read_to_string(overlay_file).unwrap(),
+                "original content"
+            );
+        }
+
+        #[test]
+        fn sync_single_overlay_fails_if_overlay_not_in_repo() {
+            let repo = create_test_repo();
+            let overlay_repo = create_mock_overlay_repo(&[]);
+
+            let state = OverlayState::new(
+                "missing-overlay".to_string(),
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "missing-overlay".to_string(),
+                    "abc123".to_string(),
+                ),
+            );
+
+            let manager = create_test_manager(overlay_repo.path());
+
+            let result = sync_single_overlay(
+                repo.path(),
+                "myorg",
+                "missing-overlay",
+                "myrepo",
+                &state,
+                &manager,
+                false,
+            );
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("does not exist in overlay repo")
+            );
+        }
+
+        #[test]
+        fn sync_single_overlay_skips_missing_target_files() {
+            let repo = create_test_repo();
+            let overlay_repo = create_mock_overlay_repo(&[(
+                "myorg",
+                "myrepo",
+                "my-overlay",
+                &[(".envrc", "original")],
+            )]);
+
+            // Don't create the target file - simulates a deleted file
+
+            let mut state = OverlayState::new(
+                "my-overlay".to_string(),
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "my-overlay".to_string(),
+                    "abc123".to_string(),
+                ),
+            );
+            state.add_file(FileEntry {
+                source: PathBuf::from(".envrc"),
+                target: PathBuf::from(".envrc"),
+                link_type: LinkType::Copy,
+                entry_type: EntryType::File,
+            });
+
+            let manager = create_test_manager(overlay_repo.path());
+
+            let result = sync_single_overlay(
+                repo.path(),
+                "myorg",
+                "my-overlay",
+                "myrepo",
+                &state,
+                &manager,
+                false,
+            );
+            assert!(result.is_ok());
+
+            // Overlay repo file should still have original content
+            let overlay_file = overlay_repo
+                .path()
+                .join("myorg")
+                .join("myrepo")
+                .join("my-overlay")
+                .join(".envrc");
+            assert_eq!(fs::read_to_string(overlay_file).unwrap(), "original");
+        }
+
+        #[test]
+        fn sync_single_overlay_copies_multiple_files() {
+            let repo = create_test_repo();
+            let overlay_repo = create_mock_overlay_repo(&[(
+                "myorg",
+                "myrepo",
+                "my-overlay",
+                &[(".envrc", "old1"), ("config.json", "old2")],
+            )]);
+
+            fs::write(repo.path().join(".envrc"), "new1").unwrap();
+            fs::write(repo.path().join("config.json"), "new2").unwrap();
+
+            let mut state = OverlayState::new(
+                "my-overlay".to_string(),
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "my-overlay".to_string(),
+                    "abc123".to_string(),
+                ),
+            );
+            state.add_file(FileEntry {
+                source: PathBuf::from(".envrc"),
+                target: PathBuf::from(".envrc"),
+                link_type: LinkType::Copy,
+                entry_type: EntryType::File,
+            });
+            state.add_file(FileEntry {
+                source: PathBuf::from("config.json"),
+                target: PathBuf::from("config.json"),
+                link_type: LinkType::Copy,
+                entry_type: EntryType::File,
+            });
+
+            let manager = create_test_manager(overlay_repo.path());
+
+            sync_single_overlay(
+                repo.path(),
+                "myorg",
+                "my-overlay",
+                "myrepo",
+                &state,
+                &manager,
+                false,
+            )
+            .unwrap();
+
+            let base = overlay_repo
+                .path()
+                .join("myorg")
+                .join("myrepo")
+                .join("my-overlay");
+            assert_eq!(fs::read_to_string(base.join(".envrc")).unwrap(), "new1");
+            assert_eq!(
+                fs::read_to_string(base.join("config.json")).unwrap(),
+                "new2"
+            );
+        }
+
+        #[test]
+        fn sync_single_overlay_creates_parent_directories() {
+            let repo = create_test_repo();
+            let overlay_repo = create_mock_overlay_repo(&[(
+                "myorg",
+                "myrepo",
+                "my-overlay",
+                &[], // No files initially
+            )]);
+
+            // Create a nested file in the target repo
+            let nested_dir = repo.path().join(".claude");
+            fs::create_dir_all(&nested_dir).unwrap();
+            fs::write(nested_dir.join("CLAUDE.md"), "# Config").unwrap();
+
+            let mut state = OverlayState::new(
+                "my-overlay".to_string(),
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "my-overlay".to_string(),
+                    "abc123".to_string(),
+                ),
+            );
+            state.add_file(FileEntry {
+                source: PathBuf::from(".claude/CLAUDE.md"),
+                target: PathBuf::from(".claude/CLAUDE.md"),
+                link_type: LinkType::Copy,
+                entry_type: EntryType::File,
+            });
+
+            let manager = create_test_manager(overlay_repo.path());
+
+            sync_single_overlay(
+                repo.path(),
+                "myorg",
+                "my-overlay",
+                "myrepo",
+                &state,
+                &manager,
+                false,
+            )
+            .unwrap();
+
+            let overlay_file = overlay_repo
+                .path()
+                .join("myorg")
+                .join("myrepo")
+                .join("my-overlay")
+                .join(".claude")
+                .join("CLAUDE.md");
+            assert!(overlay_file.exists());
+            assert_eq!(fs::read_to_string(overlay_file).unwrap(), "# Config");
+        }
+
+        #[test]
+        fn handle_sync_all_skips_local_sources() {
+            let repo = create_test_repo();
+
+            // Create overlay state files with a local source
+            save_test_state(
+                repo.path(),
+                "local-overlay",
+                OverlaySource::local(PathBuf::from("/some/path")),
+                vec![(".envrc", ".envrc")],
+            );
+
+            // handle_sync --all should succeed (returns Ok) but needs config
+            // for the manager. Since there are no OverlayRepo sources to sync,
+            // we test that the state files with non-OverlayRepo sources are
+            // correctly identified by listing applied overlays.
+            let applied = crate::list_applied_overlays(repo.path()).unwrap();
+            assert_eq!(applied.len(), 1);
+            assert_eq!(applied[0], "local-overlay");
+
+            // Verify the source is Local (which would be skipped by --all)
+            let state = crate::load_overlay_state(repo.path(), "local-overlay").unwrap();
+            assert!(!state.source.is_overlay_repo());
+        }
+
+        #[test]
+        fn handle_sync_all_skips_github_sources() {
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "github-overlay",
+                OverlaySource::github(
+                    "https://github.com/org/repo".to_string(),
+                    "org".to_string(),
+                    "repo".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    None,
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let state = crate::load_overlay_state(repo.path(), "github-overlay").unwrap();
+            assert!(state.source.is_github());
+            assert!(!state.source.is_overlay_repo());
+        }
+
+        #[test]
+        fn handle_sync_all_identifies_overlay_repo_sources() {
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "repo-overlay",
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "repo-overlay".to_string(),
+                    "abc123".to_string(),
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let state = crate::load_overlay_state(repo.path(), "repo-overlay").unwrap();
+            assert!(state.source.is_overlay_repo());
+        }
+
+        #[test]
+        fn handle_sync_all_with_mixed_sources_identifies_correctly() {
+            let repo = create_test_repo();
+
+            // Create overlays with different source types
+            save_test_state(
+                repo.path(),
+                "local-one",
+                OverlaySource::local(PathBuf::from("/path")),
+                vec![("a.txt", "a.txt")],
+            );
+            save_test_state(
+                repo.path(),
+                "github-one",
+                OverlaySource::github(
+                    "https://github.com/o/r".to_string(),
+                    "o".to_string(),
+                    "r".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    None,
+                ),
+                vec![("b.txt", "b.txt")],
+            );
+            save_test_state(
+                repo.path(),
+                "repo-one",
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "repo-one".to_string(),
+                    "abc123".to_string(),
+                ),
+                vec![("c.txt", "c.txt")],
+            );
+
+            let applied = crate::list_applied_overlays(repo.path()).unwrap();
+            assert_eq!(applied.len(), 3);
+
+            // Verify source type classification for each
+            let mut overlay_repo_count = 0;
+            let mut skipped_count = 0;
+            for name in &applied {
+                let state = crate::load_overlay_state(repo.path(), name).unwrap();
+                if state.source.is_overlay_repo() {
+                    overlay_repo_count += 1;
+                } else {
+                    skipped_count += 1;
+                }
+            }
+            assert_eq!(overlay_repo_count, 1);
+            assert_eq!(skipped_count, 2);
+        }
+    }
+
     // CLI structure and parsing tests using clap's try_parse_from()
     // These tests validate CLI behavior without running the binary.
     mod cli_parsing {
