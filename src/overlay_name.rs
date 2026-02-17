@@ -6,13 +6,23 @@ use std::fmt;
 ///
 /// This newtype prevents accidental comparison between overlay names
 /// and other string types (e.g., full three-part paths like `"org/repo/name"`).
+///
+/// An `OverlayName` must be a simple name (no path separators).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OverlayName(String);
 
 impl OverlayName {
     /// Create a new `OverlayName` from a string.
+    ///
+    /// The name must be a simple overlay name (e.g., `"my-overlay"`),
+    /// not a path like `"org/repo/name"`.
     pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
+        let name = name.into();
+        debug_assert!(
+            !name.contains('/'),
+            "OverlayName must not contain path separators: {name}"
+        );
+        Self(name)
     }
 
     /// Get the underlying string slice.
@@ -33,15 +43,15 @@ impl AsRef<str> for OverlayName {
     }
 }
 
-impl From<String> for OverlayName {
-    fn from(s: String) -> Self {
-        Self(s)
+impl PartialEq<str> for OverlayName {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
     }
 }
 
-impl From<&str> for OverlayName {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
+impl PartialEq<&str> for OverlayName {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
     }
 }
 
@@ -68,5 +78,18 @@ mod tests {
     fn overlay_name_as_str() {
         let name = OverlayName::new("test");
         assert_eq!(name.as_str(), "test");
+    }
+
+    #[test]
+    fn overlay_name_eq_str() {
+        let name = OverlayName::new("foo");
+        assert!(name == "foo");
+        assert!(name != "bar");
+    }
+
+    #[test]
+    #[should_panic(expected = "must not contain path separators")]
+    fn overlay_name_rejects_paths_in_debug() {
+        let _ = OverlayName::new("org/repo/name");
     }
 }

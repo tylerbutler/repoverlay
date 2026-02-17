@@ -487,7 +487,7 @@ fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableOverlay>> {
         }
     }
 
-    overlays.sort_by_key(ToString::to_string);
+    overlays.sort_by(|a, b| (&a.org, &a.repo, &a.name).cmp(&(&b.org, &b.repo, &b.name)));
     debug!("found {} overlays in path", overlays.len());
     Ok(overlays)
 }
@@ -1841,7 +1841,7 @@ pub(crate) fn show_status(target: &Path, filter_name: Option<String>) -> Result<
     if let Some(filter) = filter_name {
         let normalized = normalize_overlay_name(&filter)?;
 
-        if !applied_overlays.contains(&OverlayName::new(&normalized)) {
+        if !applied_overlays.iter().any(|n| n == normalized.as_str()) {
             let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
             bail!(
                 "Overlay '{}' is not applied. Available: {}",
@@ -2112,7 +2112,7 @@ pub(crate) fn update_overlays(
     // Filter to just the specified overlay if name provided
     let overlays_to_check: Vec<OverlayName> = if let Some(ref name) = name {
         let normalized = normalize_overlay_name(name)?;
-        if !applied_overlays.contains(&OverlayName::new(&normalized)) {
+        if !applied_overlays.iter().any(|n| n == normalized.as_str()) {
             let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
             bail!(
                 "Overlay '{}' is not applied. Available: {}",
