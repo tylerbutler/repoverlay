@@ -1075,6 +1075,294 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_get_current_commit_on_non_git_directory() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("not-a-repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let result = manager.get_current_commit();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_current_commit_on_valid_repo() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("repo");
+
+        // Initialize a real git repo with a commit
+        std::process::Command::new("git")
+            .args(["init"])
+            .arg(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        fs::write(repo_path.join("file.txt"), "content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let commit = manager.get_current_commit().unwrap();
+        assert_eq!(commit.len(), 40);
+        assert!(commit.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_stage_overlay_with_source_files() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+
+        // Initialize a real git repo
+        std::process::Command::new("git")
+            .args(["init"])
+            .arg(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Create initial commit
+        fs::write(repo_path.join("README.md"), "repo").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path.clone()),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        // Create source overlay directory
+        let source = TempDir::new().unwrap();
+        fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+        let dest = manager
+            .stage_overlay("org", "repo", "my-overlay", source.path())
+            .unwrap();
+
+        assert_eq!(dest, repo_path.join("org/repo/my-overlay"));
+        assert!(dest.join(".envrc").exists());
+    }
+
+    #[test]
+    fn test_stage_overlay_with_nonexistent_source() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+
+        // Initialize a real git repo
+        std::process::Command::new("git")
+            .args(["init"])
+            .arg(&repo_path)
+            .output()
+            .unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        // Try to stage from non-existent source
+        let result = manager.stage_overlay(
+            "org",
+            "repo",
+            "overlay",
+            Path::new("/nonexistent/source/path/xyz123"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_has_staged_changes_empty_repo() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("repo");
+
+        // Initialize a real git repo with a commit
+        std::process::Command::new("git")
+            .args(["init"])
+            .arg(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        fs::write(repo_path.join("file.txt"), "content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        // No staged changes
+        let has_changes = manager.has_staged_changes().unwrap();
+        assert!(!has_changes);
+    }
+
+    #[test]
+    fn test_has_staged_changes_with_staged_files() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("repo");
+
+        // Initialize a real git repo with a commit
+        std::process::Command::new("git")
+            .args(["init"])
+            .arg(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        fs::write(repo_path.join("file.txt"), "content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Add a new file and stage it
+        fs::write(repo_path.join("new.txt"), "new content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "new.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        let has_changes = manager.has_staged_changes().unwrap();
+        assert!(has_changes);
+    }
+
+    #[test]
+    fn test_list_overlays_for_repo_multiple_overlays() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        fs::create_dir_all(repo_path.join("microsoft/FluidFramework/claude-config")).unwrap();
+        fs::create_dir_all(repo_path.join("microsoft/FluidFramework/vscode-setup")).unwrap();
+        fs::create_dir_all(repo_path.join("google/chromium/dev-tools")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        let overlays = manager
+            .list_overlays_for_repo("microsoft", "FluidFramework")
+            .unwrap();
+        assert_eq!(overlays.len(), 2);
+
+        // Different repo should not be included
+        let chrome_overlays = manager
+            .list_overlays_for_repo("google", "chromium")
+            .unwrap();
+        assert_eq!(chrome_overlays.len(), 1);
+    }
+
+    #[test]
+    fn test_list_overlays_skips_hidden_and_files() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        fs::create_dir_all(repo_path.join("org/repo/visible-overlay")).unwrap();
+        fs::create_dir_all(repo_path.join("org/repo/.hidden-overlay")).unwrap();
+        fs::write(repo_path.join("org/repo/not-a-dir.txt"), "file").unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager.list_overlays().unwrap();
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0].name, "visible-overlay");
+    }
+
     // --- Security fix tests ---
 
     #[test]
