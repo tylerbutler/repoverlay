@@ -1,0 +1,9 @@
+kind: Changed
+body: |-
+    Rationalize command vocabulary and deprecate old commands before 1.0
+
+    Rename `list` to `browse`, merge `create-local` into `create --output`,
+    consolidate `cache clear` into `cache remove --all`, and deprecate
+    `publish` (use `create`) and `add` (use `edit --add`). All deprecated
+    commands are hidden from help and emit a warning targeting removal in 1.0.
+time: 2026-02-17T16:52:00-08:00
