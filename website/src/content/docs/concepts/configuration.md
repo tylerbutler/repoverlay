@@ -57,4 +57,4 @@ This is important for directories like `.claude/` where the entire directory tre
 
 ## Configuration format
 
-repoverlay uses [CCL (Colon Configuration Language)](https://ccl.tylerbutler.com/) for its configuration files. CCL uses `=` for key-value pairs and indentation for nesting. Lines starting with `/=` are comments.
+repoverlay uses [CCL (Categorical Configuration Language)](https://ccl.tylerbutler.com/) for its configuration files. CCL uses `=` for key-value pairs and indentation for nesting. Lines starting with `/=` are comments.
