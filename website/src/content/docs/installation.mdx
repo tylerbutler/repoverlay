@@ -1,0 +1,37 @@
+---
+title: Installation
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+<Tabs>
+	<TabItem label="Homebrew">
+		```bash
+		brew install tylerbutler/tap/repoverlay
+		```
+	</TabItem>
+	<TabItem label="Shell script">
+		```bash
+		curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.sh | sh
+		```
+	</TabItem>
+	<TabItem label="PowerShell">
+		```powershell
+		irm https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.ps1 | iex
+		```
+	</TabItem>
+	<TabItem label="Cargo">
+		```bash
+		# Install a pre-built binary (faster)
+		cargo binstall repoverlay
+
+		# Build from source
+		cargo install repoverlay
+		```
+	</TabItem>
+</Tabs>
+
+## Manual
+
+Download the pre-built binaries for your platform at
+[repoverlay releases](https://github.com/tylerbutler/repoverlay/releases).

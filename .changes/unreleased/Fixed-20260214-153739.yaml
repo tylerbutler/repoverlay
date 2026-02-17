@@ -1,8 +1,0 @@
-kind: Fixed
-body: |-
-    Reload overlay targets after removing a conflicting overlay during re-apply
-
-    When `--force` removed an existing overlay to make room for a re-apply, the in-memory
-    target set was stale, causing subsequent conflict checks in the same batch to see
-    phantom conflicts. The target set is now reloaded after each forced removal.
-time: 2026-02-14T15:37:39.000000-08:00

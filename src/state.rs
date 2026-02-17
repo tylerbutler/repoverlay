@@ -258,6 +258,16 @@ impl OverlayState {
         self.files.push(entry);
     }
 
+    /// Remove a file entry by target path. Returns the removed entry, or None if not found.
+    #[allow(dead_code)]
+    pub fn remove_file(&mut self, target: &Path) -> Option<FileEntry> {
+        if let Some(pos) = self.files.iter().position(|f| f.target == target) {
+            Some(self.files.remove(pos))
+        } else {
+            None
+        }
+    }
+
     /// Get the number of files in the overlay.
     #[allow(clippy::missing_const_for_fn)]
     pub fn file_count(&self) -> usize {
@@ -1359,5 +1369,44 @@ directories =
         let dir1 = external_state_dir_for_target(temp.path()).unwrap();
         let dir2 = external_state_dir_for_target(temp.path()).unwrap();
         assert_eq!(dir1, dir2);
+    }
+
+    #[test]
+    fn remove_file_returns_matching_entry() {
+        let mut state = OverlayState::new(
+            "test".to_string(),
+            OverlaySource::Local {
+                path: PathBuf::from("/tmp"),
+            },
+        );
+        state.add_file(FileEntry {
+            source: PathBuf::from("a.txt"),
+            target: PathBuf::from("a.txt"),
+            link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
+        });
+        state.add_file(FileEntry {
+            source: PathBuf::from("b.txt"),
+            target: PathBuf::from("b.txt"),
+            link_type: LinkType::Symlink,
+            entry_type: EntryType::File,
+        });
+
+        let removed = state.remove_file(&PathBuf::from("a.txt"));
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().target, PathBuf::from("a.txt"));
+        assert_eq!(state.file_count(), 1);
+    }
+
+    #[test]
+    fn remove_file_returns_none_for_missing() {
+        let mut state = OverlayState::new(
+            "test".to_string(),
+            OverlaySource::Local {
+                path: PathBuf::from("/tmp"),
+            },
+        );
+        let removed = state.remove_file(&PathBuf::from("nonexistent.txt"));
+        assert!(removed.is_none());
     }
 }
