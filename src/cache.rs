@@ -174,6 +174,7 @@ impl CacheManager {
             }
         }
 
+        cmd.arg("--");
         cmd.arg(source.clone_url());
         cmd.arg(target);
 

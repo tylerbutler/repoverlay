@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.0 - 2026-02-16
+
+
+### Command: `apply`
+
+
+#### Added
+
+- Deep merge `.json` files during overlay application
+
+  Resolve `.json` file conflicts automatically instead of failing. When `--merge` is enabled (via CLI flag or `REPOVERLAY_MERGE` env var), JSON files are recursively deep merged — objects merge key-by-key with overlay values winning, arrays and scalars use overlay values directly, and type mismatches are logged with full dotted key paths. Merged files are tracked with a new `Merged` link type in overlay state for correct cleanup on remove/update.
+
+#### Fixed
+
+- Reload overlay targets after removing a conflicting overlay during re-apply
+
+  When `--force` removed an existing overlay to make room for a re-apply, the in-memory target set was stale, causing subsequent conflict checks in the same batch to see phantom conflicts. The target set is now reloaded after each forced removal.
+
+### Command: `edit`
+
+
+#### Added
+
+- Add `edit` command for modifying existing overlays
+
+  New `edit` command with `--add`, `--remove`, and `--interactive` flags for modifying applied overlays. `--add` adds files to an overlay, `--remove` removes specific files without removing the whole overlay, and `--interactive` re-runs the file selection UI with currently-applied files pre-selected. The existing `add` command is deprecated in favor of `edit --add`.
+
+#### Changed
+
+- `edit` defaults to interactive file selection when no flags given
+
+  Running `repoverlay edit <name>` without `--add`, `--remove`, or `--interactive` in an interactive terminal now launches interactive file re-selection automatically. Non-interactive environments are unaffected.
+
+### Command: `remove`
+
+
+#### Changed
+
+- `remove` defaults to interactive selection when no arguments given
+
+  Running `repoverlay remove` in an interactive terminal now launches the interactive overlay selection instead of printing a usage error. Non-interactive environments (CI, piped stdin, TERM=dumb) are unaffected.
+
+
+
+
+#### Security
+
+- Reject git refs starting with `-` to prevent flag injection
+
+  Source URLs with refs like `--upload-pack=evil` could be passed through to git commands as flags. `GitRef::from_str` now rejects any ref beginning with `-` and `with_ref_override` propagates the error instead of panicking via `.unwrap()`.
+- Validate overlay mapping destinations against path traversal
+
+  Overlay configs with mappings like `secret.txt = ../etc/passwd` could write files outside the target repository. Mapping destinations are now canonicalized and verified to stay within the target directory before any files are copied. Symlinks in overlay sources are also skipped to prevent symlink-based escapes.
+
 ## v0.5.0 - 2026-02-14
 
 ### Added
