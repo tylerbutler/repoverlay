@@ -17,32 +17,25 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_PAT }}
 
-      - uses: tylerbutler/actions/changie-release@4dd5edb0cc1d941b6db7433504e406c001eea748 # ratchet:tylerbutler/actions/changie-release@main
+      - uses: tylerbutler/actions/changie-release@c697a81 # ratchet:tylerbutler/actions/changie-release@main
         id: release
         with:
           token: ${{ secrets.RELEASE_PAT }}
+          version-files: 'Cargo.toml:version'
 
-      # Bump Cargo.toml version to match changie's determined version
-      - name: Bump Cargo.toml version
+      # Update Cargo.lock to match the version bumped by changie-release
+      - name: Update Cargo.lock
         if: steps.release.outputs.skipped != 'true'
         env:
-          VERSION: ${{ steps.release.outputs.version }}
           PR_BRANCH: ${{ steps.release.outputs.pr-branch }}
         run: |
-          # Strip leading 'v' if present
-          SEMVER="${VERSION#v}"
-          # Update version in Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"${SEMVER}\"/" Cargo.toml
-          # Update Cargo.lock
-          cargo generate-lockfile
-
-          # Commit version bump to release branch
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout "$PR_BRANCH"
-          git add Cargo.toml Cargo.lock
+          cargo generate-lockfile
+          git add Cargo.lock
           if ! git diff --cached --quiet; then
-            git commit -m "chore: bump version to ${SEMVER}"
+            git commit -m "chore: update Cargo.lock"
             git push origin "$PR_BRANCH"
           fi
 
