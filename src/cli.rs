@@ -646,7 +646,7 @@ pub fn run() -> Result<()> {
             force: _,
         } => {
             eprintln!(
-                "{} 'repoverlay create-local' is deprecated and will be removed in a future version.",
+                "{} 'repoverlay create-local' is deprecated and will be removed in 1.0.",
                 "Warning:".yellow().bold()
             );
             eprintln!("         Use 'repoverlay create --output <path>' instead.");
@@ -691,7 +691,7 @@ pub fn run() -> Result<()> {
         }
         Commands::List { filter, update } => {
             eprintln!(
-                "{} 'repoverlay list' is deprecated and will be removed in a future version.",
+                "{} 'repoverlay list' is deprecated and will be removed in 1.0.",
                 "Warning:".yellow().bold()
             );
             eprintln!("         Use 'repoverlay browse' instead.");
@@ -726,7 +726,7 @@ pub fn run() -> Result<()> {
             dry_run,
         } => {
             eprintln!(
-                "{} 'repoverlay add' is deprecated. Use 'repoverlay edit --add' instead.",
+                "{} 'repoverlay add' is deprecated and will be removed in 1.0. Use 'repoverlay edit --add' instead.",
                 "Warning:".yellow().bold()
             );
             eprintln!();
@@ -742,7 +742,7 @@ pub fn run() -> Result<()> {
             dry_run,
         } => {
             eprintln!(
-                "{} 'repoverlay publish' is deprecated and will be removed in a future version.",
+                "{} 'repoverlay publish' is deprecated and will be removed in 1.0.",
                 "Warning:".yellow().bold()
             );
             eprintln!(
@@ -1000,7 +1000,7 @@ fn handle_cache_command(command: CacheCommand) -> Result<()> {
 
         CacheCommand::Clear { yes } => {
             eprintln!(
-                "{} 'repoverlay cache clear' is deprecated and will be removed in a future version.",
+                "{} 'repoverlay cache clear' is deprecated and will be removed in 1.0.",
                 "Warning:".yellow().bold()
             );
             eprintln!("         Use 'repoverlay cache remove --all' instead.");
