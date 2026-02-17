@@ -6007,4 +6007,1160 @@ mod tests {
             assert_ne!(ConflictStrategy::Fail, ConflictStrategy::Force);
         }
     }
+
+    // Tests for resolve_git_dir
+    mod resolve_git_dir_tests {
+        use super::*;
+
+        #[test]
+        fn regular_git_repo_returns_git_dir() {
+            let repo = create_test_repo();
+            let result = resolve_git_dir(repo.path()).unwrap();
+            assert!(result.is_dir());
+            // The resolved path should end with .git
+            assert!(result.ends_with(".git") || result.to_string_lossy().contains(".git"));
+        }
+
+        #[test]
+        fn worktree_with_relative_gitdir() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path().join("worktree");
+            fs::create_dir_all(&repo_path).unwrap();
+
+            // Create the actual git dir relative to the worktree
+            let actual_git_dir = temp.path().join("actual-git-dir");
+            fs::create_dir_all(&actual_git_dir).unwrap();
+
+            // Write a .git file with relative path
+            let relative_path = "../actual-git-dir";
+            fs::write(repo_path.join(".git"), format!("gitdir: {relative_path}\n")).unwrap();
+
+            let result = resolve_git_dir(&repo_path).unwrap();
+            assert!(result.is_dir());
+        }
+
+        #[test]
+        fn worktree_with_absolute_gitdir() {
+            let temp = TempDir::new().unwrap();
+            let repo_path = temp.path();
+
+            let actual_git_dir = temp.path().join("actual-git-dir");
+            fs::create_dir_all(&actual_git_dir).unwrap();
+
+            let abs_path = actual_git_dir.canonicalize().unwrap();
+            fs::write(
+                repo_path.join(".git"),
+                format!("gitdir: {}\n", abs_path.display()),
+            )
+            .unwrap();
+
+            let result = resolve_git_dir(repo_path).unwrap();
+            assert!(result.is_dir());
+        }
+
+        #[test]
+        fn git_file_without_gitdir_prefix_fails() {
+            let temp = TempDir::new().unwrap();
+            fs::write(
+                temp.path().join(".git"),
+                "some random content\nno gitdir here\n",
+            )
+            .unwrap();
+
+            let result = resolve_git_dir(temp.path());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no gitdir found"));
+        }
+
+        #[test]
+        fn no_git_at_all_fails() {
+            let temp = TempDir::new().unwrap();
+            let result = resolve_git_dir(temp.path());
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Not a git repository")
+            );
+        }
+    }
+
+    // Tests for list_overlays_from_path
+    mod list_overlays_from_path_tests {
+        use super::*;
+
+        #[test]
+        fn finds_overlays_in_nested_structure() {
+            let temp = TempDir::new().unwrap();
+            let root = temp.path();
+
+            fs::create_dir_all(root.join("microsoft/FluidFramework/vscode-setup")).unwrap();
+            fs::create_dir_all(root.join("microsoft/FluidFramework/ci-config")).unwrap();
+            fs::create_dir_all(root.join("microsoft/other-repo/overlay1")).unwrap();
+
+            let overlays = list_overlays_from_path(root).unwrap();
+            assert_eq!(overlays.len(), 3);
+
+            let names: Vec<&str> = overlays.iter().map(|o| o.name.as_str()).collect();
+            assert!(names.contains(&"vscode-setup"));
+            assert!(names.contains(&"ci-config"));
+            assert!(names.contains(&"overlay1"));
+        }
+
+        #[test]
+        fn detects_has_config() {
+            let temp = TempDir::new().unwrap();
+            let root = temp.path();
+
+            // Overlay with config
+            let with_config = root.join("org/repo/with-config");
+            fs::create_dir_all(&with_config).unwrap();
+            fs::write(with_config.join("repoverlay.ccl"), "").unwrap();
+
+            // Overlay without config
+            fs::create_dir_all(root.join("org/repo/no-config")).unwrap();
+
+            let overlays = list_overlays_from_path(root).unwrap();
+            assert_eq!(overlays.len(), 2);
+
+            let with = overlays.iter().find(|o| o.name == "with-config").unwrap();
+            let without = overlays.iter().find(|o| o.name == "no-config").unwrap();
+            assert!(with.has_config);
+            assert!(!without.has_config);
+        }
+
+        #[test]
+        fn returns_sorted_overlays() {
+            let temp = TempDir::new().unwrap();
+            let root = temp.path();
+
+            fs::create_dir_all(root.join("z-org/z-repo/z-overlay")).unwrap();
+            fs::create_dir_all(root.join("a-org/a-repo/a-overlay")).unwrap();
+            fs::create_dir_all(root.join("a-org/a-repo/b-overlay")).unwrap();
+
+            let overlays = list_overlays_from_path(root).unwrap();
+            assert_eq!(overlays.len(), 3);
+
+            // Should be sorted by org, then repo, then name
+            assert_eq!(overlays[0].org, "a-org");
+            assert_eq!(overlays[0].name, "a-overlay");
+            assert_eq!(overlays[1].org, "a-org");
+            assert_eq!(overlays[1].name, "b-overlay");
+            assert_eq!(overlays[2].org, "z-org");
+        }
+
+        #[test]
+        fn empty_directory_returns_empty() {
+            let temp = TempDir::new().unwrap();
+            let overlays = list_overlays_from_path(temp.path()).unwrap();
+            assert!(overlays.is_empty());
+        }
+
+        #[test]
+        fn skips_hidden_directories() {
+            let temp = TempDir::new().unwrap();
+            let root = temp.path();
+
+            // Hidden org directory should be skipped
+            fs::create_dir_all(root.join(".hidden-org/repo/overlay")).unwrap();
+            // Visible org
+            fs::create_dir_all(root.join("visible-org/repo/overlay")).unwrap();
+
+            let overlays = list_overlays_from_path(root).unwrap();
+            assert_eq!(overlays.len(), 1);
+            assert_eq!(overlays[0].org, "visible-org");
+        }
+
+        #[test]
+        fn files_at_org_level_are_ignored() {
+            let temp = TempDir::new().unwrap();
+            let root = temp.path();
+
+            // File at root level (not a directory)
+            fs::write(root.join("README.md"), "# Overlays").unwrap();
+            // Real overlay
+            fs::create_dir_all(root.join("org/repo/overlay")).unwrap();
+
+            let overlays = list_overlays_from_path(root).unwrap();
+            assert_eq!(overlays.len(), 1);
+        }
+
+        #[test]
+        fn shallow_structure_returns_empty() {
+            let temp = TempDir::new().unwrap();
+            let root = temp.path();
+
+            // Only one level deep - not enough for org/repo/overlay
+            fs::create_dir_all(root.join("org")).unwrap();
+
+            let overlays = list_overlays_from_path(root).unwrap();
+            assert!(overlays.is_empty());
+        }
+
+        #[test]
+        fn two_level_structure_returns_empty() {
+            let temp = TempDir::new().unwrap();
+            let root = temp.path();
+
+            // Only two levels deep - not enough for org/repo/overlay
+            fs::create_dir_all(root.join("org/repo")).unwrap();
+            // Add a file so repo dir isn't empty
+            fs::write(root.join("org/repo/README.md"), "").unwrap();
+
+            let overlays = list_overlays_from_path(root).unwrap();
+            assert!(overlays.is_empty());
+        }
+
+        #[test]
+        fn sets_org_and_repo_fields() {
+            let temp = TempDir::new().unwrap();
+            fs::create_dir_all(temp.path().join("my-org/my-repo/my-overlay")).unwrap();
+
+            let overlays = list_overlays_from_path(temp.path()).unwrap();
+            assert_eq!(overlays.len(), 1);
+            assert_eq!(overlays[0].org, "my-org");
+            assert_eq!(overlays[0].repo, "my-repo");
+            assert_eq!(overlays[0].name, "my-overlay");
+        }
+    }
+
+    // Tests for visible_subdirs additional edge cases
+    mod visible_subdirs_edge_cases {
+        use super::*;
+
+        #[test]
+        fn only_hidden_directories_returns_empty() {
+            let temp = TempDir::new().unwrap();
+            fs::create_dir(temp.path().join(".hidden1")).unwrap();
+            fs::create_dir(temp.path().join(".hidden2")).unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn only_files_returns_empty() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("file1.txt"), "").unwrap();
+            fs::write(temp.path().join("file2.txt"), "").unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn mixed_visible_hidden_and_files() {
+            let temp = TempDir::new().unwrap();
+            fs::create_dir(temp.path().join("visible")).unwrap();
+            fs::create_dir(temp.path().join(".hidden")).unwrap();
+            fs::write(temp.path().join("file.txt"), "").unwrap();
+
+            let result = visible_subdirs(temp.path()).unwrap();
+            assert_eq!(result.len(), 1);
+            assert_eq!(result[0].1, "visible");
+        }
+
+        #[test]
+        fn nonexistent_directory_returns_error() {
+            let result = visible_subdirs(Path::new("/nonexistent/path/abc123"));
+            assert!(result.is_err());
+        }
+    }
+
+    // Tests for resolve_overlay_display_name
+    mod resolve_overlay_display_name_tests {
+        use super::*;
+
+        #[test]
+        fn name_override_takes_priority() {
+            let config = OverlayConfig {
+                overlay: state::OverlayConfigMeta {
+                    name: Some("config-name".to_string()),
+                    description: None,
+                },
+                ..Default::default()
+            };
+            let result = resolve_overlay_display_name(
+                &config,
+                Path::new("/some/dir-name"),
+                Some("override".to_string()),
+            );
+            assert_eq!(result, "override");
+        }
+
+        #[test]
+        fn config_name_used_when_no_override() {
+            let config = OverlayConfig {
+                overlay: state::OverlayConfigMeta {
+                    name: Some("config-name".to_string()),
+                    description: None,
+                },
+                ..Default::default()
+            };
+            let result = resolve_overlay_display_name(&config, Path::new("/some/dir-name"), None);
+            assert_eq!(result, "config-name");
+        }
+
+        #[test]
+        fn directory_name_used_as_fallback() {
+            let config = OverlayConfig::default();
+            let result = resolve_overlay_display_name(&config, Path::new("/some/my-overlay"), None);
+            assert_eq!(result, "my-overlay");
+        }
+
+        #[test]
+        fn root_path_returns_unnamed() {
+            let config = OverlayConfig::default();
+            let result = resolve_overlay_display_name(&config, Path::new("/"), None);
+            // Path::new("/").file_name() is None
+            assert_eq!(result, "unnamed");
+        }
+    }
+
+    // Tests for determine_overlay_name
+    mod determine_overlay_name_tests {
+        use super::*;
+
+        #[test]
+        fn returns_normalized_name() {
+            let config = OverlayConfig::default();
+            let result =
+                determine_overlay_name(&config, Path::new("/some/My Overlay"), None).unwrap();
+            // normalize_overlay_name lowercases and replaces spaces
+            assert!(!result.contains(' '));
+        }
+
+        #[test]
+        fn name_override_is_normalized() {
+            let config = OverlayConfig::default();
+            let result = determine_overlay_name(
+                &config,
+                Path::new("/some/dir"),
+                Some("My Override".to_string()),
+            )
+            .unwrap();
+            assert!(!result.contains(' '));
+        }
+    }
+
+    // Tests for collect_overlay_files
+    mod collect_overlay_files_tests {
+        use super::*;
+
+        #[test]
+        fn collects_regular_files() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("file1.txt"), "content1").unwrap();
+            fs::write(temp.path().join("file2.txt"), "content2").unwrap();
+
+            let config = OverlayConfig::default();
+            let files = collect_overlay_files(temp.path(), &config);
+            assert_eq!(files.len(), 2);
+        }
+
+        #[test]
+        fn skips_config_file() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("file.txt"), "content").unwrap();
+            fs::write(temp.path().join(CONFIG_FILE), "overlay config").unwrap();
+
+            let config = OverlayConfig::default();
+            let files = collect_overlay_files(temp.path(), &config);
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].1, "file.txt");
+        }
+
+        #[test]
+        fn skips_git_directory() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("file.txt"), "content").unwrap();
+            fs::create_dir_all(temp.path().join(".git/objects")).unwrap();
+            fs::write(temp.path().join(".git/HEAD"), "ref: refs/heads/main").unwrap();
+
+            let config = OverlayConfig::default();
+            let files = collect_overlay_files(temp.path(), &config);
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].1, "file.txt");
+        }
+
+        #[test]
+        fn skips_cache_meta_file() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("file.txt"), "content").unwrap();
+            fs::write(temp.path().join(".repoverlay-cache-meta.ccl"), "meta").unwrap();
+
+            let config = OverlayConfig::default();
+            let files = collect_overlay_files(temp.path(), &config);
+            assert_eq!(files.len(), 1);
+        }
+
+        #[test]
+        fn skips_files_in_configured_directories() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("keep.txt"), "keep").unwrap();
+            fs::create_dir_all(temp.path().join(".vscode")).unwrap();
+            fs::write(temp.path().join(".vscode/settings.json"), "{}").unwrap();
+
+            let config = OverlayConfig {
+                directories: vec![".vscode".to_string()],
+                ..Default::default()
+            };
+            let files = collect_overlay_files(temp.path(), &config);
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].1, "keep.txt");
+        }
+
+        #[test]
+        fn applies_mappings() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("source.txt"), "content").unwrap();
+
+            let mut mappings = std::collections::HashMap::new();
+            mappings.insert("source.txt".to_string(), "target.txt".to_string());
+            let config = OverlayConfig {
+                mappings,
+                ..Default::default()
+            };
+            let files = collect_overlay_files(temp.path(), &config);
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].0, PathBuf::from("source.txt"));
+            assert_eq!(files[0].1, "target.txt");
+        }
+
+        #[test]
+        fn collects_nested_files() {
+            let temp = TempDir::new().unwrap();
+            fs::create_dir_all(temp.path().join("dir/subdir")).unwrap();
+            fs::write(temp.path().join("dir/file.txt"), "").unwrap();
+            fs::write(temp.path().join("dir/subdir/nested.txt"), "").unwrap();
+
+            let config = OverlayConfig::default();
+            let files = collect_overlay_files(temp.path(), &config);
+            assert_eq!(files.len(), 2);
+        }
+
+        #[test]
+        fn empty_source_returns_empty() {
+            let temp = TempDir::new().unwrap();
+            let config = OverlayConfig::default();
+            let files = collect_overlay_files(temp.path(), &config);
+            assert!(files.is_empty());
+        }
+    }
+
+    // Tests for load_overlay_config
+    mod load_overlay_config_tests {
+        use super::*;
+
+        #[test]
+        fn missing_config_returns_default() {
+            let temp = TempDir::new().unwrap();
+            let config = load_overlay_config(temp.path()).unwrap();
+            assert!(config.overlay.name.is_none());
+            assert!(config.mappings.is_empty());
+            assert!(config.directories.is_empty());
+        }
+
+        #[test]
+        fn reads_config_with_name() {
+            let temp = TempDir::new().unwrap();
+            // CCL format: section with nested key-value
+            fs::write(
+                temp.path().join(CONFIG_FILE),
+                "overlay =\n  name = my-overlay\n",
+            )
+            .unwrap();
+
+            let config = load_overlay_config(temp.path()).unwrap();
+            assert_eq!(config.overlay.name.as_deref(), Some("my-overlay"));
+        }
+
+        #[test]
+        fn empty_config_returns_default() {
+            let temp = TempDir::new().unwrap();
+            // An empty file is valid CCL - all fields have defaults
+            fs::write(temp.path().join(CONFIG_FILE), "").unwrap();
+
+            let config = load_overlay_config(temp.path()).unwrap();
+            assert!(config.overlay.name.is_none());
+        }
+    }
+
+    // Tests for OverlayName via the public type
+    mod overlay_name_integration_tests {
+        use super::*;
+
+        #[test]
+        fn as_ref_returns_inner_str() {
+            let name = OverlayName::new("test-overlay");
+            let s: &str = name.as_ref();
+            assert_eq!(s, "test-overlay");
+        }
+
+        #[test]
+        fn clone_produces_equal_value() {
+            let name = OverlayName::new("overlay");
+            let cloned = name.clone();
+            assert_eq!(name, cloned);
+        }
+
+        #[test]
+        fn ordering_is_alphabetical() {
+            let a = OverlayName::new("alpha");
+            let b = OverlayName::new("beta");
+            let c = OverlayName::new("alpha");
+            assert!(a < b);
+            assert_eq!(a.cmp(&c), std::cmp::Ordering::Equal);
+        }
+
+        #[test]
+        fn hash_consistent_with_equality() {
+            use std::collections::HashSet;
+            let mut set = HashSet::new();
+            set.insert(OverlayName::new("foo"));
+            set.insert(OverlayName::new("foo"));
+            set.insert(OverlayName::new("bar"));
+            assert_eq!(set.len(), 2);
+        }
+
+        #[test]
+        fn debug_format() {
+            let name = OverlayName::new("test");
+            let debug = format!("{name:?}");
+            assert!(debug.contains("test"));
+        }
+
+        #[test]
+        fn partial_eq_str_ref() {
+            let name = OverlayName::new("my-overlay");
+            let s: &str = "my-overlay";
+            assert!(name == s);
+            assert!(name == "my-overlay");
+        }
+    }
+
+    // Tests for ResolvedSource and ResolvedSources
+    mod resolved_types_tests {
+        use super::*;
+
+        #[test]
+        fn resolved_source_holds_path_and_source_info() {
+            let temp = TempDir::new().unwrap();
+            let resolved = ResolvedSource {
+                path: temp.path().to_path_buf(),
+                source_info: OverlaySource::local(temp.path().to_path_buf()),
+            };
+            assert_eq!(resolved.path, temp.path());
+        }
+
+        #[test]
+        fn resolved_sources_single_variant() {
+            let temp = TempDir::new().unwrap();
+            let source = ResolvedSource {
+                path: temp.path().to_path_buf(),
+                source_info: OverlaySource::local(temp.path().to_path_buf()),
+            };
+            let resolved = ResolvedSources::Single(source);
+            match resolved {
+                ResolvedSources::Single(s) => assert_eq!(s.path, temp.path()),
+                ResolvedSources::Multiple(_) => panic!("Expected Single variant"),
+            }
+        }
+
+        #[test]
+        fn resolved_sources_multiple_variant() {
+            let resolved = ResolvedSources::Multiple(vec![]);
+            match resolved {
+                ResolvedSources::Multiple(v) => assert!(v.is_empty()),
+                ResolvedSources::Single(_) => panic!("Expected Multiple variant"),
+            }
+        }
+    }
+
+    // Tests for check_files_against_existing
+    mod check_files_against_existing_tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        #[test]
+        fn no_conflicts_succeeds() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("new-file.txt"), "content").unwrap();
+
+            let config = OverlayConfig::default();
+            let existing: HashMap<String, String> = HashMap::new();
+
+            let result = check_files_against_existing(temp.path(), &config, &existing);
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn file_conflict_fails() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("conflicting.txt"), "content").unwrap();
+
+            let config = OverlayConfig::default();
+            let mut existing = HashMap::new();
+            existing.insert("conflicting.txt".to_string(), "other-overlay".to_string());
+
+            let result = check_files_against_existing(temp.path(), &config, &existing);
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("conflicting.txt"));
+            assert!(err.contains("other-overlay"));
+        }
+
+        #[test]
+        fn directory_conflict_fails() {
+            let temp = TempDir::new().unwrap();
+
+            let config = OverlayConfig {
+                directories: vec![".vscode".to_string()],
+                ..Default::default()
+            };
+            let mut existing = HashMap::new();
+            existing.insert(".vscode".to_string(), "existing-overlay".to_string());
+
+            let result = check_files_against_existing(temp.path(), &config, &existing);
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains(".vscode"));
+        }
+    }
+
+    // Tests for resolve_local_path with deprecation warning
+    mod resolve_local_path_warning_tests {
+        use super::*;
+
+        #[test]
+        fn warning_path_still_resolves_successfully() {
+            let temp = TempDir::new().unwrap();
+            // With needs_prefix_warning=true, it should still resolve but emit warning
+            let result = resolve_local_path(temp.path(), "test-dir", true).unwrap();
+            assert!(result.path.exists());
+        }
+
+        #[test]
+        fn returns_canonical_path() {
+            let temp = TempDir::new().unwrap();
+            let result = resolve_local_path(temp.path(), "test-dir", false).unwrap();
+            // The returned path should be canonical (absolute, no symlinks)
+            assert!(result.path.is_absolute());
+        }
+    }
+
+    // Tests for remove_overlay
+    mod remove_overlay_tests {
+        use super::*;
+
+        #[test]
+        fn remove_all_removes_all_overlays() {
+            let repo = create_test_repo();
+            let overlay1 = TempDir::new().unwrap();
+            fs::write(overlay1.path().join("file1.txt"), "content1").unwrap();
+            let overlay2 = TempDir::new().unwrap();
+            fs::write(overlay2.path().join("file2.txt"), "content2").unwrap();
+
+            // Apply two overlays
+            apply_overlay(
+                overlay1.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("overlay-1".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay2.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("overlay-2".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(canonical.join("file1.txt").exists());
+            assert!(canonical.join("file2.txt").exists());
+
+            // Remove all
+            remove_overlay(&canonical, None, true, false).unwrap();
+
+            assert!(!canonical.join("file1.txt").exists());
+            assert!(!canonical.join("file2.txt").exists());
+            assert!(!canonical.join(STATE_DIR).exists());
+        }
+
+        #[test]
+        fn remove_by_name_removes_single_overlay() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("test-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            remove_overlay(&canonical, Some("test-overlay".to_string()), false, false).unwrap();
+
+            assert!(!canonical.join("file.txt").exists());
+        }
+
+        #[test]
+        fn remove_no_overlays_applied_fails() {
+            let repo = create_test_repo();
+            let canonical = repo.path().canonicalize().unwrap();
+
+            let result = remove_overlay(&canonical, None, true, false);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("No overlays"));
+        }
+
+        #[test]
+        fn remove_no_name_no_all_fails() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = remove_overlay(&canonical, None, false, false);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("No overlay name specified")
+            );
+        }
+
+        #[test]
+        fn dry_run_does_not_remove() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            // Dry run with --all
+            remove_overlay(&canonical, None, true, true).unwrap();
+            // Files should still exist
+            assert!(canonical.join("file.txt").exists());
+
+            // Dry run with specific name
+            remove_overlay(&canonical, Some("test".to_string()), false, true).unwrap();
+            assert!(canonical.join("file.txt").exists());
+        }
+
+        #[test]
+        fn remove_last_overlay_cleans_state_dir() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("only-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(canonical.join(STATE_DIR).exists());
+
+            remove_overlay(&canonical, Some("only-overlay".to_string()), false, false).unwrap();
+
+            // State dir should be cleaned up when last overlay is removed
+            assert!(!canonical.join(STATE_DIR).exists());
+        }
+    }
+
+    // Tests for show_status
+    mod show_status_tests {
+        use super::*;
+
+        #[test]
+        fn status_no_overlays_succeeds() {
+            let repo = create_test_repo();
+            let canonical = repo.path().canonicalize().unwrap();
+            // Should not error, just print message
+            show_status(&canonical, None).unwrap();
+        }
+
+        #[test]
+        fn status_with_overlay_succeeds() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("status-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            show_status(&canonical, None).unwrap();
+        }
+
+        #[test]
+        fn status_with_filter_existing() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("filtered-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            show_status(&canonical, Some("filtered-test".to_string())).unwrap();
+        }
+
+        #[test]
+        fn status_with_filter_nonexistent_fails() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("real-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = show_status(&canonical, Some("nonexistent".to_string()));
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("not applied"));
+            assert!(err.contains("real-overlay"));
+        }
+    }
+
+    // Tests for apply_overlay with different conflict strategies
+    mod apply_overlay_conflict_tests {
+        use super::*;
+
+        #[test]
+        fn apply_same_name_twice_fails_by_default() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("dup-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("dup-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            );
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("already applied"));
+        }
+
+        #[test]
+        fn apply_same_name_with_force_succeeds() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content1").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("force-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            // Update the file
+            fs::write(overlay.path().join("file.txt"), "content2").unwrap();
+
+            // Re-apply with force
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("force-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::Force,
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let content = fs::read_to_string(canonical.join("file.txt")).unwrap();
+            assert_eq!(content, "content2");
+        }
+
+        #[test]
+        fn dry_run_does_not_apply() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("dry-run-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                true, // dry_run
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(!canonical.join("file.txt").exists());
+        }
+    }
+
+    // Tests for apply_overlay with config file
+    mod apply_overlay_config_tests {
+        use super::*;
+
+        #[test]
+        fn overlay_uses_config_name() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+            fs::write(
+                overlay.path().join(CONFIG_FILE),
+                "overlay =\n  name = config-name\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                None, // no name override
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let state_file = canonical
+                .join(STATE_DIR)
+                .join(OVERLAYS_DIR)
+                .join("config-name.ccl");
+            assert!(state_file.exists());
+        }
+
+        #[test]
+        fn name_override_beats_config() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+            fs::write(
+                overlay.path().join(CONFIG_FILE),
+                "overlay =\n  name = config-name\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("override-name".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let state_file = canonical
+                .join(STATE_DIR)
+                .join(OVERLAYS_DIR)
+                .join("override-name.ccl");
+            assert!(state_file.exists());
+        }
+
+        #[test]
+        fn overlay_with_mappings() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join(".envrc"), "content").unwrap();
+            fs::write(
+                overlay.path().join(CONFIG_FILE),
+                "mappings =\n  .envrc = .env\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("mapped".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(canonical.join(".env").exists());
+            assert!(!canonical.join(".envrc").exists());
+        }
+
+        #[test]
+        fn overlay_with_directories() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join(".vscode")).unwrap();
+            fs::write(
+                overlay.path().join(".vscode/settings.json"),
+                r#"{"editor.tabSize": 2}"#,
+            )
+            .unwrap();
+            fs::write(
+                overlay.path().join(CONFIG_FILE),
+                "directories =\n  = .vscode\n",
+            )
+            .unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("dir-overlay".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(canonical.join(".vscode").exists());
+            assert!(canonical.join(".vscode/settings.json").exists());
+        }
+    }
 }
