@@ -65,7 +65,6 @@ impl std::fmt::Display for AvailableOverlay {
 
 impl AvailableOverlay {
     /// Format the overlay path for display with the overlay name in bold.
-    #[allow(dead_code)] // Will be used once callers migrate from format_overlay_path()
     pub fn display_bold(&self) -> String {
         use colored::Colorize;
         format!("{}/{}/{}", self.org, self.repo, self.name.bold())
