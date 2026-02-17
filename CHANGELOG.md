@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.1 - 2026-02-17
+
+
+#### Security
+
+- Reject symlinks that escape the overlay source directory during copy
+
+  Malicious overlay repositories could include symlinks pointing outside their directory tree (e.g., to /etc/passwd). The copy operation now checks each entry with symlink_metadata and rejects any symlink whose target resolves outside the source root. Also adds a recursion depth limit (64) to prevent stack overflow from circular symlinks.
+- Validate overlay repository URL scheme before cloning
+
+  Only https://, ssh://, and git@ URLs are now accepted for overlay repository sources. This prevents file:// and other local schemes from being used to read files from the host filesystem. URLs starting with `-` are also rejected to prevent git flag injection.
+- Validate overlay path components against directory traversal
+
+  The org, repo, and overlay name components used to construct filesystem paths are now validated to reject `..`, `/`, `\`, and leading `.` characters, preventing path traversal attacks via crafted overlay references.
+
 ## v0.6.0 - 2026-02-16
 
 
