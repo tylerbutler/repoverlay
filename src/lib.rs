@@ -359,7 +359,7 @@ fn resolve_two_part(
         // Non-interactive mode - error with available overlays
         let overlay_list = available_overlays
             .iter()
-            .map(|o| format!("  {}", format_overlay_path(o)))
+            .map(|o| format!("  {}", o.display_bold()))
             .collect::<Vec<_>>()
             .join("\n");
         bail!(
@@ -372,7 +372,7 @@ fn resolve_two_part(
         println!(
             "{} overlay: {}",
             "Selected".green().bold(),
-            format_overlay_path(&selected_overlays[0])
+            selected_overlays[0].display_bold()
         );
     } else {
         println!(
@@ -381,7 +381,7 @@ fn resolve_two_part(
             selected_overlays.len()
         );
         for selected in &selected_overlays {
-            println!("  - {}", format_overlay_path(selected));
+            println!("  - {}", selected.display_bold());
         }
     }
 
@@ -504,29 +504,6 @@ fn visible_subdirs(path: &Path) -> Result<Vec<(PathBuf, String)>> {
         }
     }
     Ok(results)
-}
-
-/// Parse an overlay path string into `(org, repo, overlay_name)` components.
-///
-/// Returns None if the path doesn't have exactly 3 components.
-#[cfg(test)] // Only used in tests; production callers now use AvailableOverlay directly
-fn parse_overlay_path(path: &str) -> Option<(&str, &str, &str)> {
-    let (org, rest) = path.split_once('/')?;
-    let (repo, overlay) = rest.split_once('/')?;
-    // Reject paths with more than 3 components
-    if overlay.contains('/') {
-        None
-    } else {
-        Some((org, repo, overlay))
-    }
-}
-
-/// Format an overlay path for display with the overlay name in bold.
-///
-/// Input: `"microsoft/FluidFramework/vscode-setup"`
-/// Output: `"microsoft/FluidFramework/vscode-setup"` (with "vscode-setup" in bold)
-fn format_overlay_path(overlay: &AvailableOverlay) -> String {
-    overlay.display_bold()
 }
 
 /// Present an interactive multi-select picker for overlays.
@@ -4012,31 +3989,6 @@ mod tests {
         }
 
         #[test]
-        fn parse_overlay_path_valid_three_parts() {
-            let result = parse_overlay_path("microsoft/FluidFramework/vscode-setup");
-            assert_eq!(
-                result,
-                Some(("microsoft", "FluidFramework", "vscode-setup"))
-            );
-        }
-
-        #[test]
-        fn parse_overlay_path_too_few_parts() {
-            assert_eq!(parse_overlay_path("only-one"), None);
-            assert_eq!(parse_overlay_path("only/two"), None);
-        }
-
-        #[test]
-        fn parse_overlay_path_too_many_parts() {
-            assert_eq!(parse_overlay_path("one/two/three/four"), None);
-        }
-
-        #[test]
-        fn parse_overlay_path_empty() {
-            assert_eq!(parse_overlay_path(""), None);
-        }
-
-        #[test]
         fn get_cached_repo_commit_valid_git_repo() {
             let repo = create_test_repo();
 
@@ -4191,38 +4143,6 @@ mod tests {
             let (path, name) = &result[0];
             assert_eq!(name, "subdir");
             assert!(path.ends_with("subdir"));
-        }
-    }
-
-    // Tests for format_overlay_path
-    mod format_overlay_path_tests {
-        use super::*;
-
-        #[test]
-        fn formats_overlay_with_all_parts() {
-            let overlay = AvailableOverlay {
-                org: "microsoft".to_string(),
-                repo: "FluidFramework".to_string(),
-                name: "vscode-setup".to_string(),
-                has_config: false,
-            };
-            let result = format_overlay_path(&overlay);
-            // Should contain all parts
-            assert!(result.contains("microsoft"));
-            assert!(result.contains("FluidFramework"));
-            assert!(result.contains("vscode-setup"));
-        }
-
-        #[test]
-        fn delegates_to_display_bold() {
-            let overlay = AvailableOverlay {
-                org: "org".to_string(),
-                repo: "repo".to_string(),
-                name: "overlay".to_string(),
-                has_config: true,
-            };
-            let result = format_overlay_path(&overlay);
-            assert_eq!(result, overlay.display_bold());
         }
     }
 
