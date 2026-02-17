@@ -730,7 +730,11 @@ fn get_fuzzy_suggestions_multi_source(
     repo: &str,
     query: &str,
 ) -> Vec<String> {
-    let available = manager.list_overlays_for_repo(org, repo);
+    let available: Vec<String> = manager
+        .list_overlays_for_repo(org, repo)
+        .into_iter()
+        .map(|n| n.to_string())
+        .collect();
     fuzzy_suggest(query, &available)
 }
 
