@@ -1754,7 +1754,7 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
         default_hidden_categories: HashSet::new(),
     };
 
-    let result = select_files(&detected_files, config)?;
+    let result = select_files(&detected_files, &config)?;
 
     if result.cancelled {
         println!("{} Selection cancelled, no changes made.", "Note:".yellow());

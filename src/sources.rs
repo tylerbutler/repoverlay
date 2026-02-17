@@ -860,8 +860,9 @@ mod tests {
 
         let source = manager.get_source("personal");
         assert!(source.is_some());
-        assert_eq!(source.unwrap().name, "personal");
-        assert_eq!(source.unwrap().url, "https://github.com/user/overlays");
+        let source = source.unwrap();
+        assert_eq!(source.name, "personal");
+        assert_eq!(source.url, "https://github.com/user/overlays");
     }
 
     #[test]

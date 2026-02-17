@@ -114,7 +114,6 @@ impl FlatSelectionState {
                 return;
             }
             let id = item.id.clone();
-            drop(visible);
             if self.selections.contains(&id) {
                 self.selections.remove(&id);
             } else {
@@ -639,7 +638,7 @@ fn restore_terminal() -> anyhow::Result<()> {
 /// returning all preselected files (AI configs) without showing the UI.
 pub fn select_files(
     files: &[DetectedFile],
-    config: SelectionConfig,
+    config: &SelectionConfig,
 ) -> anyhow::Result<SelectionResult> {
     // Non-TTY fallback: return preselected files
     if !is_interactive() {
@@ -662,7 +661,7 @@ pub fn select_files(
         });
     }
 
-    let mut state = SelectionState::new(files.to_vec(), config.default_hidden_categories);
+    let mut state = SelectionState::new(files.to_vec(), config.default_hidden_categories.clone());
 
     terminal::enable_raw_mode()?;
     let result = run_selection_loop(&mut state, &config.prompt);

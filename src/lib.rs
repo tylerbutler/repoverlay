@@ -555,7 +555,11 @@ fn select_overlays_interactive(
     let items: Vec<SelectableItem> = overlays
         .iter()
         .map(|o| {
-            let disabled = applied_set.contains(o.as_str());
+            // Compare the overlay name component (3rd part of org/repo/name)
+            // against applied overlay names (which are normalized file stems)
+            let disabled = parse_overlay_path(o)
+                .and_then(|(_, _, name)| normalize_overlay_name(name).ok())
+                .is_some_and(|normalized| applied_set.contains(normalized.as_str()));
             SelectableItem {
                 id: o.clone(),
                 label: format_overlay_path(o),
@@ -2473,7 +2477,7 @@ pub(crate) fn create_overlay(
             use selection::{SelectionConfig, select_files};
 
             let config = SelectionConfig::default();
-            let result = select_files(&discovered, config)?;
+            let result = select_files(&discovered, &config)?;
 
             if result.cancelled {
                 bail!("Selection cancelled.");
