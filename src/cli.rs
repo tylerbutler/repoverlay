@@ -9,10 +9,10 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{
-    CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, STATE_DIR, apply_overlay,
-    canonicalize_path, config, list_applied_overlays, parse_github_owner_repo, remove_overlay,
-    remove_single_overlay, restore_overlays, selection::is_interactive, show_status,
-    switch_overlay, update_overlays,
+    CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, STATE_DIR,
+    apply_overlay, canonicalize_path, config, list_applied_overlays, parse_github_owner_repo,
+    remove_overlay, remove_single_overlay, restore_overlays, selection::is_interactive,
+    show_status, switch_overlay, update_overlays,
 };
 
 /// Build version string with git info for local builds
@@ -921,8 +921,8 @@ fn handle_remove(
     let items: Vec<SelectableItem> = applied_overlays
         .iter()
         .map(|name| SelectableItem {
-            id: name.clone(),
-            label: name.clone(),
+            id: name.to_string(),
+            label: name.to_string(),
             description: None,
             preselected: false,
             disabled: false,
@@ -1578,7 +1578,7 @@ fn handle_sync(
         let mut skipped = 0u32;
 
         for overlay_name in &applied_overlays {
-            let state = load_overlay_state(&target, overlay_name)?;
+            let state = load_overlay_state(&target, overlay_name.as_str())?;
 
             match &state.source {
                 OverlaySource::OverlayRepo {
@@ -1620,7 +1620,10 @@ fn handle_sync(
         let normalized_name = normalize_overlay_name(&overlay_name)?;
         let applied_overlays = list_applied_overlays(&target)?;
 
-        if !applied_overlays.contains(&normalized_name) {
+        if !applied_overlays
+            .iter()
+            .any(|n| n == normalized_name.as_str())
+        {
             bail!(
                 "Overlay '{overlay_name}' is not currently applied.\n\n\
                  To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
@@ -1843,7 +1846,10 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
 
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
-    if !applied_overlays.contains(&normalized_name) {
+    if !applied_overlays
+        .iter()
+        .any(|n| n == normalized_name.as_str())
+    {
         bail!("Overlay '{overlay_name}' is not currently applied.");
     }
 
@@ -2017,7 +2023,11 @@ fn remove_files_from_overlay(
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
 
-    if !applied_overlays.contains(&normalized_name) {
+    if !applied_overlays
+        .iter()
+        .any(|n| n == normalized_name.as_str())
+    {
+        let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
         bail!(
             "Overlay '{}' is not currently applied.\n\n\
              Applied overlays: {}",
@@ -2025,7 +2035,7 @@ fn remove_files_from_overlay(
             if applied_overlays.is_empty() {
                 "(none)".to_string()
             } else {
-                applied_overlays.join(", ")
+                names.join(", ")
             }
         );
     }
@@ -2213,7 +2223,10 @@ fn add_files_to_overlay(
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
 
-    if !applied_overlays.contains(&normalized_name) {
+    if !applied_overlays
+        .iter()
+        .any(|n| n == normalized_name.as_str())
+    {
         bail!(
             "Overlay '{overlay_name}' is not currently applied.\n\n\
              To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
@@ -5848,7 +5861,7 @@ directories =
             let mut overlay_repo_count = 0;
             let mut skipped_count = 0;
             for name in &applied {
-                let state = crate::load_overlay_state(repo.path(), name).unwrap();
+                let state = crate::load_overlay_state(repo.path(), name.as_str()).unwrap();
                 if state.source.is_overlay_repo() {
                     overlay_repo_count += 1;
                 } else {

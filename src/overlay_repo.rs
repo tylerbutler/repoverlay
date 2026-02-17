@@ -45,7 +45,7 @@ pub struct OverlayRepoMeta {
 }
 
 /// Information about an available overlay in the repository.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvailableOverlay {
     /// Target organization (e.g., "microsoft")
     pub org: String,
@@ -55,6 +55,20 @@ pub struct AvailableOverlay {
     pub name: String,
     /// Whether the overlay has a repoverlay.ccl config file
     pub has_config: bool,
+}
+
+impl std::fmt::Display for AvailableOverlay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}/{}", self.org, self.repo, self.name)
+    }
+}
+
+impl AvailableOverlay {
+    /// Format the overlay path for display with the overlay name in bold.
+    pub fn display_bold(&self) -> String {
+        use colored::Colorize;
+        format!("{}/{}/{}", self.org, self.repo, self.name.bold())
+    }
 }
 
 /// Manager for the overlay repository.
@@ -1545,6 +1559,17 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(!err.contains("flag injection"));
         assert!(!err.contains("Unsupported URL scheme"));
+    }
+
+    #[test]
+    fn available_overlay_display() {
+        let o = AvailableOverlay {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "vscode-setup".to_string(),
+            has_config: true,
+        };
+        assert_eq!(o.to_string(), "microsoft/FluidFramework/vscode-setup");
     }
 
     #[test]

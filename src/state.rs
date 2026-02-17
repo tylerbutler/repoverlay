@@ -13,6 +13,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use crate::overlay_name::OverlayName;
+
 /// Constants for state directory structure
 pub const STATE_DIR: &str = ".repoverlay";
 pub const OVERLAYS_DIR: &str = "overlays";
@@ -499,20 +501,20 @@ pub fn load_all_overlay_targets(
 }
 
 /// List all applied overlays, returning their normalized names.
-pub fn list_applied_overlays(target: &Path) -> Result<Vec<String>> {
+pub fn list_applied_overlays(target: &Path) -> Result<Vec<OverlayName>> {
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
 
     if !overlays_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let mut names: Vec<String> = fs::read_dir(&overlays_dir)?
+    let mut names: Vec<OverlayName> = fs::read_dir(&overlays_dir)?
         .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "ccl"))
         .filter_map(|e| {
             e.path()
                 .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
+                .map(|s| OverlayName::new(s.to_string_lossy().to_string()))
         })
         .collect();
 
@@ -838,9 +840,9 @@ mod tests {
         let overlays = list_applied_overlays(temp.path()).unwrap();
         assert_eq!(overlays.len(), 3);
         // Should be sorted
-        assert_eq!(overlays[0], "alpha");
-        assert_eq!(overlays[1], "beta");
-        assert_eq!(overlays[2], "gamma");
+        assert_eq!(overlays[0], OverlayName::new("alpha"));
+        assert_eq!(overlays[1], OverlayName::new("beta"));
+        assert_eq!(overlays[2], OverlayName::new("gamma"));
     }
 
     #[test]
@@ -855,7 +857,7 @@ mod tests {
 
         let overlays = list_applied_overlays(temp.path()).unwrap();
         assert_eq!(overlays.len(), 1);
-        assert_eq!(overlays[0], "overlay");
+        assert_eq!(overlays[0], OverlayName::new("overlay"));
     }
 
     #[test]
