@@ -1,9 +1,9 @@
 kind: Added
 body: |-
-    Add flat list selector for interactive overlay selection
+    Add flat list selector for overlay apply and remove pickers
 
-    Introduces a reusable flat list selector UI with keyboard navigation, search
-    filtering, multi-select with toggle-all, and support for disabled items.
-    The `remove` command now uses this selector instead of a numbered list, and
-    the `apply` command shows already-applied overlays as disabled entries.
+    The `remove` command now uses a multi-select picker instead of a numbered
+    list, allowing multiple overlays to be removed at once. The `apply` overlay
+    picker shows already-applied overlays as disabled entries. Both pickers
+    support keyboard navigation, search filtering, and select-all toggling.
 time: 2026-02-17T00:01:36Z
