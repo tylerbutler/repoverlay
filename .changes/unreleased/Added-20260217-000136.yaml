@@ -1,9 +1,9 @@
 kind: Added
 body: |-
-    Add flat list selector for overlay apply and remove pickers
+    Show already-applied overlays as disabled in the overlay picker
 
-    The `remove` command now uses a multi-select picker instead of a numbered
-    list, allowing multiple overlays to be removed at once. The `apply` overlay
-    picker shows already-applied overlays as disabled entries. Both pickers
-    support keyboard navigation, search filtering, and select-all toggling.
+    The interactive overlay picker now displays already-applied overlays as
+    dimmed, non-selectable entries so users can see what's active without
+    leaving the selection UI.
 time: 2026-02-17T00:01:36Z
+component: apply
