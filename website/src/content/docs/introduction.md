@@ -4,7 +4,7 @@ title: What is repoverlay?
 
 repoverlay is a command-line tool that **overlays config files into git repositories without committing them**. Files are symlinked (or copied) from overlay sources and automatically excluded from git tracking.
 
-## The problem
+## OK, but why?
 
 Many development workflows require configuration files that shouldn't be committed to a repository:
 

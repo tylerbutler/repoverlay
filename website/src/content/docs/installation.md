@@ -29,3 +29,8 @@ cargo binstall repoverlay
 # Build from source
 cargo install repoverlay
 ```
+
+## Manual
+
+Download the pre-built binaries for your platform at
+[repoverlay releases](https://github.com/tylerbutler/repoverlay/releases).

@@ -5,6 +5,7 @@ import { includeMarkdown } from "@hashicorp/platform-remark-plugins";
 import { defineConfig } from "astro/config";
 import { remarkShiftHeadings } from "remark-shift-headings";
 import starlightLinksValidator from "starlight-links-validator";
+import starlightLlmsTxt from "starlight-llms-txt";
 
 // Get the directory name from the script URL
 const rootDir = new URL(".", import.meta.url).pathname;
@@ -15,18 +16,26 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: "repoverlay",
+			logo: {
+				src: "./src/assets/repoverlay.svg",
+			},
+			favicon: "./src/assets/repoverlay.svg",
 			description:
 				"Overlay config files into git repositories without committing them.",
 			lastUpdated: true,
 			customCss: [
 				"@fontsource/metropolis/400.css",
 				"@fontsource/metropolis/600.css",
-				"./src/styles/custom.css",
+				// "./src/styles/custom.css",
 			],
-			plugins: [starlightCatppuccin({
-				dark: { flavor: "mocha", accent: "blue" },
-				light: { flavor: "latte", accent: "blue" },
-			}), starlightLinksValidator()],
+			plugins: [
+				starlightCatppuccin({
+					dark: { flavor: "macchiato", accent: "maroon" },
+					light: { accent: "maroon" },
+				}),
+				starlightLlmsTxt(),
+				starlightLinksValidator(),
+			],
 			social: [
 				{
 					icon: "github",
