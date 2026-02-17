@@ -1637,7 +1637,7 @@ fn resolve_overlay_source_path(state: &crate::state::OverlayState) -> Result<Pat
             let overlay_config = config.get_default_overlay_repo_config()?;
             let manager = OverlayRepoManager::new(overlay_config)?;
             manager.ensure_cloned()?;
-            Ok(manager.path().join(org).join(repo).join(name))
+            manager.get_overlay_path(org, repo, name)
         }
         OverlaySource::GitHub { .. } => {
             bail!(
