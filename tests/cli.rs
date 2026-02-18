@@ -1783,3 +1783,76 @@ fn edit_interactive_non_tty_uses_preselected() {
         .success()
         .stdout(predicate::str::contains("No changes"));
 }
+
+#[test]
+fn edit_interactive_includes_files_in_hidden_directories() {
+    // Overlays commonly contain files inside hidden directories (e.g. .vscode/,
+    // .claude/). The edit command must detect these files so they appear in the
+    // interactive selection and are correctly pre-selected.
+    let ctx = TestContext::new().with_overlay(&[
+        (".vscode/settings.json", r#"{"editor.tabSize": 2}"#),
+        (".claude/settings.json", r#"{"key": "value"}"#),
+        (".envrc", "export FOO=bar"),
+    ]);
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Verify all files were applied
+    assert!(ctx.file_exists(".vscode/settings.json"));
+    assert!(ctx.file_exists(".claude/settings.json"));
+    assert!(ctx.file_exists(".envrc"));
+
+    // In non-TTY mode, interactive edit should detect all overlay files
+    // (including those inside hidden directories) and pre-select the applied ones.
+    // Since all applied files are detected, the diff is empty -> "No changes".
+    // Before the fix, files in hidden directories were skipped by WalkDir,
+    // which would cause them to appear as removals instead.
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--interactive"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes"));
+}
+
+#[test]
+fn edit_interactive_excludes_repoverlay_ccl_from_selection() {
+    // The repoverlay.ccl config file in the overlay source should not appear
+    // in the edit selection UI (it's metadata, not overlay content).
+    // Adding a repoverlay.ccl to the overlay source and verifying edit
+    // reports "No changes" confirms it isn't treated as an overlay file.
+    let ctx = TestContext::new().with_overlay(&[(".envrc", "export FOO=bar")]);
+
+    // The overlay source directory also contains repoverlay.ccl (written by
+    // create_overlay_dir -> no, actually our test helper doesn't write it).
+    // Write one manually so we can verify it's excluded.
+    fs::write(
+        ctx.overlay_path().join("repoverlay.ccl"),
+        "overlay =\n  name = test\n",
+    )
+    .unwrap();
+
+    // Apply overlay (repoverlay.ccl is not applied as an overlay file)
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Interactive edit should NOT see repoverlay.ccl as a new file to add.
+    // If it did, the diff would be non-empty (repoverlay.ccl as an addition).
+    // "No changes" confirms repoverlay.ccl is properly excluded.
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--interactive"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes"));
+}
