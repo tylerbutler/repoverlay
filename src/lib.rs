@@ -1162,7 +1162,7 @@ pub(crate) fn apply_resolved_overlay(
 
         // Check for conflicts with existing overlays
         if let Some(conflicting_overlay) = existing_targets.get(&target_rel_str) {
-            if merge && is_json_file(&target_rel) && target_file.exists() {
+            if is_json_file(&target_rel) && target_file.exists() {
                 eprintln!(
                     "  {} Merging '{}' (managed by overlay '{}')",
                     "Merge:".cyan(),
