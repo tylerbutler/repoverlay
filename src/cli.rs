@@ -1092,19 +1092,9 @@ fn clear_cache(cache: &CacheManager, skip_confirm: bool) -> Result<()> {
 }
 
 /// Print the overlay list as text (non-interactive output).
-fn print_overlay_list(
-    overlays: &[crate::overlay_repo::AvailableOverlay],
-    target_filter: Option<&str>,
-) {
-    if overlays.is_empty() {
-        if let Some(filter) = target_filter {
-            println!("{} No overlays found for {}.", "Status:".bold(), filter);
-        } else {
-            println!("{} No overlays found in repository.", "Status:".bold());
-        }
-        return;
-    }
-
+///
+/// Caller must ensure `overlays` is non-empty.
+fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay]) {
     println!("{}\n", "Available overlays:".bold());
 
     // Group by org/repo
@@ -1171,12 +1161,6 @@ fn browse_overlays(
         manager.list_overlays()?
     };
 
-    // Non-interactive: just print the list
-    if no_interactive || !is_interactive() {
-        print_overlay_list(&overlays, target_filter);
-        return Ok(());
-    }
-
     if overlays.is_empty() {
         if let Some(filter) = target_filter {
             println!("{} No overlays found for {}.", "Status:".bold(), filter);
@@ -1186,9 +1170,17 @@ fn browse_overlays(
         return Ok(());
     }
 
+    // Non-interactive: just print the list
+    if no_interactive || !is_interactive() {
+        print_overlay_list(&overlays);
+        return Ok(());
+    }
+
     // Interactive mode: select and apply
-    let target = target.unwrap_or_else(|| PathBuf::from("."));
-    let target = canonicalize_path(&target, "Target directory")?;
+    let target = canonicalize_path(
+        &target.unwrap_or_else(|| PathBuf::from(".")),
+        "Target directory",
+    )?;
     validate_git_repo(&target)?;
 
     // Get already-applied overlays to disable them in the selector
@@ -1198,10 +1190,7 @@ fn browse_overlays(
         .iter()
         .map(|o| {
             let disabled = normalize_overlay_name(&o.name)
-                .ok()
-                .is_some_and(|normalized| {
-                    applied_overlays.iter().any(|n| n == normalized.as_str())
-                });
+                .is_ok_and(|normalized| applied_overlays.iter().any(|n| n == normalized.as_str()));
             SelectableItem {
                 id: o.to_string(),
                 label: o.display_bold(),
