@@ -1,0 +1,16 @@
+kind: Changed
+body: |-
+    Rationalize command vocabulary and deprecate old commands before 1.0
+
+    Several commands have been renamed or consolidated for consistency. The old names still work but are hidden from help output and print a deprecation warning. They will be removed in 1.0.
+
+    **`list` → `browse`** — Browse available overlays from the overlay repository. Flags (`--filter`, `--update`) are unchanged.
+
+    **`create-local` → `create --output <path>`** — Local overlay creation is now a mode of the `create` command. Pass `--output` to write to a local directory instead of the overlay repository; the overlay name becomes optional in this mode.
+
+    **`cache clear` → `cache remove --all`** — Cache removal is unified under `cache remove`. Use `--all` to clear everything, or pass a specific `owner/repo` to remove a single cached repository.
+
+    **`publish` → `create`** — Overlay publishing is now handled by `create`, which auto-detects the target repository from the git remote or accepts an explicit `org/repo/name` path.
+
+    **`add` → `edit --add`** — Adding files to an existing overlay is now a flag on the `edit` command. Use `--add` (repeatable) to include new files and `--remove` to drop files in a single invocation.
+time: 2026-02-17T16:52:00-08:00
