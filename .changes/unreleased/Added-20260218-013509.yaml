@@ -1,0 +1,8 @@
+kind: Added
+body: |-
+    Add `--quiet` flag to `status` command for exit-code-only checks
+
+    Exits with code 0 if overlays are applied, 1 if none. Produces no output.
+    Useful for conditional scripts (e.g. `if repoverlay status -q; then ...`).
+time: 2026-02-18T01:35:09+00:00
+component: status
