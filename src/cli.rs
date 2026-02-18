@@ -2072,16 +2072,16 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
         .map(|e| e.target.clone())
         .collect();
 
-    // Walk the overlay source directory to find all available files
+    // Walk the overlay source directory to find all available files.
+    // Only skip .git directory - hidden directories like .claude/, .vscode/, etc.
+    // are valid overlay content and must be included.
     let mut detected_files: Vec<DetectedFile> = Vec::new();
     for entry in WalkDir::new(&source_path)
         .min_depth(1)
         .into_iter()
         .filter_entry(|e| {
-            // Skip hidden directories like .git, but allow hidden files
-            !e.file_type().is_dir()
-                || !e.file_name().to_string_lossy().starts_with('.')
-                || e.depth() == 0
+            // Only skip .git directory
+            !(e.file_type().is_dir() && e.file_name() == ".git")
         })
         .filter_map(Result::ok)
     {
@@ -2091,6 +2091,15 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
                 .strip_prefix(&source_path)
                 .unwrap_or_else(|_| entry.path())
                 .to_path_buf();
+
+            let rel_str = relative.to_string_lossy();
+
+            // Skip overlay config file and cache metadata (not user-facing overlay content)
+            if relative == std::path::Path::new(crate::state::CONFIG_FILE)
+                || rel_str == ".repoverlay-cache-meta.ccl"
+            {
+                continue;
+            }
 
             let is_currently_applied = current_files.contains(&relative);
 
