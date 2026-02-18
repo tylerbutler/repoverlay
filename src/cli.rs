@@ -711,7 +711,14 @@ pub fn run() -> Result<()> {
             dry_run,
             show_all,
         } => {
-            browse_overlays(filter.as_deref(), update, target, no_interactive, dry_run, show_all)?;
+            browse_overlays(
+                filter.as_deref(),
+                update,
+                target,
+                no_interactive,
+                dry_run,
+                show_all,
+            )?;
         }
         Commands::List { filter, update } => {
             eprintln!(
@@ -1142,6 +1149,7 @@ fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay], filter
 /// When `show_all` is false, auto-detects the current repository from git remotes
 /// and filters to only show matching overlays. If detection fails or no overlays
 /// match, falls back to showing all overlays.
+#[allow(clippy::fn_params_excessive_bools)]
 fn browse_overlays(
     target_filter: Option<&str>,
     update: bool,
