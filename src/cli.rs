@@ -354,6 +354,10 @@ enum Commands {
         /// Show what would be applied without making changes
         #[arg(long)]
         dry_run: bool,
+
+        /// Show all overlays, including those for other repositories
+        #[arg(long)]
+        show_all: bool,
     },
 
     /// List available overlays from the overlay repository
@@ -727,8 +731,16 @@ pub fn run() -> Result<()> {
             target,
             no_interactive,
             dry_run,
+            show_all,
         } => {
-            browse_overlays(filter.as_deref(), update, target, no_interactive, dry_run)?;
+            browse_overlays(
+                filter.as_deref(),
+                update,
+                target,
+                no_interactive,
+                dry_run,
+                show_all,
+            )?;
         }
         Commands::List { filter, update } => {
             eprintln!(
@@ -738,7 +750,7 @@ pub fn run() -> Result<()> {
             eprintln!("         Use 'repoverlay browse' instead.");
             eprintln!();
 
-            browse_overlays(filter.as_deref(), update, None, true, false)?;
+            browse_overlays(filter.as_deref(), update, None, true, false, true)?;
         }
         Commands::Sync {
             name,
@@ -1113,10 +1125,49 @@ fn clear_cache(cache: &CacheManager, skip_confirm: bool) -> Result<()> {
     Ok(())
 }
 
+/// Filter overlays to those matching the current repository.
+///
+/// When `skip_filter` is true, returns all overlays unfiltered. Otherwise, detects
+/// the current repository from git remotes and returns only matching overlays.
+/// Falls back to showing all overlays if detection fails or nothing matches.
+///
+/// Returns `(overlays, was_filtered)`.
+fn auto_filter_overlays(
+    overlays: Vec<crate::overlay_repo::AvailableOverlay>,
+    skip_filter: bool,
+) -> (Vec<crate::overlay_repo::AvailableOverlay>, bool) {
+    use crate::upstream::detect_repo_identity;
+
+    if skip_filter {
+        return (overlays, false);
+    }
+
+    let identity = PathBuf::from(".")
+        .canonicalize()
+        .ok()
+        .and_then(|p| detect_repo_identity(&p).ok().flatten());
+
+    let Some(identity) = identity else {
+        return (overlays, false);
+    };
+
+    let matching: Vec<_> = overlays
+        .iter()
+        .filter(|o| identity.matches(&o.org, &o.repo))
+        .cloned()
+        .collect();
+
+    if matching.is_empty() {
+        (overlays, false)
+    } else {
+        (matching, true)
+    }
+}
+
 /// Print the overlay list as text (non-interactive output).
 ///
 /// Caller must ensure `overlays` is non-empty.
-fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay]) {
+fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay], filtered: bool) {
     println!("{}\n", "Available overlays:".bold());
 
     // Group by org/repo
@@ -1138,6 +1189,13 @@ fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay]) {
         println!("  - {}{}", overlay.name, config_marker.dimmed());
     }
 
+    if filtered {
+        println!(
+            "\n{}",
+            "Showing overlays for current repository. Use --show-all to see all.".dimmed()
+        );
+    }
+
     println!(
         "\nTo apply an overlay: repoverlay apply {}",
         "<org>/<repo>/<name>".dimmed()
@@ -1148,12 +1206,15 @@ fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay]) {
 ///
 /// In interactive mode (TTY), presents a multi-select picker and applies selected
 /// overlays. In non-interactive mode, prints the overlay list as text.
+/// Unless `show_all` is set, overlays are auto-filtered to the current repository.
+#[allow(clippy::fn_params_excessive_bools)]
 fn browse_overlays(
     target_filter: Option<&str>,
     update: bool,
     target: Option<PathBuf>,
     no_interactive: bool,
     dry_run: bool,
+    show_all: bool,
 ) -> Result<()> {
     use crate::config::load_config;
     use crate::overlay_repo::OverlayRepoManager;
@@ -1183,7 +1244,11 @@ fn browse_overlays(
         manager.list_overlays()?
     };
 
-    if overlays.is_empty() {
+    // Auto-filter by current repo when no explicit filter and not --show-all
+    let (display_overlays, filtered) =
+        auto_filter_overlays(overlays, show_all || target_filter.is_some());
+
+    if display_overlays.is_empty() {
         if let Some(filter) = target_filter {
             println!("{} No overlays found for {}.", "Status:".bold(), filter);
         } else {
@@ -1194,7 +1259,7 @@ fn browse_overlays(
 
     // Non-interactive: just print the list
     if no_interactive || !is_interactive() {
-        print_overlay_list(&overlays);
+        print_overlay_list(&display_overlays, filtered);
         return Ok(());
     }
 
@@ -1208,7 +1273,7 @@ fn browse_overlays(
     // Get already-applied overlays to disable them in the selector
     let applied_overlays = list_applied_overlays(&target).unwrap_or_default();
 
-    let items: Vec<SelectableItem> = overlays
+    let items: Vec<SelectableItem> = display_overlays
         .iter()
         .map(|o| {
             let disabled = normalize_overlay_name(&o.name)
@@ -1239,7 +1304,7 @@ fn browse_overlays(
     let selected: Vec<_> = result
         .selected_ids
         .iter()
-        .filter_map(|id| overlays.iter().find(|o| o.to_string() == *id))
+        .filter_map(|id| display_overlays.iter().find(|o| o.to_string() == *id))
         .collect();
 
     // Build ResolvedSources for apply
@@ -6631,6 +6696,18 @@ directories =
         }
 
         #[test]
+        fn browse_parses_show_all() {
+            let cli = Cli::try_parse_from(["repoverlay", "browse", "--show-all"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Browse { show_all, .. }) => {
+                    assert!(show_all);
+                }
+                _ => panic!("Expected Browse command"),
+            }
+        }
+
+        #[test]
         fn browse_parses_target() {
             let cli =
                 Cli::try_parse_from(["repoverlay", "browse", "--target", "/some/path"]).unwrap();
@@ -6662,6 +6739,18 @@ directories =
             match cli.command {
                 Some(Commands::Browse { dry_run, .. }) => {
                     assert!(dry_run);
+                }
+                _ => panic!("Expected Browse command"),
+            }
+        }
+
+        #[test]
+        fn browse_defaults_show_all_false() {
+            let cli = Cli::try_parse_from(["repoverlay", "browse"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Browse { show_all, .. }) => {
+                    assert!(!show_all);
                 }
                 _ => panic!("Expected Browse command"),
             }

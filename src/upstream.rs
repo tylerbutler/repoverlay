@@ -58,6 +58,50 @@ pub fn detect_upstream(repo_path: &Path) -> Result<Option<UpstreamInfo>> {
     Ok(None)
 }
 
+/// Identity of the repository the user is operating in.
+///
+/// Contains org/repo pairs from git remotes, used to auto-filter overlays
+/// to those targeting the current repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoIdentity {
+    /// org/repo from the "origin" remote
+    pub origin: Option<(String, String)>,
+    /// org/repo from the "upstream" remote (fork parent)
+    pub upstream: Option<(String, String)>,
+}
+
+impl RepoIdentity {
+    /// Check if an overlay's target org/repo matches this repository.
+    ///
+    /// Matches against both origin and upstream, case-insensitively.
+    pub fn matches(&self, org: &str, repo: &str) -> bool {
+        let matches_pair = |pair: &(String, String)| {
+            pair.0.eq_ignore_ascii_case(org) && pair.1.eq_ignore_ascii_case(repo)
+        };
+        self.origin.as_ref().is_some_and(matches_pair)
+            || self.upstream.as_ref().is_some_and(matches_pair)
+    }
+}
+
+/// Detect the identity of the repository at the given path from git remotes.
+///
+/// Parses "origin" and "upstream" remote URLs to extract org/repo pairs.
+/// Returns `None` if no GitHub remotes can be parsed.
+pub fn detect_repo_identity(repo_path: &Path) -> Result<Option<RepoIdentity>> {
+    let origin = get_remote_url(repo_path, "origin")?
+        .as_deref()
+        .and_then(parse_remote_url);
+    let upstream = get_remote_url(repo_path, "upstream")?
+        .as_deref()
+        .and_then(parse_remote_url);
+
+    if origin.is_none() && upstream.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(RepoIdentity { origin, upstream }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +171,107 @@ mod tests {
         let result = detect_upstream(repo.path()).unwrap();
 
         assert!(result.is_none());
+    }
+
+    // detect_repo_identity tests
+
+    fn create_git_repo_with_remotes(remotes: &[(&str, &str)]) -> TempDir {
+        let dir = TempDir::new().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        for (name, url) in remotes {
+            Command::new("git")
+                .args(["remote", "add", name, url])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn detect_identity_from_origin() {
+        let repo = create_git_repo_with_remotes(&[(
+            "origin",
+            "https://github.com/tylerbutler/FluidFramework.git",
+        )]);
+
+        let identity = detect_repo_identity(repo.path()).unwrap().unwrap();
+        assert_eq!(
+            identity.origin,
+            Some(("tylerbutler".to_string(), "FluidFramework".to_string()))
+        );
+        assert!(identity.upstream.is_none());
+    }
+
+    #[test]
+    fn detect_identity_from_both_remotes() {
+        let repo = create_git_repo_with_remotes(&[
+            (
+                "origin",
+                "https://github.com/tylerbutler/FluidFramework.git",
+            ),
+            (
+                "upstream",
+                "https://github.com/microsoft/FluidFramework.git",
+            ),
+        ]);
+
+        let identity = detect_repo_identity(repo.path()).unwrap().unwrap();
+        assert_eq!(
+            identity.origin,
+            Some(("tylerbutler".to_string(), "FluidFramework".to_string()))
+        );
+        assert_eq!(
+            identity.upstream,
+            Some(("microsoft".to_string(), "FluidFramework".to_string()))
+        );
+    }
+
+    #[test]
+    fn detect_identity_returns_none_for_no_remotes() {
+        let dir = TempDir::new().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let result = detect_repo_identity(dir.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn repo_identity_matches_origin() {
+        let id = RepoIdentity {
+            origin: Some(("tylerbutler".to_string(), "FluidFramework".to_string())),
+            upstream: None,
+        };
+        assert!(id.matches("tylerbutler", "FluidFramework"));
+        assert!(!id.matches("microsoft", "FluidFramework"));
+    }
+
+    #[test]
+    fn repo_identity_matches_upstream() {
+        let id = RepoIdentity {
+            origin: Some(("tylerbutler".to_string(), "FluidFramework".to_string())),
+            upstream: Some(("microsoft".to_string(), "FluidFramework".to_string())),
+        };
+        assert!(id.matches("tylerbutler", "FluidFramework"));
+        assert!(id.matches("microsoft", "FluidFramework"));
+        assert!(!id.matches("other-org", "FluidFramework"));
+    }
+
+    #[test]
+    fn repo_identity_matches_case_insensitive() {
+        let id = RepoIdentity {
+            origin: Some(("TylerButler".to_string(), "FluidFramework".to_string())),
+            upstream: None,
+        };
+        assert!(id.matches("tylerbutler", "fluidframework"));
+        assert!(id.matches("TYLERBUTLER", "FLUIDFRAMEWORK"));
     }
 }
