@@ -5,6 +5,116 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.7.0 - 2026-02-18
+
+
+### Command: `apply`
+
+
+#### Added
+
+##### Show already-applied overlays as disabled in the overlay picker
+
+The interactive overlay picker now displays already-applied overlays as dimmed, non-selectable entries so users can see what's active without leaving the selection UI.
+
+
+### Command: `browse`
+
+
+#### Added
+
+##### Add interactive overlay selection and apply to `browse` command
+
+When running in an interactive terminal, `browse` now presents a multi-select picker to choose overlays and applies them directly. Already-applied overlays appear disabled. Non-interactive mode (piped output or `--no-interactive`) continues to list overlays as text. Also adds `--target`, `--no-interactive`, and `--dry-run` flags.
+
+
+### Command: `remove`
+
+
+#### Added
+
+##### Replace numbered list with multi-select picker for overlay removal
+
+The `remove` command now uses an interactive multi-select picker with keyboard navigation, search filtering, and select-all toggling, replacing the old numbered-list prompt. Multiple overlays can be removed at once.
+
+
+### Command: `status`
+
+
+#### Added
+
+##### Add `--json` flag to `status` command for machine-readable output
+
+Outputs applied overlay state as structured JSON including overlay name, source info, applied timestamp, and per-file status (`ok` or `missing`). Useful for scripting and CI integration (e.g. `repoverlay status --json | jq ...`). Works with `--name` filter to output a single overlay.
+
+##### Add `--quiet` flag to `status` command for exit-code-only checks
+
+Exits with code 0 if overlays are applied, 1 if none. Produces no output. Useful for conditional scripts (e.g. `if repoverlay status -q; then ...`).
+
+
+### Command: `sync`
+
+
+#### Added
+
+##### Add --all flag to sync all applied overlays at once
+
+Only syncs overlays sourced from the overlay repo. Overlays from local or GitHub sources are skipped with a warning. Supports --dry-run.
+
+
+#### Fixed
+
+##### Fix sync --all skipping overlays from the overlay repo GitHub source
+
+Overlays applied via two-part browse mode (e.g., `repoverlay apply owner/repo-overlays`) are stored with a GitHub source type rather than an OverlayRepo source type. The sync command now detects these by checking if the GitHub URL matches a configured overlay source and the subpath contains a valid org/repo/name reference.
+
+
+
+
+
+#### Added
+
+##### Auto-filter overlays by current repository
+
+When browsing or selecting overlays, the current repository is auto-detected from git remotes (origin and upstream). Matching overlays are shown first; non-matching overlays are labeled "different repo" in the interactive picker. Text listing filters to matching overlays by default. Use `--show-all` to see all overlays.
+
+##### Add documentation site at repoverlay.tylerbutler.com
+
+Full docs site with installation instructions, quick start guide, concept explanations (overlay repos, sources, fork inheritance, configuration), usage guides, and CLI reference.
+
+
+#### Changed
+
+##### Rationalize command vocabulary and deprecate old commands before 1.0
+
+Several commands have been renamed or consolidated for consistency. The old names still work but are hidden from help output and print a deprecation warning. They will be removed in 1.0.
+
+**`list` → `browse`** — Browse available overlays from the overlay repository. Flags (`--filter`, `--update`) are unchanged.
+
+**`create-local` → `create --output <path>`** — Local overlay creation is now a mode of the `create` command. Pass `--output` to write to a local directory instead of the overlay repository; the overlay name becomes optional in this mode.
+
+**`cache clear` → `cache remove --all`** — Cache removal is unified under `cache remove`. Use `--all` to clear everything, or pass a specific `owner/repo` to remove a single cached repository.
+
+**`publish` → `create`** — Overlay publishing is now handled by `create`, which auto-detects the target repository from the git remote or accepts an explicit `org/repo/name` path.
+
+**`add` → `edit --add`** — Adding files to an existing overlay is now a flag on the `edit` command. Use `--add` (repeatable) to include new files and `--remove` to drop files in a single invocation.
+
+
+#### Security
+
+##### Reject symlinks that escape the overlay source directory during copy
+
+Malicious overlay repositories could include symlinks pointing outside their directory tree (e.g., to /etc/passwd). The copy operation now checks each entry with symlink_metadata and rejects any symlink whose target resolves outside the source root. Also adds a recursion depth limit (64) to prevent stack overflow from circular symlinks.
+
+##### Validate overlay repository URL scheme before cloning
+
+Only https://, ssh://, and git@ URLs are now accepted for overlay repository sources. This prevents file:// and other local schemes from being used to read files from the host filesystem. URLs starting with `-` are also rejected to prevent git flag injection.
+
+##### Validate overlay path components against directory traversal
+
+The org, repo, and overlay name components used to construct filesystem paths are now validated to reject `..`, `/`, `\`, and leading `.` characters, preventing path traversal attacks via crafted overlay references.
+
+
 ## v0.6.0 - 2026-02-16
 
 
