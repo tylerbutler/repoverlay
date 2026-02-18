@@ -1579,6 +1579,96 @@ fn repoverlay_merge_env_var_enables_merge() {
     assert_eq!(json["overlay"], true);
 }
 
+#[test]
+fn cross_overlay_json_auto_merges_without_merge_flag() {
+    let ctx = TestContext::new();
+    let overlay1 = common::create_overlay_dir(&[(
+        "settings.json",
+        r#"{"from_overlay1": true, "shared": "overlay1"}"#,
+    )]);
+    let overlay2 = common::create_overlay_dir(&[(
+        "settings.json",
+        r#"{"from_overlay2": true, "shared": "overlay2"}"#,
+    )]);
+
+    // Apply first overlay (copy mode for merge support)
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay1.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "first", "--copy"])
+        .assert()
+        .success();
+
+    // Apply second overlay WITHOUT --merge; should auto-merge the JSON
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay2.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "second", "--copy"])
+        .assert()
+        .success();
+
+    let content: serde_json::Value = serde_json::from_str(&ctx.read_file("settings.json")).unwrap();
+    assert_eq!(content["from_overlay1"], true); // preserved from first overlay
+    assert_eq!(content["from_overlay2"], true); // added from second overlay
+    assert_eq!(content["shared"], "overlay2"); // second overlay wins
+}
+
+#[test]
+fn cross_overlay_json_deep_merges_nested_objects() {
+    let ctx = TestContext::new();
+    let overlay1 = common::create_overlay_dir(&[(
+        "config.json",
+        r#"{"settings": {"theme": "dark", "font": "mono"}}"#,
+    )]);
+    let overlay2 = common::create_overlay_dir(&[(
+        "config.json",
+        r#"{"settings": {"font": "sans", "size": 14}}"#,
+    )]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay1.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "first", "--copy"])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay2.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "second", "--copy"])
+        .assert()
+        .success();
+
+    let content: serde_json::Value = serde_json::from_str(&ctx.read_file("config.json")).unwrap();
+    let settings = &content["settings"];
+    assert_eq!(settings["theme"], "dark"); // preserved from first
+    assert_eq!(settings["font"], "sans"); // second overlay wins
+    assert_eq!(settings["size"], 14); // added from second
+}
+
+#[test]
+fn cross_overlay_non_json_conflict_still_fails() {
+    let ctx = TestContext::new();
+    let overlay1 = common::create_overlay_dir(&[("config.txt", "from overlay1")]);
+    let overlay2 = common::create_overlay_dir(&[("config.txt", "from overlay2")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay1.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "first", "--copy"])
+        .assert()
+        .success();
+
+    // Non-JSON cross-overlay conflict should still fail
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay2.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "second", "--copy"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already managed by overlay"));
+}
+
 // ─── Edit command tests ──────────────────────────────────────────────────────
 
 #[test]
