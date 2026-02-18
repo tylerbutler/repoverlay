@@ -1,9 +1,0 @@
-kind: Added
-body: |-
-    Replace numbered list with multi-select picker for overlay removal
-
-    The `remove` command now uses an interactive multi-select picker with
-    keyboard navigation, search filtering, and select-all toggling, replacing
-    the old numbered-list prompt. Multiple overlays can be removed at once.
-time: 2026-02-17T00:01:37Z
-component: remove

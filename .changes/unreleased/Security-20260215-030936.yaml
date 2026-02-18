@@ -1,9 +1,0 @@
-kind: Security
-body: |-
-    Validate overlay repository URL scheme before cloning
-
-    Only https://, ssh://, and git@ URLs are now accepted for overlay
-    repository sources. This prevents file:// and other local schemes from
-    being used to read files from the host filesystem. URLs starting with
-    `-` are also rejected to prevent git flag injection.
-time: 2026-02-15T03:09:36Z

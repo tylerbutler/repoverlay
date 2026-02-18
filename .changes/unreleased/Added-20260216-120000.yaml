@@ -1,8 +1,0 @@
-kind: Added
-body: |-
-    Add --all flag to sync all applied overlays at once
-
-    Only syncs overlays sourced from the overlay repo. Overlays from local
-    or GitHub sources are skipped with a warning. Supports --dry-run.
-time: 2026-02-16T12:00:00-08:00
-component: sync
