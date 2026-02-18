@@ -1,0 +1,11 @@
+kind: Added
+body: |-
+    Add interactive overlay selection and apply to `browse` command
+
+    When running in an interactive terminal, `browse` now presents a multi-select
+    picker to choose overlays and applies them directly. Already-applied overlays
+    appear disabled. Non-interactive mode (piped output or `--no-interactive`)
+    continues to list overlays as text. Also adds `--target`, `--no-interactive`,
+    and `--dry-run` flags.
+time: 2026-02-18T01:36:00+00:00
+component: browse
