@@ -1870,18 +1870,23 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
     Ok(())
 }
 
-/// Show the status of applied overlays.
-/// Check whether any overlays are currently applied (for `--quiet` mode).
+/// Check whether overlays are currently applied (for `--quiet` mode).
 ///
-/// Returns `true` if at least one overlay is applied, `false` otherwise.
-pub(crate) fn status_has_overlays(target: &Path) -> Result<bool> {
+/// If `filter_name` is `Some`, checks only whether that specific overlay is applied.
+/// Otherwise, checks whether any overlay is applied.
+///
+/// Returns `true` if at least one matching overlay is applied, `false` otherwise.
+pub(crate) fn status_has_overlays(target: &Path, filter_name: Option<&str>) -> Result<bool> {
     let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
     if !overlays_dir.exists() {
         return Ok(false);
     }
     let applied = list_applied_overlays(&target)?;
-    Ok(!applied.is_empty())
+    filter_name.map_or_else(
+        || Ok(!applied.is_empty()),
+        |name| Ok(applied.iter().any(|o| o == name)),
+    )
 }
 
 /// Output overlay status as JSON for scripting and CI integration.
@@ -1987,6 +1992,7 @@ pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Resu
     Ok(())
 }
 
+/// Show the status of applied overlays.
 pub(crate) fn show_status(target: &Path, filter_name: Option<String>) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
 
@@ -7076,7 +7082,7 @@ mod tests {
         fn no_overlays_returns_false() {
             let repo = create_test_repo();
             let canonical = repo.path().canonicalize().unwrap();
-            assert!(!status_has_overlays(&canonical).unwrap());
+            assert!(!status_has_overlays(&canonical, None).unwrap());
         }
 
         #[test]
@@ -7100,7 +7106,11 @@ mod tests {
             .unwrap();
 
             let canonical = repo.path().canonicalize().unwrap();
-            assert!(status_has_overlays(&canonical).unwrap());
+            assert!(status_has_overlays(&canonical, None).unwrap());
+            // Filter by name should also match
+            assert!(status_has_overlays(&canonical, Some("check-test")).unwrap());
+            // Non-existent name should return false
+            assert!(!status_has_overlays(&canonical, Some("nonexistent")).unwrap());
         }
     }
 

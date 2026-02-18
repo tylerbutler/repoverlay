@@ -166,11 +166,11 @@ enum Commands {
         name: Option<String>,
 
         /// Output as JSON for scripting and CI integration
-        #[arg(long)]
+        #[arg(long, conflicts_with = "quiet")]
         json: bool,
 
         /// Quiet mode: exit code only (0 = overlays applied, 1 = none)
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "json")]
         quiet: bool,
     },
 
@@ -619,7 +619,7 @@ pub fn run() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             if quiet {
-                let has_overlays = status_has_overlays(&target)?;
+                let has_overlays = status_has_overlays(&target, name.as_deref())?;
                 if !has_overlays {
                     std::process::exit(1);
                 }
