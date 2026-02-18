@@ -10,8 +10,8 @@ use std::sync::LazyLock;
 
 use crate::{
     CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource,
-    STATE_DIR, apply_multiple_overlays, apply_overlay, apply_resolved_overlay, canonicalize_path,
-    config, list_applied_overlays, parse_github_owner_repo, remove_overlay, remove_single_overlay,
+    STATE_DIR, apply_multiple_overlays, apply_overlay, canonicalize_path, config,
+    list_applied_overlays, parse_github_owner_repo, remove_overlay, remove_single_overlay,
     restore_overlays, selection::is_interactive, show_status, switch_overlay, update_overlays,
     validate_git_repo,
 };
@@ -352,7 +352,7 @@ enum Commands {
     #[command(name = "list", hide = true)]
     List {
         /// Filter by target repository (format: org/repo)
-        #[arg(short = 'f', long)]
+        #[arg(short = 'f', long, alias = "target")]
         filter: Option<String>,
 
         /// Update overlay repo before listing
@@ -1249,33 +1249,14 @@ fn browse_overlays(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    if sources.len() == 1 {
-        if dry_run {
-            println!(
-                "{} Dry run - would apply overlay '{}'",
-                "Note:".yellow(),
-                selected[0]
-            );
-            return Ok(());
-        }
-        apply_resolved_overlay(
-            &sources[0],
-            &target,
-            false,
-            None,
-            ConflictStrategy::default(),
-            false,
-        )?;
-    } else {
-        apply_multiple_overlays(
-            &sources,
-            &target,
-            false,
-            dry_run,
-            ConflictStrategy::default(),
-            false,
-        )?;
-    }
+    apply_multiple_overlays(
+        &sources,
+        &target,
+        false,
+        dry_run,
+        ConflictStrategy::default(),
+        false,
+    )?;
 
     Ok(())
 }
@@ -6556,10 +6537,15 @@ directories =
         }
 
         #[test]
-        fn list_rejects_target_flag() {
-            // --target is no longer an alias for --filter on list
-            let result = Cli::try_parse_from(["repoverlay", "list", "--target", "org/repo"]);
-            assert!(result.is_err());
+        fn list_parses_target_alias() {
+            let cli = Cli::try_parse_from(["repoverlay", "list", "--target", "org/repo"]).unwrap();
+
+            match cli.command {
+                Some(Commands::List { filter, .. }) => {
+                    assert_eq!(filter, Some("org/repo".to_string()));
+                }
+                _ => panic!("Expected List command"),
+            }
         }
 
         #[test]
