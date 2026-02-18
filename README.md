@@ -18,9 +18,20 @@ Overlay config files into git repositories without committing them. Files are sy
 | Update from remote | `repoverlay update` |
 | Restore after git clean | `repoverlay restore` |
 | Create overlay | `repoverlay create <name>` |
+| Create local overlay | `repoverlay create --output <path>` |
 | Add files to overlay | `repoverlay add <name> <files>` |
 | Sync changes back | `repoverlay sync <name>` |
 | Switch overlays | `repoverlay switch <source>` |
+| Browse available overlays | `repoverlay browse` |
+
+## Concepts
+
+repoverlay manages four kinds of objects:
+
+- **Overlay** — a set of config files applied to a repo. Lifecycle: `create` → `apply` → `update` → `remove`.
+- **Source** — a configured location (GitHub repo) to find overlays. Lifecycle: `source add` → `source list` → `source remove`.
+- **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
+- **File** — an individual file within an overlay. Managed via `add` and `sync`.
 
 ## Installation
 
@@ -115,7 +126,7 @@ repoverlay create microsoft/vscode/ai-config
 repoverlay create my-overlay --include .claude/ --include CLAUDE.md
 
 # Local output (no overlay repo)
-repoverlay create --local ./output --include .envrc
+repoverlay create --output ./output --include .envrc
 
 # Preview / overwrite
 repoverlay create my-overlay --dry-run
@@ -153,8 +164,8 @@ repoverlay switch https://github.com/user/ai-configs/tree/main/rust
 ```bash
 repoverlay cache list              # List cached repositories
 repoverlay cache path              # Show cache location
-repoverlay cache clear             # Clear entire cache
 repoverlay cache remove owner/repo # Remove specific cached repo
+repoverlay cache remove --all      # Remove all cached repos
 ```
 
 ## Overlay Configuration

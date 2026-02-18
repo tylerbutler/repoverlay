@@ -13,4 +13,4 @@ body: |-
     **`publish` → `create`** — Overlay publishing is now handled by `create`, which auto-detects the target repository from the git remote or accepts an explicit `org/repo/name` path.
 
     **`add` → `edit --add`** — Adding files to an existing overlay is now a flag on the `edit` command. Use `--add` (repeatable) to include new files and `--remove` to drop files in a single invocation.
-time: 2026-02-17T16:52:00-08:00
+time: 2026-02-17T16:31:42-08:00
