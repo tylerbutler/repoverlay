@@ -358,8 +358,15 @@ fn resolve_two_part(
     let applied = target_path
         .map(|p| list_applied_overlays(p).unwrap_or_default())
         .unwrap_or_default();
+    let repo_identity = target_path.and_then(|p| upstream::detect_repo_identity(p).ok().flatten());
     let selected_overlays = if is_interactive() {
-        select_overlays_interactive(owner, repo, &available_overlays, &applied)?
+        select_overlays_interactive(
+            owner,
+            repo,
+            &available_overlays,
+            &applied,
+            repo_identity.as_ref(),
+        )?
     } else {
         // Non-interactive mode - error with available overlays
         let overlay_list = available_overlays
@@ -514,28 +521,54 @@ fn visible_subdirs(path: &Path) -> Result<Vec<(PathBuf, String)>> {
 /// Present an interactive multi-select picker for overlays.
 ///
 /// Already-applied overlays appear dimmed and cannot be selected.
+/// When `repo_identity` is provided, overlays targeting a different repository
+/// are shown dimmed with a "different repo" description but remain selectable.
+/// Matching overlays are listed first.
 fn select_overlays_interactive(
     owner: &str,
     repo: &str,
     overlays: &[AvailableOverlay],
     applied_overlays: &[OverlayName],
+    repo_identity: Option<&upstream::RepoIdentity>,
 ) -> Result<Vec<AvailableOverlay>> {
     use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
 
-    let items: Vec<SelectableItem> = overlays
+    // Partition overlays: matching first, then non-matching
+    let (matching, non_matching): (Vec<_>, Vec<_>) = repo_identity.map_or_else(
+        || (overlays.iter().collect(), vec![]),
+        |identity| {
+            overlays
+                .iter()
+                .partition(|o| identity.matches(&o.org, &o.repo))
+        },
+    );
+    let ordered: Vec<&&AvailableOverlay> = matching.iter().chain(non_matching.iter()).collect();
+
+    let items: Vec<SelectableItem> = ordered
         .iter()
         .map(|o| {
-            let disabled = normalize_overlay_name(&o.name)
+            let already_applied = normalize_overlay_name(&o.name)
                 .ok()
                 .is_some_and(|normalized| {
                     applied_overlays.iter().any(|n| n == normalized.as_str())
                 });
+            let is_different_repo =
+                repo_identity.is_some_and(|identity| !identity.matches(&o.org, &o.repo));
+
+            let description = if already_applied {
+                Some("already applied".into())
+            } else if is_different_repo {
+                Some("different repo".into())
+            } else {
+                None
+            };
+
             SelectableItem {
                 id: o.to_string(),
                 label: o.display_bold(),
-                description: disabled.then(|| "already applied".into()),
+                description,
                 preselected: false,
-                disabled,
+                disabled: already_applied,
             }
         })
         .collect();

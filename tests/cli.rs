@@ -64,7 +64,8 @@ fn browse_help_displays() {
         .stdout(predicate::str::contains("Browse"))
         .stdout(predicate::str::contains("--target"))
         .stdout(predicate::str::contains("--no-interactive"))
-        .stdout(predicate::str::contains("--dry-run"));
+        .stdout(predicate::str::contains("--dry-run"))
+        .stdout(predicate::str::contains("--show-all"));
 }
 
 #[test]
