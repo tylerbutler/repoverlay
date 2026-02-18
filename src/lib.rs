@@ -1838,6 +1838,122 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
 }
 
 /// Show the status of applied overlays.
+/// Check whether any overlays are currently applied (for `--quiet` mode).
+///
+/// Returns `true` if at least one overlay is applied, `false` otherwise.
+pub(crate) fn status_has_overlays(target: &Path) -> Result<bool> {
+    let target = canonicalize_path(target, "Target directory")?;
+    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+    if !overlays_dir.exists() {
+        return Ok(false);
+    }
+    let applied = list_applied_overlays(&target)?;
+    Ok(!applied.is_empty())
+}
+
+/// Output overlay status as JSON for scripting and CI integration.
+pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Result<()> {
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct JsonOutput {
+        overlays: Vec<JsonOverlay>,
+    }
+
+    #[derive(Serialize)]
+    struct JsonOverlay {
+        name: String,
+        applied_at: String,
+        source: OverlaySource,
+        files: Vec<JsonFileEntry>,
+    }
+
+    #[derive(Serialize)]
+    struct JsonFileEntry {
+        source: PathBuf,
+        target: PathBuf,
+        link_type: LinkType,
+        entry_type: EntryType,
+        status: &'static str,
+    }
+
+    let target = canonicalize_path(target, "Target directory")?;
+    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+
+    if !overlays_dir.exists() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&JsonOutput { overlays: vec![] })?
+        );
+        return Ok(());
+    }
+
+    let applied_overlays = list_applied_overlays(&target)?;
+    if applied_overlays.is_empty() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&JsonOutput { overlays: vec![] })?
+        );
+        return Ok(());
+    }
+
+    // Filter if name provided
+    let names: Vec<&OverlayName> = if let Some(filter) = filter_name {
+        let normalized = normalize_overlay_name(filter)?;
+        if !applied_overlays.iter().any(|n| n == normalized.as_str()) {
+            let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
+            bail!(
+                "Overlay '{}' is not applied. Available: {}",
+                filter,
+                names.join(", ")
+            );
+        }
+        applied_overlays
+            .iter()
+            .filter(|n| n.as_str() == normalized.as_str())
+            .collect()
+    } else {
+        applied_overlays.iter().collect()
+    };
+
+    let mut overlays = Vec::new();
+    for overlay_name in &names {
+        let state = load_overlay_state(&target, overlay_name.as_str())?;
+        let files: Vec<JsonFileEntry> = state
+            .file_entries()
+            .iter()
+            .map(|entry| {
+                let target_path = target.join(&entry.target);
+                let status = if target_path.exists() || target_path.is_symlink() {
+                    "ok"
+                } else {
+                    "missing"
+                };
+                JsonFileEntry {
+                    source: entry.source.clone(),
+                    target: entry.target.clone(),
+                    link_type: entry.link_type,
+                    entry_type: entry.entry_type,
+                    status,
+                }
+            })
+            .collect();
+
+        overlays.push(JsonOverlay {
+            name: state.name.clone(),
+            applied_at: state.applied_at.to_rfc3339(),
+            source: state.source.clone(),
+            files,
+        });
+    }
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&JsonOutput { overlays })?
+    );
+    Ok(())
+}
+
 pub(crate) fn show_status(target: &Path, filter_name: Option<String>) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
 
@@ -6917,6 +7033,127 @@ mod tests {
             let err = result.unwrap_err().to_string();
             assert!(err.contains("not applied"));
             assert!(err.contains("real-overlay"));
+        }
+    }
+
+    mod status_has_overlays_tests {
+        use super::*;
+
+        #[test]
+        fn no_overlays_returns_false() {
+            let repo = create_test_repo();
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(!status_has_overlays(&canonical).unwrap());
+        }
+
+        #[test]
+        fn with_overlay_returns_true() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("check-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            assert!(status_has_overlays(&canonical).unwrap());
+        }
+    }
+
+    mod show_status_json_tests {
+        use super::*;
+
+        #[test]
+        fn json_no_overlays_outputs_empty_array() {
+            let repo = create_test_repo();
+            let canonical = repo.path().canonicalize().unwrap();
+            // Should not error
+            show_status_json(&canonical, None).unwrap();
+        }
+
+        #[test]
+        fn json_with_overlay_succeeds() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("json-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            show_status_json(&canonical, None).unwrap();
+        }
+
+        #[test]
+        fn json_with_name_filter() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("json-filter-test".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            show_status_json(&canonical, Some("json-filter-test")).unwrap();
+        }
+
+        #[test]
+        fn json_with_nonexistent_filter_fails() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("real-json".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = show_status_json(&canonical, Some("nonexistent"));
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("not applied"));
         }
     }
 

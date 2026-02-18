@@ -12,7 +12,7 @@ use crate::{
     CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, STATE_DIR,
     apply_overlay, canonicalize_path, config, list_applied_overlays, parse_github_owner_repo,
     remove_overlay, remove_single_overlay, restore_overlays, selection::is_interactive,
-    show_status, switch_overlay, update_overlays,
+    show_status, show_status_json, status_has_overlays, switch_overlay, update_overlays,
 };
 
 /// Build version string with git info for local builds
@@ -163,6 +163,14 @@ enum Commands {
         /// Show only a specific overlay
         #[arg(short, long)]
         name: Option<String>,
+
+        /// Output as JSON for scripting and CI integration
+        #[arg(long)]
+        json: bool,
+
+        /// Quiet mode: exit code only (0 = overlays applied, 1 = none)
+        #[arg(short, long)]
+        quiet: bool,
     },
 
     /// Restore overlays after git clean or other removal
@@ -586,9 +594,23 @@ pub fn run() -> Result<()> {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             handle_remove(&target, name, all, dry_run, interactive)?;
         }
-        Commands::Status { target, name } => {
+        Commands::Status {
+            target,
+            name,
+            json,
+            quiet,
+        } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            show_status(&target, name)?;
+            if quiet {
+                let has_overlays = status_has_overlays(&target)?;
+                if !has_overlays {
+                    std::process::exit(1);
+                }
+            } else if json {
+                show_status_json(&target, name.as_deref())?;
+            } else {
+                show_status(&target, name)?;
+            }
         }
         Commands::Restore {
             target,
@@ -6125,9 +6147,16 @@ directories =
             let cli = Cli::try_parse_from(["repoverlay", "status"]).unwrap();
 
             match cli.command {
-                Some(Commands::Status { target, name }) => {
+                Some(Commands::Status {
+                    target,
+                    name,
+                    json,
+                    quiet,
+                }) => {
                     assert!(target.is_none());
                     assert!(name.is_none());
+                    assert!(!json);
+                    assert!(!quiet);
                 }
                 _ => panic!("Expected Status command"),
             }
@@ -6140,6 +6169,57 @@ directories =
 
             match cli.command {
                 Some(Commands::Status { name, .. }) => {
+                    assert_eq!(name, Some("my-overlay".to_string()));
+                }
+                _ => panic!("Expected Status command"),
+            }
+        }
+
+        #[test]
+        fn status_parses_json_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "status", "--json"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Status { json, .. }) => {
+                    assert!(json);
+                }
+                _ => panic!("Expected Status command"),
+            }
+        }
+
+        #[test]
+        fn status_parses_quiet_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "status", "--quiet"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Status { quiet, .. }) => {
+                    assert!(quiet);
+                }
+                _ => panic!("Expected Status command"),
+            }
+        }
+
+        #[test]
+        fn status_parses_short_quiet() {
+            let cli = Cli::try_parse_from(["repoverlay", "status", "-q"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Status { quiet, .. }) => {
+                    assert!(quiet);
+                }
+                _ => panic!("Expected Status command"),
+            }
+        }
+
+        #[test]
+        fn status_json_with_name_filter() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "status", "--json", "--name", "my-overlay"])
+                    .unwrap();
+
+            match cli.command {
+                Some(Commands::Status { json, name, .. }) => {
+                    assert!(json);
                     assert_eq!(name, Some("my-overlay".to_string()));
                 }
                 _ => panic!("Expected Status command"),
