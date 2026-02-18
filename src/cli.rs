@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{
-    CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, STATE_DIR,
-    apply_overlay, canonicalize_path, config, list_applied_overlays, parse_github_owner_repo,
-    remove_overlay, remove_single_overlay, restore_overlays, selection::is_interactive,
-    show_status, show_status_json, status_has_overlays, switch_overlay, update_overlays,
+    CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource,
+    STATE_DIR, apply_multiple_overlays, apply_overlay, canonicalize_path, config,
+    list_applied_overlays, parse_github_owner_repo, remove_overlay, remove_single_overlay,
+    restore_overlays, selection::is_interactive, show_status, show_status_json,
+    status_has_overlays, switch_overlay, update_overlays, validate_git_repo,
 };
 
 /// Build version string with git info for local builds
@@ -335,12 +336,24 @@ enum Commands {
     #[command(name = "browse")]
     Browse {
         /// Filter by target repository (format: org/repo)
-        #[arg(short = 'f', long, alias = "target")]
+        #[arg(short = 'f', long)]
         filter: Option<String>,
 
         /// Update overlay repo before listing
         #[arg(long)]
         update: bool,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Disable interactive selection (just list overlays)
+        #[arg(long)]
+        no_interactive: bool,
+
+        /// Show what would be applied without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// List available overlays from the overlay repository
@@ -708,8 +721,14 @@ pub fn run() -> Result<()> {
         Commands::Cache { command } => {
             handle_cache_command(command)?;
         }
-        Commands::Browse { filter, update } => {
-            list_overlays(filter.as_deref(), update)?;
+        Commands::Browse {
+            filter,
+            update,
+            target,
+            no_interactive,
+            dry_run,
+        } => {
+            browse_overlays(filter.as_deref(), update, target, no_interactive, dry_run)?;
         }
         Commands::List { filter, update } => {
             eprintln!(
@@ -719,7 +738,7 @@ pub fn run() -> Result<()> {
             eprintln!("         Use 'repoverlay browse' instead.");
             eprintln!();
 
-            list_overlays(filter.as_deref(), update)?;
+            browse_overlays(filter.as_deref(), update, None, true, false)?;
         }
         Commands::Sync {
             name,
@@ -1094,10 +1113,52 @@ fn clear_cache(cache: &CacheManager, skip_confirm: bool) -> Result<()> {
     Ok(())
 }
 
-/// List available overlays from the overlay repository.
-fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
+/// Print the overlay list as text (non-interactive output).
+///
+/// Caller must ensure `overlays` is non-empty.
+fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay]) {
+    println!("{}\n", "Available overlays:".bold());
+
+    // Group by org/repo
+    let mut current_group: Option<(String, String)> = None;
+    for overlay in overlays {
+        let group = (overlay.org.clone(), overlay.repo.clone());
+        if current_group.as_ref() != Some(&group) {
+            if current_group.is_some() {
+                println!();
+            }
+            println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
+            current_group = Some(group);
+        }
+        let config_marker = if overlay.has_config {
+            ""
+        } else {
+            " (no config)"
+        };
+        println!("  - {}{}", overlay.name, config_marker.dimmed());
+    }
+
+    println!(
+        "\nTo apply an overlay: repoverlay apply {}",
+        "<org>/<repo>/<name>".dimmed()
+    );
+}
+
+/// Browse available overlays from the overlay repository.
+///
+/// In interactive mode (TTY), presents a multi-select picker and applies selected
+/// overlays. In non-interactive mode, prints the overlay list as text.
+fn browse_overlays(
+    target_filter: Option<&str>,
+    update: bool,
+    target: Option<PathBuf>,
+    no_interactive: bool,
+    dry_run: bool,
+) -> Result<()> {
     use crate::config::load_config;
     use crate::overlay_repo::OverlayRepoManager;
+    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+    use crate::state::{OverlaySource, normalize_overlay_name};
 
     let config = load_config(None)?;
 
@@ -1131,31 +1192,82 @@ fn list_overlays(target_filter: Option<&str>, update: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("{}\n", "Available overlays:".bold());
-
-    // Group by org/repo
-    let mut current_group: Option<(String, String)> = None;
-    for overlay in &overlays {
-        let group = (overlay.org.clone(), overlay.repo.clone());
-        if current_group.as_ref() != Some(&group) {
-            if current_group.is_some() {
-                println!();
-            }
-            println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
-            current_group = Some(group);
-        }
-        let config_marker = if overlay.has_config {
-            ""
-        } else {
-            " (no config)"
-        };
-        println!("  - {}{}", overlay.name, config_marker.dimmed());
+    // Non-interactive: just print the list
+    if no_interactive || !is_interactive() {
+        print_overlay_list(&overlays);
+        return Ok(());
     }
 
-    println!(
-        "\nTo apply an overlay: repoverlay apply {}",
-        "<org>/<repo>/<name>".dimmed()
-    );
+    // Interactive mode: select and apply
+    let target = canonicalize_path(
+        &target.unwrap_or_else(|| PathBuf::from(".")),
+        "Target directory",
+    )?;
+    validate_git_repo(&target)?;
+
+    // Get already-applied overlays to disable them in the selector
+    let applied_overlays = list_applied_overlays(&target).unwrap_or_default();
+
+    let items: Vec<SelectableItem> = overlays
+        .iter()
+        .map(|o| {
+            let disabled = normalize_overlay_name(&o.name)
+                .is_ok_and(|normalized| applied_overlays.iter().any(|n| n == normalized.as_str()));
+            SelectableItem {
+                id: o.to_string(),
+                label: o.display_bold(),
+                description: disabled.then(|| "already applied".into()),
+                preselected: false,
+                disabled,
+            }
+        })
+        .collect();
+
+    let result = select_flat(
+        &items,
+        &FlatSelectionConfig {
+            prompt: "Select overlay(s) to apply:".into(),
+        },
+    )?;
+
+    if result.cancelled || result.selected_ids.is_empty() {
+        println!("No overlays selected.");
+        return Ok(());
+    }
+
+    // Map selected IDs back to AvailableOverlay values
+    let selected: Vec<_> = result
+        .selected_ids
+        .iter()
+        .filter_map(|id| overlays.iter().find(|o| o.to_string() == *id))
+        .collect();
+
+    // Build ResolvedSources for apply
+    let commit = manager.get_current_commit()?;
+    let sources: Vec<ResolvedSource> = selected
+        .iter()
+        .map(|o| {
+            let path = manager.get_overlay_path(&o.org, &o.repo, &o.name)?;
+            Ok(ResolvedSource {
+                path,
+                source_info: OverlaySource::overlay_repo(
+                    o.org.clone(),
+                    o.repo.clone(),
+                    o.name.clone(),
+                    commit.clone(),
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    apply_multiple_overlays(
+        &sources,
+        &target,
+        false,
+        dry_run,
+        ConflictStrategy::default(),
+        false,
+    )?;
 
     Ok(())
 }
@@ -6495,7 +6607,6 @@ directories =
 
         #[test]
         fn list_parses_target_alias() {
-            // --target should work as an alias for --filter
             let cli = Cli::try_parse_from(["repoverlay", "list", "--target", "org/repo"]).unwrap();
 
             match cli.command {
@@ -6503,6 +6614,56 @@ directories =
                     assert_eq!(filter, Some("org/repo".to_string()));
                 }
                 _ => panic!("Expected List command"),
+            }
+        }
+
+        #[test]
+        fn browse_parses_filter() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "browse", "--filter", "org/repo"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Browse { filter, .. }) => {
+                    assert_eq!(filter, Some("org/repo".to_string()));
+                }
+                _ => panic!("Expected Browse command"),
+            }
+        }
+
+        #[test]
+        fn browse_parses_target() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "browse", "--target", "/some/path"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Browse { target, .. }) => {
+                    assert_eq!(target, Some(PathBuf::from("/some/path")));
+                }
+                _ => panic!("Expected Browse command"),
+            }
+        }
+
+        #[test]
+        fn browse_parses_no_interactive() {
+            let cli = Cli::try_parse_from(["repoverlay", "browse", "--no-interactive"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Browse { no_interactive, .. }) => {
+                    assert!(no_interactive);
+                }
+                _ => panic!("Expected Browse command"),
+            }
+        }
+
+        #[test]
+        fn browse_parses_dry_run() {
+            let cli = Cli::try_parse_from(["repoverlay", "browse", "--dry-run"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Browse { dry_run, .. }) => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Browse command"),
             }
         }
 

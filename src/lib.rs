@@ -889,7 +889,7 @@ pub(crate) fn apply_overlay(
 ///
 /// This contains the core overlay application logic, separated from source resolution
 /// so it can be reused by both single-apply and multi-apply paths.
-fn apply_resolved_overlay(
+pub(crate) fn apply_resolved_overlay(
     resolved: &ResolvedSource,
     target: &Path,
     force_copy: bool,
@@ -1306,7 +1306,7 @@ fn apply_resolved_overlay(
 /// Pre-checks for conflicts between the selected overlays and with existing overlays,
 /// then applies each overlay in sequence. If any overlay fails to apply, all previously
 /// applied overlays from this batch are rolled back.
-fn apply_multiple_overlays(
+pub(crate) fn apply_multiple_overlays(
     sources: &[ResolvedSource],
     target: &Path,
     force_copy: bool,
