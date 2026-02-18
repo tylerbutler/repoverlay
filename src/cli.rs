@@ -1103,6 +1103,45 @@ fn clear_cache(cache: &CacheManager, skip_confirm: bool) -> Result<()> {
     Ok(())
 }
 
+/// Filter overlays to those matching the current repository.
+///
+/// When `skip_filter` is true, returns all overlays unfiltered. Otherwise, detects
+/// the current repository from git remotes and returns only matching overlays.
+/// Falls back to showing all overlays if detection fails or nothing matches.
+///
+/// Returns `(overlays, was_filtered)`.
+fn auto_filter_overlays(
+    overlays: Vec<crate::overlay_repo::AvailableOverlay>,
+    skip_filter: bool,
+) -> (Vec<crate::overlay_repo::AvailableOverlay>, bool) {
+    use crate::upstream::detect_repo_identity;
+
+    if skip_filter {
+        return (overlays, false);
+    }
+
+    let identity = PathBuf::from(".")
+        .canonicalize()
+        .ok()
+        .and_then(|p| detect_repo_identity(&p).ok().flatten());
+
+    let Some(identity) = identity else {
+        return (overlays, false);
+    };
+
+    let matching: Vec<_> = overlays
+        .iter()
+        .filter(|o| identity.matches(&o.org, &o.repo))
+        .cloned()
+        .collect();
+
+    if matching.is_empty() {
+        (overlays, false)
+    } else {
+        (matching, true)
+    }
+}
+
 /// Print the overlay list as text (non-interactive output).
 ///
 /// Caller must ensure `overlays` is non-empty.
@@ -1145,10 +1184,7 @@ fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay], filter
 ///
 /// In interactive mode (TTY), presents a multi-select picker and applies selected
 /// overlays. In non-interactive mode, prints the overlay list as text.
-///
-/// When `show_all` is false, auto-detects the current repository from git remotes
-/// and filters to only show matching overlays. If detection fails or no overlays
-/// match, falls back to showing all overlays.
+/// Unless `show_all` is set, overlays are auto-filtered to the current repository.
 #[allow(clippy::fn_params_excessive_bools)]
 fn browse_overlays(
     target_filter: Option<&str>,
@@ -1162,7 +1198,6 @@ fn browse_overlays(
     use crate::overlay_repo::OverlayRepoManager;
     use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
     use crate::state::{OverlaySource, normalize_overlay_name};
-    use crate::upstream::detect_repo_identity;
 
     let config = load_config(None)?;
 
@@ -1188,30 +1223,8 @@ fn browse_overlays(
     };
 
     // Auto-filter by current repo when no explicit filter and not --show-all
-    let (display_overlays, filtered) = if !show_all && target_filter.is_none() {
-        let cwd = PathBuf::from(".");
-        if let Some(identity) = cwd
-            .canonicalize()
-            .ok()
-            .and_then(|p| detect_repo_identity(&p).ok().flatten())
-        {
-            let matching: Vec<_> = overlays
-                .iter()
-                .filter(|o| identity.matches(&o.org, &o.repo))
-                .cloned()
-                .collect();
-            if matching.is_empty() {
-                // No matching overlays, fall back to showing all
-                (overlays, false)
-            } else {
-                (matching, true)
-            }
-        } else {
-            (overlays, false)
-        }
-    } else {
-        (overlays, false)
-    };
+    let (display_overlays, filtered) =
+        auto_filter_overlays(overlays, show_all || target_filter.is_some());
 
     if display_overlays.is_empty() {
         if let Some(filter) = target_filter {

@@ -533,16 +533,16 @@ fn select_overlays_interactive(
 ) -> Result<Vec<AvailableOverlay>> {
     use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
 
-    // Partition overlays: matching first, then non-matching
-    let (matching, non_matching): (Vec<_>, Vec<_>) = repo_identity.map_or_else(
-        || (overlays.iter().collect(), vec![]),
+    // Order overlays: matching repo first, then non-matching
+    let ordered: Vec<&AvailableOverlay> = repo_identity.map_or_else(
+        || overlays.iter().collect(),
         |identity| {
-            overlays
+            let (matching, non_matching): (Vec<_>, Vec<_>) = overlays
                 .iter()
-                .partition(|o| identity.matches(&o.org, &o.repo))
+                .partition(|o| identity.matches(&o.org, &o.repo));
+            matching.into_iter().chain(non_matching).collect()
         },
     );
-    let ordered: Vec<&&AvailableOverlay> = matching.iter().chain(non_matching.iter()).collect();
 
     let items: Vec<SelectableItem> = ordered
         .iter()
