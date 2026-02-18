@@ -1797,7 +1797,36 @@ fn handle_sync(
                     );
                     skipped += 1;
                 }
-                OverlaySource::GitHub { .. } => {
+                OverlaySource::GitHub {
+                    owner,
+                    repo: gh_repo,
+                    subpath,
+                    ..
+                } => {
+                    // Check if this GitHub source is the overlay repo itself.
+                    // Overlays applied via two-part browse mode (e.g., `apply tylerbutler/repo-overlays`)
+                    // are stored as GitHub sources with a subpath of `org/repo/name`.
+                    if let Some(overlay_ref) =
+                        subpath.as_deref().and_then(parse_github_overlay_subpath)
+                    {
+                        let is_overlay_repo = config
+                            .sources
+                            .iter()
+                            .any(|s| is_overlay_repo_url(&s.url, owner, gh_repo));
+
+                        if is_overlay_repo {
+                            let (ref org, ref repo, ref name) = overlay_ref;
+                            sync_single_overlay(
+                                &target, org, name, repo, &state, &manager, dry_run,
+                            )?;
+                            if !dry_run {
+                                auto_commit_overlay(&manager, org, repo, name, false)?;
+                            }
+                            synced += 1;
+                            continue;
+                        }
+                    }
+
                     println!(
                         "{} Skipping '{}' (GitHub source, not syncable to overlay repo)",
                         "Warning:".yellow(),
@@ -1862,6 +1891,32 @@ fn handle_sync(
     }
 
     Ok(())
+}
+
+/// Parse a GitHub overlay subpath like "org/repo/name" into its components.
+///
+/// Returns `Some((org, repo, name))` if the subpath has exactly three parts.
+fn parse_github_overlay_subpath(subpath: &str) -> Option<(String, String, String)> {
+    let parts: Vec<&str> = subpath.split('/').collect();
+    if parts.len() == 3 && parts.iter().all(|p| !p.is_empty()) {
+        Some((
+            parts[0].to_string(),
+            parts[1].to_string(),
+            parts[2].to_string(),
+        ))
+    } else {
+        None
+    }
+}
+
+/// Check if a configured source URL matches a GitHub owner/repo.
+///
+/// Handles both full URLs (`https://github.com/owner/repo`) and
+/// shorthand that was expanded during config deserialization.
+fn is_overlay_repo_url(source_url: &str, gh_owner: &str, gh_repo: &str) -> bool {
+    let expected_suffix = format!("/{gh_owner}/{gh_repo}");
+    let url_trimmed = source_url.trim_end_matches(".git");
+    url_trimmed.ends_with(&expected_suffix)
 }
 
 /// Sync a single overlay's files from the target repo back to the overlay repo.
@@ -6069,6 +6124,134 @@ directories =
             }
             assert_eq!(overlay_repo_count, 1);
             assert_eq!(skipped_count, 2);
+        }
+
+        #[test]
+        fn parse_github_overlay_subpath_valid() {
+            let result = parse_github_overlay_subpath("microsoft/FluidFramework/claude-config");
+            assert!(result.is_some());
+            let (org, repo, name) = result.unwrap();
+            assert_eq!(org, "microsoft");
+            assert_eq!(repo, "FluidFramework");
+            assert_eq!(name, "claude-config");
+        }
+
+        #[test]
+        fn parse_github_overlay_subpath_invalid() {
+            // Two parts
+            assert!(parse_github_overlay_subpath("org/repo").is_none());
+            // One part
+            assert!(parse_github_overlay_subpath("overlay").is_none());
+            // Four parts
+            assert!(parse_github_overlay_subpath("a/b/c/d").is_none());
+            // Empty parts
+            assert!(parse_github_overlay_subpath("org//name").is_none());
+            assert!(parse_github_overlay_subpath("/repo/name").is_none());
+            assert!(parse_github_overlay_subpath("org/repo/").is_none());
+        }
+
+        #[test]
+        fn is_overlay_repo_url_matches_https() {
+            assert!(is_overlay_repo_url(
+                "https://github.com/tylerbutler/repo-overlays",
+                "tylerbutler",
+                "repo-overlays"
+            ));
+        }
+
+        #[test]
+        fn is_overlay_repo_url_matches_with_git_suffix() {
+            assert!(is_overlay_repo_url(
+                "https://github.com/tylerbutler/repo-overlays.git",
+                "tylerbutler",
+                "repo-overlays"
+            ));
+        }
+
+        #[test]
+        fn is_overlay_repo_url_no_match_different_owner() {
+            assert!(!is_overlay_repo_url(
+                "https://github.com/other/repo-overlays",
+                "tylerbutler",
+                "repo-overlays"
+            ));
+        }
+
+        #[test]
+        fn is_overlay_repo_url_no_match_different_repo() {
+            assert!(!is_overlay_repo_url(
+                "https://github.com/tylerbutler/other-repo",
+                "tylerbutler",
+                "repo-overlays"
+            ));
+        }
+
+        #[test]
+        fn github_source_from_overlay_repo_is_syncable() {
+            // When an overlay is applied via two-part browse mode from the overlay repo,
+            // it should be recognized as syncable (not skipped) by sync --all.
+            let repo = create_test_repo();
+
+            // This is what happens when a user applies via `repoverlay apply tylerbutler/repo-overlays`
+            // The source is stored as GitHub with the overlay identity in the subpath.
+            save_test_state(
+                repo.path(),
+                "build-troubleshooter",
+                OverlaySource::github(
+                    "https://github.com/tylerbutler/repo-overlays".to_string(),
+                    "tylerbutler".to_string(),
+                    "repo-overlays".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    Some("microsoft/FluidFramework/build-troubleshooter".to_string()),
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let state = crate::load_overlay_state(repo.path(), "build-troubleshooter").unwrap();
+            // Source is GitHub, not OverlayRepo
+            assert!(state.source.is_github());
+            assert!(!state.source.is_overlay_repo());
+
+            // But subpath should be parseable as an overlay reference
+            if let OverlaySource::GitHub { subpath, .. } = &state.source {
+                let parsed = subpath.as_deref().and_then(parse_github_overlay_subpath);
+                assert!(parsed.is_some());
+                let (org, repo, name) = parsed.unwrap();
+                assert_eq!(org, "microsoft");
+                assert_eq!(repo, "FluidFramework");
+                assert_eq!(name, "build-troubleshooter");
+            } else {
+                panic!("Expected GitHub source");
+            }
+        }
+
+        #[test]
+        fn github_source_without_subpath_is_not_syncable() {
+            // A GitHub source without a subpath (direct repo apply) should still be skipped
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "direct-github",
+                OverlaySource::github(
+                    "https://github.com/someone/some-overlay".to_string(),
+                    "someone".to_string(),
+                    "some-overlay".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    None,
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let state = crate::load_overlay_state(repo.path(), "direct-github").unwrap();
+            if let OverlaySource::GitHub { subpath, .. } = &state.source {
+                let parsed = subpath.as_deref().and_then(parse_github_overlay_subpath);
+                assert!(parsed.is_none());
+            } else {
+                panic!("Expected GitHub source");
+            }
         }
     }
 
