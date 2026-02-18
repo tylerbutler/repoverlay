@@ -1,0 +1,10 @@
+kind: Added
+body: |-
+    Add `--json` flag to `status` command for machine-readable output
+
+    Outputs applied overlay state as structured JSON including overlay name,
+    source info, applied timestamp, and per-file status (`ok` or `missing`).
+    Useful for scripting and CI integration (e.g. `repoverlay status --json | jq ...`).
+    Works with `--name` filter to output a single overlay.
+time: 2026-02-18T01:35:08+00:00
+component: status

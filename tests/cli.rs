@@ -52,7 +52,9 @@ fn status_help_displays() {
         .args(["status", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("status"));
+        .stdout(predicate::str::contains("status"))
+        .stdout(predicate::str::contains("--json"))
+        .stdout(predicate::str::contains("--quiet"));
 }
 
 #[test]
@@ -599,6 +601,116 @@ fn status_shows_multiple_overlays() {
         .success()
         .stdout(predicate::str::contains("first-overlay"))
         .stdout(predicate::str::contains("second-overlay"));
+}
+
+// ============================================================================
+// Status --json / --quiet Tests
+// ============================================================================
+
+#[test]
+fn status_json_no_overlays() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["status", "--json"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""overlays": []"#));
+}
+
+#[test]
+fn status_json_with_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "json-test"])
+        .assert()
+        .success();
+
+    let output = cargo_bin_cmd!("repoverlay")
+        .args(["status", "--json"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    let overlays = json["overlays"].as_array().unwrap();
+    assert_eq!(overlays.len(), 1);
+    assert_eq!(overlays[0]["name"], "json-test");
+    assert!(overlays[0]["applied_at"].is_string());
+    assert!(overlays[0]["source"].is_object());
+
+    let files = overlays[0]["files"].as_array().unwrap();
+    assert!(!files.is_empty());
+    assert_eq!(files[0]["status"], "ok");
+}
+
+#[test]
+fn status_json_with_name_filter() {
+    let ctx = TestContext::new();
+    let overlay1 = common::create_overlay_dir(&[(".envrc", "export FOO=1")]);
+    let overlay2 = common::create_overlay_dir(&[(".tool-versions", "nodejs 20.0.0")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay1.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "first"])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay2.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "second"])
+        .assert()
+        .success();
+
+    let output = cargo_bin_cmd!("repoverlay")
+        .args(["status", "--json", "--name", "first"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    let overlays = json["overlays"].as_array().unwrap();
+    assert_eq!(overlays.len(), 1);
+    assert_eq!(overlays[0]["name"], "first");
+}
+
+#[test]
+fn status_quiet_exits_1_when_no_overlays() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["status", "--quiet"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn status_quiet_exits_0_when_overlays_applied() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["status", "--quiet"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
 }
 
 // ============================================================================
