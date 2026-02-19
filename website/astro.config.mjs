@@ -34,13 +34,14 @@ export default defineConfig({
 			customCss: [
 				"@fontsource/metropolis/400.css",
 				"@fontsource/metropolis/600.css",
-				// "./src/styles/custom.css",
+				"./src/styles/fonts.css",
+				"./src/styles/custom.css",
 			],
 			plugins: [
-				starlightCatppuccin({
-					dark: { flavor: "macchiato", accent: "maroon" },
-					light: { accent: "maroon" },
-				}),
+				// starlightCatppuccin({
+				// 	dark: { flavor: "macchiato", accent: "maroon" },
+				// 	light: { accent: "maroon" },
+				// }),
 				starlightLlmsTxt(),
 				starlightLinksValidator(),
 			],
