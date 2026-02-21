@@ -113,7 +113,7 @@ enum Commands {
         update: bool,
 
         /// Overwrite existing files and re-apply same-name overlays
-        #[arg(long, conflicts_with_all = ["skip_conflicts", "interactive"])]
+        #[arg(long, visible_alias = "overwrite", conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
 
         /// Skip conflicting files silently, continue with non-conflicting files
@@ -189,7 +189,7 @@ enum Commands {
         dry_run: bool,
 
         /// Overwrite existing files during restore
-        #[arg(long, conflicts_with_all = ["skip_conflicts", "interactive"])]
+        #[arg(long, visible_alias = "overwrite", conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
 
         /// Skip conflicting files silently during restore
@@ -219,7 +219,7 @@ enum Commands {
         dry_run: bool,
 
         /// Overwrite existing files during update
-        #[arg(long, conflicts_with_all = ["skip_conflicts", "interactive"])]
+        #[arg(long, visible_alias = "overwrite", conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
 
         /// Skip conflicting files silently during update
@@ -326,7 +326,7 @@ enum Commands {
         r#ref: Option<String>,
 
         /// Overwrite existing repo files when applying the new overlay
-        #[arg(long, conflicts_with_all = ["skip_conflicts", "interactive"])]
+        #[arg(long, visible_alias = "overwrite", conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
 
         /// Skip conflicting repo files silently when applying the new overlay
