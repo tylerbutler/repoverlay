@@ -11,7 +11,7 @@ kindFormat: '#### {{.Kind}}'
 changeFormat: |-
     ##### {{(splitn "\n" 2 .Body)._0}}
     {{with (splitn "\n" 2 .Body)._1 | default "" | trim}}
-    {{. | replace "\n\n" "<<PARA>>" | replace "\n" " " | replace "<<PARA>>" "\n\n"}}
+    {{.}}
     {{end}}
 body:
     block: true
