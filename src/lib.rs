@@ -112,7 +112,7 @@ enum InteractiveInput {
 /// `diff`, `abort`) forms, case-insensitively.
 fn parse_interactive_input(input: &str) -> InteractiveInput {
     match input.trim().to_lowercase().as_str() {
-        "o" | "overwrite" => InteractiveInput::Choice(InteractiveChoice::Overwrite),
+        "o" | "overwrite" | "f" | "force" => InteractiveInput::Choice(InteractiveChoice::Overwrite),
         "s" | "skip" => InteractiveInput::Choice(InteractiveChoice::Skip),
         "a" | "abort" => InteractiveInput::Choice(InteractiveChoice::Abort),
         "d" | "diff" => InteractiveInput::ShowDiff,
@@ -133,7 +133,7 @@ fn prompt_conflict_interactive(
 
     loop {
         eprint!(
-            "  {} {} {}\n  [o]verwrite  [s]kip  [d]iff  [a]bort: ",
+            "  {} {} {}\n  [o]verwrite/[f]orce  [s]kip  [d]iff  [a]bort: ",
             "Conflict:".yellow(),
             conflict_path.display(),
             context,
@@ -149,7 +149,7 @@ fn prompt_conflict_interactive(
                 show_file_diff(existing_path, overlay_path, conflict_path);
             }
             InteractiveInput::Invalid => {
-                eprintln!("  Invalid choice. Please enter o, s, d, or a.");
+                eprintln!("  Invalid choice. Please enter o/f, s, d, or a.");
             }
         }
     }
