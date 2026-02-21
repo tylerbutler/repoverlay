@@ -113,12 +113,16 @@ enum Commands {
         update: bool,
 
         /// Overwrite existing files and re-apply same-name overlays
-        #[arg(long, conflicts_with = "skip_conflicts")]
+        #[arg(long, conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
 
         /// Skip conflicting files silently, continue with non-conflicting files
-        #[arg(long, conflicts_with = "force")]
+        #[arg(long, conflicts_with_all = ["force", "interactive"])]
         skip_conflicts: bool,
+
+        /// Prompt interactively for each conflict (overwrite, skip, diff, or abort)
+        #[arg(short, long, conflicts_with_all = ["force", "skip_conflicts"])]
+        interactive: bool,
 
         /// Deep merge conflicting JSON files instead of failing
         #[arg(long, env = "REPOVERLAY_MERGE")]
@@ -185,12 +189,16 @@ enum Commands {
         dry_run: bool,
 
         /// Overwrite existing files during restore
-        #[arg(long, conflicts_with = "skip_conflicts")]
+        #[arg(long, conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
 
         /// Skip conflicting files silently during restore
-        #[arg(long, conflicts_with = "force")]
+        #[arg(long, conflicts_with_all = ["force", "interactive"])]
         skip_conflicts: bool,
+
+        /// Prompt interactively for each conflict during restore
+        #[arg(short, long, conflicts_with_all = ["force", "skip_conflicts"])]
+        interactive: bool,
 
         /// Deep merge conflicting JSON files instead of failing
         #[arg(long, env = "REPOVERLAY_MERGE")]
@@ -211,12 +219,16 @@ enum Commands {
         dry_run: bool,
 
         /// Overwrite existing files during update
-        #[arg(long, conflicts_with = "skip_conflicts")]
+        #[arg(long, conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
 
         /// Skip conflicting files silently during update
-        #[arg(long, conflicts_with = "force")]
+        #[arg(long, conflicts_with_all = ["force", "interactive"])]
         skip_conflicts: bool,
+
+        /// Prompt interactively for each conflict during update
+        #[arg(short, long, conflicts_with_all = ["force", "skip_conflicts"])]
+        interactive: bool,
 
         /// Deep merge conflicting JSON files instead of failing
         #[arg(long, env = "REPOVERLAY_MERGE")]
@@ -314,12 +326,16 @@ enum Commands {
         r#ref: Option<String>,
 
         /// Overwrite existing repo files when applying the new overlay
-        #[arg(long, conflicts_with = "skip_conflicts")]
+        #[arg(long, conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
 
         /// Skip conflicting repo files silently when applying the new overlay
-        #[arg(long, conflicts_with = "force")]
+        #[arg(long, conflicts_with_all = ["force", "interactive"])]
         skip_conflicts: bool,
+
+        /// Prompt interactively for each conflict when applying the new overlay
+        #[arg(short, long, conflicts_with_all = ["force", "skip_conflicts"])]
+        interactive: bool,
 
         /// Deep merge conflicting JSON files instead of failing
         #[arg(long, env = "REPOVERLAY_MERGE")]
@@ -576,6 +592,7 @@ pub fn run() -> Result<()> {
             update,
             force,
             skip_conflicts,
+            interactive,
             merge,
             from_source,
             dry_run,
@@ -585,6 +602,8 @@ pub fn run() -> Result<()> {
                 ConflictStrategy::Force
             } else if skip_conflicts {
                 ConflictStrategy::SkipConflicts
+            } else if interactive {
+                ConflictStrategy::Interactive
             } else {
                 ConflictStrategy::Fail
             };
@@ -634,6 +653,7 @@ pub fn run() -> Result<()> {
             dry_run,
             force,
             skip_conflicts,
+            interactive,
             merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
@@ -641,6 +661,8 @@ pub fn run() -> Result<()> {
                 ConflictStrategy::Force
             } else if skip_conflicts {
                 ConflictStrategy::SkipConflicts
+            } else if interactive {
+                ConflictStrategy::Interactive
             } else {
                 ConflictStrategy::Fail
             };
@@ -652,6 +674,7 @@ pub fn run() -> Result<()> {
             dry_run,
             force,
             skip_conflicts,
+            interactive,
             merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
@@ -659,6 +682,8 @@ pub fn run() -> Result<()> {
                 ConflictStrategy::Force
             } else if skip_conflicts {
                 ConflictStrategy::SkipConflicts
+            } else if interactive {
+                ConflictStrategy::Interactive
             } else {
                 ConflictStrategy::Fail
             };
@@ -702,6 +727,7 @@ pub fn run() -> Result<()> {
             r#ref,
             force,
             skip_conflicts,
+            interactive,
             merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
@@ -709,6 +735,8 @@ pub fn run() -> Result<()> {
                 ConflictStrategy::Force
             } else if skip_conflicts {
                 ConflictStrategy::SkipConflicts
+            } else if interactive {
+                ConflictStrategy::Interactive
             } else {
                 ConflictStrategy::Fail
             };
@@ -6315,6 +6343,7 @@ directories =
                     update,
                     force,
                     skip_conflicts,
+                    interactive,
                     merge: _,
                     from_source,
                     dry_run,
@@ -6327,6 +6356,7 @@ directories =
                     assert!(update);
                     assert!(!force);
                     assert!(!skip_conflicts);
+                    assert!(!interactive);
                     assert!(from_source.is_none());
                     assert!(!dry_run);
                 }
@@ -6390,6 +6420,60 @@ directories =
                 "./overlay",
                 "--force",
                 "--skip-conflicts",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn apply_parses_interactive_flag() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "apply", "./overlay", "--interactive"]).unwrap();
+            match cli.command {
+                Some(Commands::Apply {
+                    force,
+                    skip_conflicts,
+                    interactive,
+                    ..
+                }) => {
+                    assert!(!force);
+                    assert!(!skip_conflicts);
+                    assert!(interactive);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_parses_interactive_short_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "apply", "./overlay", "-i"]).unwrap();
+            match cli.command {
+                Some(Commands::Apply { interactive, .. }) => {
+                    assert!(interactive);
+                }
+                _ => panic!("Expected Apply command"),
+            }
+        }
+
+        #[test]
+        fn apply_rejects_force_and_interactive_together() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "apply",
+                "./overlay",
+                "--force",
+                "--interactive",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn apply_rejects_skip_conflicts_and_interactive_together() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "apply",
+                "./overlay",
+                "--skip-conflicts",
+                "--interactive",
             ]);
             assert!(result.is_err());
         }
@@ -6649,6 +6733,30 @@ directories =
         }
 
         #[test]
+        fn restore_parses_interactive_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "restore", "--interactive"]).unwrap();
+            match cli.command {
+                Some(Commands::Restore {
+                    interactive,
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(interactive);
+                    assert!(!force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Restore command"),
+            }
+        }
+
+        #[test]
+        fn restore_rejects_force_and_interactive_together() {
+            let result = Cli::try_parse_from(["repoverlay", "restore", "--force", "--interactive"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
         fn update_parses_overlay_name() {
             let cli = Cli::try_parse_from(["repoverlay", "update", "my-overlay"]).unwrap();
 
@@ -6699,6 +6807,30 @@ directories =
         fn update_rejects_force_and_skip_conflicts_together() {
             let result =
                 Cli::try_parse_from(["repoverlay", "update", "--force", "--skip-conflicts"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn update_parses_interactive_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "update", "--interactive"]).unwrap();
+            match cli.command {
+                Some(Commands::Update {
+                    interactive,
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(interactive);
+                    assert!(!force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Update command"),
+            }
+        }
+
+        #[test]
+        fn update_rejects_force_and_interactive_together() {
+            let result = Cli::try_parse_from(["repoverlay", "update", "--force", "--interactive"]);
             assert!(result.is_err());
         }
 
@@ -6846,6 +6978,37 @@ directories =
                 "./overlay",
                 "--force",
                 "--skip-conflicts",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn switch_parses_interactive_flag() {
+            let cli = Cli::try_parse_from(["repoverlay", "switch", "./overlay", "--interactive"])
+                .unwrap();
+            match cli.command {
+                Some(Commands::Switch {
+                    interactive,
+                    force,
+                    skip_conflicts,
+                    ..
+                }) => {
+                    assert!(interactive);
+                    assert!(!force);
+                    assert!(!skip_conflicts);
+                }
+                _ => panic!("Expected Switch command"),
+            }
+        }
+
+        #[test]
+        fn switch_rejects_force_and_interactive_together() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "switch",
+                "./overlay",
+                "--force",
+                "--interactive",
             ]);
             assert!(result.is_err());
         }

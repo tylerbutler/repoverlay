@@ -76,6 +76,135 @@ pub(crate) enum ConflictStrategy {
     /// - For existing repo files: skips the file with a warning
     /// - Logs skipped files but does not error
     SkipConflicts,
+
+    /// Prompt the user interactively for each conflict.
+    ///
+    /// For each conflicting file, the user can choose to:
+    /// - Overwrite the existing file
+    /// - Skip the file
+    /// - View a diff between existing and overlay files
+    /// - Abort the entire apply operation
+    Interactive,
+}
+
+/// Result of an interactive conflict prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InteractiveChoice {
+    Overwrite,
+    Skip,
+    Abort,
+}
+
+/// Parse result from interactive input parsing.
+///
+/// Separates "show diff" (a UI action) from terminal choices so the
+/// prompt loop can handle them differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InteractiveInput {
+    Choice(InteractiveChoice),
+    ShowDiff,
+    Invalid,
+}
+
+/// Parse a single line of user input into an [`InteractiveInput`].
+///
+/// Accepts both short (`o`, `s`, `d`, `a`) and long (`overwrite`, `skip`,
+/// `diff`, `abort`) forms, case-insensitively.
+fn parse_interactive_input(input: &str) -> InteractiveInput {
+    match input.trim().to_lowercase().as_str() {
+        "o" | "overwrite" => InteractiveInput::Choice(InteractiveChoice::Overwrite),
+        "s" | "skip" => InteractiveInput::Choice(InteractiveChoice::Skip),
+        "a" | "abort" => InteractiveInput::Choice(InteractiveChoice::Abort),
+        "d" | "diff" => InteractiveInput::ShowDiff,
+        _ => InteractiveInput::Invalid,
+    }
+}
+
+/// Prompt the user interactively for a file conflict resolution.
+///
+/// Shows the conflict and lets the user choose to overwrite, skip, diff, or abort.
+fn prompt_conflict_interactive(
+    conflict_path: &Path,
+    existing_path: &Path,
+    overlay_path: &Path,
+    context: &str,
+) -> Result<InteractiveChoice> {
+    use std::io::{self, Write};
+
+    loop {
+        eprint!(
+            "  {} {} {}\n  [o]verwrite  [s]kip  [d]iff  [a]bort: ",
+            "Conflict:".yellow(),
+            conflict_path.display(),
+            context,
+        );
+        io::stderr().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        match parse_interactive_input(&input) {
+            InteractiveInput::Choice(choice) => return Ok(choice),
+            InteractiveInput::ShowDiff => {
+                show_file_diff(existing_path, overlay_path, conflict_path);
+            }
+            InteractiveInput::Invalid => {
+                eprintln!("  Invalid choice. Please enter o, s, d, or a.");
+            }
+        }
+    }
+}
+
+/// Generate a unified diff string between two content strings.
+///
+/// Returns `None` if the contents are identical.
+fn generate_diff(
+    existing_content: &str,
+    overlay_content: &str,
+    display_path: &Path,
+) -> Option<String> {
+    let diff = similar::TextDiff::from_lines(existing_content, overlay_content);
+    let mut unified = diff.unified_diff();
+    let formatted = unified
+        .header(
+            &format!("existing {}", display_path.display()),
+            &format!("overlay {}", display_path.display()),
+        )
+        .to_string();
+
+    if formatted.trim().is_empty() {
+        None
+    } else {
+        Some(formatted)
+    }
+}
+
+/// Display a unified diff between two files.
+fn show_file_diff(existing_path: &Path, overlay_path: &Path, display_path: &Path) {
+    let existing_content = fs::read_to_string(existing_path).unwrap_or_else(|_| String::new());
+    let overlay_content = fs::read_to_string(overlay_path).unwrap_or_else(|_| String::new());
+
+    match generate_diff(&existing_content, &overlay_content, display_path) {
+        None => {
+            eprintln!("  (files are identical)");
+        }
+        Some(formatted) => {
+            for line in formatted.lines() {
+                if line.starts_with("---") || line.starts_with("+++") {
+                    eprintln!("  {}", line.bold());
+                } else if line.starts_with("@@") {
+                    eprintln!("  {}", line.cyan());
+                } else if line.starts_with('-') {
+                    eprintln!("  {}", line.red());
+                } else if line.starts_with('+') {
+                    eprintln!("  {}", line.green());
+                } else {
+                    eprintln!("  {line}");
+                }
+            }
+        }
+    }
+    eprintln!();
 }
 
 /// Canonicalize a path and return an error with a descriptive message if it fails.
@@ -952,7 +1081,7 @@ pub(crate) fn apply_resolved_overlay(
     let overlay_state_path = overlays_dir.join(format!("{normalized_name}.ccl"));
     if overlay_state_path.exists() {
         match conflict_strategy {
-            ConflictStrategy::Force => {
+            ConflictStrategy::Force | ConflictStrategy::Interactive => {
                 println!(
                     "  {} Removing existing overlay '{}'",
                     "Force:".yellow(),
@@ -1014,6 +1143,27 @@ pub(crate) fn apply_resolved_overlay(
                     );
                     continue;
                 }
+                ConflictStrategy::Interactive => {
+                    let context = format!("(managed by overlay '{conflicting_overlay}')");
+                    match prompt_conflict_interactive(
+                        &dir_path,
+                        &target.join(&dir_path),
+                        &source.join(&dir_path),
+                        &context,
+                    )? {
+                        InteractiveChoice::Skip => continue,
+                        InteractiveChoice::Abort => bail!("Aborted by user"),
+                        InteractiveChoice::Overwrite => {
+                            // Cross-overlay conflicts still fail even in interactive mode
+                            bail!(
+                                "Conflict: directory '{}' is already managed by overlay '{}'\n\
+                                 Remove that overlay first to overwrite.",
+                                dir_path.display(),
+                                conflicting_overlay
+                            );
+                        }
+                    }
+                }
                 ConflictStrategy::Fail | ConflictStrategy::Force => {
                     bail!(
                         "Conflict: directory '{}' is already managed by overlay '{}'\n\
@@ -1042,6 +1192,30 @@ pub(crate) fn apply_resolved_overlay(
                             target_dir.display()
                         )
                     })?;
+                }
+                ConflictStrategy::Interactive => {
+                    match prompt_conflict_interactive(
+                        &dir_path,
+                        &target_dir,
+                        &source_dir,
+                        "(already exists)",
+                    )? {
+                        InteractiveChoice::Skip => continue,
+                        InteractiveChoice::Abort => bail!("Aborted by user"),
+                        InteractiveChoice::Overwrite => {
+                            eprintln!(
+                                "  {} Overwriting existing directory: {}",
+                                "Force:".yellow(),
+                                dir_path.display()
+                            );
+                            fs::remove_dir_all(&target_dir).with_context(|| {
+                                format!(
+                                    "Failed to remove existing directory: {}",
+                                    target_dir.display()
+                                )
+                            })?;
+                        }
+                    }
                 }
                 ConflictStrategy::SkipConflicts => {
                     eprintln!(
@@ -1188,6 +1362,27 @@ pub(crate) fn apply_resolved_overlay(
                     );
                     continue;
                 }
+                ConflictStrategy::Interactive => {
+                    let context = format!("(managed by overlay '{conflicting_overlay}')");
+                    match prompt_conflict_interactive(
+                        &target_rel,
+                        &target_file,
+                        &source_file,
+                        &context,
+                    )? {
+                        InteractiveChoice::Skip => continue,
+                        InteractiveChoice::Abort => bail!("Aborted by user"),
+                        InteractiveChoice::Overwrite => {
+                            // Cross-overlay conflicts still fail even in interactive mode
+                            bail!(
+                                "Conflict: file '{}' is already managed by overlay '{}'\n\
+                                 Remove that overlay first to overwrite.",
+                                target_rel.display(),
+                                conflicting_overlay
+                            );
+                        }
+                    }
+                }
                 ConflictStrategy::Fail | ConflictStrategy::Force => {
                     bail!(
                         "Conflict: file '{}' is already managed by overlay '{}'\n\
@@ -1226,6 +1421,27 @@ pub(crate) fn apply_resolved_overlay(
                     fs::remove_file(&target_file).with_context(|| {
                         format!("Failed to remove existing file: {}", target_file.display())
                     })?;
+                }
+                ConflictStrategy::Interactive => {
+                    match prompt_conflict_interactive(
+                        &target_rel,
+                        &target_file,
+                        &source_file,
+                        "(already exists)",
+                    )? {
+                        InteractiveChoice::Skip => continue,
+                        InteractiveChoice::Abort => bail!("Aborted by user"),
+                        InteractiveChoice::Overwrite => {
+                            eprintln!(
+                                "  {} Overwriting existing file: {}",
+                                "Force:".yellow(),
+                                target_rel.display()
+                            );
+                            fs::remove_file(&target_file).with_context(|| {
+                                format!("Failed to remove existing file: {}", target_file.display())
+                            })?;
+                        }
+                    }
                 }
                 ConflictStrategy::SkipConflicts => {
                     eprintln!(
@@ -1372,7 +1588,7 @@ pub(crate) fn apply_multiple_overlays(
 
         if overlay_state_path.exists() {
             match conflict_strategy {
-                ConflictStrategy::Force => {
+                ConflictStrategy::Force | ConflictStrategy::Interactive => {
                     println!(
                         "  {} Removing existing overlay '{}' (batch mode)",
                         "Force:".yellow(),
@@ -6159,7 +6375,343 @@ mod tests {
                 ConflictStrategy::SkipConflicts,
                 ConflictStrategy::SkipConflicts
             );
+            assert_eq!(ConflictStrategy::Interactive, ConflictStrategy::Interactive);
             assert_ne!(ConflictStrategy::Fail, ConflictStrategy::Force);
+            assert_ne!(ConflictStrategy::Fail, ConflictStrategy::Interactive);
+            assert_ne!(ConflictStrategy::Force, ConflictStrategy::Interactive);
+            assert_ne!(
+                ConflictStrategy::SkipConflicts,
+                ConflictStrategy::Interactive
+            );
+        }
+    }
+
+    mod interactive_input_tests {
+        use super::*;
+
+        #[test]
+        fn short_overwrite() {
+            assert_eq!(
+                parse_interactive_input("o"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+        }
+
+        #[test]
+        fn long_overwrite() {
+            assert_eq!(
+                parse_interactive_input("overwrite"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+        }
+
+        #[test]
+        fn short_skip() {
+            assert_eq!(
+                parse_interactive_input("s"),
+                InteractiveInput::Choice(InteractiveChoice::Skip)
+            );
+        }
+
+        #[test]
+        fn long_skip() {
+            assert_eq!(
+                parse_interactive_input("skip"),
+                InteractiveInput::Choice(InteractiveChoice::Skip)
+            );
+        }
+
+        #[test]
+        fn short_abort() {
+            assert_eq!(
+                parse_interactive_input("a"),
+                InteractiveInput::Choice(InteractiveChoice::Abort)
+            );
+        }
+
+        #[test]
+        fn long_abort() {
+            assert_eq!(
+                parse_interactive_input("abort"),
+                InteractiveInput::Choice(InteractiveChoice::Abort)
+            );
+        }
+
+        #[test]
+        fn short_diff() {
+            assert_eq!(parse_interactive_input("d"), InteractiveInput::ShowDiff);
+        }
+
+        #[test]
+        fn long_diff() {
+            assert_eq!(parse_interactive_input("diff"), InteractiveInput::ShowDiff);
+        }
+
+        #[test]
+        fn case_insensitive() {
+            assert_eq!(
+                parse_interactive_input("O"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+            assert_eq!(
+                parse_interactive_input("OVERWRITE"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+            assert_eq!(
+                parse_interactive_input("Skip"),
+                InteractiveInput::Choice(InteractiveChoice::Skip)
+            );
+            assert_eq!(parse_interactive_input("DIFF"), InteractiveInput::ShowDiff);
+        }
+
+        #[test]
+        fn whitespace_trimmed() {
+            assert_eq!(
+                parse_interactive_input("  o  "),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+            assert_eq!(
+                parse_interactive_input("\ts\n"),
+                InteractiveInput::Choice(InteractiveChoice::Skip)
+            );
+        }
+
+        #[test]
+        fn invalid_input() {
+            assert_eq!(parse_interactive_input("x"), InteractiveInput::Invalid);
+            assert_eq!(parse_interactive_input("yes"), InteractiveInput::Invalid);
+            assert_eq!(parse_interactive_input(""), InteractiveInput::Invalid);
+            assert_eq!(parse_interactive_input("oo"), InteractiveInput::Invalid);
+            assert_eq!(
+                parse_interactive_input("overwritee"),
+                InteractiveInput::Invalid
+            );
+        }
+
+        #[test]
+        fn interactive_choice_clone_and_debug() {
+            let choice = InteractiveChoice::Overwrite;
+            let cloned = choice;
+            assert_eq!(choice, cloned);
+            assert_eq!(format!("{choice:?}"), "Overwrite");
+        }
+
+        #[test]
+        fn interactive_input_clone_and_debug() {
+            let input = InteractiveInput::ShowDiff;
+            let cloned = input;
+            assert_eq!(input, cloned);
+            assert_eq!(format!("{input:?}"), "ShowDiff");
+        }
+    }
+
+    mod generate_diff_tests {
+        use super::*;
+
+        #[test]
+        fn identical_content_returns_none() {
+            let content = "hello\nworld\n";
+            assert!(generate_diff(content, content, Path::new("test.txt")).is_none());
+        }
+
+        #[test]
+        fn different_content_returns_some() {
+            let existing = "hello\n";
+            let overlay = "world\n";
+            let result = generate_diff(existing, overlay, Path::new("test.txt"));
+            assert!(result.is_some());
+            let diff = result.unwrap();
+            assert!(diff.contains("-hello"));
+            assert!(diff.contains("+world"));
+        }
+
+        #[test]
+        fn diff_contains_header() {
+            let existing = "a\n";
+            let overlay = "b\n";
+            let result = generate_diff(existing, overlay, Path::new("config.yml")).unwrap();
+            assert!(result.contains("existing config.yml"));
+            assert!(result.contains("overlay config.yml"));
+        }
+
+        #[test]
+        fn empty_existing_shows_additions() {
+            let result = generate_diff("", "new content\n", Path::new("f.txt")).unwrap();
+            assert!(result.contains("+new content"));
+        }
+
+        #[test]
+        fn empty_overlay_shows_removals() {
+            let result = generate_diff("old content\n", "", Path::new("f.txt")).unwrap();
+            assert!(result.contains("-old content"));
+        }
+
+        #[test]
+        fn multiline_diff() {
+            let existing = "line1\nline2\nline3\n";
+            let overlay = "line1\nchanged\nline3\n";
+            let result = generate_diff(existing, overlay, Path::new("f.txt")).unwrap();
+            assert!(result.contains("-line2"));
+            assert!(result.contains("+changed"));
+            // Unchanged lines should still appear as context
+            assert!(result.contains(" line1"));
+            assert!(result.contains(" line3"));
+        }
+
+        #[test]
+        fn both_empty_returns_none() {
+            assert!(generate_diff("", "", Path::new("f.txt")).is_none());
+        }
+    }
+
+    mod show_file_diff_tests {
+        use super::*;
+
+        #[test]
+        fn handles_nonexistent_existing_file() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let overlay = tmp.path().join("overlay.txt");
+            fs::write(&overlay, "content\n").unwrap();
+            // Should not panic when existing file doesn't exist
+            show_file_diff(
+                &tmp.path().join("nonexistent.txt"),
+                &overlay,
+                Path::new("test.txt"),
+            );
+        }
+
+        #[test]
+        fn handles_nonexistent_overlay_file() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let existing = tmp.path().join("existing.txt");
+            fs::write(&existing, "content\n").unwrap();
+            // Should not panic when overlay file doesn't exist
+            show_file_diff(
+                &existing,
+                &tmp.path().join("nonexistent.txt"),
+                Path::new("test.txt"),
+            );
+        }
+
+        #[test]
+        fn handles_identical_files() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let existing = tmp.path().join("existing.txt");
+            let overlay = tmp.path().join("overlay.txt");
+            fs::write(&existing, "same\n").unwrap();
+            fs::write(&overlay, "same\n").unwrap();
+            // Should not panic with identical content
+            show_file_diff(&existing, &overlay, Path::new("test.txt"));
+        }
+
+        #[test]
+        fn handles_different_files() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let existing = tmp.path().join("existing.txt");
+            let overlay = tmp.path().join("overlay.txt");
+            fs::write(&existing, "old\n").unwrap();
+            fs::write(&overlay, "new\n").unwrap();
+            // Should not panic with different content
+            show_file_diff(&existing, &overlay, Path::new("test.txt"));
+        }
+    }
+
+    mod interactive_apply_tests {
+        use super::*;
+        use crate::testutil::{create_test_overlay, create_test_repo};
+
+        #[test]
+        fn interactive_reapplies_same_name_overlay() {
+            // When an overlay with the same name is already applied,
+            // Interactive strategy should auto-remove and re-apply (like Force).
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[("test.txt", "original")]);
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::Local {
+                    path: overlay.path().to_path_buf(),
+                },
+            };
+            apply_resolved_overlay(
+                &resolved,
+                repo.path(),
+                true,
+                Some("my-overlay".to_string()),
+                ConflictStrategy::Fail,
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                fs::read_to_string(repo.path().join("test.txt")).unwrap(),
+                "original"
+            );
+
+            // Apply again with same name and Interactive strategy
+            let overlay2 = create_test_overlay(&[("test.txt", "updated")]);
+            let resolved2 = ResolvedSource {
+                path: overlay2.path().to_path_buf(),
+                source_info: OverlaySource::Local {
+                    path: overlay2.path().to_path_buf(),
+                },
+            };
+            apply_resolved_overlay(
+                &resolved2,
+                repo.path(),
+                true,
+                Some("my-overlay".to_string()),
+                ConflictStrategy::Interactive,
+                false,
+            )
+            .unwrap();
+
+            // The file should now have the updated content
+            let content = fs::read_to_string(repo.path().join("test.txt")).unwrap();
+            assert_eq!(content, "updated");
+        }
+
+        #[test]
+        fn interactive_batch_reapplies_same_name_overlay() {
+            // In batch mode, Interactive should also auto-remove existing same-name overlays.
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[("a.txt", "first")]);
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::Local {
+                    path: overlay.path().to_path_buf(),
+                },
+            };
+            apply_resolved_overlay(
+                &resolved,
+                repo.path(),
+                true,
+                Some("batch-test".to_string()),
+                ConflictStrategy::Fail,
+                false,
+            )
+            .unwrap();
+
+            // Re-apply via batch with Interactive
+            let overlay2 = create_test_overlay(&[("a.txt", "second")]);
+            let resolved2 = ResolvedSource {
+                path: overlay2.path().to_path_buf(),
+                source_info: OverlaySource::Local {
+                    path: overlay2.path().to_path_buf(),
+                },
+            };
+            apply_multiple_overlays(
+                &[resolved2],
+                repo.path(),
+                true,
+                false,
+                ConflictStrategy::Interactive,
+                false,
+            )
+            .unwrap();
+
+            let content = fs::read_to_string(repo.path().join("a.txt")).unwrap();
+            assert_eq!(content, "second");
         }
     }
 
