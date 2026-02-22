@@ -6384,6 +6384,20 @@ mod tests {
                 ConflictStrategy::Interactive
             );
         }
+
+        #[test]
+        fn debug_format() {
+            assert_eq!(format!("{:?}", ConflictStrategy::Fail), "Fail");
+            assert_eq!(format!("{:?}", ConflictStrategy::Force), "Force");
+            assert_eq!(
+                format!("{:?}", ConflictStrategy::SkipConflicts),
+                "SkipConflicts"
+            );
+            assert_eq!(
+                format!("{:?}", ConflictStrategy::Interactive),
+                "Interactive"
+            );
+        }
     }
 
     mod interactive_input_tests {
@@ -6503,6 +6517,52 @@ mod tests {
             assert_eq!(input, cloned);
             assert_eq!(format!("{input:?}"), "ShowDiff");
         }
+
+        #[test]
+        fn short_force_alias() {
+            assert_eq!(
+                parse_interactive_input("f"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+        }
+
+        #[test]
+        fn long_force_alias() {
+            assert_eq!(
+                parse_interactive_input("force"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+        }
+
+        #[test]
+        fn force_alias_case_insensitive() {
+            assert_eq!(
+                parse_interactive_input("F"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+            assert_eq!(
+                parse_interactive_input("FORCE"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+            assert_eq!(
+                parse_interactive_input("Force"),
+                InteractiveInput::Choice(InteractiveChoice::Overwrite)
+            );
+        }
+
+        #[test]
+        fn newline_only_is_invalid() {
+            assert_eq!(parse_interactive_input("\n"), InteractiveInput::Invalid);
+        }
+
+        #[test]
+        fn partial_keywords_are_invalid() {
+            assert_eq!(parse_interactive_input("ov"), InteractiveInput::Invalid);
+            assert_eq!(parse_interactive_input("sk"), InteractiveInput::Invalid);
+            assert_eq!(parse_interactive_input("ab"), InteractiveInput::Invalid);
+            assert_eq!(parse_interactive_input("di"), InteractiveInput::Invalid);
+            assert_eq!(parse_interactive_input("fo"), InteractiveInput::Invalid);
+        }
     }
 
     mod generate_diff_tests {
@@ -6562,6 +6622,32 @@ mod tests {
         fn both_empty_returns_none() {
             assert!(generate_diff("", "", Path::new("f.txt")).is_none());
         }
+
+        #[test]
+        fn unicode_content() {
+            let existing = "héllo wörld\n日本語\n";
+            let overlay = "héllo wörld\nchanged\n";
+            let result = generate_diff(existing, overlay, Path::new("f.txt")).unwrap();
+            assert!(result.contains("-日本語"));
+            assert!(result.contains("+changed"));
+        }
+
+        #[test]
+        fn single_line_no_trailing_newline() {
+            let existing = "old";
+            let overlay = "new";
+            let result = generate_diff(existing, overlay, Path::new("f.txt")).unwrap();
+            assert!(result.contains("-old"));
+            assert!(result.contains("+new"));
+        }
+
+        #[test]
+        fn whitespace_only_changes() {
+            let existing = "line1\nline2\n";
+            let overlay = "line1\nline2 \n";
+            let result = generate_diff(existing, overlay, Path::new("f.txt"));
+            assert!(result.is_some());
+        }
     }
 
     mod show_file_diff_tests {
@@ -6612,6 +6698,28 @@ mod tests {
             fs::write(&existing, "old\n").unwrap();
             fs::write(&overlay, "new\n").unwrap();
             // Should not panic with different content
+            show_file_diff(&existing, &overlay, Path::new("test.txt"));
+        }
+
+        #[test]
+        fn handles_both_files_nonexistent() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            // Should not panic when neither file exists (both read as empty → identical)
+            show_file_diff(
+                &tmp.path().join("a.txt"),
+                &tmp.path().join("b.txt"),
+                Path::new("test.txt"),
+            );
+        }
+
+        #[test]
+        fn handles_empty_files() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let existing = tmp.path().join("existing.txt");
+            let overlay = tmp.path().join("overlay.txt");
+            fs::write(&existing, "").unwrap();
+            fs::write(&overlay, "").unwrap();
+            // Should not panic with empty content
             show_file_diff(&existing, &overlay, Path::new("test.txt"));
         }
     }
