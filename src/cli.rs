@@ -11,9 +11,10 @@ use std::sync::LazyLock;
 use crate::{
     CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource,
     STATE_DIR, apply_multiple_overlays, apply_overlay, canonicalize_path, config,
-    list_applied_overlays, parse_github_owner_repo, remove_overlay, remove_single_overlay,
-    restore_overlays, selection::is_interactive, show_status, show_status_json,
-    status_has_overlays, switch_overlay, update_overlays, validate_git_repo,
+    get_cached_repo_commit, list_applied_overlays, list_overlays_from_cached_repo,
+    parse_github_owner_repo, remove_overlay, remove_single_overlay, restore_overlays,
+    selection::is_interactive, show_status, show_status_json, status_has_overlays, switch_overlay,
+    update_overlays, validate_git_repo,
 };
 
 /// Build version string with git info for local builds
@@ -351,6 +352,13 @@ enum Commands {
     /// Browse available overlays from the overlay repository
     #[command(name = "browse")]
     Browse {
+        /// Overlay source (GitHub username, owner/repo, or URL)
+        ///
+        /// Browse overlays from this source without adding it as a configured source.
+        /// If omitted, uses configured sources.
+        #[arg(value_name = "SOURCE")]
+        source: Option<String>,
+
         /// Filter by target repository (format: org/repo)
         #[arg(short = 'f', long)]
         filter: Option<String>,
@@ -754,6 +762,7 @@ pub fn run() -> Result<()> {
             handle_cache_command(command)?;
         }
         Commands::Browse {
+            source,
             filter,
             update,
             target,
@@ -762,6 +771,7 @@ pub fn run() -> Result<()> {
             show_all,
         } => {
             browse_overlays(
+                source.as_deref(),
                 filter.as_deref(),
                 update,
                 target,
@@ -778,7 +788,7 @@ pub fn run() -> Result<()> {
             eprintln!("         Use 'repoverlay browse' instead.");
             eprintln!();
 
-            browse_overlays(filter.as_deref(), update, None, true, false, true)?;
+            browse_overlays(None, filter.as_deref(), update, None, true, false, true)?;
         }
         Commands::Sync {
             name,
@@ -1235,8 +1245,12 @@ fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay], filter
 /// In interactive mode (TTY), presents a multi-select picker and applies selected
 /// overlays. In non-interactive mode, prints the overlay list as text.
 /// Unless `show_all` is set, overlays are auto-filtered to the current repository.
-#[allow(clippy::fn_params_excessive_bools)]
+///
+/// When `source` is provided, overlays are fetched directly from the given source
+/// (username, owner/repo, or GitHub URL) without requiring a configured source.
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 fn browse_overlays(
+    source: Option<&str>,
     target_filter: Option<&str>,
     update: bool,
     target: Option<PathBuf>,
@@ -1246,11 +1260,21 @@ fn browse_overlays(
 ) -> Result<()> {
     use crate::config::load_config;
     use crate::overlay_repo::OverlayRepoManager;
-    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
-    use crate::state::{OverlaySource, normalize_overlay_name};
+    use crate::state::OverlaySource;
+
+    if let Some(source_str) = source {
+        return browse_ephemeral_source(
+            source_str,
+            target_filter,
+            update,
+            target,
+            no_interactive,
+            dry_run,
+            show_all,
+        );
+    }
 
     let config = load_config(None)?;
-
     let overlay_config = config.get_default_overlay_repo_config()?;
 
     let manager = OverlayRepoManager::new(overlay_config)?;
@@ -1262,7 +1286,6 @@ fn browse_overlays(
     }
 
     let overlays = if let Some(filter) = target_filter {
-        // Parse org/repo filter
         let parts: Vec<&str> = filter.split('/').collect();
         if parts.len() != 2 {
             bail!("Invalid target filter format. Use: org/repo");
@@ -1271,6 +1294,132 @@ fn browse_overlays(
     } else {
         manager.list_overlays()?
     };
+
+    let commit = manager.get_current_commit()?;
+    let build_source_info = |o: &crate::overlay_repo::AvailableOverlay| {
+        let path = manager.get_overlay_path(&o.org, &o.repo, &o.name)?;
+        Ok(ResolvedSource {
+            path,
+            source_info: OverlaySource::overlay_repo(
+                o.org.clone(),
+                o.repo.clone(),
+                o.name.clone(),
+                commit.clone(),
+            ),
+        })
+    };
+
+    browse_and_apply(
+        overlays,
+        target_filter,
+        target,
+        no_interactive,
+        dry_run,
+        show_all,
+        build_source_info,
+    )
+}
+
+/// Browse overlays from an ephemeral source (not saved to config).
+///
+/// Fetches the source repository to cache, lists available overlays, and
+/// presents them for selection and apply — without modifying the source config.
+#[allow(clippy::fn_params_excessive_bools)]
+fn browse_ephemeral_source(
+    source_str: &str,
+    target_filter: Option<&str>,
+    update: bool,
+    target: Option<PathBuf>,
+    no_interactive: bool,
+    dry_run: bool,
+    show_all: bool,
+) -> Result<()> {
+    use crate::github::GitHubSource;
+    use crate::reference::SourceReference;
+    use crate::state::OverlaySource;
+
+    let reference = SourceReference::parse(source_str);
+
+    let (owner, repo) = match reference {
+        SourceReference::OnePart { username } => {
+            let default_repo = config::default_overlay_repo_name();
+            (username, default_repo)
+        }
+        SourceReference::TwoPart { owner, repo } => (owner, repo),
+        SourceReference::GitHubUrl(url) => {
+            let github_source = GitHubSource::parse(&url)?;
+            (github_source.owner, github_source.repo)
+        }
+        SourceReference::LocalPath { .. } | SourceReference::ThreePart { .. } => {
+            bail!(
+                "Invalid source for browse: '{source_str}'\n\n\
+                 Use a GitHub username, owner/repo, or GitHub URL."
+            );
+        }
+    };
+
+    let github_url = format!("https://github.com/{owner}/{repo}");
+    let github_source = GitHubSource::parse(&github_url)?;
+    let cache = CacheManager::new()?;
+    println!(
+        "{} repository: {}/{}",
+        if update { "Updating" } else { "Fetching" }.blue().bold(),
+        owner,
+        repo
+    );
+    let cached = cache.ensure_cached(&github_source, update)?;
+
+    let overlays = list_overlays_from_cached_repo(&owner, &repo)?;
+
+    let git_ref_str = github_source.git_ref.as_str().to_string();
+    let commit = get_cached_repo_commit(&cached.path).unwrap_or_else(|| "unknown".to_string());
+    let cached_path = cached.path;
+
+    let build_source_info = |o: &crate::overlay_repo::AvailableOverlay| {
+        let overlay_path = cached_path.join(&o.org).join(&o.repo).join(&o.name);
+        if !overlay_path.exists() {
+            bail!("Overlay directory not found: {}", overlay_path.display());
+        }
+        Ok(ResolvedSource {
+            path: overlay_path,
+            source_info: OverlaySource::github(
+                github_url.clone(),
+                owner.clone(),
+                repo.clone(),
+                git_ref_str.clone(),
+                commit.clone(),
+                Some(o.to_string()),
+            ),
+        })
+    };
+
+    browse_and_apply(
+        overlays,
+        target_filter,
+        target,
+        no_interactive,
+        dry_run,
+        show_all,
+        build_source_info,
+    )
+}
+
+/// Shared logic for browse: filter, display, select, and apply overlays.
+#[allow(clippy::fn_params_excessive_bools)]
+fn browse_and_apply<F>(
+    overlays: Vec<crate::overlay_repo::AvailableOverlay>,
+    target_filter: Option<&str>,
+    target: Option<PathBuf>,
+    no_interactive: bool,
+    dry_run: bool,
+    show_all: bool,
+    build_source: F,
+) -> Result<()>
+where
+    F: Fn(&crate::overlay_repo::AvailableOverlay) -> Result<ResolvedSource>,
+{
+    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+    use crate::state::normalize_overlay_name;
 
     // Auto-filter by current repo when no explicit filter and not --show-all
     let (display_overlays, filtered) =
@@ -1336,21 +1485,9 @@ fn browse_overlays(
         .collect();
 
     // Build ResolvedSources for apply
-    let commit = manager.get_current_commit()?;
     let sources: Vec<ResolvedSource> = selected
         .iter()
-        .map(|o| {
-            let path = manager.get_overlay_path(&o.org, &o.repo, &o.name)?;
-            Ok(ResolvedSource {
-                path,
-                source_info: OverlaySource::overlay_repo(
-                    o.org.clone(),
-                    o.repo.clone(),
-                    o.name.clone(),
-                    commit.clone(),
-                ),
-            })
-        })
+        .map(|o| build_source(o))
         .collect::<Result<Vec<_>>>()?;
 
     apply_multiple_overlays(
@@ -7106,6 +7243,43 @@ directories =
             match cli.command {
                 Some(Commands::Browse { show_all, .. }) => {
                     assert!(!show_all);
+                }
+                _ => panic!("Expected Browse command"),
+            }
+        }
+
+        #[test]
+        fn browse_parses_source_argument() {
+            let cli = Cli::try_parse_from(["repoverlay", "browse", "tylerbutler"]).unwrap();
+            match cli.command {
+                Some(Commands::Browse { source, .. }) => {
+                    assert_eq!(source, Some("tylerbutler".to_string()));
+                }
+                _ => panic!("Expected Browse command"),
+            }
+        }
+
+        #[test]
+        fn browse_source_is_optional() {
+            let cli = Cli::try_parse_from(["repoverlay", "browse"]).unwrap();
+            match cli.command {
+                Some(Commands::Browse { source, .. }) => {
+                    assert!(source.is_none());
+                }
+                _ => panic!("Expected Browse command"),
+            }
+        }
+
+        #[test]
+        fn browse_source_with_other_flags() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "browse", "tylerbutler", "--show-all"]).unwrap();
+            match cli.command {
+                Some(Commands::Browse {
+                    source, show_all, ..
+                }) => {
+                    assert_eq!(source, Some("tylerbutler".to_string()));
+                    assert!(show_all);
                 }
                 _ => panic!("Expected Browse command"),
             }

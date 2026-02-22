@@ -566,7 +566,7 @@ fn resolve_two_part(
 }
 
 /// Get the current commit hash from a cached repository.
-fn get_cached_repo_commit(repo_path: &Path) -> Option<String> {
+pub(crate) fn get_cached_repo_commit(repo_path: &Path) -> Option<String> {
     use std::process::Command;
 
     let output = Command::new("git")
@@ -592,7 +592,10 @@ fn get_cached_repo_commit(repo_path: &Path) -> Option<String> {
 ///
 /// Note: This is the same structure used by `OverlayRepoManager::list_overlays()`,
 /// but operates on the GitHub cache instead of managed overlay repositories.
-fn list_overlays_from_cached_repo(owner: &str, repo: &str) -> Result<Vec<AvailableOverlay>> {
+pub(crate) fn list_overlays_from_cached_repo(
+    owner: &str,
+    repo: &str,
+) -> Result<Vec<AvailableOverlay>> {
     debug!("listing overlays from cached GitHub repo: {owner}/{repo}");
 
     let cache = CacheManager::new()?;
