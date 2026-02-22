@@ -11,14 +11,12 @@ This document contains the help content for the `repoverlay` command-line progra
 * [`repoverlay restore`↴](#repoverlay-restore)
 * [`repoverlay update`↴](#repoverlay-update)
 * [`repoverlay create`↴](#repoverlay-create)
-* [`repoverlay create-local`↴](#repoverlay-create-local)
 * [`repoverlay switch`↴](#repoverlay-switch)
 * [`repoverlay cache`↴](#repoverlay-cache)
 * [`repoverlay cache list`↴](#repoverlay-cache-list)
-* [`repoverlay cache clear`↴](#repoverlay-cache-clear)
 * [`repoverlay cache remove`↴](#repoverlay-cache-remove)
 * [`repoverlay cache path`↴](#repoverlay-cache-path)
-* [`repoverlay list`↴](#repoverlay-list)
+* [`repoverlay browse`↴](#repoverlay-browse)
 * [`repoverlay sync`↴](#repoverlay-sync)
 * [`repoverlay edit`↴](#repoverlay-edit)
 * [`repoverlay source`↴](#repoverlay-source)
@@ -41,10 +39,9 @@ Overlay config files into git repositories without committing them
 * `restore` — Restore overlays after git clean or other removal
 * `update` — Update applied overlays from remote sources
 * `create` — Create a new overlay from files in a repository
-* `create-local` — Create a new overlay in a local directory
 * `switch` — Switch to a different overlay (removes all existing overlays first)
 * `cache` — Manage the overlay cache
-* `list` — List available overlays from the overlay repository
+* `browse` — Browse available overlays from the overlay repository
 * `sync` — Sync changes from an applied overlay back to the overlay repo
 * `edit` — Edit an existing applied overlay (add files, remove files, or re-select interactively)
 * `source` — Manage overlay sources (for multi-source configurations)
@@ -71,8 +68,9 @@ Apply an overlay to a git repository
 * `-n`, `--name <NAME>` — Override the overlay name (defaults to config name or directory name)
 * `-r`, `--ref <REF>` — Git ref (branch, tag, or commit) to use (GitHub sources only)
 * `--update` — Force update the cached repository before applying (GitHub sources only)
-* `--force` — Overwrite existing files and re-apply same-name overlays
+* `--force` [alias: `overwrite`] — Overwrite existing files and re-apply same-name overlays
 * `--skip-conflicts` — Skip conflicting files silently, continue with non-conflicting files
+* `-i`, `--interactive` — Prompt interactively for each conflict (overwrite, skip, diff, or abort)
 * `--merge` — Deep merge conflicting JSON files instead of failing
 * `--from <SOURCE>` — Use a specific overlay source instead of priority order (multi-source configs only)
 * `--dry-run` — Show what would be applied without making changes
@@ -108,6 +106,8 @@ Show the status of applied overlays
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `-n`, `--name <NAME>` — Show only a specific overlay
+* `--json` — Output as JSON for scripting and CI integration
+* `-q`, `--quiet` — Quiet mode: exit code only (0 = overlays applied, 1 = none)
 
 
 
@@ -121,8 +121,9 @@ Restore overlays after git clean or other removal
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--dry-run` — Show what would be restored without applying
-* `--force` — Overwrite existing files during restore
+* `--force` [alias: `overwrite`] — Overwrite existing files during restore
 * `--skip-conflicts` — Skip conflicting files silently during restore
+* `-i`, `--interactive` — Prompt interactively for each conflict during restore
 * `--merge` — Deep merge conflicting JSON files instead of failing
 
 
@@ -141,8 +142,9 @@ Update applied overlays from remote sources
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--dry-run` — Check for updates without applying them
-* `--force` — Overwrite existing files during update
+* `--force` [alias: `overwrite`] — Overwrite existing files during update
 * `--skip-conflicts` — Skip conflicting files silently during update
+* `-i`, `--interactive` — Prompt interactively for each conflict during update
 * `--merge` — Deep merge conflicting JSON files instead of failing
 
 
@@ -151,45 +153,24 @@ Update applied overlays from remote sources
 
 Create a new overlay from files in a repository
 
-Examples: repoverlay create my-overlay          # Detects org/repo from git remote repoverlay create org/repo/my-overlay # Explicit target
+Examples: repoverlay create my-overlay              # Detects org/repo from git remote repoverlay create org/repo/my-overlay     # Explicit target repoverlay create --output ./output        # Write to local directory
 
-**Usage:** `repoverlay create [OPTIONS] <NAME>`
+**Usage:** `repoverlay create [OPTIONS] [NAME]`
 
 ###### **Arguments:**
 
 * `<NAME>` — Overlay name or full path (org/repo/name)
 
-   Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit target
+   Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit target Omit when using --output for local directory output
 
 ###### **Options:**
 
 * `-i`, `--include <INCLUDE>` — Include specific files or directories (can be specified multiple times)
 * `-s`, `--source <SOURCE>` — Source repository to extract files from (defaults to current directory)
+* `-o`, `--output <OUTPUT>` — Output directory for local overlay creation (no overlay repo required)
 * `--dry-run` — Show what would be created without creating files
 * `-y`, `--yes` — Skip interactive prompts, use defaults
 * `-f`, `--force` — Force overwrite if overlay already exists
-
-
-
-## `repoverlay create-local`
-
-Create a new overlay in a local directory
-
-Examples: repoverlay create-local ./output      # Write to local directory
-
-**Usage:** `repoverlay create-local [OPTIONS] <OUTPUT>`
-
-###### **Arguments:**
-
-* `<OUTPUT>` — Output directory for the overlay
-
-###### **Options:**
-
-* `-i`, `--include <INCLUDE>` — Include specific files or directories (can be specified multiple times)
-* `-s`, `--source <SOURCE>` — Source repository to extract files from (defaults to current directory)
-* `--dry-run` — Show what would be created without creating files
-* `-y`, `--yes` — Skip interactive prompts, use defaults
-* `-f`, `--force` — Force overwrite if output already exists
 
 
 
@@ -209,8 +190,9 @@ Switch to a different overlay (removes all existing overlays first)
 * `--copy` — Force copy mode instead of symlinks (default on Windows)
 * `-n`, `--name <NAME>` — Override the overlay name
 * `-r`, `--ref <REF>` — Git ref (branch, tag, or commit) to use (GitHub sources only)
-* `--force` — Overwrite existing repo files when applying the new overlay
+* `--force` [alias: `overwrite`] — Overwrite existing repo files when applying the new overlay
 * `--skip-conflicts` — Skip conflicting repo files silently when applying the new overlay
+* `-i`, `--interactive` — Prompt interactively for each conflict when applying the new overlay
 * `--merge` — Deep merge conflicting JSON files instead of failing
 
 
@@ -224,8 +206,7 @@ Manage the overlay cache
 ###### **Subcommands:**
 
 * `list` — List cached repositories
-* `clear` — Clear all cached repositories
-* `remove` — Remove a specific cached repository
+* `remove` — Remove cached repositories
 * `path` — Show cache location
 
 
@@ -238,27 +219,20 @@ List cached repositories
 
 
 
-## `repoverlay cache clear`
-
-Clear all cached repositories
-
-**Usage:** `repoverlay cache clear [OPTIONS]`
-
-###### **Options:**
-
-* `-y`, `--yes` — Skip confirmation prompt
-
-
-
 ## `repoverlay cache remove`
 
-Remove a specific cached repository
+Remove cached repositories
 
-**Usage:** `repoverlay cache remove <REPO>`
+**Usage:** `repoverlay cache remove [OPTIONS] [REPO]`
 
 ###### **Arguments:**
 
 * `<REPO>` — Repository to remove (format: owner/repo)
+
+###### **Options:**
+
+* `-a`, `--all` — Remove all cached repositories
+* `-y`, `--yes` — Skip confirmation prompt (used with --all)
 
 
 
@@ -270,16 +244,26 @@ Show cache location
 
 
 
-## `repoverlay list`
+## `repoverlay browse`
 
-List available overlays from the overlay repository
+Browse available overlays from the overlay repository
 
-**Usage:** `repoverlay list [OPTIONS]`
+**Usage:** `repoverlay browse [OPTIONS] [SOURCE]`
+
+###### **Arguments:**
+
+* `<SOURCE>` — Overlay source (GitHub username, owner/repo, or URL)
+
+   Browse overlays from this source without adding it as a configured source. If omitted, uses configured sources.
 
 ###### **Options:**
 
 * `-f`, `--filter <FILTER>` — Filter by target repository (format: org/repo)
 * `--update` — Update overlay repo before listing
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `--no-interactive` — Disable interactive selection (just list overlays)
+* `--dry-run` — Show what would be applied without making changes
+* `--show-all` — Show all overlays, including those for other repositories
 
 
 
