@@ -6675,6 +6675,12 @@ mod tests {
             // In batch mode, Interactive should also auto-remove existing same-name overlays.
             let repo = create_test_repo();
             let overlay = create_test_overlay(&[("a.txt", "first")]);
+            // Add a config so the overlay name resolves consistently
+            fs::write(
+                overlay.path().join(CONFIG_FILE),
+                "overlay =\n  name = batch-test\n",
+            )
+            .unwrap();
 
             let resolved = ResolvedSource {
                 path: overlay.path().to_path_buf(),
@@ -6692,8 +6698,15 @@ mod tests {
             )
             .unwrap();
 
-            // Re-apply via batch with Interactive
+            // Re-apply via batch with Interactive — the config name ensures
+            // apply_multiple_overlays resolves the same "batch-test" name and
+            // auto-removes the existing overlay instead of prompting on stdin.
             let overlay2 = create_test_overlay(&[("a.txt", "second")]);
+            fs::write(
+                overlay2.path().join(CONFIG_FILE),
+                "overlay =\n  name = batch-test\n",
+            )
+            .unwrap();
             let resolved2 = ResolvedSource {
                 path: overlay2.path().to_path_buf(),
                 source_info: OverlaySource::Local {
