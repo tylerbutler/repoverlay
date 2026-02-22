@@ -526,7 +526,6 @@ fn resolve_two_part(
         }
     }
 
-    // Prompt to save as a source if not already configured
     prompt_save_source(owner, repo)?;
 
     // Resolve each selected overlay to a ResolvedSource
@@ -572,48 +571,44 @@ fn resolve_two_part(
 ///
 /// Skips silently if the source is already configured or the session is non-interactive.
 fn prompt_save_source(owner: &str, repo: &str) -> Result<()> {
-    use selection::is_interactive;
-
     if !is_interactive() {
         return Ok(());
     }
 
-    let current_config = config::load_config(None)?;
+    let mut config = config::load_config(None)?;
     let url = format!("https://github.com/{owner}/{repo}");
+    let source_name = repo.to_string();
 
-    // Check if already configured (by URL)
-    if current_config.sources.iter().any(|s| s.url == url) {
+    if config
+        .sources
+        .iter()
+        .any(|s| s.url == url || s.name == source_name)
+    {
         return Ok(());
     }
 
     let prompt = format!("Save {owner}/{repo} as a source for future use?");
-    let save = dialoguer::Confirm::new()
+    let confirmed = dialoguer::Confirm::new()
         .with_prompt(&prompt)
         .default(true)
         .interact()?;
 
-    if save {
-        let mut updated_config = config::load_config(None)?;
-        let source_name = repo.to_string();
-
-        // Avoid duplicate names
-        if updated_config.sources.iter().any(|s| s.name == source_name) {
-            return Ok(());
-        }
-
-        updated_config.sources.push(config::Source {
-            name: source_name.clone(),
-            url: url.clone(),
-        });
-        config::save_config(&updated_config)?;
-
-        println!(
-            "{} source '{}' ({})",
-            "Saved".green().bold(),
-            source_name,
-            url
-        );
+    if !confirmed {
+        return Ok(());
     }
+
+    config.sources.push(config::Source {
+        name: source_name.clone(),
+        url: url.clone(),
+    });
+    config::save_config(&config)?;
+
+    println!(
+        "{} source '{}' ({})",
+        "Saved".green().bold(),
+        source_name,
+        url
+    );
 
     Ok(())
 }
