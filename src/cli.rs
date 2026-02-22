@@ -1262,7 +1262,6 @@ fn browse_overlays(
     use crate::overlay_repo::OverlayRepoManager;
     use crate::state::OverlaySource;
 
-    // If a source argument was provided, use ephemeral browse mode
     if let Some(source_str) = source {
         return browse_ephemeral_source(
             source_str,
@@ -1275,7 +1274,6 @@ fn browse_overlays(
         );
     }
 
-    // Otherwise, use configured sources (existing behavior)
     let config = load_config(None)?;
     let overlay_config = config.get_default_overlay_repo_config()?;
 
@@ -1288,7 +1286,6 @@ fn browse_overlays(
     }
 
     let overlays = if let Some(filter) = target_filter {
-        // Parse org/repo filter
         let parts: Vec<&str> = filter.split('/').collect();
         if parts.len() != 2 {
             bail!("Invalid target filter format. Use: org/repo");
@@ -1353,7 +1350,7 @@ fn browse_ephemeral_source(
             let github_source = GitHubSource::parse(&url)?;
             (github_source.owner, github_source.repo)
         }
-        _ => {
+        SourceReference::LocalPath { .. } | SourceReference::ThreePart { .. } => {
             bail!(
                 "Invalid source for browse: '{source_str}'\n\n\
                  Use a GitHub username, owner/repo, or GitHub URL."
@@ -1361,7 +1358,6 @@ fn browse_ephemeral_source(
         }
     };
 
-    // Fetch/cache the repository
     let github_url = format!("https://github.com/{owner}/{repo}");
     let github_source = GitHubSource::parse(&github_url)?;
     let cache = CacheManager::new()?;
