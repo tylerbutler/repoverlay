@@ -4,23 +4,21 @@ sidebar:
   order: 2
 ---
 
-<!-- TODO: Walk through a complete example from creation to sharing -->
-
 This guide covers how to create overlays from existing files and share them with others.
 
 ## Creating an overlay
 
-The `create` command packages files from your current repository into an overlay:
+The `create` command packages files from your current repository into an overlay and saves them to your overlay repository:
 
 ```bash
 # Auto-detect org/repo from git remote
 repoverlay create my-overlay
 
-# Explicit path
+# Explicit target path
 repoverlay create microsoft/vscode/ai-config
 ```
 
-## Selecting files
+### Selecting files
 
 Use `--include` to specify which files to include:
 
@@ -30,36 +28,108 @@ repoverlay create my-overlay --include .claude/ --include CLAUDE.md --include .e
 
 Without `--include`, repoverlay launches an interactive file selector that detects AI configs, gitignored files, and untracked files as candidates.
 
-## Local output
-
-Create an overlay in a local directory instead of pushing to an overlay repository:
+### Preview and overwrite
 
 ```bash
-repoverlay create --local ./my-overlay --include .envrc --include .claude/
-```
-
-## Preview changes
-
-Use `--dry-run` to see what would be created without writing anything:
-
-```bash
+# See what would be created without writing anything
 repoverlay create my-overlay --dry-run
-```
 
-## Overwriting an existing overlay
-
-Use `--force` to overwrite an existing overlay:
-
-```bash
+# Overwrite an existing overlay
 repoverlay create my-overlay --force
 ```
 
-## Sharing overlays
+## Local output
 
-<!-- TODO: Document the full sharing workflow -->
-
-Once created, overlays can be shared by pushing the overlay repository to GitHub. Others can then apply your overlays using the overlay repository reference syntax:
+If you don't have an overlay repository set up, or want to create an overlay in a local directory:
 
 ```bash
-repoverlay apply org/repo/overlay-name
+repoverlay create --output ./my-overlay
+repoverlay create --output ./output --include .envrc --include .claude/
+```
+
+This writes the overlay files to the specified directory without pushing anywhere.
+
+## Overlay configuration (advanced)
+
+:::note
+Most overlays don't need a configuration file. Without one, all files in the overlay directory are symlinked with the same relative paths. Configuration is most useful for hand-authored overlays or cases where you need to remap files from their source location.
+:::
+
+Create a `repoverlay.ccl` in the root of your overlay directory to control how files are applied:
+
+```
+overlay =
+  name = my-config
+
+/= Rename files when applying
+mappings =
+  .envrc.template = .envrc
+  vscode-settings.json = .vscode/settings.json
+
+/= Symlink entire directories as a unit
+directories =
+  = .claude
+  = scratch
+```
+
+### Overlay name
+
+The `overlay.name` field sets the name used in `status`, `remove`, and other commands. If omitted, the directory name is used.
+
+### Mappings
+
+The `mappings` section renames files during apply. Each entry maps a source filename to a destination path. This is useful when the overlay uses different filenames than the target repo expects.
+
+### Directories
+
+The `directories` section lists directories to symlink (or copy) as a unit rather than walking individual files. This is important for directories like `.claude/` where the entire tree should be managed atomically.
+
+### Configuration format
+
+repoverlay uses [CCL (Categorical Configuration Language)](https://ccl.tylerbutler.com/) for configuration files. CCL uses `=` for key-value pairs and indentation for nesting. Lines starting with `/=` are comments.
+
+## Overlay repository structure
+
+An overlay repository organizes overlays by target project:
+
+```
+my-overlays/
+├── microsoft/
+│   └── FluidFramework/
+│       ├── claude-config/
+│       │   ├── CLAUDE.md
+│       │   └── .claude/
+│       └── dev-tools/
+│           └── .envrc
+└── tylerbutler/
+    └── tools-monorepo/
+        └── ai-config/
+            └── CLAUDE.md
+```
+
+The structure is `<target-org>/<target-repo>/<overlay-name>/`. When someone runs `repoverlay apply org/repo/overlay-name`, repoverlay resolves the overlay from this directory structure.
+
+## Sharing overlays
+
+Once you've created overlays in a repository, push it to GitHub:
+
+```bash
+cd ~/my-overlays
+git push origin main
+```
+
+Others can then apply your overlays using your GitHub username:
+
+```bash
+# Interactive selection
+repoverlay apply tylerbutler
+
+# Direct reference
+repoverlay apply tylerbutler/my-overlays/ai-config
+```
+
+Or browse without applying:
+
+```bash
+repoverlay browse tylerbutler
 ```
