@@ -20,39 +20,45 @@ Get up and running with repoverlay in under two minutes.
    cargo binstall repoverlay
    ```
 
-2. **Apply an overlay**
+2. **Check that nothing is applied yet**
 
-   Navigate to a git repository and apply an overlay from a local directory:
+   Navigate to a git repository and check the current status:
 
    ```bash
    cd ~/projects/my-repo
-   repoverlay apply ~/my-overlays/ai-config
+   repoverlay status
    ```
 
-   Or apply directly from a GitHub repository:
+   You should see: `No overlays applied.`
+
+3. **Apply an overlay**
+
+   Apply an overlay from a shared source — this will show you available overlays and let you pick:
 
    ```bash
-   repoverlay apply https://github.com/user/shared-configs
+   repoverlay apply tylerbutler
    ```
 
-3. **Check status**
+   Select an overlay from the interactive list. repoverlay will ask if you want to save the source for future use.
 
-   See what overlays are applied:
+4. **Check status again**
 
    ```bash
    repoverlay status
    ```
 
-4. **Remove when done**
+   You'll see the applied overlay, its source, and the files it manages.
+
+5. **Remove when done**
 
    ```bash
-   repoverlay remove ai-config
+   repoverlay remove my-overlay
    ```
 
 </Steps>
 
 ## Next steps
 
-- Learn [how overlays work](/concepts/how-overlays-work/) under the hood
-- Explore [different source types](/concepts/sources/) (local, GitHub, overlay repos)
-- Follow the [applying overlays guide](/guides/applying/) for advanced usage
+- Learn about [applying overlays](/guides/applying/) from different sources
+- [Create and share](/guides/creating/) your own overlays
+- Understand [how it works](/guides/how-it-works/) under the hood
