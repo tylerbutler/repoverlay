@@ -28,6 +28,12 @@ repoverlay apply https://github.com/owner/repo
 
 repoverlay supports several source types. It determines the type automatically from what you pass to `apply`:
 
+- Strings starting with `https://github.com/` are treated as **GitHub URLs**
+- Strings that look like filesystem paths (`./`, `/`, `~/`) are treated as **local directories**
+- Three-part strings like `org/repo/name` are treated as **overlay repository references**
+- Two-part strings like `owner/repo` enter **browse mode** (interactive selection)
+- Single words like `tylerbutler` are treated as **GitHub usernames**
+
 ### GitHub usernames
 
 ```bash

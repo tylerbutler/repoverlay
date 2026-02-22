@@ -60,7 +60,7 @@ Manage the cache with:
 repoverlay cache list              # List cached repositories
 repoverlay cache path              # Show cache location
 repoverlay cache remove owner/repo # Remove a specific cached repo
-repoverlay cache clear             # Remove all cached repos
+repoverlay cache remove --all      # Remove all cached repos
 ```
 
 ## Fork inheritance

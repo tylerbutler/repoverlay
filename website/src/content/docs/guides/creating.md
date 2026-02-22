@@ -43,8 +43,8 @@ repoverlay create my-overlay --force
 If you don't have an overlay repository set up, or want to create an overlay in a local directory:
 
 ```bash
-repoverlay create-local ./my-overlay
-repoverlay create-local ./output --include .envrc --include .claude/
+repoverlay create --output ./my-overlay
+repoverlay create --output ./output --include .envrc --include .claude/
 ```
 
 This writes the overlay files to the specified directory without pushing anywhere.
