@@ -71,12 +71,29 @@ export default defineConfig({
 					],
 				},
 				{
-					label: "Concepts",
-					autogenerate: { directory: "concepts" },
-				},
-				{
 					label: "Guides",
-					autogenerate: { directory: "guides" },
+					items: [
+						{
+							label: "Applying Overlays",
+							slug: "guides/applying",
+						},
+						{
+							label: "Creating & Sharing",
+							slug: "guides/creating",
+						},
+						{
+							label: "Managing Applied Overlays",
+							slug: "guides/managing",
+						},
+						{
+							label: "Restoring After Git Clean",
+							slug: "guides/restoring",
+						},
+						{
+							label: "How It Works",
+							slug: "guides/how-it-works",
+						},
+					],
 				},
 				{
 					label: "CLI Reference",
