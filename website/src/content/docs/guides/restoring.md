@@ -1,10 +1,8 @@
 ---
 title: Restoring After Git Clean
 sidebar:
-  order: 5
+  order: 4
 ---
-
-<!-- TODO: Add detail about what gets restored and from where -->
 
 If you run `git clean -fd` or otherwise lose your overlay files, repoverlay can restore them from its external backup.
 
@@ -34,6 +32,8 @@ The external backup stores:
 - The overlay name and source
 - The list of files and their link types
 - Enough information to re-apply the overlay from the original source
+
+For more detail on how state tracking and external backups work, see [How It Works](/guides/how-it-works/#state-tracking).
 
 ## When to use restore
 
