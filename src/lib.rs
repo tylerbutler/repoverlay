@@ -526,6 +526,9 @@ fn resolve_two_part(
         }
     }
 
+    // Prompt to save as a source if not already configured
+    prompt_save_source(owner, repo)?;
+
     // Resolve each selected overlay to a ResolvedSource
     let git_ref_str = github_source.git_ref.as_str().to_string();
     let commit = get_cached_repo_commit(&cached.path).unwrap_or_else(|| "unknown".to_string());
@@ -563,6 +566,56 @@ fn resolve_two_part(
     } else {
         Ok(ResolvedSources::Multiple(resolved_sources))
     }
+}
+
+/// Prompt the user to save a source for future use, if not already configured.
+///
+/// Skips silently if the source is already configured or the session is non-interactive.
+fn prompt_save_source(owner: &str, repo: &str) -> Result<()> {
+    use selection::is_interactive;
+
+    if !is_interactive() {
+        return Ok(());
+    }
+
+    let current_config = config::load_config(None)?;
+    let url = format!("https://github.com/{owner}/{repo}");
+
+    // Check if already configured (by URL)
+    if current_config.sources.iter().any(|s| s.url == url) {
+        return Ok(());
+    }
+
+    let prompt = format!("Save {owner}/{repo} as a source for future use?");
+    let save = dialoguer::Confirm::new()
+        .with_prompt(&prompt)
+        .default(true)
+        .interact()?;
+
+    if save {
+        let mut updated_config = config::load_config(None)?;
+        let source_name = repo.to_string();
+
+        // Avoid duplicate names
+        if updated_config.sources.iter().any(|s| s.name == source_name) {
+            return Ok(());
+        }
+
+        updated_config.sources.push(config::Source {
+            name: source_name.clone(),
+            url: url.clone(),
+        });
+        config::save_config(&updated_config)?;
+
+        println!(
+            "{} source '{}' ({})",
+            "Saved".green().bold(),
+            source_name,
+            url
+        );
+    }
+
+    Ok(())
 }
 
 /// Get the current commit hash from a cached repository.
