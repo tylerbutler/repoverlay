@@ -86,6 +86,42 @@ fn browse_help_no_target_alias_on_filter() {
 }
 
 #[test]
+fn browse_help_shows_source_argument() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["browse", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[SOURCE]"));
+}
+
+#[test]
+fn browse_rejects_local_path_source() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["browse", "./my-overlay"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid source for browse"));
+}
+
+#[test]
+fn browse_rejects_absolute_path_source() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["browse", "/tmp/my-overlay"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid source for browse"));
+}
+
+#[test]
+fn browse_rejects_three_part_source() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["browse", "owner/repo/overlay"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid source for browse"));
+}
+
+#[test]
 fn cache_help_displays() {
     cargo_bin_cmd!("repoverlay")
         .args(["cache", "--help"])
