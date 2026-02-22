@@ -1,0 +1,7 @@
+component: apply
+kind: Added
+body: |-
+    Add interactive conflict resolution mode
+
+    Use `--interactive` (`-i`) to be prompted for each file conflict during apply, restore, and update. When a conflict is detected, you can choose to overwrite the file, skip it, view a diff, or abort the operation. The `--force` flag can also be written as `--overwrite`.
+time: 2026-02-21T19:19:22.602510549-08:00
