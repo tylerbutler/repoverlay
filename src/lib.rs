@@ -8715,12 +8715,12 @@ mod tests {
     mod cross_overlay_integration_tests {
         use super::*;
 
-        /// Tests that relative-path mapping keys (../) resolve correctly end-to-end.
+        /// Tests that repo-root mapping keys (//) resolve correctly end-to-end.
         ///
         /// NOTE: The CCL parser (sickle) currently cannot handle forward slashes in
-        /// mapping keys (see tylerbutler/santa#71). This test uses the `//` prefix form
-        /// to reference a sibling overlay, proving the `repo_root` threading works.
-        /// When sickle supports `/` in map keys, this can be rewritten to use `../`.
+        /// non-slash-leading mapping keys (see tylerbutler/santa#91). This test uses
+        /// the `//` prefix form. When sickle supports `/` in all map keys, add a
+        /// separate test for the `../` form.
         #[test]
         fn apply_overlay_with_external_file_mapping() {
             let temp = TempDir::new().unwrap();
@@ -8735,7 +8735,7 @@ mod tests {
             fs::write(overlay_a.join("CLAUDE.md"), "# AI Config").unwrap();
 
             // Create overlay-b that references overlay-a's file via // prefix
-            // (Using // instead of ../ because sickle can't parse slashes in keys)
+            // (Using // instead of ../ due to sickle key parsing; see tylerbutler/santa#91)
             let overlay_b = repo_root.join("org/repo/overlay-b");
             fs::create_dir_all(&overlay_b).unwrap();
             fs::write(
