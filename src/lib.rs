@@ -1332,8 +1332,20 @@ pub(crate) fn apply_resolved_overlay(
 
         println!("  {} {}/", "+".green(), dir_path.display());
 
+        // For external directories, record repo-relative source path
+        let dir_source_for_state =
+            if source_dir.is_absolute() && source_dir != source.join(&dir_path) {
+                // External directory — record repo-relative path if possible
+                repo_root
+                    .as_deref()
+                    .and_then(|root| source_dir.strip_prefix(root).ok())
+                    .map_or_else(|| dir_path.clone(), Path::to_path_buf)
+            } else {
+                dir_path.clone()
+            };
+
         state.add_file(FileEntry {
-            source: dir_path.clone(),
+            source: dir_source_for_state,
             target: dir_path.clone(),
             link_type,
             entry_type: EntryType::Directory,
@@ -1557,8 +1569,19 @@ pub(crate) fn apply_resolved_overlay(
 
         println!("  {} {}", "+".green(), target_rel.display());
 
+        // For external files (absolute path from cross-overlay resolution),
+        // record the repo-relative path for portable state tracking.
+        let source_for_state = if rel_path.is_absolute() {
+            repo_root
+                .as_deref()
+                .and_then(|root| rel_path.strip_prefix(root).ok())
+                .map_or_else(|| rel_path.clone(), Path::to_path_buf)
+        } else {
+            rel_path.clone()
+        };
+
         state.add_file(FileEntry {
-            source: rel_path.clone(),
+            source: source_for_state,
             target: target_rel.clone(),
             link_type,
             entry_type: EntryType::File,
@@ -8798,6 +8821,150 @@ mod tests {
             );
             let content = fs::read_to_string(target.join(".envrc")).unwrap();
             assert_eq!(content, "use nix");
+        }
+
+        #[test]
+        fn state_records_repo_relative_source_for_external_files() {
+            let temp = TempDir::new().unwrap();
+
+            // Create overlay repo
+            let repo_root = temp.path().join("overlay-repo");
+            fs::create_dir_all(repo_root.join(".git")).unwrap();
+
+            // Create overlay-a with source file
+            let overlay_a = repo_root.join("org/repo/overlay-a");
+            fs::create_dir_all(&overlay_a).unwrap();
+            fs::write(overlay_a.join("CLAUDE.md"), "# AI Config").unwrap();
+
+            // Create overlay-b referencing overlay-a via // prefix
+            let overlay_b = repo_root.join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+            fs::write(
+                overlay_b.join("repoverlay.ccl"),
+                "mappings =\n  //org/repo/overlay-a/CLAUDE.md = .ai/config.md",
+            )
+            .unwrap();
+            fs::write(overlay_b.join("local.txt"), "local").unwrap();
+
+            // Create target repo
+            let target = temp.path().join("target-repo");
+            fs::create_dir_all(target.join(".git")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay_b.clone(),
+                source_info: OverlaySource::Local { path: overlay_b },
+            };
+
+            apply_resolved_overlay(
+                &resolved,
+                &target,
+                true,
+                None,
+                ConflictStrategy::Fail,
+                false,
+            )
+            .unwrap();
+
+            // Read the state file
+            let state_path = target
+                .join(STATE_DIR)
+                .join(OVERLAYS_DIR)
+                .join("overlay-b.ccl");
+            let content = fs::read_to_string(&state_path).unwrap();
+            let state: OverlayState = sickle::from_str(&content).unwrap();
+
+            let external_entry = state
+                .files
+                .iter()
+                .find(|f| f.target == PathBuf::from(".ai/config.md"));
+            assert!(
+                external_entry.is_some(),
+                "should have entry for external file"
+            );
+
+            let entry = external_entry.unwrap();
+            // Source should be repo-relative, not absolute
+            assert!(
+                !entry.source.is_absolute(),
+                "source should be relative, got: {}",
+                entry.source.display()
+            );
+            assert_eq!(
+                entry.source,
+                PathBuf::from("org/repo/overlay-a/CLAUDE.md"),
+                "source should be repo-relative"
+            );
+        }
+
+        #[test]
+        fn state_records_repo_relative_source_for_external_directories() {
+            let temp = TempDir::new().unwrap();
+
+            // Create overlay repo
+            let repo_root = temp.path().join("overlay-repo");
+            fs::create_dir_all(repo_root.join(".git")).unwrap();
+
+            // Create overlay-a with a .claude directory
+            let overlay_a = repo_root.join("org/repo/overlay-a");
+            fs::create_dir_all(overlay_a.join(".claude")).unwrap();
+            fs::write(overlay_a.join(".claude/config.json"), "{}").unwrap();
+
+            // Create overlay-b referencing overlay-a's .claude dir
+            let overlay_b = repo_root.join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+            fs::write(overlay_b.join("marker.txt"), "marker").unwrap();
+            fs::write(
+                overlay_b.join("repoverlay.ccl"),
+                "directories =\n  = ../overlay-a/.claude",
+            )
+            .unwrap();
+
+            // Create target repo
+            let target = temp.path().join("target-repo");
+            fs::create_dir_all(target.join(".git")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay_b.clone(),
+                source_info: OverlaySource::Local { path: overlay_b },
+            };
+
+            apply_resolved_overlay(
+                &resolved,
+                &target,
+                false,
+                None,
+                ConflictStrategy::Fail,
+                false,
+            )
+            .unwrap();
+
+            // Read the state file
+            let state_path = target
+                .join(STATE_DIR)
+                .join(OVERLAYS_DIR)
+                .join("overlay-b.ccl");
+            let content = fs::read_to_string(&state_path).unwrap();
+            let state: OverlayState = sickle::from_str(&content).unwrap();
+
+            let dir_entry = state.files.iter().find(|f| {
+                f.target == PathBuf::from(".claude") && f.entry_type == EntryType::Directory
+            });
+            assert!(
+                dir_entry.is_some(),
+                "should have entry for external directory"
+            );
+
+            let entry = dir_entry.unwrap();
+            assert!(
+                !entry.source.is_absolute(),
+                "source should be relative, got: {}",
+                entry.source.display()
+            );
+            assert_eq!(
+                entry.source,
+                PathBuf::from("org/repo/overlay-a/.claude"),
+                "source should be repo-relative"
+            );
         }
     }
 }
