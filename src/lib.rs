@@ -1123,6 +1123,9 @@ pub(crate) fn apply_resolved_overlay(
     // Load overlay config (optional)
     let config = load_overlay_config(source)?;
 
+    // Infer overlay repo root for cross-overlay references
+    let repo_root = infer_repo_root(source);
+
     // Determine overlay name (priority: CLI override > config > directory name)
     let overlay_name = resolve_overlay_display_name(&config, source, name_override);
     let normalized_name = normalize_overlay_name(&overlay_name)?;
@@ -1159,8 +1162,14 @@ pub(crate) fn apply_resolved_overlay(
 
     // Process directories first (symlink as units)
     for dir_name in &config.directories {
-        let dir_path = PathBuf::from(dir_name);
-        let source_dir = source.join(&dir_path);
+        let (source_dir, dir_path) =
+            match resolve_directory_source(dir_name, source, repo_root.as_deref()) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    eprintln!("  {} {}", "Warning:".yellow(), e);
+                    continue;
+                }
+            };
 
         // Check if directory exists
         if !source_dir.exists() {
@@ -1896,6 +1905,48 @@ fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+/// Infer the overlay repo root by walking up from the overlay source directory.
+/// Returns None if no .git directory is found (e.g., for local overlays not in a repo).
+fn infer_repo_root(overlay_dir: &Path) -> Option<PathBuf> {
+    let mut current = overlay_dir;
+    loop {
+        if current.join(".git").exists() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
+}
+
+/// Resolve a directory entry to an absolute source path and a target-relative path.
+///
+/// For external references (`../` or `//`), resolves to the absolute path of the
+/// directory in the overlay repo. The target path is the last component of the
+/// referenced directory.
+///
+/// For local references, resolves relative to `overlay_dir` as today.
+///
+/// Returns `(absolute_source_path, target_relative_path)`.
+fn resolve_directory_source(
+    dir_name: &str,
+    overlay_dir: &Path,
+    repo_root: Option<&Path>,
+) -> Result<(PathBuf, PathBuf)> {
+    if is_external_mapping(dir_name) {
+        let resolved = resolve_mapping_source(dir_name, overlay_dir, repo_root)?;
+        // Target is the last path component: "../overlay-a/.claude" -> ".claude"
+        let target = if let Some(file_name) = resolved.file_name() {
+            PathBuf::from(file_name)
+        } else {
+            bail!("Cross-overlay directory reference has no directory name: {dir_name}");
+        };
+        Ok((resolved, target))
+    } else {
+        let source = overlay_dir.join(dir_name);
+        let target = PathBuf::from(dir_name);
+        Ok((source, target))
+    }
 }
 
 /// Check for file path conflicts across multiple overlay sources.
@@ -7636,6 +7687,160 @@ mod tests {
                     .unwrap_err()
                     .to_string()
                     .contains("requires an overlay repo")
+            );
+        }
+    }
+
+    // Tests for resolve_directory_source
+    mod resolve_directory_source_tests {
+        use super::*;
+
+        #[test]
+        fn local_directory_resolves_normally() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-a");
+            let result = resolve_directory_source(".claude", &overlay_dir, None);
+            assert!(result.is_ok());
+            let (source, target) = result.unwrap();
+            assert_eq!(source, PathBuf::from("/repo/org/repo/overlay-a/.claude"));
+            assert_eq!(target, PathBuf::from(".claude"));
+        }
+
+        #[test]
+        fn relative_directory_resolves_to_sibling() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-b");
+            let repo_root = PathBuf::from("/repo");
+            let result =
+                resolve_directory_source("../overlay-a/.claude", &overlay_dir, Some(&repo_root));
+            assert!(result.is_ok());
+            let (source, target) = result.unwrap();
+            assert_eq!(source, PathBuf::from("/repo/org/repo/overlay-a/.claude"));
+            assert_eq!(target, PathBuf::from(".claude"));
+        }
+
+        #[test]
+        fn repo_root_directory_resolves() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-b");
+            let repo_root = PathBuf::from("/repo");
+            let result = resolve_directory_source(
+                "//microsoft/FluidFramework/base/scratch",
+                &overlay_dir,
+                Some(&repo_root),
+            );
+            assert!(result.is_ok());
+            let (source, target) = result.unwrap();
+            assert_eq!(
+                source,
+                PathBuf::from("/repo/microsoft/FluidFramework/base/scratch")
+            );
+            assert_eq!(target, PathBuf::from("scratch"));
+        }
+
+        #[test]
+        fn external_directory_without_repo_root_fails() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-b");
+            let result = resolve_directory_source("../overlay-a/.claude", &overlay_dir, None);
+            assert!(result.is_err());
+        }
+    }
+
+    // Integration tests for external directory references
+    mod external_directory_tests {
+        use super::*;
+
+        #[test]
+        fn relative_directory_reference_is_symlinked() {
+            let temp = TempDir::new().unwrap();
+
+            // Create overlay repo with .git
+            let repo_root = temp.path().join("overlay-repo");
+            fs::create_dir_all(repo_root.join(".git")).unwrap();
+
+            // Create overlay-a with a .claude directory
+            let overlay_a = repo_root.join("org/repo/overlay-a");
+            fs::create_dir_all(overlay_a.join(".claude")).unwrap();
+            fs::write(overlay_a.join(".claude/config.json"), "{}").unwrap();
+
+            // Create overlay-b that references overlay-a's .claude dir
+            let overlay_b = repo_root.join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+            // Need a local file so overlay isn't empty
+            fs::write(overlay_b.join("marker.txt"), "marker").unwrap();
+            fs::write(
+                overlay_b.join("repoverlay.ccl"),
+                "directories =\n  = ../overlay-a/.claude",
+            )
+            .unwrap();
+
+            // Create target repo
+            let target = temp.path().join("target-repo");
+            fs::create_dir_all(target.join(".git")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay_b.clone(),
+                source_info: OverlaySource::Local { path: overlay_b },
+            };
+
+            let result = apply_resolved_overlay(
+                &resolved,
+                &target,
+                false,
+                None,
+                ConflictStrategy::Fail,
+                false,
+            );
+
+            assert!(result.is_ok(), "apply should succeed: {:?}", result.err());
+            assert!(
+                target.join(".claude").exists(),
+                ".claude should exist in target"
+            );
+        }
+
+        #[test]
+        fn repo_root_directory_reference_is_symlinked() {
+            let temp = TempDir::new().unwrap();
+
+            // Create overlay repo with .git
+            let repo_root = temp.path().join("overlay-repo");
+            fs::create_dir_all(repo_root.join(".git")).unwrap();
+
+            // Create source overlay with a directory
+            let source_overlay = repo_root.join("microsoft/FluidFramework/base");
+            fs::create_dir_all(source_overlay.join("scratch")).unwrap();
+            fs::write(source_overlay.join("scratch/notes.md"), "# Notes").unwrap();
+
+            // Create overlay-b that references via //
+            let overlay_b = repo_root.join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+            fs::write(overlay_b.join("marker.txt"), "marker").unwrap();
+            fs::write(
+                overlay_b.join("repoverlay.ccl"),
+                "directories =\n  = //microsoft/FluidFramework/base/scratch",
+            )
+            .unwrap();
+
+            // Create target repo
+            let target = temp.path().join("target-repo");
+            fs::create_dir_all(target.join(".git")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay_b.clone(),
+                source_info: OverlaySource::Local { path: overlay_b },
+            };
+
+            let result = apply_resolved_overlay(
+                &resolved,
+                &target,
+                false,
+                None,
+                ConflictStrategy::Fail,
+                false,
+            );
+
+            assert!(result.is_ok(), "apply should succeed: {:?}", result.err());
+            assert!(
+                target.join("scratch").exists(),
+                "scratch should exist in target"
             );
         }
     }
