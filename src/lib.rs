@@ -1335,7 +1335,7 @@ pub(crate) fn apply_resolved_overlay(
         exclude_entries.push(exclude_path);
     }
 
-    for (rel_path, target_rel_str) in collect_overlay_files(source, &config) {
+    for (rel_path, target_rel_str) in collect_overlay_files(source, &config, None) {
         let rel_str = rel_path.to_string_lossy().to_string();
         let target_rel = PathBuf::from(&target_rel_str);
         let source_file = source.join(&rel_path);
@@ -1746,12 +1746,17 @@ pub(crate) fn apply_multiple_overlays(
 /// Walks the overlay source directory and returns `(source_rel_path, mapped_target_path)` pairs
 /// for each file that should be overlaid. Skips config files, `.git`, cache metadata, and files
 /// within directories being symlinked as units.
-fn collect_overlay_files(source: &Path, config: &OverlayConfig) -> Vec<(PathBuf, String)> {
+fn collect_overlay_files(
+    source: &Path,
+    config: &OverlayConfig,
+    repo_root: Option<&Path>,
+) -> Vec<(PathBuf, String)> {
     let dir_set: std::collections::HashSet<PathBuf> =
         config.directories.iter().map(PathBuf::from).collect();
 
     let mut files = Vec::new();
 
+    // Phase 1: Walk the overlay directory for local files
     for entry in WalkDir::new(source)
         .into_iter()
         .filter_map(std::result::Result::ok)
@@ -1784,11 +1789,49 @@ fn collect_overlay_files(source: &Path, config: &OverlayConfig) -> Vec<(PathBuf,
         files.push((rel_path.to_path_buf(), target_rel));
     }
 
+    // Phase 2: Resolve external mapping keys (cross-overlay references)
+    for (key, target) in &config.mappings {
+        if !is_external_mapping(key) {
+            continue;
+        }
+
+        match resolve_mapping_source(key, source, repo_root) {
+            Ok(resolved_path) => {
+                if !resolved_path.exists() {
+                    eprintln!(
+                        "{} external mapping '{}' -> '{}': source file does not exist, skipping",
+                        "Warning:".yellow(),
+                        key,
+                        target,
+                    );
+                    continue;
+                }
+                if !resolved_path.is_file() {
+                    eprintln!(
+                        "{} external mapping '{}' -> '{}': source is not a file, skipping",
+                        "Warning:".yellow(),
+                        key,
+                        target,
+                    );
+                    continue;
+                }
+                files.push((resolved_path, target.clone()));
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} external mapping '{}' -> '{}': {e}, skipping",
+                    "Warning:".yellow(),
+                    key,
+                    target,
+                );
+            }
+        }
+    }
+
     files
 }
 
 /// Check whether a mapping key is an external reference (cross-overlay).
-#[allow(dead_code)] // Used by collect_overlay_files in a follow-up change
 fn is_external_mapping(key: &str) -> bool {
     key.starts_with("//") || key.starts_with("../")
 }
@@ -1801,7 +1844,6 @@ fn is_external_mapping(key: &str) -> bool {
 /// - Repo-root key (`//org/repo/name/file.txt`): resolved from `repo_root`
 ///
 /// Returns an error if the resolved path escapes the overlay repo root.
-#[allow(dead_code)] // Used by collect_overlay_files in a follow-up change
 fn resolve_mapping_source(
     key: &str,
     overlay_dir: &Path,
@@ -1841,7 +1883,6 @@ fn resolve_mapping_source(
 
 /// Normalize a path by resolving `.` and `..` components without touching the filesystem.
 /// Unlike `canonicalize()`, this works on paths that don't exist yet.
-#[allow(dead_code)] // Used by resolve_mapping_source; attr removed when callers land
 fn normalize_path(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut normalized = PathBuf::new();
@@ -1901,7 +1942,7 @@ fn check_overlay_conflicts(sources: &[ResolvedSource]) -> Result<()> {
         }
 
         // Check individual files
-        for (_rel_path, target_rel) in collect_overlay_files(source, &config) {
+        for (_rel_path, target_rel) in collect_overlay_files(source, &config, None) {
             if let Some(conflicting) = target_files.get(&target_rel) {
                 bail!(
                     "Conflict between selected overlays: file '{target_rel}' is claimed by \
@@ -1991,7 +2032,7 @@ fn check_files_against_existing(
     }
 
     // Check individual files
-    for (_rel_path, target_rel) in collect_overlay_files(source, config) {
+    for (_rel_path, target_rel) in collect_overlay_files(source, config, None) {
         if let Some(conflicting) = existing_targets.get(&target_rel) {
             bail!(
                 "Conflict: file '{target_rel}' is already managed by overlay '{conflicting}'.\n\
@@ -7304,7 +7345,7 @@ mod tests {
             fs::write(temp.path().join("file2.txt"), "content2").unwrap();
 
             let config = OverlayConfig::default();
-            let files = collect_overlay_files(temp.path(), &config);
+            let files = collect_overlay_files(temp.path(), &config, None);
             assert_eq!(files.len(), 2);
         }
 
@@ -7315,7 +7356,7 @@ mod tests {
             fs::write(temp.path().join(CONFIG_FILE), "overlay config").unwrap();
 
             let config = OverlayConfig::default();
-            let files = collect_overlay_files(temp.path(), &config);
+            let files = collect_overlay_files(temp.path(), &config, None);
             assert_eq!(files.len(), 1);
             assert_eq!(files[0].1, "file.txt");
         }
@@ -7328,7 +7369,7 @@ mod tests {
             fs::write(temp.path().join(".git/HEAD"), "ref: refs/heads/main").unwrap();
 
             let config = OverlayConfig::default();
-            let files = collect_overlay_files(temp.path(), &config);
+            let files = collect_overlay_files(temp.path(), &config, None);
             assert_eq!(files.len(), 1);
             assert_eq!(files[0].1, "file.txt");
         }
@@ -7340,7 +7381,7 @@ mod tests {
             fs::write(temp.path().join(".repoverlay-cache-meta.ccl"), "meta").unwrap();
 
             let config = OverlayConfig::default();
-            let files = collect_overlay_files(temp.path(), &config);
+            let files = collect_overlay_files(temp.path(), &config, None);
             assert_eq!(files.len(), 1);
         }
 
@@ -7355,7 +7396,7 @@ mod tests {
                 directories: vec![".vscode".to_string()],
                 ..Default::default()
             };
-            let files = collect_overlay_files(temp.path(), &config);
+            let files = collect_overlay_files(temp.path(), &config, None);
             assert_eq!(files.len(), 1);
             assert_eq!(files[0].1, "keep.txt");
         }
@@ -7371,7 +7412,7 @@ mod tests {
                 mappings,
                 ..Default::default()
             };
-            let files = collect_overlay_files(temp.path(), &config);
+            let files = collect_overlay_files(temp.path(), &config, None);
             assert_eq!(files.len(), 1);
             assert_eq!(files[0].0, PathBuf::from("source.txt"));
             assert_eq!(files[0].1, "target.txt");
@@ -7385,7 +7426,7 @@ mod tests {
             fs::write(temp.path().join("dir/subdir/nested.txt"), "").unwrap();
 
             let config = OverlayConfig::default();
-            let files = collect_overlay_files(temp.path(), &config);
+            let files = collect_overlay_files(temp.path(), &config, None);
             assert_eq!(files.len(), 2);
         }
 
@@ -7393,8 +7434,121 @@ mod tests {
         fn empty_source_returns_empty() {
             let temp = TempDir::new().unwrap();
             let config = OverlayConfig::default();
-            let files = collect_overlay_files(temp.path(), &config);
+            let files = collect_overlay_files(temp.path(), &config, None);
             assert!(files.is_empty());
+        }
+
+        #[test]
+        fn external_mapping_relative_resolves_sibling_file() {
+            let temp = TempDir::new().unwrap();
+            // Create overlay-a with a file
+            let overlay_a = temp.path().join("org/repo/overlay-a");
+            fs::create_dir_all(&overlay_a).unwrap();
+            fs::write(overlay_a.join("CLAUDE.md"), "# AI config").unwrap();
+
+            // Create overlay-b with a config referencing overlay-a
+            let overlay_b = temp.path().join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+            fs::write(overlay_b.join("local.txt"), "local content").unwrap();
+
+            let mut mappings = std::collections::HashMap::new();
+            mappings.insert(
+                "../overlay-a/CLAUDE.md".to_string(),
+                ".ai/instructions.md".to_string(),
+            );
+            let config = OverlayConfig {
+                mappings,
+                ..Default::default()
+            };
+
+            let files = collect_overlay_files(&overlay_b, &config, Some(temp.path()));
+            assert_eq!(files.len(), 2);
+
+            let external = files.iter().find(|(_, t)| t == ".ai/instructions.md");
+            assert!(external.is_some(), "external mapping should be in results");
+            let (source_path, _) = external.unwrap();
+            assert!(
+                source_path.is_absolute(),
+                "external source should be absolute path"
+            );
+        }
+
+        #[test]
+        fn external_mapping_repo_root_resolves() {
+            let temp = TempDir::new().unwrap();
+            let source_file = temp
+                .path()
+                .join("microsoft/FluidFramework/claude-config/CLAUDE.md");
+            fs::create_dir_all(source_file.parent().unwrap()).unwrap();
+            fs::write(&source_file, "# AI config").unwrap();
+
+            let overlay_b = temp.path().join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+
+            let mut mappings = std::collections::HashMap::new();
+            mappings.insert(
+                "//microsoft/FluidFramework/claude-config/CLAUDE.md".to_string(),
+                ".cursor/instructions.md".to_string(),
+            );
+            let config = OverlayConfig {
+                mappings,
+                ..Default::default()
+            };
+
+            let files = collect_overlay_files(&overlay_b, &config, Some(temp.path()));
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].1, ".cursor/instructions.md");
+        }
+
+        #[test]
+        fn external_mapping_missing_file_is_skipped_with_warning() {
+            let temp = TempDir::new().unwrap();
+            let overlay_b = temp.path().join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+
+            let mut mappings = std::collections::HashMap::new();
+            mappings.insert(
+                "../overlay-a/nonexistent.txt".to_string(),
+                "target.txt".to_string(),
+            );
+            let config = OverlayConfig {
+                mappings,
+                ..Default::default()
+            };
+
+            let files = collect_overlay_files(&overlay_b, &config, Some(temp.path()));
+            assert!(files.is_empty(), "missing external file should be skipped");
+        }
+
+        #[test]
+        fn local_mappings_still_work_with_repo_root() {
+            let temp = TempDir::new().unwrap();
+            let overlay = temp.path().join("org/repo/my-overlay");
+            fs::create_dir_all(&overlay).unwrap();
+            fs::write(overlay.join("source.txt"), "content").unwrap();
+
+            let mut mappings = std::collections::HashMap::new();
+            mappings.insert("source.txt".to_string(), "target.txt".to_string());
+            let config = OverlayConfig {
+                mappings,
+                ..Default::default()
+            };
+
+            let files = collect_overlay_files(&overlay, &config, Some(temp.path()));
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].0, PathBuf::from("source.txt"));
+            assert_eq!(files[0].1, "target.txt");
+        }
+
+        #[test]
+        fn existing_tests_work_with_none_repo_root() {
+            let temp = TempDir::new().unwrap();
+            fs::write(temp.path().join("file1.txt"), "content1").unwrap();
+            fs::write(temp.path().join("file2.txt"), "content2").unwrap();
+
+            let config = OverlayConfig::default();
+            let files = collect_overlay_files(temp.path(), &config, None);
+            assert_eq!(files.len(), 2);
         }
     }
 
