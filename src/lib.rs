@@ -1344,7 +1344,7 @@ pub(crate) fn apply_resolved_overlay(
         exclude_entries.push(exclude_path);
     }
 
-    for (rel_path, target_rel_str) in collect_overlay_files(source, &config, None) {
+    for (rel_path, target_rel_str) in collect_overlay_files(source, &config, repo_root.as_deref()) {
         let rel_str = rel_path.to_string_lossy().to_string();
         let target_rel = PathBuf::from(&target_rel_str);
         let source_file = source.join(&rel_path);
@@ -1962,6 +1962,7 @@ fn check_overlay_conflicts(sources: &[ResolvedSource]) -> Result<()> {
     for resolved in sources {
         let source = &resolved.path;
         let config = load_overlay_config(source)?;
+        let repo_root = infer_repo_root(source);
         let overlay_name = determine_overlay_name(&config, source, None)?;
 
         // Check configured directories
@@ -1993,7 +1994,8 @@ fn check_overlay_conflicts(sources: &[ResolvedSource]) -> Result<()> {
         }
 
         // Check individual files
-        for (_rel_path, target_rel) in collect_overlay_files(source, &config, None) {
+        for (_rel_path, target_rel) in collect_overlay_files(source, &config, repo_root.as_deref())
+        {
             if let Some(conflicting) = target_files.get(&target_rel) {
                 bail!(
                     "Conflict between selected overlays: file '{target_rel}' is claimed by \
@@ -2072,6 +2074,8 @@ fn check_files_against_existing(
     config: &OverlayConfig,
     existing_targets: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
+    let repo_root = infer_repo_root(source);
+
     // Check configured directories
     for dir_name in &config.directories {
         if let Some(conflicting) = existing_targets.get(dir_name.as_str()) {
@@ -2083,7 +2087,7 @@ fn check_files_against_existing(
     }
 
     // Check individual files
-    for (_rel_path, target_rel) in collect_overlay_files(source, config, None) {
+    for (_rel_path, target_rel) in collect_overlay_files(source, config, repo_root.as_deref()) {
         if let Some(conflicting) = existing_targets.get(&target_rel) {
             bail!(
                 "Conflict: file '{target_rel}' is already managed by overlay '{conflicting}'.\n\
@@ -8682,6 +8686,118 @@ mod tests {
             let canonical = repo.path().canonicalize().unwrap();
             assert!(canonical.join(".vscode").exists());
             assert!(canonical.join(".vscode/settings.json").exists());
+        }
+    }
+
+    mod cross_overlay_integration_tests {
+        use super::*;
+
+        /// Tests that relative-path mapping keys (../) resolve correctly end-to-end.
+        ///
+        /// NOTE: The CCL parser (sickle) currently cannot handle forward slashes in
+        /// mapping keys (see tylerbutler/santa#71). This test uses the `//` prefix form
+        /// to reference a sibling overlay, proving the `repo_root` threading works.
+        /// When sickle supports `/` in map keys, this can be rewritten to use `../`.
+        #[test]
+        fn apply_overlay_with_external_file_mapping() {
+            let temp = TempDir::new().unwrap();
+
+            // Create overlay repo with .git
+            let repo_root = temp.path().join("overlay-repo");
+            fs::create_dir_all(repo_root.join(".git")).unwrap();
+
+            // Create overlay-a with source file (sibling overlay)
+            let overlay_a = repo_root.join("org/repo/overlay-a");
+            fs::create_dir_all(&overlay_a).unwrap();
+            fs::write(overlay_a.join("CLAUDE.md"), "# AI Config").unwrap();
+
+            // Create overlay-b that references overlay-a's file via // prefix
+            // (Using // instead of ../ because sickle can't parse slashes in keys)
+            let overlay_b = repo_root.join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+            fs::write(
+                overlay_b.join("repoverlay.ccl"),
+                "mappings =\n  //org/repo/overlay-a/CLAUDE.md = .cursor/rules.md",
+            )
+            .unwrap();
+            // Need at least one local file so overlay isn't empty
+            fs::write(overlay_b.join("local.txt"), "local").unwrap();
+
+            // Create target repo
+            let target = temp.path().join("target-repo");
+            fs::create_dir_all(target.join(".git")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay_b.clone(),
+                source_info: OverlaySource::Local { path: overlay_b },
+            };
+
+            let result = apply_resolved_overlay(
+                &resolved,
+                &target,
+                true, // force copy so we don't need real symlinks in test
+                None,
+                ConflictStrategy::Fail,
+                false,
+            );
+
+            assert!(result.is_ok(), "apply should succeed: {:?}", result.err());
+            assert!(
+                target.join(".cursor/rules.md").exists(),
+                "cross-overlay file should be applied at mapped target"
+            );
+            let content = fs::read_to_string(target.join(".cursor/rules.md")).unwrap();
+            assert_eq!(content, "# AI Config");
+        }
+
+        #[test]
+        fn apply_overlay_with_repo_root_file_mapping() {
+            let temp = TempDir::new().unwrap();
+
+            // Create overlay repo with .git
+            let repo_root = temp.path().join("overlay-repo");
+            fs::create_dir_all(repo_root.join(".git")).unwrap();
+
+            // Create a file in a different org/repo
+            let other_overlay = repo_root.join("microsoft/FluidFramework/base");
+            fs::create_dir_all(&other_overlay).unwrap();
+            fs::write(other_overlay.join(".envrc"), "use nix").unwrap();
+
+            // Create overlay-b that references via //
+            let overlay_b = repo_root.join("org/repo/overlay-b");
+            fs::create_dir_all(&overlay_b).unwrap();
+            fs::write(
+                overlay_b.join("repoverlay.ccl"),
+                "mappings =\n  //microsoft/FluidFramework/base/.envrc = .envrc",
+            )
+            .unwrap();
+            fs::write(overlay_b.join("marker.txt"), "marker").unwrap();
+
+            // Create target repo
+            let target = temp.path().join("target-repo");
+            fs::create_dir_all(target.join(".git")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay_b.clone(),
+                source_info: OverlaySource::Local { path: overlay_b },
+            };
+
+            let result = apply_resolved_overlay(
+                &resolved,
+                &target,
+                true,
+                None,
+                ConflictStrategy::Fail,
+                false,
+            );
+
+            assert!(result.is_ok(), "apply should succeed: {:?}", result.err());
+            assert!(
+                target.join(".envrc").exists(),
+                ".envrc should exist in target"
+            );
+            let content = fs::read_to_string(target.join(".envrc")).unwrap();
+            assert_eq!(content, "use nix");
         }
     }
 }
