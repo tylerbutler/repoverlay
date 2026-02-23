@@ -1787,6 +1787,76 @@ fn collect_overlay_files(source: &Path, config: &OverlayConfig) -> Vec<(PathBuf,
     files
 }
 
+/// Check whether a mapping key is an external reference (cross-overlay).
+#[allow(dead_code)] // Used by collect_overlay_files in a follow-up change
+fn is_external_mapping(key: &str) -> bool {
+    key.starts_with("//") || key.starts_with("../")
+}
+
+/// Resolve a mapping key to an absolute source path.
+///
+/// Handles three forms:
+/// - Plain key (`file.txt`): resolved relative to `overlay_dir`
+/// - Relative key (`../sibling/file.txt`): resolved relative to `overlay_dir`, validated against `repo_root`
+/// - Repo-root key (`//org/repo/name/file.txt`): resolved from `repo_root`
+///
+/// Returns an error if the resolved path escapes the overlay repo root.
+#[allow(dead_code)] // Used by collect_overlay_files in a follow-up change
+fn resolve_mapping_source(
+    key: &str,
+    overlay_dir: &Path,
+    repo_root: Option<&Path>,
+) -> Result<PathBuf> {
+    if key.starts_with("//") {
+        let Some(root) = repo_root else {
+            bail!(
+                "Cross-overlay reference '{key}' requires an overlay repo root, \
+                 but this overlay was not resolved from an overlay repository"
+            );
+        };
+        let rel = key.strip_prefix("//").unwrap();
+        let resolved = root.join(rel);
+        let normalized = normalize_path(&resolved);
+        if !normalized.starts_with(root) {
+            bail!("Cross-overlay reference escapes overlay repo: {key}");
+        }
+        Ok(normalized)
+    } else if key.starts_with("../") {
+        let Some(root) = repo_root else {
+            bail!(
+                "Cross-overlay reference '{key}' requires an overlay repo root, \
+                 but this overlay was not resolved from an overlay repository"
+            );
+        };
+        let resolved = overlay_dir.join(key);
+        let normalized = normalize_path(&resolved);
+        if !normalized.starts_with(root) {
+            bail!("Cross-overlay reference escapes overlay repo: {key}");
+        }
+        Ok(normalized)
+    } else {
+        Ok(overlay_dir.join(key))
+    }
+}
+
+/// Normalize a path by resolving `.` and `..` components without touching the filesystem.
+/// Unlike `canonicalize()`, this works on paths that don't exist yet.
+#[allow(dead_code)] // Used by resolve_mapping_source; attr removed when callers land
+fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            other => normalized.push(other),
+        }
+    }
+    normalized
+}
+
 /// Check for file path conflicts across multiple overlay sources.
 ///
 /// Walks each overlay's files and directories to build a map of target paths.
@@ -7325,6 +7395,94 @@ mod tests {
             let config = OverlayConfig::default();
             let files = collect_overlay_files(temp.path(), &config);
             assert!(files.is_empty());
+        }
+    }
+
+    // Tests for resolve_mapping_source
+    mod resolve_mapping_source_tests {
+        use super::*;
+
+        #[test]
+        fn local_key_resolves_to_overlay_dir() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-a");
+            let repo_root = PathBuf::from("/repo");
+            let result = resolve_mapping_source("file.txt", &overlay_dir, Some(&repo_root));
+            assert!(result.is_ok());
+            assert_eq!(
+                result.unwrap(),
+                PathBuf::from("/repo/org/repo/overlay-a/file.txt")
+            );
+        }
+
+        #[test]
+        fn relative_key_resolves_to_sibling() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-b");
+            let repo_root = PathBuf::from("/repo");
+            let result =
+                resolve_mapping_source("../overlay-a/CLAUDE.md", &overlay_dir, Some(&repo_root));
+            assert!(result.is_ok());
+            assert_eq!(
+                result.unwrap(),
+                PathBuf::from("/repo/org/repo/overlay-a/CLAUDE.md")
+            );
+        }
+
+        #[test]
+        fn repo_root_key_resolves_from_root() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-b");
+            let repo_root = PathBuf::from("/repo");
+            let result = resolve_mapping_source(
+                "//microsoft/FluidFramework/claude-config/CLAUDE.md",
+                &overlay_dir,
+                Some(&repo_root),
+            );
+            assert!(result.is_ok());
+            assert_eq!(
+                result.unwrap(),
+                PathBuf::from("/repo/microsoft/FluidFramework/claude-config/CLAUDE.md")
+            );
+        }
+
+        #[test]
+        fn relative_key_escaping_repo_root_fails() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-b");
+            let repo_root = PathBuf::from("/repo");
+            let result =
+                resolve_mapping_source("../../../../etc/passwd", &overlay_dir, Some(&repo_root));
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("escapes overlay repo")
+            );
+        }
+
+        #[test]
+        fn repo_root_key_without_repo_root_fails() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-b");
+            let result =
+                resolve_mapping_source("//org/repo/overlay-a/file.txt", &overlay_dir, None);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("requires an overlay repo")
+            );
+        }
+
+        #[test]
+        fn relative_key_without_repo_root_fails() {
+            let overlay_dir = PathBuf::from("/repo/org/repo/overlay-b");
+            let result = resolve_mapping_source("../overlay-a/file.txt", &overlay_dir, None);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("requires an overlay repo")
+            );
         }
     }
 
