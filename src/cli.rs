@@ -7889,7 +7889,6 @@ directories =
         /// instead of resolving to the cached path. The function should succeed for
         /// all source types.
         #[test]
-        #[ignore = "fixed by #149"]
         fn issue_142_resolve_source_path_github_should_not_bail() {
             // Create a GitHub-sourced overlay state (no actual GitHub access needed)
             let state = OverlayState::new(
@@ -7993,7 +7992,6 @@ directories =
         /// Issue #143: `add_files_to_overlay` should give a clear error for GitHub (read-only)
         /// sources instead of trying to use `OverlayRepoManager`.
         #[test]
-        #[ignore = "fixed by #149"]
         fn issue_143_add_files_should_reject_github_clearly() {
             let repo = create_test_repo();
 
@@ -8145,7 +8143,6 @@ directories =
         /// before proceeding. It should reject non-OverlayRepo sources with a
         /// clear message about syncability.
         #[test]
-        #[ignore = "fixed by #149"]
         fn issue_146_sync_single_name_should_check_source_type() {
             let repo = create_test_repo();
 
@@ -8207,7 +8204,6 @@ directories =
         /// We verify this by inspecting the code: the `OverlayRepo` match arm uses
         /// `..` to discard `source_name`, then calls `get_default_overlay_repo_config()`.
         #[test]
-        #[ignore = "fixed by #149"]
         fn issue_147_resolve_should_use_source_name() {
             // Create an OverlayRepo source with a specific source_name
             let state = OverlayState::new(
@@ -8272,7 +8268,6 @@ directories =
         /// On main, there is no such upfront check — the function never inspects
         /// `state.source` at all.
         #[test]
-        #[ignore = "fixed by #149"]
         fn issue_148_add_should_check_mutability_before_filesystem_changes() {
             let repo = create_test_repo();
 
