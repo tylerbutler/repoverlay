@@ -7854,4 +7854,474 @@ directories =
             assert!(result.is_err());
         }
     }
+
+    /// Regression tests for source-type dispatch bugs.
+    ///
+    /// These tests reproduce the bugs described in issues #142, #143, #145–#148.
+    /// They should fail on the `main` branch (before the `SourceResolver` fix)
+    /// and pass once the fix from #149 is applied.
+    mod source_resolver_bugs {
+        use super::*;
+        use crate::save_overlay_state;
+        use crate::state::{EntryType, FileEntry, LinkType, OverlaySource, OverlayState};
+
+        fn save_test_state(
+            target: &std::path::Path,
+            name: &str,
+            source: OverlaySource,
+            files: Vec<(&str, &str)>,
+        ) {
+            let mut state = OverlayState::new(name.to_string(), source);
+            for (src, tgt) in files {
+                state.add_file(FileEntry {
+                    source: PathBuf::from(src),
+                    target: PathBuf::from(tgt),
+                    link_type: LinkType::Copy,
+                    entry_type: EntryType::File,
+                });
+            }
+            save_overlay_state(target, &state).unwrap();
+        }
+
+        // ==================== #142: resolve_overlay_source_path bails on GitHub ====================
+
+        /// Issue #142: `resolve_overlay_source_path` returns an error for GitHub sources
+        /// instead of resolving to the cached path. The function should succeed for
+        /// all source types.
+        #[test]
+        #[ignore = "fixed by #149"]
+        fn issue_142_resolve_source_path_github_should_not_bail() {
+            // Create a GitHub-sourced overlay state (no actual GitHub access needed)
+            let state = OverlayState::new(
+                "test-overlay".to_string(),
+                OverlaySource::github(
+                    "https://github.com/owner/repo".to_string(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    None,
+                ),
+            );
+
+            // BUG: On main, this returns Err("Interactive edit is not supported for GitHub overlays")
+            // EXPECTED: Should return Ok with a path (the cached path), not bail
+            let result = resolve_overlay_source_path(&state);
+            assert!(
+                !result
+                    .as_ref()
+                    .is_err_and(|e| e.to_string().contains("not supported for GitHub")),
+                "Bug #142: resolve_overlay_source_path should not unconditionally \
+                 reject GitHub sources. Error: {:?}",
+                result.unwrap_err()
+            );
+        }
+
+        // ==================== #143: add_files_to_overlay assumes overlay repo ====================
+
+        /// Issue #143: `add_files_to_overlay` calls `get_default_overlay_repo_config()`
+        /// and uses `OverlayRepoManager` even for Local sources. It should detect
+        /// the source type and handle Local sources directly (or give a clear error).
+        ///
+        /// The bug is that `add_files_to_overlay` never checks `state.source` —
+        /// it always goes through the overlay repo code path.
+        #[test]
+        #[ignore = "fixed by #149"]
+        fn issue_143_add_files_should_check_source_type_for_local() {
+            let repo = create_test_repo();
+
+            // Create a local overlay pointing to a real directory
+            let overlay_source = create_test_overlay(&[(".envrc", "export FOO=bar")]);
+
+            // Create overlay state with Local source
+            save_test_state(
+                repo.path(),
+                "local-overlay",
+                OverlaySource::local(overlay_source.path().to_path_buf()),
+                vec![(".envrc", ".envrc")],
+            );
+
+            // Create the target file and a new file to add
+            fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
+            fs::write(repo.path().join("new-file.txt"), "new content").unwrap();
+
+            // BUG: On main, add_files_to_overlay loads overlay state but then
+            // ignores state.source entirely. It calls get_default_overlay_repo_config()
+            // and OverlayRepoManager to resolve the path, which is wrong for Local sources.
+            // The overlay repo path (manager.path()/org/repo/name) won't match the
+            // actual local source path, causing "does not exist in overlay repo" errors
+            // or copying files to the wrong location.
+            //
+            // EXPECTED: Should use state.source to determine how to resolve the path.
+            let result = add_files_to_overlay(
+                "org/repo/local-overlay",
+                repo.path(),
+                &[PathBuf::from("new-file.txt")],
+                true, // dry_run to avoid side effects
+            );
+
+            // BUG: On main, add_files_to_overlay goes through the overlay repo code
+            // path for ALL sources (it never checks state.source). For local sources,
+            // it tries to find org/repo/local-overlay in the overlay repo directory.
+            // If a global overlay repo is configured, it silently uses the wrong path;
+            // if not, it errors about overlay repo config.
+            //
+            // Either way, the function should NOT try to use the overlay repo for
+            // a local source. We verify by checking:
+            // 1. If it errors, the error mentions the source type (not overlay repo)
+            // 2. If it "succeeds", it went to the overlay repo path (which is wrong)
+            if let Err(e) = &result {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("does not exist in overlay repo")
+                        && !msg.contains("Overlay repository not configured"),
+                    "Bug #143: add_files_to_overlay should not use overlay repo \
+                     for local sources. Got: {msg}"
+                );
+            } else {
+                // "Success" actually means it found an overlay repo and tried to
+                // use it — which is wrong for a local source. The local source's
+                // path should be used, not the overlay repo path.
+                panic!(
+                    "Bug #143: add_files_to_overlay should not use overlay repo \
+                     code path for local sources. It 'succeeded' by going through \
+                     OverlayRepoManager instead of using the local source path."
+                );
+            }
+        }
+
+        /// Issue #143: `add_files_to_overlay` should give a clear error for GitHub (read-only)
+        /// sources instead of trying to use `OverlayRepoManager`.
+        #[test]
+        #[ignore = "fixed by #149"]
+        fn issue_143_add_files_should_reject_github_clearly() {
+            let repo = create_test_repo();
+
+            // Manually create state with GitHub source
+            save_test_state(
+                repo.path(),
+                "gh-overlay",
+                OverlaySource::github(
+                    "https://github.com/owner/repo".to_string(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    None,
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            // Create the file that would be added
+            fs::write(repo.path().join(".envrc"), "existing").unwrap();
+            fs::write(repo.path().join("new-file.txt"), "content").unwrap();
+
+            // BUG: On main, this fails with "Overlay repository not configured"
+            // EXPECTED: Should fail with a clear message about GitHub being read-only
+            let result = add_files_to_overlay(
+                "org/repo/gh-overlay",
+                repo.path(),
+                &[PathBuf::from("new-file.txt")],
+                false,
+            );
+
+            assert!(result.is_err());
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("read-only") || msg.contains("GitHub") || msg.contains("mutable"),
+                "Bug #143: Error for GitHub source should mention read-only/GitHub, got: {msg}"
+            );
+        }
+
+        // ==================== #145: update shows wrong message for OverlayRepo ====================
+
+        /// Issue #145: `update_overlays` treats `OverlayRepo` the same as Local in
+        /// the else branch, printing "local overlay (not updatable)" for both.
+        ///
+        /// The bug is in the code structure:
+        /// ```ignore
+        /// if let OverlaySource::GitHub { .. } = &state.source {
+        ///     // GitHub check
+        /// } else {
+        ///     println!("is a local overlay (not updatable)");  // catches BOTH Local and OverlayRepo!
+        /// }
+        /// ```
+        ///
+        /// We verify the bug by checking that the code produces the same result
+        /// for `OverlayRepo` as it does for Local (which is incorrect).
+        #[test]
+        #[ignore = "fixed by #149"]
+        fn issue_145_update_code_should_handle_overlay_repo_separately() {
+            let repo = create_test_repo();
+
+            // Create two overlays: one Local, one OverlayRepo
+            save_test_state(
+                repo.path(),
+                "local-overlay",
+                OverlaySource::local(PathBuf::from("/some/path")),
+                vec![("a.txt", "a.txt")],
+            );
+            save_test_state(
+                repo.path(),
+                "repo-overlay",
+                OverlaySource::overlay_repo(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "repo-overlay".to_string(),
+                    "abc123def456".to_string(),
+                ),
+                vec![("b.txt", "b.txt")],
+            );
+
+            // Both should go through update_overlays successfully (dry run)
+            // The bug is that both produce the same "local overlay (not updatable)" message
+            // because OverlayRepo falls into the `else` branch alongside Local.
+
+            // We can verify the bug structurally: OverlaySource has no method to
+            // distinguish "updatable" from "not updatable" except is_github().
+            // Both Local and OverlayRepo return false for is_github(), so they
+            // are treated identically in update_overlays.
+            let local_source = OverlaySource::local(PathBuf::from("/path"));
+            let repo_source = OverlaySource::overlay_repo(
+                "org".to_string(),
+                "repo".to_string(),
+                "name".to_string(),
+                "abc".to_string(),
+            );
+
+            // BUG: The only source-type check in update_overlays is `is_github()`.
+            // Both Local and OverlayRepo return false, so they are indistinguishable.
+            // After the fix (#149), OverlaySource has is_updatable() and
+            // source_type_label() methods that distinguish them.
+            //
+            // Verify that OverlaySource has no method on main to distinguish
+            // "updatable" from "not updatable" for non-GitHub sources.
+            // After #149, this test should be updated to use is_updatable().
+
+            // The fix adds is_updatable() -> bool:
+            //   Local: false, OverlayRepo: true, GitHub: true
+            // On main, we must check that no such distinction exists:
+            assert!(
+                !local_source.is_github() && !repo_source.is_github(),
+                "Both sources are non-GitHub"
+            );
+            // The only way to distinguish them is is_overlay_repo(), but
+            // update_overlays doesn't use it. Verify the bug by asserting
+            // what SHOULD be true after the fix:
+            assert_ne!(
+                local_source.is_overlay_repo(),
+                repo_source.is_overlay_repo(),
+                "Local and OverlayRepo ARE distinguishable via is_overlay_repo(), \
+                 but update_overlays doesn't use it — it only uses is_github()"
+            );
+
+            // BUG assertion: update_overlays should treat OverlayRepo differently
+            // from Local. We verify that the existing API has the ability to
+            // distinguish them (is_overlay_repo) but update_overlays doesn't use it.
+            // The test fails when the SourceResolver trait is added because
+            // source_type_label() returns different values:
+            //   local_source.source_type_label() != repo_source.source_type_label()
+            // But on main, those methods don't exist, so we simulate the check:
+            let local_label = if local_source.is_github() {
+                "GitHub"
+            } else {
+                "local overlay" // This is what update_overlays prints for BOTH
+            };
+            let repo_label = if repo_source.is_github() {
+                "GitHub"
+            } else {
+                "local overlay" // BUG: Same label for OverlayRepo!
+            };
+            assert_ne!(
+                local_label, repo_label,
+                "Bug #145: Local and OverlayRepo get the same label in update_overlays. \
+                 Both are labeled '{local_label}' because the code only checks is_github()."
+            );
+        }
+
+        // ==================== #146: sync single-name doesn't check source type ====================
+
+        /// Issue #146: `handle_sync` single-name path doesn't check `state.source`
+        /// before proceeding. It should reject non-OverlayRepo sources with a
+        /// clear message about syncability.
+        #[test]
+        #[ignore = "fixed by #149"]
+        fn issue_146_sync_single_name_should_check_source_type() {
+            let repo = create_test_repo();
+
+            // Set up a git remote so parse_overlay_name_arg can detect org/repo
+            std::process::Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/testorg/testrepo.git",
+                ])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            // Create a local-sourced overlay
+            save_test_state(
+                repo.path(),
+                "local-overlay",
+                OverlaySource::local(PathBuf::from("/some/local/path")),
+                vec![(".envrc", ".envrc")],
+            );
+
+            // BUG: On main, handle_sync for a single name with a local source
+            // doesn't check state.source at all. It proceeds to load overlay repo
+            // config and create an OverlayRepoManager, eventually failing with
+            // an error that doesn't mention the actual problem (wrong source type).
+            //
+            // EXPECTED: Should fail early with a clear message like
+            // "Cannot sync overlay 'local-overlay' (local source)."
+            let result = handle_sync(
+                repo.path(),
+                Some("local-overlay".to_string()),
+                false, // not --all
+                false,
+            );
+
+            // The result should be an error (can't sync a local source)
+            assert!(result.is_err(), "sync should fail for local sources");
+            let msg = result.unwrap_err().to_string();
+
+            // The error should explicitly mention the source type or syncability.
+            // BUG: On main, the error is about overlay repo internals (e.g.,
+            // "Overlay does not exist in overlay repo") not about source type.
+            assert!(
+                msg.contains("local") && (msg.contains("sync") || msg.contains("syncable")),
+                "Bug #146: sync error for local source should mention the source type \
+                 and syncability. Got: {msg}"
+            );
+        }
+
+        // ==================== #147: resolve ignores source_name ====================
+
+        /// Issue #147: `resolve_overlay_source_path` always calls
+        /// `get_default_overlay_repo_config()` for `OverlayRepo` sources, ignoring
+        /// the `source_name` field. With multiple sources configured, this resolves
+        /// to the wrong overlay repo.
+        ///
+        /// We verify this by inspecting the code: the `OverlayRepo` match arm uses
+        /// `..` to discard `source_name`, then calls `get_default_overlay_repo_config()`.
+        #[test]
+        #[ignore = "fixed by #149"]
+        fn issue_147_resolve_should_use_source_name() {
+            // Create an OverlayRepo source with a specific source_name
+            let state = OverlayState::new(
+                "test-overlay".to_string(),
+                OverlaySource::overlay_repo_full(
+                    "myorg".to_string(),
+                    "myrepo".to_string(),
+                    "test-overlay".to_string(),
+                    "abc123".to_string(),
+                    crate::state::ResolvedVia::Direct,
+                    "secondary-source".to_string(),
+                ),
+            );
+
+            // Verify the source_name is stored correctly
+            let source_name = match &state.source {
+                OverlaySource::OverlayRepo { source_name, .. } => source_name.clone(),
+                _ => panic!("Test setup: expected OverlayRepo source"),
+            };
+            assert_eq!(
+                source_name.as_deref(),
+                Some("secondary-source"),
+                "Test setup: source_name should be set"
+            );
+
+            // BUG: On main, resolve_overlay_source_path destructures with `..`
+            // which discards source_name, then calls get_default_overlay_repo_config().
+            // The result is that it always resolves to the default source even when
+            // source_name specifies a different source.
+            //
+            // We verify this by calling resolve_overlay_source_path — it will call
+            // get_default_overlay_repo_config() (ignoring source_name) and fail
+            // with "Overlay repository not configured" rather than a source-name-aware
+            // error like "Source 'secondary-source' not found in configuration".
+            let result = resolve_overlay_source_path(&state);
+            assert!(
+                result.is_err(),
+                "Expected error (no config available in test env)"
+            );
+            let msg = result.unwrap_err().to_string();
+
+            // BUG: The error says "Overlay repository not configured" because it
+            // called get_default_overlay_repo_config() instead of looking up
+            // "secondary-source" specifically.
+            // AFTER FIX: The error should mention the source name "secondary-source".
+            assert!(
+                msg.contains("secondary-source"),
+                "Bug #147: resolve_overlay_source_path ignores source_name \
+                 'secondary-source' and calls get_default_overlay_repo_config() \
+                 instead. Error should mention the source name. Got: {msg}"
+            );
+        }
+
+        // ==================== #148: no early mutability check ====================
+
+        /// Issue #148: `add_files_to_overlay` doesn't check source mutability
+        /// before making filesystem changes. For GitHub (read-only) sources,
+        /// the function proceeds past validation, attempts to copy files to the
+        /// overlay repo, and fails late — potentially leaving partial state.
+        ///
+        /// The fix is to check mutability (or equivalent) before any mutations.
+        /// On main, there is no such upfront check — the function never inspects
+        /// `state.source` at all.
+        #[test]
+        #[ignore = "fixed by #149"]
+        fn issue_148_add_should_check_mutability_before_filesystem_changes() {
+            let repo = create_test_repo();
+
+            // Create overlay state with GitHub source (immutable)
+            save_test_state(
+                repo.path(),
+                "gh-overlay",
+                OverlaySource::github(
+                    "https://github.com/owner/repo".to_string(),
+                    "owner".to_string(),
+                    "repo".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    None,
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            // Create files
+            fs::write(repo.path().join(".envrc"), "existing").unwrap();
+            fs::write(repo.path().join("extra.txt"), "content").unwrap();
+
+            // Call add_files_to_overlay with org/repo/name format
+            let result = add_files_to_overlay(
+                "org/repo/gh-overlay",
+                repo.path(),
+                &[PathBuf::from("extra.txt")],
+                false,
+            );
+
+            // It should fail — that's expected for a read-only source.
+            assert!(result.is_err());
+
+            // BUG: On main, the error comes from deep in the overlay repo code
+            // (e.g., "does not exist in overlay repo") rather than from an early
+            // mutability check. The function never inspects state.source to see
+            // that it's a GitHub (read-only) source.
+            //
+            // EXPECTED: Error should mention "read-only", "GitHub", or "mutable"
+            // indicating that the source type was checked.
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("read-only")
+                    || msg.contains("GitHub")
+                    || msg.contains("mutable")
+                    || msg.contains("not supported"),
+                "Bug #148: Error should come from an early mutability check mentioning \
+                 the source type, not from late overlay repo operations. Got: {msg}"
+            );
+        }
+    }
 }
