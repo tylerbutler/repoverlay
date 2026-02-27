@@ -1,0 +1,9 @@
+kind: Fixed
+body: |-
+    Fix update showing incorrect source type for overlay repo sources (#145)
+
+    Running `update` on overlays from an overlay repo incorrectly displayed
+    messages meant for local sources. Each source type now shows the correct
+    label and update behavior.
+time: 2026-02-27T16:24:13+00:00
+component: update
