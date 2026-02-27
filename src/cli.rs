@@ -7920,7 +7920,7 @@ directories =
 
         /// Issue #143: `add_files_to_overlay` should use `resolve_local_path()` from
         /// the `SourceResolver` trait for Local sources instead of going through the
-        /// overlay repo code path. With the fix, dry_run succeeds for local sources
+        /// overlay repo code path. With the fix, `dry_run` succeeds for local sources
         /// by resolving directly to the local path.
         #[test]
         fn issue_143_add_files_should_check_source_type_for_local() {
@@ -8005,8 +8005,8 @@ directories =
 
         // ==================== #145: update shows wrong message for OverlayRepo ====================
 
-        /// Issue #145: `update_overlays` should distinguish OverlayRepo from Local
-        /// sources. With the SourceResolver fix (#149), `source_type_label()` returns
+        /// Issue #145: `update_overlays` should distinguish `OverlayRepo` from Local
+        /// sources. With the `SourceResolver` fix (#149), `source_type_label()` returns
         /// different labels and `is_updatable()` returns different values for each.
         #[test]
         fn issue_145_update_code_should_handle_overlay_repo_separately() {
