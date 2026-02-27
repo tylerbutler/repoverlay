@@ -7918,14 +7918,11 @@ directories =
 
         // ==================== #143: add_files_to_overlay assumes overlay repo ====================
 
-        /// Issue #143: `add_files_to_overlay` calls `get_default_overlay_repo_config()`
-        /// and uses `OverlayRepoManager` even for Local sources. It should detect
-        /// the source type and handle Local sources directly (or give a clear error).
-        ///
-        /// The bug is that `add_files_to_overlay` never checks `state.source` —
-        /// it always goes through the overlay repo code path.
+        /// Issue #143: `add_files_to_overlay` should use `resolve_local_path()` from
+        /// the `SourceResolver` trait for Local sources instead of going through the
+        /// overlay repo code path. With the fix, dry_run succeeds for local sources
+        /// by resolving directly to the local path.
         #[test]
-        #[ignore = "fixed by #149"]
         fn issue_143_add_files_should_check_source_type_for_local() {
             let repo = create_test_repo();
 
@@ -7944,14 +7941,9 @@ directories =
             fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
             fs::write(repo.path().join("new-file.txt"), "new content").unwrap();
 
-            // BUG: On main, add_files_to_overlay loads overlay state but then
-            // ignores state.source entirely. It calls get_default_overlay_repo_config()
-            // and OverlayRepoManager to resolve the path, which is wrong for Local sources.
-            // The overlay repo path (manager.path()/org/repo/name) won't match the
-            // actual local source path, causing "does not exist in overlay repo" errors
-            // or copying files to the wrong location.
-            //
-            // EXPECTED: Should use state.source to determine how to resolve the path.
+            // With the SourceResolver fix (#149), add_files_to_overlay uses
+            // resolve_local_path() which returns the local path directly for
+            // Local sources — no overlay repo lookup needed.
             let result = add_files_to_overlay(
                 "org/repo/local-overlay",
                 repo.path(),
@@ -7959,34 +7951,14 @@ directories =
                 true, // dry_run to avoid side effects
             );
 
-            // BUG: On main, add_files_to_overlay goes through the overlay repo code
-            // path for ALL sources (it never checks state.source). For local sources,
-            // it tries to find org/repo/local-overlay in the overlay repo directory.
-            // If a global overlay repo is configured, it silently uses the wrong path;
-            // if not, it errors about overlay repo config.
-            //
-            // Either way, the function should NOT try to use the overlay repo for
-            // a local source. We verify by checking:
-            // 1. If it errors, the error mentions the source type (not overlay repo)
-            // 2. If it "succeeds", it went to the overlay repo path (which is wrong)
-            if let Err(e) = &result {
-                let msg = e.to_string();
-                assert!(
-                    !msg.contains("does not exist in overlay repo")
-                        && !msg.contains("Overlay repository not configured"),
-                    "Bug #143: add_files_to_overlay should not use overlay repo \
-                     for local sources. Got: {msg}"
-                );
-            } else {
-                // "Success" actually means it found an overlay repo and tried to
-                // use it — which is wrong for a local source. The local source's
-                // path should be used, not the overlay repo path.
-                panic!(
-                    "Bug #143: add_files_to_overlay should not use overlay repo \
-                     code path for local sources. It 'succeeded' by going through \
-                     OverlayRepoManager instead of using the local source path."
-                );
-            }
+            // Should succeed: Local sources are mutable and resolve_local_path()
+            // returns the stored local path directly.
+            assert!(
+                result.is_ok(),
+                "add_files_to_overlay should succeed for Local sources (dry run). \
+                 Got error: {:?}",
+                result.unwrap_err()
+            );
         }
 
         /// Issue #143: `add_files_to_overlay` should give a clear error for GitHub (read-only)
@@ -8033,52 +8005,13 @@ directories =
 
         // ==================== #145: update shows wrong message for OverlayRepo ====================
 
-        /// Issue #145: `update_overlays` treats `OverlayRepo` the same as Local in
-        /// the else branch, printing "local overlay (not updatable)" for both.
-        ///
-        /// The bug is in the code structure:
-        /// ```ignore
-        /// if let OverlaySource::GitHub { .. } = &state.source {
-        ///     // GitHub check
-        /// } else {
-        ///     println!("is a local overlay (not updatable)");  // catches BOTH Local and OverlayRepo!
-        /// }
-        /// ```
-        ///
-        /// We verify the bug by checking that the code produces the same result
-        /// for `OverlayRepo` as it does for Local (which is incorrect).
+        /// Issue #145: `update_overlays` should distinguish OverlayRepo from Local
+        /// sources. With the SourceResolver fix (#149), `source_type_label()` returns
+        /// different labels and `is_updatable()` returns different values for each.
         #[test]
-        #[ignore = "fixed by #149"]
         fn issue_145_update_code_should_handle_overlay_repo_separately() {
-            let repo = create_test_repo();
+            use crate::state::SourceResolver;
 
-            // Create two overlays: one Local, one OverlayRepo
-            save_test_state(
-                repo.path(),
-                "local-overlay",
-                OverlaySource::local(PathBuf::from("/some/path")),
-                vec![("a.txt", "a.txt")],
-            );
-            save_test_state(
-                repo.path(),
-                "repo-overlay",
-                OverlaySource::overlay_repo(
-                    "myorg".to_string(),
-                    "myrepo".to_string(),
-                    "repo-overlay".to_string(),
-                    "abc123def456".to_string(),
-                ),
-                vec![("b.txt", "b.txt")],
-            );
-
-            // Both should go through update_overlays successfully (dry run)
-            // The bug is that both produce the same "local overlay (not updatable)" message
-            // because OverlayRepo falls into the `else` branch alongside Local.
-
-            // We can verify the bug structurally: OverlaySource has no method to
-            // distinguish "updatable" from "not updatable" except is_github().
-            // Both Local and OverlayRepo return false for is_github(), so they
-            // are treated identically in update_overlays.
             let local_source = OverlaySource::local(PathBuf::from("/path"));
             let repo_source = OverlaySource::overlay_repo(
                 "org".to_string(),
@@ -8087,53 +8020,23 @@ directories =
                 "abc".to_string(),
             );
 
-            // BUG: The only source-type check in update_overlays is `is_github()`.
-            // Both Local and OverlayRepo return false, so they are indistinguishable.
-            // After the fix (#149), OverlaySource has is_updatable() and
-            // source_type_label() methods that distinguish them.
-            //
-            // Verify that OverlaySource has no method on main to distinguish
-            // "updatable" from "not updatable" for non-GitHub sources.
-            // After #149, this test should be updated to use is_updatable().
+            // SourceResolver provides distinct labels for each source type
+            assert_ne!(
+                local_source.source_type_label(),
+                repo_source.source_type_label(),
+                "Local and OverlayRepo should have different labels"
+            );
+            assert_eq!(local_source.source_type_label(), "local");
+            assert_eq!(repo_source.source_type_label(), "overlay repo");
 
-            // The fix adds is_updatable() -> bool:
-            //   Local: false, OverlayRepo: true, GitHub: true
-            // On main, we must check that no such distinction exists:
+            // is_updatable() distinguishes them: OverlayRepo is updatable, Local is not
             assert!(
-                !local_source.is_github() && !repo_source.is_github(),
-                "Both sources are non-GitHub"
+                !local_source.is_updatable(),
+                "Local sources should not be updatable"
             );
-            // The only way to distinguish them is is_overlay_repo(), but
-            // update_overlays doesn't use it. Verify the bug by asserting
-            // what SHOULD be true after the fix:
-            assert_ne!(
-                local_source.is_overlay_repo(),
-                repo_source.is_overlay_repo(),
-                "Local and OverlayRepo ARE distinguishable via is_overlay_repo(), \
-                 but update_overlays doesn't use it — it only uses is_github()"
-            );
-
-            // BUG assertion: update_overlays should treat OverlayRepo differently
-            // from Local. We verify that the existing API has the ability to
-            // distinguish them (is_overlay_repo) but update_overlays doesn't use it.
-            // The test fails when the SourceResolver trait is added because
-            // source_type_label() returns different values:
-            //   local_source.source_type_label() != repo_source.source_type_label()
-            // But on main, those methods don't exist, so we simulate the check:
-            let local_label = if local_source.is_github() {
-                "GitHub"
-            } else {
-                "local overlay" // This is what update_overlays prints for BOTH
-            };
-            let repo_label = if repo_source.is_github() {
-                "GitHub"
-            } else {
-                "local overlay" // BUG: Same label for OverlayRepo!
-            };
-            assert_ne!(
-                local_label, repo_label,
-                "Bug #145: Local and OverlayRepo get the same label in update_overlays. \
-                 Both are labeled '{local_label}' because the code only checks is_github()."
+            assert!(
+                repo_source.is_updatable(),
+                "OverlayRepo sources should be updatable"
             );
         }
 
