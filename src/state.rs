@@ -216,6 +216,121 @@ impl OverlaySource {
     }
 }
 
+/// Abstraction for resolving overlay sources to local paths and querying capabilities.
+///
+/// Centralizes the `match` on `OverlaySource` variants so that each command
+/// doesn't need to independently handle source-type dispatch. Adding a new
+/// source variant only requires updating this implementation (compile-time
+/// exhaustiveness via `match` ensures completeness).
+///
+/// See: <https://github.com/tylerbutler/repoverlay/issues/149>
+pub trait SourceResolver {
+    /// Return the local filesystem path where this overlay's files live.
+    ///
+    /// - **Local**: the stored path directly.
+    /// - **`OverlayRepo`**: the path within the cloned overlay repo (uses `source_name` when available).
+    /// - **GitHub**: the cached download path.
+    fn resolve_local_path(&self) -> Result<PathBuf>;
+
+    /// Can files be written back to this source? (add/edit operations)
+    ///
+    /// - **Local**: `true` — files live on the local filesystem.
+    /// - **`OverlayRepo`**: `true` — files live in a cloned git repo.
+    /// - **GitHub**: `false` — cached read-only downloads.
+    fn is_mutable(&self) -> bool;
+
+    /// Can this source be synced with its upstream? (sync command)
+    ///
+    /// - **Local**: `false` — no upstream concept.
+    /// - **`OverlayRepo`**: `true` — can push changes to the overlay repo.
+    /// - **GitHub**: `false` — read-only cache.
+    fn is_syncable(&self) -> bool;
+
+    /// Can we check for newer versions? (update command)
+    ///
+    /// - **Local**: `false` — always uses the current local files.
+    /// - **`OverlayRepo`**: `true` — can pull newer commits.
+    /// - **GitHub**: `true` — can re-fetch from GitHub.
+    fn is_updatable(&self) -> bool;
+
+    /// Human-readable description of the source type for messages.
+    fn source_type_label(&self) -> &'static str;
+}
+
+impl SourceResolver for OverlaySource {
+    fn resolve_local_path(&self) -> Result<PathBuf> {
+        match self {
+            Self::Local { path } => Ok(path.clone()),
+            Self::OverlayRepo {
+                org,
+                repo,
+                name,
+                source_name,
+                ..
+            } => {
+                use crate::config::load_config;
+                use crate::overlay_repo::OverlayRepoManager;
+
+                let config = load_config(None)?;
+                let overlay_config =
+                    config.get_overlay_repo_config_by_name(source_name.as_deref())?;
+                let manager = OverlayRepoManager::new(overlay_config)?;
+                manager.ensure_cloned()?;
+                manager.get_overlay_path(org, repo, name)
+            }
+            Self::GitHub {
+                owner,
+                repo,
+                git_ref,
+                subpath,
+                ..
+            } => {
+                use crate::cache::CacheManager;
+                use crate::github::{GitHubSource, GitRef};
+
+                let cache = CacheManager::new()?;
+                let source = GitHubSource {
+                    owner: owner.clone(),
+                    repo: repo.clone(),
+                    git_ref: GitRef::Branch(git_ref.clone()),
+                    subpath: subpath.as_ref().map(PathBuf::from),
+                };
+                let cached = cache.ensure_cached(&source, false)?;
+                Ok(cached.path)
+            }
+        }
+    }
+
+    fn is_mutable(&self) -> bool {
+        match self {
+            Self::Local { .. } | Self::OverlayRepo { .. } => true,
+            Self::GitHub { .. } => false,
+        }
+    }
+
+    fn is_syncable(&self) -> bool {
+        match self {
+            Self::OverlayRepo { .. } => true,
+            Self::Local { .. } | Self::GitHub { .. } => false,
+        }
+    }
+
+    fn is_updatable(&self) -> bool {
+        match self {
+            Self::OverlayRepo { .. } | Self::GitHub { .. } => true,
+            Self::Local { .. } => false,
+        }
+    }
+
+    fn source_type_label(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::OverlayRepo { .. } => "overlay repo",
+            Self::GitHub { .. } => "GitHub",
+        }
+    }
+}
+
 /// Global metadata for the .repoverlay directory.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GlobalMeta {
@@ -789,6 +904,21 @@ mod tests {
         };
         let display = source.display();
         assert!(display.contains("via upstream"));
+    }
+
+    #[test]
+    fn test_overlay_source_display_overlay_repo_with_source_name() {
+        let source = OverlaySource::OverlayRepo {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "claude-config".to_string(),
+            commit: "abc123def456".to_string(),
+            resolved_via: None,
+            source_name: Some("my-source".to_string()),
+        };
+        let display = source.display();
+        assert!(display.contains("[my-source]"));
+        assert!(display.contains("microsoft/FluidFramework/claude-config"));
     }
 
     #[test]
@@ -1409,5 +1539,134 @@ directories =
         );
         let removed = state.remove_file(&PathBuf::from("nonexistent.txt"));
         assert!(removed.is_none());
+    }
+
+    // ==================== SourceResolver trait tests ====================
+
+    #[test]
+    fn source_resolver_local_is_mutable() {
+        let source = OverlaySource::local(PathBuf::from("/tmp/overlay"));
+        assert!(source.is_mutable());
+    }
+
+    #[test]
+    fn source_resolver_local_is_not_syncable() {
+        let source = OverlaySource::local(PathBuf::from("/tmp/overlay"));
+        assert!(!source.is_syncable());
+    }
+
+    #[test]
+    fn source_resolver_local_is_not_updatable() {
+        let source = OverlaySource::local(PathBuf::from("/tmp/overlay"));
+        assert!(!source.is_updatable());
+    }
+
+    #[test]
+    fn source_resolver_local_label() {
+        let source = OverlaySource::local(PathBuf::from("/tmp/overlay"));
+        assert_eq!(source.source_type_label(), "local");
+    }
+
+    #[test]
+    fn source_resolver_local_resolve_path() {
+        let source = OverlaySource::local(PathBuf::from("/tmp/overlay"));
+        let path = source.resolve_local_path().unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/overlay"));
+    }
+
+    #[test]
+    fn source_resolver_github_is_not_mutable() {
+        let source = OverlaySource::github(
+            "https://github.com/owner/repo".to_string(),
+            "owner".to_string(),
+            "repo".to_string(),
+            "main".to_string(),
+            "abc123".to_string(),
+            None,
+        );
+        assert!(!source.is_mutable());
+    }
+
+    #[test]
+    fn source_resolver_github_is_not_syncable() {
+        let source = OverlaySource::github(
+            "https://github.com/owner/repo".to_string(),
+            "owner".to_string(),
+            "repo".to_string(),
+            "main".to_string(),
+            "abc123".to_string(),
+            None,
+        );
+        assert!(!source.is_syncable());
+    }
+
+    #[test]
+    fn source_resolver_github_is_updatable() {
+        let source = OverlaySource::github(
+            "https://github.com/owner/repo".to_string(),
+            "owner".to_string(),
+            "repo".to_string(),
+            "main".to_string(),
+            "abc123".to_string(),
+            None,
+        );
+        assert!(source.is_updatable());
+    }
+
+    #[test]
+    fn source_resolver_github_label() {
+        let source = OverlaySource::github(
+            "https://github.com/owner/repo".to_string(),
+            "owner".to_string(),
+            "repo".to_string(),
+            "main".to_string(),
+            "abc123".to_string(),
+            None,
+        );
+        assert_eq!(source.source_type_label(), "GitHub");
+    }
+
+    #[test]
+    fn source_resolver_overlay_repo_is_mutable() {
+        let source = OverlaySource::overlay_repo(
+            "org".to_string(),
+            "repo".to_string(),
+            "name".to_string(),
+            "abc123".to_string(),
+        );
+        assert!(source.is_mutable());
+    }
+
+    #[test]
+    fn source_resolver_overlay_repo_is_syncable() {
+        let source = OverlaySource::overlay_repo(
+            "org".to_string(),
+            "repo".to_string(),
+            "name".to_string(),
+            "abc123".to_string(),
+        );
+        assert!(source.is_syncable());
+    }
+
+    #[test]
+    fn source_resolver_overlay_repo_is_updatable() {
+        let source = OverlaySource::overlay_repo(
+            "org".to_string(),
+            "repo".to_string(),
+            "name".to_string(),
+            "abc123".to_string(),
+        );
+        assert!(source.is_updatable());
+    }
+
+    #[test]
+    fn source_resolver_overlay_repo_label() {
+        let source = OverlaySource::overlay_repo(
+            "org".to_string(),
+            "repo".to_string(),
+            "name".to_string(),
+            "abc123".to_string(),
+        );
+        assert_eq!(source.source_type_label(), "overlay repo");
     }
 }

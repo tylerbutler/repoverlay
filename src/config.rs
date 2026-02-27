@@ -50,6 +50,44 @@ impl RepoverlayConfig {
             )
         })
     }
+
+    /// Get an `OverlayRepoConfig` for a specific named source.
+    ///
+    /// Looks up the source by name in the configured sources list.
+    /// Falls back to `get_default_overlay_repo_config` if `source_name` is `None`.
+    pub fn get_overlay_repo_config_by_name(
+        &self,
+        source_name: Option<&str>,
+    ) -> Result<OverlayRepoConfig> {
+        let Some(name) = source_name else {
+            return self.get_default_overlay_repo_config();
+        };
+
+        let source = self
+            .sources
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Source '{name}' not found in configuration.\n\n\
+                 Available sources: {}",
+                    self.sources
+                        .iter()
+                        .map(|s| s.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+
+        let cache_dir = directories::ProjectDirs::from("", "", "repoverlay")
+            .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
+        let local_path = cache_dir.cache_dir().join("sources").join(&source.name);
+
+        Ok(OverlayRepoConfig {
+            url: source.url.clone(),
+            local_path: Some(local_path),
+        })
+    }
 }
 
 /// An overlay source repository.
@@ -1031,6 +1069,22 @@ sources =
     }
 
     #[test]
+    fn test_generate_config_legacy_overlay_repo_with_local_path() {
+        let config = RepoverlayConfig {
+            sources: vec![],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/org/overlays".to_string(),
+                local_path: Some(PathBuf::from("/custom/local/path")),
+            }),
+        };
+
+        let output = generate_sources_config_ccl(&config);
+        assert!(output.contains("overlay_repo"));
+        assert!(output.contains("url = https://github.com/org/overlays"));
+        assert!(output.contains("local_path = /custom/local/path"));
+    }
+
+    #[test]
     fn test_source_equality() {
         let source1 = Source {
             name: "test".to_string(),
@@ -1211,6 +1265,61 @@ sources =
 
         let result = config.get_default_overlay_repo_config();
         assert!(result.is_err());
+    }
+
+    // ==================== get_overlay_repo_config_by_name tests ====================
+
+    #[test]
+    fn test_get_overlay_repo_config_by_name_none_falls_back_to_default() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "default".to_string(),
+                url: "https://github.com/org/repo".to_string(),
+            }],
+            overlay_repo: None,
+        };
+
+        let result = config.get_overlay_repo_config_by_name(None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().url, "https://github.com/org/repo");
+    }
+
+    #[test]
+    fn test_get_overlay_repo_config_by_name_found() {
+        let config = RepoverlayConfig {
+            sources: vec![
+                Source {
+                    name: "primary".to_string(),
+                    url: "https://github.com/org/primary".to_string(),
+                },
+                Source {
+                    name: "secondary".to_string(),
+                    url: "https://github.com/org/secondary".to_string(),
+                },
+            ],
+            overlay_repo: None,
+        };
+
+        let result = config.get_overlay_repo_config_by_name(Some("secondary"));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().url, "https://github.com/org/secondary");
+    }
+
+    #[test]
+    fn test_get_overlay_repo_config_by_name_not_found() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "primary".to_string(),
+                url: "https://github.com/org/primary".to_string(),
+            }],
+            overlay_repo: None,
+        };
+
+        let result = config.get_overlay_repo_config_by_name(Some("nonexistent"));
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("nonexistent"));
+        assert!(err_msg.contains("primary"));
     }
 
     // ==================== SourceUrlInput tests ====================

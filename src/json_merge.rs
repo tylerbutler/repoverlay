@@ -213,4 +213,38 @@ mod tests {
         assert_eq!(result.type_mismatches.len(), 1);
         assert_eq!(result.type_mismatches[0].base_type, "null");
     }
+
+    #[test]
+    fn merge_bool_to_string_type_mismatch() {
+        let base = json!({"flag": true});
+        let overlay = json!({"flag": "yes"});
+        let result = deep_merge(&base, &overlay);
+        assert_eq!(result.merged, json!({"flag": "yes"}));
+        assert_eq!(result.type_mismatches.len(), 1);
+        assert_eq!(result.type_mismatches[0].base_type, "bool");
+        assert_eq!(result.type_mismatches[0].overlay_type, "string");
+    }
+
+    #[test]
+    fn merge_array_to_object_type_mismatch() {
+        let base = json!({"data": [1, 2, 3]});
+        let overlay = json!({"data": {"nested": true}});
+        let result = deep_merge(&base, &overlay);
+        assert_eq!(result.merged, json!({"data": {"nested": true}}));
+        assert_eq!(result.type_mismatches.len(), 1);
+        assert_eq!(result.type_mismatches[0].base_type, "array");
+        assert_eq!(result.type_mismatches[0].overlay_type, "object");
+    }
+
+    #[test]
+    fn merge_root_level_type_mismatch_uses_root_path() {
+        let base = json!("a string");
+        let overlay = json!(42);
+        let result = deep_merge(&base, &overlay);
+        assert_eq!(result.merged, json!(42));
+        assert_eq!(result.type_mismatches.len(), 1);
+        assert_eq!(result.type_mismatches[0].key_path, "(root)");
+        assert_eq!(result.type_mismatches[0].base_type, "string");
+        assert_eq!(result.type_mismatches[0].overlay_type, "number");
+    }
 }

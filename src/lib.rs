@@ -45,10 +45,10 @@ use reference::SourceReference;
 use selection::is_interactive;
 use state::{
     CONFIG_FILE, EntryType, FileEntry, GlobalMeta, LinkType, MANAGED_SECTION_NAME, META_FILE,
-    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, exclude_marker_end,
-    exclude_marker_start, list_applied_overlays, load_all_overlay_targets, load_external_states,
-    load_overlay_state, normalize_overlay_name, remove_external_state, save_external_state,
-    save_overlay_state,
+    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, SourceResolver,
+    exclude_marker_end, exclude_marker_start, list_applied_overlays, load_all_overlay_targets,
+    load_external_states, load_overlay_state, normalize_overlay_name, remove_external_state,
+    save_external_state, save_overlay_state,
 };
 use upstream::detect_upstream;
 
@@ -2610,11 +2610,20 @@ pub(crate) fn update_overlays(
                     );
                 }
             }
+        } else if state.source.is_updatable() {
+            // OverlayRepo sources: update by re-applying from the overlay repo
+            println!(
+                "  {} {} ({} source, update via 'repoverlay restore')",
+                "-".dimmed(),
+                state.name,
+                state.source.source_type_label()
+            );
         } else {
             println!(
-                "  {} {} is a local overlay (not updatable)",
+                "  {} {} is a {} overlay (not updatable)",
                 "-".dimmed(),
-                state.name
+                state.name,
+                state.source.source_type_label()
             );
         }
     }
