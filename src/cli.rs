@@ -1915,7 +1915,7 @@ fn handle_sync(
 ) -> Result<()> {
     use crate::config::load_config;
     use crate::overlay_repo::OverlayRepoManager;
-    use crate::state::OverlaySource;
+    use crate::state::{OverlaySource, SourceResolver};
     use crate::{load_overlay_state, normalize_overlay_name};
 
     // Validate target is a git repo
@@ -1944,6 +1944,49 @@ fn handle_sync(
         for overlay_name in &applied_overlays {
             let state = load_overlay_state(&target, overlay_name.as_str())?;
 
+            // Use SourceResolver to check syncability (#146, #149)
+            if !state.source.is_syncable() {
+                // Special case: GitHub sources that are actually overlay repos
+                // (applied via two-part browse mode) can still be synced.
+                let mut handled = false;
+                if let OverlaySource::GitHub {
+                    owner,
+                    repo: gh_repo,
+                    subpath,
+                    ..
+                } = &state.source
+                    && let Some(overlay_ref) =
+                        subpath.as_deref().and_then(parse_github_overlay_subpath)
+                {
+                    let is_overlay_repo = config
+                        .sources
+                        .iter()
+                        .any(|s| is_overlay_repo_url(&s.url, owner, gh_repo));
+
+                    if is_overlay_repo {
+                        let (ref org, ref repo, ref name) = overlay_ref;
+                        sync_single_overlay(&target, org, name, repo, &state, &manager, dry_run)?;
+                        if !dry_run {
+                            auto_commit_overlay(&manager, org, repo, name, false)?;
+                        }
+                        synced += 1;
+                        handled = true;
+                    }
+                }
+
+                if !handled {
+                    let label = state.source.source_type_label();
+                    println!(
+                        "{} Skipping '{}' ({label} source, not syncable to overlay repo)",
+                        "Warning:".yellow(),
+                        overlay_name
+                    );
+                    skipped += 1;
+                }
+                continue;
+            }
+
+            // OverlayRepo source — sync directly
             match &state.source {
                 OverlaySource::OverlayRepo {
                     org, repo, name, ..
@@ -1954,51 +1997,8 @@ fn handle_sync(
                     }
                     synced += 1;
                 }
-                OverlaySource::Local { .. } => {
-                    println!(
-                        "{} Skipping '{}' (local source, not syncable to overlay repo)",
-                        "Warning:".yellow(),
-                        overlay_name
-                    );
-                    skipped += 1;
-                }
-                OverlaySource::GitHub {
-                    owner,
-                    repo: gh_repo,
-                    subpath,
-                    ..
-                } => {
-                    // Check if this GitHub source is the overlay repo itself.
-                    // Overlays applied via two-part browse mode (e.g., `apply tylerbutler/repo-overlays`)
-                    // are stored as GitHub sources with a subpath of `org/repo/name`.
-                    if let Some(overlay_ref) =
-                        subpath.as_deref().and_then(parse_github_overlay_subpath)
-                    {
-                        let is_overlay_repo = config
-                            .sources
-                            .iter()
-                            .any(|s| is_overlay_repo_url(&s.url, owner, gh_repo));
-
-                        if is_overlay_repo {
-                            let (ref org, ref repo, ref name) = overlay_ref;
-                            sync_single_overlay(
-                                &target, org, name, repo, &state, &manager, dry_run,
-                            )?;
-                            if !dry_run {
-                                auto_commit_overlay(&manager, org, repo, name, false)?;
-                            }
-                            synced += 1;
-                            continue;
-                        }
-                    }
-
-                    println!(
-                        "{} Skipping '{}' (GitHub source, not syncable to overlay repo)",
-                        "Warning:".yellow(),
-                        overlay_name
-                    );
-                    skipped += 1;
-                }
+                // Other source types are already handled by the is_syncable check above
+                _ => unreachable!("is_syncable() returned true for non-OverlayRepo source"),
             }
         }
 
@@ -2026,9 +2026,25 @@ fn handle_sync(
         // Load overlay state to get file mappings
         let state = load_overlay_state(&target, &normalized_name)?;
 
-        // Load overlay repo config
+        // Check source syncability upfront (#146, #149)
+        {
+            use crate::state::SourceResolver;
+            if !state.source.is_syncable() {
+                let label = state.source.source_type_label();
+                bail!(
+                    "Cannot sync overlay '{overlay_name}' ({label} source).\n\n\
+                     Only overlay repo sources can be synced."
+                );
+            }
+        }
+
+        // Load overlay repo config (respects source_name for multi-source configs, #147)
         let config = load_config(None)?;
-        let overlay_config = config.get_default_overlay_repo_config()?;
+        let source_name = match &state.source {
+            OverlaySource::OverlayRepo { source_name, .. } => source_name.as_deref(),
+            _ => None,
+        };
+        let overlay_config = config.get_overlay_repo_config_by_name(source_name)?;
 
         // Create manager and ensure cloned
         let manager = OverlayRepoManager::new(overlay_config)?;
@@ -2202,33 +2218,14 @@ fn edit_overlay(
 
 /// Resolve an overlay's source to a local filesystem path.
 ///
-/// For local overlays, returns the stored path directly.
-/// For overlay repo overlays, reconstructs the path from the overlay repo.
-/// For GitHub overlays, returns an error (not supported for interactive edit).
+/// Uses the `SourceResolver` trait to handle all source types uniformly:
+/// - Local: returns the stored path directly
+/// - `OverlayRepo`: reconstructs path from the overlay repo (respects `source_name`)
+/// - GitHub: returns the cached download path
 fn resolve_overlay_source_path(state: &crate::state::OverlayState) -> Result<PathBuf> {
-    use crate::state::OverlaySource;
+    use crate::state::SourceResolver;
 
-    match &state.source {
-        OverlaySource::Local { path } => Ok(path.clone()),
-        OverlaySource::OverlayRepo {
-            org, repo, name, ..
-        } => {
-            use crate::config::load_config;
-            use crate::overlay_repo::OverlayRepoManager;
-
-            let config = load_config(None)?;
-            let overlay_config = config.get_default_overlay_repo_config()?;
-            let manager = OverlayRepoManager::new(overlay_config)?;
-            manager.ensure_cloned()?;
-            manager.get_overlay_path(org, repo, name)
-        }
-        OverlaySource::GitHub { .. } => {
-            bail!(
-                "Interactive edit is not supported for GitHub overlays.\n\n\
-                 GitHub overlays are cached read-only. Use --add and --remove flags instead."
-            );
-        }
-    }
+    state.source.resolve_local_path()
 }
 
 /// Interactively re-select which files from an overlay source should be applied.
@@ -2273,6 +2270,18 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
     }
 
     let state = load_overlay_state(&target, &normalized_name)?;
+
+    // Check mutability upfront before any changes (#142, #148, #149)
+    {
+        use crate::state::SourceResolver;
+        if !state.source.is_mutable() {
+            let label = state.source.source_type_label();
+            bail!(
+                "Interactive edit is not supported for {label} overlays.\n\n\
+                 {label} overlays are read-only. Use --add and --remove flags instead."
+            );
+        }
+    }
 
     // Resolve overlay source to a local directory
     let source_path = resolve_overlay_source_path(&state)?;
@@ -2621,8 +2630,6 @@ fn add_files_to_overlay(
     files: &[PathBuf],
     dry_run: bool,
 ) -> Result<()> {
-    use crate::config::load_config;
-    use crate::overlay_repo::OverlayRepoManager;
     use crate::state::{EntryType, FileEntry, LinkType};
     use crate::{
         load_all_overlay_targets, load_overlay_state, normalize_overlay_name, save_external_state,
@@ -2663,6 +2670,18 @@ fn add_files_to_overlay(
 
     // Load existing overlay state
     let mut state = load_overlay_state(&target, &normalized_name)?;
+
+    // Check source mutability upfront before any filesystem changes (#148)
+    {
+        use crate::state::SourceResolver;
+        if !state.source.is_mutable() {
+            let label = state.source.source_type_label();
+            bail!(
+                "Cannot add files to a {label} overlay (read-only source).\n\n\
+                 {label} overlays are cached read-only. Use a local or overlay repo source instead."
+            );
+        }
+    }
 
     // Validate all files exist
     for file in files {
@@ -2708,21 +2727,20 @@ fn add_files_to_overlay(
         return Ok(());
     }
 
-    // Load overlay repo config
-    let config = load_config(None)?;
-    let overlay_config = config.get_default_overlay_repo_config()?;
-
-    // Create manager and ensure cloned
-    let manager = OverlayRepoManager::new(overlay_config)?;
-    manager.ensure_cloned()?;
-
-    // Get the overlay path in the overlay repo
-    let overlay_repo_path = manager.path().join(&org).join(&repo).join(&overlay_name);
+    // Resolve the overlay source to a local path using the SourceResolver trait (#149).
+    // This correctly handles Local, OverlayRepo (with source_name), and GitHub sources.
+    let overlay_repo_path = {
+        use crate::state::SourceResolver;
+        state.source.resolve_local_path().with_context(|| {
+            format!("Failed to resolve source path for overlay '{overlay_name}'")
+        })?
+    };
 
     if !overlay_repo_path.exists() {
         bail!(
-            "Overlay '{org}/{repo}/{overlay_name}' does not exist in overlay repo.\n\n\
-             Did you mean to use 'repoverlay create {name_arg}' instead?"
+            "Overlay source directory not found: {}\n\n\
+             Did you mean to use 'repoverlay create {name_arg}' instead?",
+            overlay_repo_path.display()
         );
     }
 
@@ -2807,8 +2825,16 @@ fn add_files_to_overlay(
         overlay_name
     );
 
-    // Auto-commit to overlay repo
-    auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
+    // Auto-commit to overlay repo (only for OverlayRepo sources)
+    if let crate::state::OverlaySource::OverlayRepo { source_name, .. } = &state.source {
+        use crate::config::load_config;
+        use crate::overlay_repo::OverlayRepoManager;
+
+        let config = load_config(None)?;
+        let overlay_config = config.get_overlay_repo_config_by_name(source_name.as_deref())?;
+        let manager = OverlayRepoManager::new(overlay_config)?;
+        auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
+    }
 
     Ok(())
 }
