@@ -907,6 +907,21 @@ mod tests {
     }
 
     #[test]
+    fn test_overlay_source_display_overlay_repo_with_source_name() {
+        let source = OverlaySource::OverlayRepo {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "claude-config".to_string(),
+            commit: "abc123def456".to_string(),
+            resolved_via: None,
+            source_name: Some("my-source".to_string()),
+        };
+        let display = source.display();
+        assert!(display.contains("[my-source]"));
+        assert!(display.contains("microsoft/FluidFramework/claude-config"));
+    }
+
+    #[test]
     fn test_overlay_state_methods() {
         let mut state = OverlayState::new(
             "test".to_string(),

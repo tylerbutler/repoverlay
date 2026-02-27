@@ -108,10 +108,10 @@ impl OverlayRepoManager {
         Ok(())
     }
 
-    /// Clone the overlay repository.
-    fn clone_repo(&self) -> Result<()> {
-        let url = &self.config.url;
-
+    /// Validate that a URL is safe to pass to `git clone`.
+    ///
+    /// Rejects flag-like values and restricts to HTTPS/SSH schemes.
+    fn validate_clone_url(url: &str) -> Result<()> {
         // Validate URL doesn't look like a flag (defense in depth)
         if url.starts_with('-') {
             bail!(
@@ -130,6 +130,13 @@ impl OverlayRepoManager {
                 "Unsupported URL scheme: '{url}'. Only https://, ssh://, and git@ URLs are allowed"
             );
         }
+
+        Ok(())
+    }
+
+    /// Clone the overlay repository.
+    fn clone_repo(&self) -> Result<()> {
+        Self::validate_clone_url(&self.config.url)?;
 
         // Create parent directories
         if let Some(parent) = self.repo_path.parent() {
@@ -1512,29 +1519,15 @@ mod tests {
     }
 
     #[test]
-    fn test_overlay_repo_clone_rejects_flag_url() {
-        let temp = TempDir::new().unwrap();
-        let config = OverlayRepoConfig {
-            url: "--upload-pack=evil".to_string(),
-            local_path: Some(temp.path().join("overlay-repo")),
-        };
-
-        let manager = OverlayRepoManager::new(config).unwrap();
-        let result = manager.clone_repo();
+    fn test_validate_clone_url_rejects_flag() {
+        let result = OverlayRepoManager::validate_clone_url("--upload-pack=evil");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("flag injection"));
     }
 
     #[test]
-    fn test_overlay_repo_clone_rejects_file_url() {
-        let temp = TempDir::new().unwrap();
-        let config = OverlayRepoConfig {
-            url: "file:///etc/shadow".to_string(),
-            local_path: Some(temp.path().join("overlay-repo")),
-        };
-
-        let manager = OverlayRepoManager::new(config).unwrap();
-        let result = manager.clone_repo();
+    fn test_validate_clone_url_rejects_file_scheme() {
+        let result = OverlayRepoManager::validate_clone_url("file:///etc/shadow");
         assert!(result.is_err());
         assert!(
             result
@@ -1545,20 +1538,14 @@ mod tests {
     }
 
     #[test]
-    fn test_overlay_repo_clone_allows_https_url() {
-        let temp = TempDir::new().unwrap();
-        let config = OverlayRepoConfig {
-            url: "https://github.com/org/repo.git".to_string(),
-            local_path: Some(temp.path().join("overlay-repo")),
-        };
+    fn test_validate_clone_url_allows_https() {
+        OverlayRepoManager::validate_clone_url("https://github.com/org/repo.git").unwrap();
+    }
 
-        let manager = OverlayRepoManager::new(config).unwrap();
-        // This will fail because the repo doesn't exist, but it should get past validation
-        let result = manager.clone_repo();
-        // Should fail with a git error, not a validation error
-        let err = result.unwrap_err().to_string();
-        assert!(!err.contains("flag injection"));
-        assert!(!err.contains("Unsupported URL scheme"));
+    #[test]
+    fn test_validate_clone_url_allows_ssh() {
+        OverlayRepoManager::validate_clone_url("git@github.com:org/repo.git").unwrap();
+        OverlayRepoManager::validate_clone_url("ssh://git@github.com/org/repo.git").unwrap();
     }
 
     #[test]
@@ -1573,16 +1560,16 @@ mod tests {
     }
 
     #[test]
-    fn test_overlay_repo_clone_allows_ssh_url() {
-        let temp = TempDir::new().unwrap();
-        let config = OverlayRepoConfig {
-            url: "git@github.com:org/repo.git".to_string(),
-            local_path: Some(temp.path().join("overlay-repo")),
+    fn available_overlay_display_bold_contains_name() {
+        let o = AvailableOverlay {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "vscode-setup".to_string(),
+            has_config: true,
         };
-
-        let manager = OverlayRepoManager::new(config).unwrap();
-        let result = manager.clone_repo();
-        let err = result.unwrap_err().to_string();
-        assert!(!err.contains("Unsupported URL scheme"));
+        let bold = o.display_bold();
+        assert!(bold.contains("microsoft"));
+        assert!(bold.contains("FluidFramework"));
+        assert!(bold.contains("vscode-setup"));
     }
 }

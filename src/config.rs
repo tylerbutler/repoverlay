@@ -1069,6 +1069,22 @@ sources =
     }
 
     #[test]
+    fn test_generate_config_legacy_overlay_repo_with_local_path() {
+        let config = RepoverlayConfig {
+            sources: vec![],
+            overlay_repo: Some(OverlayRepoConfig {
+                url: "https://github.com/org/overlays".to_string(),
+                local_path: Some(PathBuf::from("/custom/local/path")),
+            }),
+        };
+
+        let output = generate_sources_config_ccl(&config);
+        assert!(output.contains("overlay_repo"));
+        assert!(output.contains("url = https://github.com/org/overlays"));
+        assert!(output.contains("local_path = /custom/local/path"));
+    }
+
+    #[test]
     fn test_source_equality() {
         let source1 = Source {
             name: "test".to_string(),
