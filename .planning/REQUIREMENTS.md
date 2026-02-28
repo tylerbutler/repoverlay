@@ -9,13 +9,13 @@ Requirements for 1.0 release. Each maps to roadmap phases.
 
 ### Code Review
 
-- [ ] **REVIEW-01**: All leaf modules reviewed for correctness (overlay_name, fuzzy, json_merge, github, upstream, reference)
-- [ ] **REVIEW-02**: All infrastructure modules reviewed for correctness (state, config, cache)
-- [ ] **REVIEW-03**: Source resolution modules reviewed for correctness (sources, overlay_repo)
-- [ ] **REVIEW-04**: Support modules reviewed for correctness (detection, selection)
+- [x] **REVIEW-01**: All leaf modules reviewed for correctness (overlay_name, fuzzy, json_merge, github, upstream, reference)
+- [x] **REVIEW-02**: All infrastructure modules reviewed for correctness (state, config, cache)
+- [x] **REVIEW-03**: Source resolution modules reviewed for correctness (sources, overlay_repo)
+- [x] **REVIEW-04**: Support modules reviewed for correctness (detection, selection)
 - [ ] **REVIEW-05**: Core operations reviewed for correctness (lib.rs — apply, remove, status, restore, update, create, switch)
 - [ ] **REVIEW-06**: CLI dispatch reviewed for correctness (cli.rs — all subcommands)
-- [ ] **REVIEW-07**: SourceResolver trait implementation verified as complete across all code paths
+- [x] **REVIEW-07**: SourceResolver trait implementation verified as complete across all code paths
 
 ### Bug Fixes
 
@@ -95,13 +95,13 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REVIEW-01 | Phase 1 | Pending |
-| REVIEW-02 | Phase 1 | Pending |
-| REVIEW-03 | Phase 1 | Pending |
-| REVIEW-04 | Phase 1 | Pending |
+| REVIEW-01 | Phase 1 | Complete |
+| REVIEW-02 | Phase 1 | Complete |
+| REVIEW-03 | Phase 1 | Complete |
+| REVIEW-04 | Phase 1 | Complete |
 | REVIEW-05 | Phase 1 | Pending |
 | REVIEW-06 | Phase 1 | Pending |
-| REVIEW-07 | Phase 1 | Pending |
+| REVIEW-07 | Phase 1 | Complete |
 | FIX-01 | Phase 1 | Pending |
 | FIX-02 | Phase 1 | Pending |
 | FIX-03 | Phase 1 | Pending |
