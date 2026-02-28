@@ -1,7 +1,0 @@
-kind: Added
-body: |-
-    Prompt to save source on first use
-
-    When `apply` resolves a username or owner/repo reference for the first time, it now prompts the user to save it as a configured source for future use. The prompt is skipped if the source is already configured or in non-interactive mode.
-time: 2026-02-22T05:58:37Z
-component: apply

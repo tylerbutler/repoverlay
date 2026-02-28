@@ -1,8 +1,0 @@
-kind: Fixed
-body: |-
-    Fix apply and sync failing for local overlay sources (#143)
-
-    Overlays from local directory sources were incorrectly handled through the
-    remote overlay path, causing apply and dry-run to fail. Local sources now
-    resolve correctly.
-time: 2026-02-27T16:24:12+00:00
