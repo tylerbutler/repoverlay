@@ -12,7 +12,7 @@ Repoverlay is feature-complete at v0.8.0. This roadmap delivers a credible 1.0 r
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Code Review and Bug Fixes** - Review all modules for correctness and fix every bug found
+- [x] **Phase 1: Code Review and Bug Fixes** - Review all modules for correctness and fix every bug found
 - [ ] **Phase 2: Test Coverage** - Close coverage gaps and verify untested behaviors via mutation testing
 - [ ] **Phase 3: API Stabilization and Manual Testing** - Lock public API surface and create manual test suite for all CLI workflows
 - [ ] **Phase 4: Release Preparation** - Final release gate: README, crates.io metadata, and release artifacts
@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01-PLAN.md -- Review all 13 non-orchestration modules (leaf, infrastructure, resolution/support) and verify SourceResolver completeness
-- [ ] 01-02-PLAN.md -- Review lib.rs and cli.rs orchestration modules, apply bug fixes (error display, SIGPIPE, issue verification)
+- [x] 01-02-PLAN.md -- Review lib.rs and cli.rs orchestration modules, apply bug fixes (error display, SIGPIPE, issue verification)
 
 ### Phase 2: Test Coverage
 **Goal**: Test suite catches regressions for all fixed bugs and covers identified gap areas
@@ -84,7 +84,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Code Review and Bug Fixes | 1/2 | In Progress | - |
+| 1. Code Review and Bug Fixes | 2/2 | Complete | 2026-02-28 |
 | 2. Test Coverage | 0/1 | Not started | - |
 | 3. API Stabilization and Manual Testing | 0/2 | Not started | - |
 | 4. Release Preparation | 0/1 | Not started | - |

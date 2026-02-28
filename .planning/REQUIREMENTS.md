@@ -13,16 +13,16 @@ Requirements for 1.0 release. Each maps to roadmap phases.
 - [x] **REVIEW-02**: All infrastructure modules reviewed for correctness (state, config, cache)
 - [x] **REVIEW-03**: Source resolution modules reviewed for correctness (sources, overlay_repo)
 - [x] **REVIEW-04**: Support modules reviewed for correctness (detection, selection)
-- [ ] **REVIEW-05**: Core operations reviewed for correctness (lib.rs — apply, remove, status, restore, update, create, switch)
-- [ ] **REVIEW-06**: CLI dispatch reviewed for correctness (cli.rs — all subcommands)
+- [x] **REVIEW-05**: Core operations reviewed for correctness (lib.rs — apply, remove, status, restore, update, create, switch)
+- [x] **REVIEW-06**: CLI dispatch reviewed for correctness (cli.rs — all subcommands)
 - [x] **REVIEW-07**: SourceResolver trait implementation verified as complete across all code paths
 
 ### Bug Fixes
 
-- [ ] **FIX-01**: All bugs discovered during code review are fixed
-- [ ] **FIX-02**: Error display switched from Debug to Display format (`{e:?}` → `{e:#}` in main.rs)
-- [ ] **FIX-03**: SIGPIPE handling added for clean pipe behavior in scripts
-- [ ] **FIX-04**: Issues #142-#148 verified as fully resolved
+- [x] **FIX-01**: All bugs discovered during code review are fixed
+- [x] **FIX-02**: Error display switched from Debug to Display format (`{e:?}` → `{e:#}` in main.rs)
+- [x] **FIX-03**: SIGPIPE handling added for clean pipe behavior in scripts
+- [x] **FIX-04**: Issues #142-#148 verified as fully resolved
 
 ### Test Coverage
 
@@ -99,13 +99,13 @@ Deferred to future release. Tracked but not in current roadmap.
 | REVIEW-02 | Phase 1 | Complete |
 | REVIEW-03 | Phase 1 | Complete |
 | REVIEW-04 | Phase 1 | Complete |
-| REVIEW-05 | Phase 1 | Pending |
-| REVIEW-06 | Phase 1 | Pending |
+| REVIEW-05 | Phase 1 | Complete |
+| REVIEW-06 | Phase 1 | Complete |
 | REVIEW-07 | Phase 1 | Complete |
-| FIX-01 | Phase 1 | Pending |
-| FIX-02 | Phase 1 | Pending |
-| FIX-03 | Phase 1 | Pending |
-| FIX-04 | Phase 1 | Pending |
+| FIX-01 | Phase 1 | Complete |
+| FIX-02 | Phase 1 | Complete |
+| FIX-03 | Phase 1 | Complete |
+| FIX-04 | Phase 1 | Complete |
 | TEST-01 | Phase 2 | Pending |
 | TEST-02 | Phase 2 | Pending |
 | TEST-03 | Phase 2 | Pending |
