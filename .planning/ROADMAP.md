@@ -29,11 +29,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Piping repoverlay output to other commands does not produce broken pipe errors
   4. Issues #142-#148 are verified resolved with passing tests
   5. SourceResolver trait implementation is verified complete across all code paths
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md -- Review all 13 non-orchestration modules (leaf, infrastructure, resolution/support) and verify SourceResolver completeness
+- [ ] 01-02-PLAN.md -- Review lib.rs and cli.rs orchestration modules, apply bug fixes (error display, SIGPIPE, issue verification)
 
 ### Phase 2: Test Coverage
 **Goal**: Test suite catches regressions for all fixed bugs and covers identified gap areas
