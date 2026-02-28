@@ -102,35 +102,35 @@ Deferred to future release. Tracked but not in current roadmap.
 | REVIEW-05 | Phase 1 | Pending |
 | REVIEW-06 | Phase 1 | Pending |
 | REVIEW-07 | Phase 1 | Pending |
-| FIX-01 | Phase 2 | Pending |
-| FIX-02 | Phase 2 | Pending |
-| FIX-03 | Phase 2 | Pending |
-| FIX-04 | Phase 2 | Pending |
-| TEST-01 | Phase 3 | Pending |
-| TEST-02 | Phase 3 | Pending |
-| TEST-03 | Phase 3 | Pending |
-| TEST-04 | Phase 3 | Pending |
-| TEST-05 | Phase 3 | Pending |
-| TEST-06 | Phase 3 | Pending |
-| API-01 | Phase 4 | Pending |
-| API-02 | Phase 4 | Pending |
-| API-03 | Phase 4 | Pending |
-| MANUAL-01 | Phase 4 | Pending |
-| MANUAL-02 | Phase 4 | Pending |
-| MANUAL-03 | Phase 4 | Pending |
-| MANUAL-04 | Phase 4 | Pending |
-| MANUAL-05 | Phase 4 | Pending |
-| MANUAL-06 | Phase 4 | Pending |
-| MANUAL-07 | Phase 4 | Pending |
-| MANUAL-08 | Phase 4 | Pending |
-| REL-01 | Phase 5 | Pending |
-| REL-02 | Phase 5 | Pending |
+| FIX-01 | Phase 1 | Pending |
+| FIX-02 | Phase 1 | Pending |
+| FIX-03 | Phase 1 | Pending |
+| FIX-04 | Phase 1 | Pending |
+| TEST-01 | Phase 2 | Pending |
+| TEST-02 | Phase 2 | Pending |
+| TEST-03 | Phase 2 | Pending |
+| TEST-04 | Phase 2 | Pending |
+| TEST-05 | Phase 2 | Pending |
+| TEST-06 | Phase 2 | Pending |
+| API-01 | Phase 3 | Pending |
+| API-02 | Phase 3 | Pending |
+| API-03 | Phase 3 | Pending |
+| MANUAL-01 | Phase 3 | Pending |
+| MANUAL-02 | Phase 3 | Pending |
+| MANUAL-03 | Phase 3 | Pending |
+| MANUAL-04 | Phase 3 | Pending |
+| MANUAL-05 | Phase 3 | Pending |
+| MANUAL-06 | Phase 3 | Pending |
+| MANUAL-07 | Phase 3 | Pending |
+| MANUAL-08 | Phase 3 | Pending |
+| REL-01 | Phase 4 | Pending |
+| REL-02 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 28 total
 - Mapped to phases: 28
-- Unmapped: 0 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-27*
-*Last updated: 2026-02-27 after initial definition*
+*Last updated: 2026-02-27 after roadmap creation (4-phase structure)*
