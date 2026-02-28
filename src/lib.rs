@@ -810,67 +810,13 @@ fn resolve_three_part(
         );
     }
 
-    // Fall back to legacy overlay_repo config. Will be removed in 1.0 (#79).
-    let overlay_config = config.overlay_repo.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Overlay repository not configured.\n\n\
-             To apply overlays from a shared repository, first run:\n\
-             repoverlay source add <url>\n\n\
-             Or use a local path or GitHub URL instead."
-        )
-    })?;
-
-    let manager = overlay_repo::OverlayRepoManager::new(overlay_config)?;
-    manager.ensure_cloned()?;
-
-    if update {
-        println!("{} overlay repository...", "Updating".blue().bold());
-        manager.pull()?;
-    }
-
-    // Try to resolve with fallback
-    if let Ok((overlay_path, resolved_via)) =
-        manager.get_overlay_path_with_fallback(org, repo, name, upstream.as_ref())
-    {
-        let commit = manager.get_current_commit()?;
-
-        // Determine actual org/repo for state tracking
-        let via_upstream = resolved_via == state::ResolvedVia::Upstream;
-        let (actual_org, actual_repo) = match (&upstream, via_upstream) {
-            (Some(up), true) => (up.org.clone(), up.repo.clone()),
-            _ => (org.to_string(), repo.to_string()),
-        };
-
-        let via_suffix = if via_upstream {
-            " (via upstream)".dimmed().to_string()
-        } else {
-            String::new()
-        };
-        println!(
-            "{} overlay: {}/{}/{}{}",
-            "Resolving".blue().bold(),
-            actual_org,
-            actual_repo,
-            name,
-            via_suffix
-        );
-
-        return Ok(ResolvedSource {
-            path: overlay_path,
-            source_info: OverlaySource::overlay_repo_with_resolution(
-                actual_org,
-                actual_repo,
-                name.to_string(),
-                commit,
-                resolved_via,
-            ),
-        });
-    }
-
-    // Overlay not found - provide fuzzy suggestions
-    let suggestions = get_fuzzy_suggestions_legacy(&manager, org, repo, name);
-    let error_msg = format_not_found_error(org, repo, name, &suggestions, None);
-    bail!("{error_msg}")
+    // No sources configured
+    bail!(
+        "Overlay repository not configured.\n\n\
+         To apply overlays from a shared repository, first run:\n\
+         repoverlay source add <url>\n\n\
+         Or use a local path or GitHub URL instead."
+    )
 }
 
 /// Resolve an overlay from configured sources with fuzzy suggestions on failure.
@@ -937,20 +883,6 @@ fn resolve_from_sources_with_suggestions(
     let source_list = manager.source_names().join(", ");
     let error_msg = format_not_found_error(org, repo, name, &suggestions, Some(&source_list));
     bail!("{error_msg}")
-}
-
-/// Get fuzzy suggestions for overlay names from legacy single-source config.
-fn get_fuzzy_suggestions_legacy(
-    manager: &overlay_repo::OverlayRepoManager,
-    org: &str,
-    repo: &str,
-    query: &str,
-) -> Vec<String> {
-    let available = match manager.list_overlays_for_repo(org, repo) {
-        Ok(overlays) => overlays.into_iter().map(|o| o.name).collect::<Vec<_>>(),
-        Err(_) => return Vec::new(),
-    };
-    fuzzy_suggest(query, &available)
 }
 
 /// Get fuzzy suggestions for overlay names from multi-source config.
@@ -2680,26 +2612,6 @@ pub(crate) fn update_overlays(
     Ok(())
 }
 
-/// Detect org/repo from git remote origin.
-///
-/// Returns `None` if the remote cannot be detected (e.g., no remote, non-GitHub).
-fn detect_target_from_git_remote(repo_path: &Path) -> Option<(String, String)> {
-    use std::process::Command;
-
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(repo_path)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let url = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    parse_github_owner_repo(&url).ok()
-}
-
 /// Create a new overlay from files in a repository.
 ///
 /// # Modes
@@ -2742,62 +2654,18 @@ pub(crate) fn create_overlay(
     }
 
     // Determine output directory
-    // Priority: explicit --local > overlay repo (if configured) > local fallback
-    // Also track overlay repo info for better prompts: (repo_root, org, repo, overlay_name)
-    let (output_dir, overlay_repo_info): (PathBuf, Option<(PathBuf, String, String, String)>) =
-        if let Some(p) = &output {
-            (p.clone(), None)
-        } else {
-            // Check if overlay repo is configured
-            let config = config::load_config(None).ok();
-            let overlay_repo_config = config.as_ref().and_then(|c| c.overlay_repo.as_ref());
-
-            if let Some(repo_config) = overlay_repo_config {
-                // Try to detect org/repo from git remote
-                if let Some((org, repo)) = detect_target_from_git_remote(source) {
-                    // Determine overlay name
-                    let overlay_name = name.clone().unwrap_or_else(|| {
-                        source
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("overlay")
-                            .to_string()
-                    });
-
-                    // Use overlay repo path: <repo_path>/<org>/<repo>/<name>
-                    let manager = overlay_repo::OverlayRepoManager::new(repo_config.clone())
-                        .expect("Failed to create overlay repo manager");
-                    manager
-                        .ensure_cloned()
-                        .expect("Failed to ensure overlay repo is cloned");
-                    let repo_root = manager.path().to_path_buf();
-                    let full_path = repo_root.join(&org).join(&repo).join(&overlay_name);
-                    (full_path, Some((repo_root, org, repo, overlay_name)))
-                } else {
-                    // Couldn't detect target, fall back to local
-                    eprintln!(
-                        "{} Could not detect target from git remote, using local storage.",
-                        "Warning:".yellow()
-                    );
-                    let repo_name = source
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("overlay");
-                    let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
-                        .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-                    (proj_dirs.data_dir().join("overlays").join(repo_name), None)
-                }
-            } else {
-                // No overlay repo configured, use local fallback
-                let repo_name = source
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("overlay");
-                let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
-                    .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
-                (proj_dirs.data_dir().join("overlays").join(repo_name), None)
-            }
-        };
+    // Priority: explicit --local > local fallback
+    let output_dir: PathBuf = if let Some(p) = &output {
+        p.clone()
+    } else {
+        let repo_name = source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("overlay");
+        let proj_dirs = directories::ProjectDirs::from("", "", "repoverlay")
+            .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?;
+        proj_dirs.data_dir().join("overlays").join(repo_name)
+    };
 
     // If no includes specified, run discovery mode
     if include.is_empty() {
@@ -2906,30 +2774,17 @@ pub(crate) fn create_overlay(
             let final_output = if output.is_none() {
                 use dialoguer::Input;
 
-                if let Some((repo_root, org, repo, default_name)) = &overlay_repo_info {
-                    // Show overlay repo context
-                    println!("{} {}/{}", "Target:".bold(), org.cyan(), repo.cyan());
+                println!(
+                    "Where should the overlay be created?\n\
+                     (This directory will contain the overlay files and config)"
+                );
 
-                    let overlay_name: String = Input::new()
-                        .with_prompt("Overlay name")
-                        .default(default_name.clone())
-                        .interact_text()?;
+                let path_str: String = Input::new()
+                    .with_prompt("Overlay directory")
+                    .default(output_dir.display().to_string())
+                    .interact_text()?;
 
-                    repo_root.join(org).join(repo).join(overlay_name)
-                } else {
-                    // Local storage - show full path
-                    println!(
-                        "Where should the overlay be created?\n\
-                         (This directory will contain the overlay files and config)"
-                    );
-
-                    let path_str: String = Input::new()
-                        .with_prompt("Overlay directory")
-                        .default(output_dir.display().to_string())
-                        .interact_text()?;
-
-                    PathBuf::from(path_str)
-                }
+                PathBuf::from(path_str)
             } else {
                 output_dir
             };
@@ -4640,78 +4495,6 @@ mod tests {
 
             let result = resolve_local_path(&file_path, "test", false).unwrap();
             assert!(result.path.exists());
-        }
-    }
-
-    // Tests for detect_target_from_git_remote
-    mod detect_target_tests {
-        use super::*;
-
-        #[test]
-        fn returns_none_for_non_git_directory() {
-            let temp = TempDir::new().unwrap();
-            let result = detect_target_from_git_remote(temp.path());
-            assert!(result.is_none());
-        }
-
-        #[test]
-        fn returns_none_for_repo_without_remote() {
-            let repo = create_test_repo();
-            let result = detect_target_from_git_remote(repo.path());
-            assert!(result.is_none());
-        }
-
-        #[test]
-        fn detects_github_https_remote() {
-            let repo = create_test_repo();
-
-            // Add a GitHub remote
-            Command::new("git")
-                .args([
-                    "remote",
-                    "add",
-                    "origin",
-                    "https://github.com/owner/repo.git",
-                ])
-                .current_dir(repo.path())
-                .output()
-                .unwrap();
-
-            let result = detect_target_from_git_remote(repo.path());
-            assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
-        }
-
-        #[test]
-        fn detects_github_ssh_remote() {
-            let repo = create_test_repo();
-
-            Command::new("git")
-                .args(["remote", "add", "origin", "git@github.com:owner/repo.git"])
-                .current_dir(repo.path())
-                .output()
-                .unwrap();
-
-            let result = detect_target_from_git_remote(repo.path());
-            assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
-        }
-
-        #[test]
-        fn returns_none_for_non_github_remote() {
-            let repo = create_test_repo();
-
-            Command::new("git")
-                .args([
-                    "remote",
-                    "add",
-                    "origin",
-                    "https://gitlab.com/owner/repo.git",
-                ])
-                .current_dir(repo.path())
-                .output()
-                .unwrap();
-
-            let result = detect_target_from_git_remote(repo.path());
-            assert!(result.is_none());
         }
     }
 

@@ -9,12 +9,11 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use crate::{
-    CONFIG_FILE, CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource,
-    STATE_DIR, apply_multiple_overlays, apply_overlay, canonicalize_path, config,
-    get_cached_repo_commit, list_applied_overlays, list_overlays_from_cached_repo,
-    parse_github_owner_repo, remove_overlay, remove_single_overlay, restore_overlays,
-    selection::is_interactive, show_status, show_status_json, status_has_overlays, switch_overlay,
-    update_overlays, validate_git_repo,
+    CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource, STATE_DIR,
+    apply_multiple_overlays, apply_overlay, canonicalize_path, config, get_cached_repo_commit,
+    list_applied_overlays, list_overlays_from_cached_repo, parse_github_owner_repo, remove_overlay,
+    remove_single_overlay, restore_overlays, selection::is_interactive, show_status,
+    show_status_json, status_has_overlays, switch_overlay, update_overlays, validate_git_repo,
 };
 
 /// Build version string with git info for local builds
@@ -275,36 +274,6 @@ enum Commands {
         force: bool,
     },
 
-    /// Create a new overlay in a local directory
-    ///
-    /// Examples:
-    ///   repoverlay create-local ./output      # Write to local directory
-    #[command(name = "create-local", hide = true)]
-    CreateLocal {
-        /// Output directory for the overlay
-        output: PathBuf,
-
-        /// Include specific files or directories (can be specified multiple times)
-        #[arg(short, long)]
-        include: Vec<PathBuf>,
-
-        /// Source repository to extract files from (defaults to current directory)
-        #[arg(short, long)]
-        source: Option<PathBuf>,
-
-        /// Show what would be created without creating files
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Skip interactive prompts, use defaults
-        #[arg(short = 'y', long)]
-        yes: bool,
-
-        /// Force overwrite if output already exists
-        #[arg(short, long)]
-        force: bool,
-    },
-
     /// Switch to a different overlay (removes all existing overlays first)
     Switch {
         /// Path to overlay source directory OR GitHub URL
@@ -384,18 +353,6 @@ enum Commands {
         show_all: bool,
     },
 
-    /// List available overlays from the overlay repository
-    #[command(name = "list", hide = true)]
-    List {
-        /// Filter by target repository (format: org/repo)
-        #[arg(short = 'f', long, alias = "target")]
-        filter: Option<String>,
-
-        /// Update overlay repo before listing
-        #[arg(long)]
-        update: bool,
-    },
-
     /// Sync changes from an applied overlay back to the overlay repo
     ///
     /// Examples:
@@ -418,29 +375,6 @@ enum Commands {
         all: bool,
 
         /// Show what would be synced without making changes
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Add files to an existing applied overlay
-    ///
-    /// Deprecated: use `repoverlay edit --add` instead.
-    #[command(hide = true)]
-    Add {
-        /// Overlay name or full path (org/repo/name)
-        ///
-        /// Short form: `my-overlay` - detects org/repo from git remote
-        /// Full form: `org/repo/name` - uses explicit values
-        name: String,
-
-        /// Files to add (relative paths from target repo)
-        files: Vec<PathBuf>,
-
-        /// Target repository directory (defaults to current directory)
-        #[arg(short, long)]
-        target: Option<PathBuf>,
-
-        /// Show what would be added without making changes
         #[arg(long)]
         dry_run: bool,
     },
@@ -480,32 +414,67 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Publish an overlay to the overlay repository
-    #[command(hide = true)] // Hidden: deprecated, use create instead
-    Publish {
-        /// Path to the overlay source directory
-        source: PathBuf,
-
-        /// Target repository (format: org/repo)
-        /// Auto-detected from current git remote if not specified
+    /// Deprecated: use `create --output` instead
+    #[command(hide = true)]
+    CreateLocal {
+        /// Include specific files or directories
         #[arg(short, long)]
-        target: Option<String>,
+        include: Vec<PathBuf>,
 
-        /// Overlay name (defaults from repoverlay.ccl or directory name)
+        /// Source repository to extract files from (defaults to current directory)
         #[arg(short, long)]
+        source: Option<PathBuf>,
+
+        /// Output directory for local overlay creation
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Overlay name
         name: Option<String>,
 
-        /// Commit message
-        #[arg(short, long)]
-        message: Option<String>,
-
-        /// Skip push to remote (just commit locally)
-        #[arg(long)]
-        no_push: bool,
-
-        /// Show what would be published without making changes
+        /// Show what would be created without creating files
         #[arg(long)]
         dry_run: bool,
+
+        /// Skip interactive prompts
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Force overwrite if overlay already exists
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Deprecated: use `browse` instead
+    #[command(hide = true, name = "list")]
+    List {
+        /// Overlay source
+        #[arg(value_name = "SOURCE")]
+        source: Option<String>,
+
+        /// Filter by target repository
+        #[arg(short = 'f', long)]
+        filter: Option<String>,
+
+        /// Update overlay repo before listing
+        #[arg(long)]
+        update: bool,
+
+        /// Target repository directory
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Disable interactive selection
+        #[arg(long)]
+        no_interactive: bool,
+
+        /// Show what would be applied without making changes
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Show all overlays
+        #[arg(long)]
+        show_all: bool,
     },
 
     /// Manage overlay sources (for multi-source configurations)
@@ -709,24 +678,6 @@ pub fn run() -> Result<()> {
             let source = source.unwrap_or_else(|| PathBuf::from("."));
             create_overlay_command(&source, name, output, &include, dry_run, yes, force)?;
         }
-        Commands::CreateLocal {
-            output,
-            include,
-            source,
-            dry_run,
-            yes,
-            force: _,
-        } => {
-            eprintln!(
-                "{} 'repoverlay create-local' is deprecated and will be removed in 1.0.",
-                "Warning:".yellow().bold()
-            );
-            eprintln!("         Use 'repoverlay create --output <path>' instead.");
-            eprintln!();
-
-            let source = source.unwrap_or_else(|| PathBuf::from("."));
-            crate::create_overlay(&source, Some(output), &include, None, dry_run, yes)?;
-        }
         Commands::Switch {
             source,
             target,
@@ -780,16 +731,6 @@ pub fn run() -> Result<()> {
                 show_all,
             )?;
         }
-        Commands::List { filter, update } => {
-            eprintln!(
-                "{} 'repoverlay list' is deprecated and will be removed in 1.0.",
-                "Warning:".yellow().bold()
-            );
-            eprintln!("         Use 'repoverlay browse' instead.");
-            eprintln!();
-
-            browse_overlays(None, filter.as_deref(), update, None, true, false, true)?;
-        }
         Commands::Sync {
             name,
             target,
@@ -810,44 +751,37 @@ pub fn run() -> Result<()> {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             edit_overlay(&name, &target, &add, &remove, interactive, dry_run)?;
         }
-        Commands::Add {
-            name,
-            files,
-            target,
-            dry_run,
-        } => {
-            eprintln!(
-                "{} 'repoverlay add' is deprecated and will be removed in 1.0. Use 'repoverlay edit --add' instead.",
-                "Warning:".yellow().bold()
-            );
-            eprintln!();
-            let target = target.unwrap_or_else(|| PathBuf::from("."));
-            add_files_to_overlay(&name, &target, &files, dry_run)?;
-        }
-        Commands::Publish {
+        Commands::CreateLocal {
+            include,
             source,
-            target,
+            output,
             name,
-            message,
-            no_push,
             dry_run,
+            yes,
+            force,
         } => {
-            eprintln!(
-                "{} 'repoverlay publish' is deprecated and will be removed in 1.0.",
-                "Warning:".yellow().bold()
-            );
-            eprintln!(
-                "         Use 'repoverlay create <name>' instead to create overlays in the overlay repo."
-            );
-            eprintln!();
-
-            publish_overlay(
-                &source,
-                target.as_deref(),
-                name.as_deref(),
-                message.as_deref(),
-                no_push,
+            eprintln!("Warning: `create-local` is deprecated, use `create --output` instead");
+            let source = source.unwrap_or_else(|| PathBuf::from("."));
+            create_overlay_command(&source, name, output, &include, dry_run, yes, force)?;
+        }
+        Commands::List {
+            source,
+            filter,
+            update,
+            target,
+            no_interactive,
+            dry_run,
+            show_all,
+        } => {
+            eprintln!("Warning: `list` is deprecated, use `browse` instead");
+            browse_overlays(
+                source.as_deref(),
+                filter.as_deref(),
+                update,
+                target,
+                no_interactive,
                 dry_run,
+                show_all,
             )?;
         }
         Commands::Source { command } => {
@@ -943,13 +877,6 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                         .collect::<String>()
                 );
                 println!("     URL: {}", source.url);
-            }
-
-            // Show legacy config if present
-            if let Some(ref legacy) = config.overlay_repo {
-                println!();
-                println!("{}", "Legacy configuration (deprecated):".yellow());
-                println!("  overlay_repo: {}", legacy.url);
             }
         }
         SourceCommand::Remove { name } => {
@@ -1502,117 +1429,6 @@ where
     Ok(())
 }
 
-/// Publish an overlay to the overlay repository.
-fn publish_overlay(
-    source: &std::path::Path,
-    target: Option<&str>,
-    name: Option<&str>,
-    message: Option<&str>,
-    no_push: bool,
-    dry_run: bool,
-) -> Result<()> {
-    use crate::config::load_config;
-    use crate::overlay_repo::OverlayRepoManager;
-    use crate::state;
-
-    // Validate source exists
-    let source = canonicalize_path(source, "Overlay source")?;
-    if !source.is_dir() {
-        bail!("Source must be a directory: {}", source.display());
-    }
-
-    // Load config
-    let config = load_config(None)?;
-    let overlay_config = config.get_default_overlay_repo_config()?;
-
-    // Determine target org/repo
-    let (org, repo) = if let Some(t) = target {
-        let parts: Vec<&str> = t.split('/').collect();
-        if parts.len() != 2 {
-            bail!("Invalid target format. Use: org/repo");
-        }
-        (parts[0].to_string(), parts[1].to_string())
-    } else {
-        // Try to detect from current git remote
-        detect_target_repo(&source)?
-    };
-
-    // Determine overlay name
-    let overlay_name = if let Some(n) = name {
-        n.to_string()
-    } else {
-        // Try to read from repoverlay.ccl
-        let config_path = source.join(CONFIG_FILE);
-
-        if config_path.exists() {
-            let content = fs::read_to_string(&config_path)?;
-            let cfg: state::OverlayConfig =
-                sickle::from_str(&content).with_context(|| "Failed to parse repoverlay.ccl")?;
-            cfg.overlay
-                .name
-                .unwrap_or_else(|| source.file_name().unwrap().to_string_lossy().to_string())
-        } else {
-            source.file_name().unwrap().to_string_lossy().to_string()
-        }
-    };
-
-    println!("{} Publishing overlay:", "Publish".blue().bold());
-    println!("  Source:  {}", source.display());
-    println!("  Target:  {org}/{repo}");
-    println!("  Name:    {overlay_name}");
-
-    if dry_run {
-        println!("\n{} Dry run - no changes made.", "Note:".yellow());
-        println!("\nWould publish to: {org}/{repo}/{overlay_name}");
-        return Ok(());
-    }
-
-    // Create manager and ensure cloned
-    let manager = OverlayRepoManager::new(overlay_config)?;
-    manager.ensure_cloned()?;
-
-    // Pull latest
-    println!("\n{} latest changes...", "Pulling".blue().bold());
-    manager.pull()?;
-
-    // Stage the overlay
-    let copying = "Copying".blue().bold();
-    println!("{copying} overlay files...");
-    let dest = manager.stage_overlay(&org, &repo, &overlay_name, &source)?;
-    println!("  Copied to: {}", dest.display());
-
-    // Check if there are changes
-    if !manager.has_staged_changes()? {
-        println!("\n{} No changes to publish.", "Note:".yellow());
-        return Ok(());
-    }
-
-    // Commit
-    let commit_msg = message
-        .unwrap_or(&format!("Update overlay: {org}/{repo}/{overlay_name}"))
-        .to_string();
-
-    println!("{} changes...", "Committing".blue().bold());
-    manager.commit(&commit_msg)?;
-
-    // Push
-    if no_push {
-        println!(
-            "\n{} Changes committed but not pushed (--no-push).",
-            "Note:".yellow()
-        );
-    } else {
-        println!("{} to remote...", "Pushing".blue().bold());
-        manager.push()?;
-        let check = "✓".green().bold();
-        println!("\n{check} Overlay published: {org}/{repo}/{overlay_name}");
-    }
-
-    println!("\nTo apply: repoverlay apply {org}/{repo}/{overlay_name}");
-
-    Ok(())
-}
-
 /// Detect org/repo from git remote origin.
 fn detect_target_repo(path: &std::path::Path) -> Result<(String, String)> {
     use std::process::Command;
@@ -1686,6 +1502,9 @@ fn parse_overlay_name_arg(
 /// - `create <name>` - create in overlay repo, auto-detect org/repo
 /// - `create org/repo/name` - create in overlay repo at explicit path
 /// - `create --local ./output` - create in local directory only
+///
+/// After creating the overlay, it is automatically applied to the source
+/// repository (symlinks replace originals, state saved, git exclude updated).
 fn create_overlay_command(
     source: &std::path::Path,
     name_arg: Option<String>,
@@ -1709,14 +1528,33 @@ fn create_overlay_command(
     // Handle --local mode (write to local directory)
     if let Some(local_path) = local {
         // Use existing create_overlay function for local mode
-        return crate::create_overlay(
+        crate::create_overlay(
             source,
-            Some(local_path),
+            Some(local_path.clone()),
             include,
             None, // name derived from directory
             dry_run,
             yes,
-        );
+        )?;
+
+        // Auto-apply the newly created overlay back to the source repo
+        if !dry_run {
+            let overlay_source = local_path.to_string_lossy().to_string();
+            crate::apply_overlay(
+                &overlay_source,
+                source,
+                false,
+                None,
+                None,
+                false,
+                crate::ConflictStrategy::Force,
+                false,
+                None,
+                false,
+            )?;
+        }
+
+        return Ok(());
     }
 
     // For overlay repo mode, we need the name argument
@@ -1771,18 +1609,34 @@ fn create_overlay_command(
     // If includes not specified, use discovery/interactive mode
     if include.is_empty() {
         // Use the existing discovery logic from create_overlay
-        return crate::create_overlay(
+        crate::create_overlay(
             source,
-            Some(output_path),
+            Some(output_path.clone()),
             include,
             Some(overlay_name.clone()),
             dry_run,
             yes,
-        )
-        .and_then(|()| {
-            // Auto-commit after creating
-            auto_commit_overlay(&manager, &org, &repo, &overlay_name, true)
-        });
+        )?;
+
+        // Auto-commit after creating
+        auto_commit_overlay(&manager, &org, &repo, &overlay_name, true)?;
+
+        // Auto-apply the overlay back to the source repo
+        let overlay_source = output_path.to_string_lossy().to_string();
+        crate::apply_overlay(
+            &overlay_source,
+            source,
+            false,
+            Some(overlay_name),
+            None,
+            false,
+            crate::ConflictStrategy::Force,
+            false,
+            None,
+            false,
+        )?;
+
+        return Ok(());
     }
 
     // Validate all include paths exist
@@ -1811,6 +1665,21 @@ fn create_overlay_command(
 
     // Auto-commit
     auto_commit_overlay(&manager, &org, &repo, &overlay_name, true)?;
+
+    // Auto-apply the overlay back to the source repo
+    let overlay_source = output_path.to_string_lossy().to_string();
+    crate::apply_overlay(
+        &overlay_source,
+        source,
+        false,
+        Some(overlay_name),
+        None,
+        false,
+        crate::ConflictStrategy::Force,
+        false,
+        None,
+        false,
+    )?;
 
     Ok(())
 }
@@ -2623,7 +2492,15 @@ fn remove_files_from_overlay(
 /// Add files to an existing applied overlay.
 ///
 /// This adds new files to an overlay that is already applied to the target repository.
-/// The files are linked to the overlay repo and the overlay state is updated.
+/// The files are linked to the overlay source and the overlay state is updated.
+///
+/// Source-type-aware behavior (#148):
+/// - **`OverlayRepo`**: copies files to overlay repo, creates symlinks, auto-commits
+/// - **Local**: copies files to local overlay directory, creates symlinks
+/// - **GitHub**: rejected (read-only source)
+///
+/// File operations are performed atomically: if any step fails, all changes
+/// are rolled back to prevent leaving the target in a half-modified state.
 fn add_files_to_overlay(
     name_arg: &str,
     target: &std::path::Path,
@@ -2647,7 +2524,7 @@ fn add_files_to_overlay(
     if files.is_empty() {
         bail!(
             "No files specified.\n\n\
-             Usage: repoverlay add <overlay-name> <file> [<file>...]"
+             Usage: repoverlay edit <overlay-name> --add <file> [--add <file>...]"
         );
     }
 
@@ -2683,7 +2560,7 @@ fn add_files_to_overlay(
         }
     }
 
-    // Validate all files exist
+    // Validate all files exist before any mutations
     for file in files {
         let full_path = target.join(file);
         if !full_path.exists() {
@@ -2751,56 +2628,111 @@ fn add_files_to_overlay(
         LinkType::Symlink
     };
 
+    // Validate all file copy destinations are writable before mutating anything.
+    // This catches permission errors early to avoid partial mutations.
+    for file in files {
+        let overlay_file = overlay_repo_path.join(file);
+        if let Some(parent) = overlay_file.parent() {
+            // Verify we can create the parent directory
+            if !parent.exists() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Cannot create directory in overlay source: {}",
+                        parent.display()
+                    )
+                })?;
+            }
+        }
+    }
+
+    // Track completed operations for rollback on failure.
+    // Each entry is (target_file, overlay_file, original_content).
+    let mut completed: Vec<(PathBuf, PathBuf, Vec<u8>)> = Vec::new();
     let mut exclude_entries: Vec<String> = Vec::new();
     let mut added_count = 0;
 
-    for file in files {
-        let target_file = target.join(file);
-        let overlay_file = overlay_repo_path.join(file);
+    let result: Result<()> = (|| {
+        for file in files {
+            let target_file = target.join(file);
+            let overlay_file = overlay_repo_path.join(file);
 
-        // Copy file to overlay repo
-        if let Some(parent) = overlay_file.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&target_file, &overlay_file)
-            .with_context(|| format!("Failed to copy {} to overlay repo", target_file.display()))?;
+            // Read original content before any mutations (for rollback)
+            let original_content = fs::read(&target_file)
+                .with_context(|| format!("Failed to read {} for backup", target_file.display()))?;
 
-        // Remove original file (we'll replace it with symlink)
-        fs::remove_file(&target_file)
-            .with_context(|| format!("Failed to remove {} for linking", target_file.display()))?;
-
-        // Create symlink/copy from overlay repo to target
-        match link_type {
-            LinkType::Symlink => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(|| {
-                    format!("Failed to create symlink: {}", target_file.display())
-                })?;
-                #[cfg(windows)]
-                std::os::windows::fs::symlink_file(&overlay_file, &target_file).with_context(
-                    || format!("Failed to create symlink: {}", target_file.display()),
-                )?;
+            // Copy file to overlay source directory
+            if let Some(parent) = overlay_file.parent() {
+                fs::create_dir_all(parent)?;
             }
-            LinkType::Copy | LinkType::Merged => {
-                fs::copy(&overlay_file, &target_file)
-                    .with_context(|| format!("Failed to copy file: {}", target_file.display()))?;
+            fs::copy(&target_file, &overlay_file).with_context(|| {
+                format!("Failed to copy {} to overlay source", target_file.display())
+            })?;
+
+            // Remove original file (we'll replace it with symlink)
+            fs::remove_file(&target_file).with_context(|| {
+                format!("Failed to remove {} for linking", target_file.display())
+            })?;
+
+            // Create symlink/copy from overlay source to target
+            match link_type {
+                LinkType::Symlink => {
+                    #[cfg(unix)]
+                    std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(|| {
+                        format!("Failed to create symlink: {}", target_file.display())
+                    })?;
+                    #[cfg(windows)]
+                    std::os::windows::fs::symlink_file(&overlay_file, &target_file).with_context(
+                        || format!("Failed to create symlink: {}", target_file.display()),
+                    )?;
+                }
+                LinkType::Copy | LinkType::Merged => {
+                    fs::copy(&overlay_file, &target_file).with_context(|| {
+                        format!("Failed to copy file: {}", target_file.display())
+                    })?;
+                }
             }
+
+            // Track for potential rollback
+            completed.push((target_file.clone(), overlay_file, original_content));
+
+            // Add to state
+            state.add_file(FileEntry {
+                source: file.clone(),
+                target: file.clone(),
+                link_type,
+                entry_type: EntryType::File,
+            });
+
+            // Add to exclude list
+            let exclude_path = file.to_string_lossy().replace('\\', "/");
+            exclude_entries.push(exclude_path);
+
+            println!("  {} {}", "+".green(), file.display());
+            added_count += 1;
         }
 
-        // Add to state
-        state.add_file(FileEntry {
-            source: file.clone(),
-            target: file.clone(),
-            link_type,
-            entry_type: EntryType::File,
-        });
+        Ok(())
+    })();
 
-        // Add to exclude list
-        let exclude_path = file.to_string_lossy().replace('\\', "/");
-        exclude_entries.push(exclude_path);
-
-        println!("  {} {}", "+".green(), file.display());
-        added_count += 1;
+    // On failure, roll back all completed operations
+    if let Err(ref e) = result {
+        eprintln!(
+            "\n{} Rolling back {} file(s) due to error: {}",
+            "Error:".red().bold(),
+            completed.len(),
+            e
+        );
+        for (target_file, overlay_file, original_content) in completed.iter().rev() {
+            // Remove the symlink/copy we created
+            if target_file.exists() || target_file.is_symlink() {
+                let _ = fs::remove_file(target_file);
+            }
+            // Restore original file content
+            let _ = fs::write(target_file, original_content);
+            // Remove the copy in overlay source
+            let _ = fs::remove_file(overlay_file);
+        }
+        return result;
     }
 
     // Update git exclude with new entries
@@ -7058,33 +6990,6 @@ directories =
         }
 
         #[test]
-        fn create_local_parses_options() {
-            let cli = Cli::try_parse_from([
-                "repoverlay",
-                "create-local",
-                "./output",
-                "--include",
-                ".envrc",
-                "--yes",
-            ])
-            .unwrap();
-
-            match cli.command {
-                Some(Commands::CreateLocal {
-                    output,
-                    include,
-                    yes,
-                    ..
-                }) => {
-                    assert_eq!(output, PathBuf::from("./output"));
-                    assert_eq!(include.len(), 1);
-                    assert!(yes);
-                }
-                _ => panic!("Expected CreateLocal command"),
-            }
-        }
-
-        #[test]
         fn switch_parses_source() {
             let cli = Cli::try_parse_from(["repoverlay", "switch", "./new-overlay"]).unwrap();
 
@@ -7174,30 +7079,6 @@ directories =
                 "--interactive",
             ]);
             assert!(result.is_err());
-        }
-
-        #[test]
-        fn list_parses_filter() {
-            let cli = Cli::try_parse_from(["repoverlay", "list", "--filter", "org/repo"]).unwrap();
-
-            match cli.command {
-                Some(Commands::List { filter, .. }) => {
-                    assert_eq!(filter, Some("org/repo".to_string()));
-                }
-                _ => panic!("Expected List command"),
-            }
-        }
-
-        #[test]
-        fn list_parses_target_alias() {
-            let cli = Cli::try_parse_from(["repoverlay", "list", "--target", "org/repo"]).unwrap();
-
-            match cli.command {
-                Some(Commands::List { filter, .. }) => {
-                    assert_eq!(filter, Some("org/repo".to_string()));
-                }
-                _ => panic!("Expected List command"),
-            }
         }
 
         #[test]
@@ -7447,147 +7328,6 @@ directories =
                     assert_eq!(r#ref, Some("main".to_string()));
                 }
                 _ => panic!("Expected Apply command"),
-            }
-        }
-
-        #[test]
-        fn add_requires_name() {
-            let result = Cli::try_parse_from(["repoverlay", "add"]);
-            assert!(result.is_err());
-        }
-
-        #[test]
-        fn add_parses_name_and_files() {
-            let cli =
-                Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file1.txt", "file2.txt"])
-                    .unwrap();
-
-            match cli.command {
-                Some(Commands::Add {
-                    name,
-                    files,
-                    target,
-                    dry_run,
-                }) => {
-                    assert_eq!(name, "my-overlay");
-                    assert_eq!(files.len(), 2);
-                    assert_eq!(files[0], PathBuf::from("file1.txt"));
-                    assert_eq!(files[1], PathBuf::from("file2.txt"));
-                    assert!(target.is_none());
-                    assert!(!dry_run);
-                }
-                _ => panic!("Expected Add command"),
-            }
-        }
-
-        #[test]
-        fn add_parses_all_options() {
-            let cli = Cli::try_parse_from([
-                "repoverlay",
-                "add",
-                "org/repo/my-overlay",
-                "newfile.txt",
-                "--target",
-                "/repo",
-                "--dry-run",
-            ])
-            .unwrap();
-
-            match cli.command {
-                Some(Commands::Add {
-                    name,
-                    files,
-                    target,
-                    dry_run,
-                }) => {
-                    assert_eq!(name, "org/repo/my-overlay");
-                    assert_eq!(files, vec![PathBuf::from("newfile.txt")]);
-                    assert_eq!(target, Some(PathBuf::from("/repo")));
-                    assert!(dry_run);
-                }
-                _ => panic!("Expected Add command"),
-            }
-        }
-
-        #[test]
-        fn add_accepts_short_target_flag() {
-            let cli =
-                Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt", "-t", "/repo"])
-                    .unwrap();
-
-            match cli.command {
-                Some(Commands::Add { target, .. }) => {
-                    assert_eq!(target, Some(PathBuf::from("/repo")));
-                }
-                _ => panic!("Expected Add command"),
-            }
-        }
-
-        #[test]
-        fn add_accepts_multiple_files() {
-            let cli = Cli::try_parse_from([
-                "repoverlay",
-                "add",
-                "my-overlay",
-                "file1.txt",
-                "file2.txt",
-                "dir/file3.txt",
-            ])
-            .unwrap();
-
-            match cli.command {
-                Some(Commands::Add { files, .. }) => {
-                    assert_eq!(files.len(), 3);
-                    assert_eq!(files[0], PathBuf::from("file1.txt"));
-                    assert_eq!(files[1], PathBuf::from("file2.txt"));
-                    assert_eq!(files[2], PathBuf::from("dir/file3.txt"));
-                }
-                _ => panic!("Expected Add command"),
-            }
-        }
-
-        #[test]
-        fn add_accepts_files_with_special_characters() {
-            let cli = Cli::try_parse_from([
-                "repoverlay",
-                "add",
-                "my-overlay",
-                "file with spaces.txt",
-                ".hidden-file",
-            ])
-            .unwrap();
-
-            match cli.command {
-                Some(Commands::Add { files, .. }) => {
-                    assert_eq!(files.len(), 2);
-                    assert_eq!(files[0], PathBuf::from("file with spaces.txt"));
-                    assert_eq!(files[1], PathBuf::from(".hidden-file"));
-                }
-                _ => panic!("Expected Add command"),
-            }
-        }
-
-        #[test]
-        fn add_dry_run_defaults_to_false() {
-            let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
-
-            match cli.command {
-                Some(Commands::Add { dry_run, .. }) => {
-                    assert!(!dry_run);
-                }
-                _ => panic!("Expected Add command"),
-            }
-        }
-
-        #[test]
-        fn add_target_defaults_to_none() {
-            let cli = Cli::try_parse_from(["repoverlay", "add", "my-overlay", "file.txt"]).unwrap();
-
-            match cli.command {
-                Some(Commands::Add { target, .. }) => {
-                    assert!(target.is_none());
-                }
-                _ => panic!("Expected Add command"),
             }
         }
 
