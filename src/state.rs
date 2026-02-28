@@ -116,24 +116,6 @@ impl OverlaySource {
         }
     }
 
-    /// Create a new overlay repository source with resolution info.
-    pub const fn overlay_repo_with_resolution(
-        org: String,
-        repo: String,
-        name: String,
-        commit: String,
-        resolved_via: ResolvedVia,
-    ) -> Self {
-        Self::OverlayRepo {
-            org,
-            repo,
-            name,
-            commit,
-            resolved_via: Some(resolved_via),
-            source_name: None,
-        }
-    }
-
     /// Create a new overlay repository source with full info (resolution + source name).
     pub const fn overlay_repo_full(
         org: String,
@@ -1155,19 +1137,21 @@ mod tests {
         let upstream = ResolvedVia::Upstream;
 
         // Create sources with each resolution type
-        let source_direct = OverlaySource::overlay_repo_with_resolution(
+        let source_direct = OverlaySource::overlay_repo_full(
             "org".to_string(),
             "repo".to_string(),
             "name".to_string(),
             "abc123".to_string(),
             direct,
+            "default".to_string(),
         );
-        let source_upstream = OverlaySource::overlay_repo_with_resolution(
+        let source_upstream = OverlaySource::overlay_repo_full(
             "org".to_string(),
             "repo".to_string(),
             "name".to_string(),
             "abc123".to_string(),
             upstream,
+            "default".to_string(),
         );
 
         let s1 = sickle::to_string(&source_direct).unwrap();

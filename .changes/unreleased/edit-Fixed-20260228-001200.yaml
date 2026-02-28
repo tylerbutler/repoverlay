@@ -1,0 +1,10 @@
+kind: Fixed
+body: |-
+    Interactive edit handles non-OverlayRepo sources correctly (#148)
+
+    `add_files_to_overlay` is now source-type-aware and includes a rollback
+    mechanism. Local overlays copy files to the overlay directory; GitHub
+    overlays are rejected with a clear error. If any operation fails mid-way,
+    all completed operations are rolled back to prevent partial state.
+time: 2026-02-28T00:12:00Z
+component: edit

@@ -346,6 +346,7 @@ impl OverlayRepoManager {
     ///
     /// Copies files from `source_dir` to the overlay repo at org/repo/name/
     /// Returns the destination path.
+    #[cfg(test)]
     pub fn stage_overlay(
         &self,
         org: &str,

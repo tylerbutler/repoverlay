@@ -1,0 +1,9 @@
+kind: Changed
+body: |-
+    Remove legacy overlay_repo config support (#79)
+
+    The deprecated `overlay_repo` configuration field and automatic migration
+    from the old format have been removed. Users must use the `sources`
+    configuration format. The `OverlayRepoConfig` struct is retained for use
+    by the sources system.
+time: 2026-02-28T00:10:00Z
