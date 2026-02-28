@@ -1,8 +1,0 @@
-kind: Changed
-body: |-
-    Remove deprecated commands: add, publish, list, create-local (#84)
-
-    Removed hidden/deprecated command variants that have been replaced:
-    `add` (use `edit --add`), `publish` (use `create`), `list` (use `browse`),
-    and `create-local` (use `create --local`).
-time: 2026-02-28T00:13:00Z
