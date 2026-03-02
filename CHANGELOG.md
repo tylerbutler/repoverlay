@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.9.0 - 2026-03-02
+
+
+#### Added
+
+##### Always sync cache and overlay repos before operations
+
+All commands that read from the overlay repo or GitHub cache now pull the
+latest by default. The `--update` flag is replaced with `--no-update` to
+opt out (e.g., for offline use). Affected commands: `apply`, `browse`,
+`list`, `switch`, `create`, and `sync`.
+
+**BREAKING:** The `--update` flag has been removed. Use `--no-update` to
+skip syncing.
+
+
 ## v0.8.0 - 2026-02-28
 
 
