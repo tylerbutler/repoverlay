@@ -47,8 +47,8 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 02-01-PLAN.md -- Path traversal edge case tests (unconditional failure assertions) and FIX-02 regression test (Display format)
-- [ ] 02-02-PLAN.md -- Cache failure recovery unit tests and interactive conflict stdin injection test (TEST-03 scope)
+- [x] 02-01-PLAN.md -- Path traversal edge case tests (unconditional failure assertions) and FIX-02 regression test (Display format)
+- [x] 02-02-PLAN.md -- Cache failure recovery unit tests and interactive conflict stdin injection test (TEST-03 scope)
 - [ ] 02-03-PLAN.md -- Install cargo-mutants, run scoped mutation baseline, address surviving mutants
 
 ### Phase 3: API Stabilization and Manual Testing
@@ -87,6 +87,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Code Review and Bug Fixes | 2/2 | Complete | 2026-02-28 |
-| 2. Test Coverage | 0/1 | Not started | - |
+| 2. Test Coverage | 2/3 | In progress | - |
 | 3. API Stabilization and Manual Testing | 0/2 | Not started | - |
 | 4. Release Preparation | 0/1 | Not started | - |

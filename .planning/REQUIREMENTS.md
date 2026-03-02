@@ -26,10 +26,10 @@ Requirements for 1.0 release. Each maps to roadmap phases.
 
 ### Test Coverage
 
-- [ ] **TEST-01**: Coverage gaps closed for path traversal edge cases
-- [ ] **TEST-02**: Coverage gaps closed for cache update failure recovery
-- [ ] **TEST-03**: Coverage gaps closed for terminal recovery (Ctrl+C in interactive selection)
-- [ ] **TEST-04**: Regression tests added for every bug fixed during review
+- [x] **TEST-01**: Coverage gaps closed for path traversal edge cases
+- [x] **TEST-02**: Coverage gaps closed for cache update failure recovery
+- [x] **TEST-03**: Coverage gaps closed for terminal recovery (Ctrl+C in interactive selection) -- prompt_conflict_interactive tested via stdin; selection.rs raw mode documented as manual-only
+- [x] **TEST-04**: Regression tests added for every bug fixed during review
 - [ ] **TEST-05**: Mutation testing run with cargo-mutants to identify untested behaviors
 - [ ] **TEST-06**: Surviving mutants from TEST-05 addressed with additional tests
 
@@ -107,8 +107,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | FIX-03 | Phase 1 | Complete |
 | FIX-04 | Phase 1 | Complete |
 | TEST-01 | Phase 2 | Pending |
-| TEST-02 | Phase 2 | Pending |
-| TEST-03 | Phase 2 | Pending |
+| TEST-02 | Phase 2 | Complete |
+| TEST-03 | Phase 2 | Complete (partial) |
 | TEST-04 | Phase 2 | Pending |
 | TEST-05 | Phase 2 | Pending |
 | TEST-06 | Phase 2 | Pending |
