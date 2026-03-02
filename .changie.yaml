@@ -11,7 +11,7 @@ kindFormat: '#### {{.Kind}}'
 changeFormat: |-
     ##### {{(splitn "\n" 2 .Body)._0}}
     {{with (splitn "\n" 2 .Body)._1 | default "" | trim}}
-    {{.}}
+    {{regexReplaceAll "([^\n])\n([^\n])" . "${1} ${2}"}}
     {{end}}
 body:
     block: true
