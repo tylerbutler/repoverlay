@@ -108,9 +108,9 @@ enum Commands {
         #[arg(short, long, value_name = "REF", help_heading = "GitHub Options")]
         r#ref: Option<String>,
 
-        /// Force update the cached repository before applying (GitHub sources only)
-        #[arg(long, help_heading = "GitHub Options")]
-        update: bool,
+        /// Skip updating cached/overlay repositories before applying
+        #[arg(long)]
+        no_update: bool,
 
         /// Overwrite existing files and re-apply same-name overlays
         #[arg(long, visible_alias = "overwrite", conflicts_with_all = ["skip_conflicts", "interactive"])]
@@ -295,6 +295,10 @@ enum Commands {
         #[arg(short, long, value_name = "REF")]
         r#ref: Option<String>,
 
+        /// Skip updating cached/overlay repositories before switching
+        #[arg(long)]
+        no_update: bool,
+
         /// Overwrite existing repo files when applying the new overlay
         #[arg(long, visible_alias = "overwrite", conflicts_with_all = ["skip_conflicts", "interactive"])]
         force: bool,
@@ -332,9 +336,9 @@ enum Commands {
         #[arg(short = 'f', long)]
         filter: Option<String>,
 
-        /// Update overlay repo before listing
+        /// Skip updating overlay repo before listing
         #[arg(long)]
-        update: bool,
+        no_update: bool,
 
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
@@ -456,9 +460,9 @@ enum Commands {
         #[arg(short = 'f', long)]
         filter: Option<String>,
 
-        /// Update overlay repo before listing
+        /// Skip updating overlay repo before listing
         #[arg(long)]
-        update: bool,
+        no_update: bool,
 
         /// Target repository directory
         #[arg(short, long)]
@@ -566,7 +570,7 @@ pub fn run() -> Result<()> {
             copy,
             name,
             r#ref,
-            update,
+            no_update,
             force,
             skip_conflicts,
             interactive,
@@ -590,7 +594,7 @@ pub fn run() -> Result<()> {
                 copy,
                 name,
                 r#ref.as_deref(),
-                update,
+                !no_update,
                 conflict_strategy,
                 merge,
                 from_source.as_deref(),
@@ -684,6 +688,7 @@ pub fn run() -> Result<()> {
             copy,
             name,
             r#ref,
+            no_update,
             force,
             skip_conflicts,
             interactive,
@@ -705,6 +710,7 @@ pub fn run() -> Result<()> {
                 copy,
                 name,
                 r#ref.as_deref(),
+                !no_update, // default: sync before switching
                 conflict_strategy,
                 merge,
             )?;
@@ -715,7 +721,7 @@ pub fn run() -> Result<()> {
         Commands::Browse {
             source,
             filter,
-            update,
+            no_update,
             target,
             no_interactive,
             dry_run,
@@ -724,7 +730,7 @@ pub fn run() -> Result<()> {
             browse_overlays(
                 source.as_deref(),
                 filter.as_deref(),
-                update,
+                !no_update,
                 target,
                 no_interactive,
                 dry_run,
@@ -767,7 +773,7 @@ pub fn run() -> Result<()> {
         Commands::List {
             source,
             filter,
-            update,
+            no_update,
             target,
             no_interactive,
             dry_run,
@@ -777,7 +783,7 @@ pub fn run() -> Result<()> {
             browse_overlays(
                 source.as_deref(),
                 filter.as_deref(),
-                update,
+                !no_update,
                 target,
                 no_interactive,
                 dry_run,
@@ -1575,9 +1581,10 @@ fn create_overlay_command(
     let config = load_config(None)?;
     let overlay_config = config.get_default_overlay_repo_config()?;
 
-    // Create manager and ensure cloned
+    // Create manager, ensure cloned, and pull latest
     let manager = OverlayRepoManager::new(overlay_config)?;
     manager.ensure_cloned()?;
+    manager.pull()?;
 
     // Determine output path in overlay repo
     let output_path = manager.path().join(&org).join(&repo).join(&overlay_name);
@@ -1806,6 +1813,7 @@ fn handle_sync(
         let overlay_config = config.get_default_overlay_repo_config()?;
         let manager = OverlayRepoManager::new(overlay_config)?;
         manager.ensure_cloned()?;
+        manager.pull()?;
 
         let mut synced = 0u32;
         let mut skipped = 0u32;
@@ -1915,9 +1923,10 @@ fn handle_sync(
         };
         let overlay_config = config.get_overlay_repo_config_by_name(source_name)?;
 
-        // Create manager and ensure cloned
+        // Create manager, ensure cloned, and pull latest
         let manager = OverlayRepoManager::new(overlay_config)?;
         manager.ensure_cloned()?;
+        manager.pull()?;
 
         sync_single_overlay(
             &target,
@@ -5488,6 +5497,7 @@ directories =
                 false,
                 Some("second-overlay".to_string()),
                 None,
+                false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
             );
@@ -5517,6 +5527,7 @@ directories =
                 false,
                 Some("new-overlay".to_string()),
                 None,
+                false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
             );
@@ -5536,6 +5547,7 @@ directories =
                 false,
                 None,
                 None,
+                false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
             );
@@ -5594,6 +5606,7 @@ directories =
                 false,
                 Some("overlay-c".to_string()),
                 None,
+                false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
             )
@@ -5621,6 +5634,7 @@ directories =
                 false,
                 Some("my-overlay".to_string()),
                 None,
+                false, // no update for local paths
                 ConflictStrategy::Force,
                 false,
             );
@@ -5653,6 +5667,7 @@ directories =
                 false,
                 Some("my-overlay".to_string()),
                 None,
+                false, // no update for local paths
                 ConflictStrategy::SkipConflicts,
                 false,
             );
@@ -5691,6 +5706,7 @@ directories =
                 false,
                 Some("my-overlay".to_string()),
                 None,
+                false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
             );
@@ -6424,7 +6440,7 @@ directories =
                 "my-name",
                 "--ref",
                 "main",
-                "--update",
+                "--no-update",
             ])
             .unwrap();
 
@@ -6435,7 +6451,7 @@ directories =
                     copy,
                     name,
                     r#ref,
-                    update,
+                    no_update,
                     force,
                     skip_conflicts,
                     interactive,
@@ -6448,7 +6464,7 @@ directories =
                     assert!(copy);
                     assert_eq!(name, Some("my-name".to_string()));
                     assert_eq!(r#ref, Some("main".to_string()));
-                    assert!(update);
+                    assert!(no_update);
                     assert!(!force);
                     assert!(!skip_conflicts);
                     assert!(!interactive);

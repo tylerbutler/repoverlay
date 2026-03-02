@@ -377,9 +377,14 @@ fn resolve_github_url(
     // Ensure cached and get path
     let cache = CacheManager::new()?;
 
+    let label = if update {
+        "Fetching"
+    } else {
+        "Fetching (cached)"
+    };
     println!(
         "{} repository: {}/{}",
-        if update { "Updating" } else { "Fetching" }.blue().bold(),
+        label.blue().bold(),
         github_source.owner,
         github_source.repo
     );
@@ -464,12 +469,12 @@ fn resolve_two_part(
 
     // Fetch/cache the repository
     let cache = CacheManager::new()?;
-    println!(
-        "{} repository: {}/{}",
-        if update { "Updating" } else { "Fetching" }.blue().bold(),
-        owner,
-        repo
-    );
+    let label = if update {
+        "Fetching"
+    } else {
+        "Fetching (cached)"
+    };
+    println!("{} repository: {}/{}", label.blue().bold(), owner, repo);
     let cached = cache.ensure_cached(&github_source, update)?;
 
     // List available overlays
@@ -831,12 +836,14 @@ fn resolve_from_sources_with_suggestions(
 ) -> Result<ResolvedSource> {
     let manager = sources::SourceManager::new(sources.to_vec())?;
 
-    // Ensure all sources are cloned
+    // Ensure all sources are cloned and up-to-date
     manager.ensure_all_cloned()?;
 
     if update {
         println!("{} overlay sources...", "Updating".blue().bold());
         manager.pull_all()?;
+    } else {
+        debug!("skipping overlay source update (--no-update)");
     }
 
     // Resolve overlay from sources
@@ -2971,12 +2978,14 @@ pub(crate) fn create_overlay_with_files(
 ///
 /// 1. Remove all existing overlays (if any)
 /// 2. Apply the new overlay
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn switch_overlay(
     source: &str,
     target: &Path,
     copy: bool,
     name: Option<String>,
     ref_override: Option<&str>,
+    update_cache: bool,
     conflict_strategy: ConflictStrategy,
     merge: bool,
 ) -> Result<()> {
@@ -3000,7 +3009,7 @@ pub(crate) fn switch_overlay(
         copy,
         name,
         ref_override,
-        false,
+        update_cache,
         conflict_strategy,
         merge,
         None,
