@@ -1842,3 +1842,49 @@ fn edit_interactive_excludes_repoverlay_ccl_from_selection() {
         .success()
         .stdout(predicate::str::contains("No changes"));
 }
+
+// ==================== 1.0 Stabilization: Phase 2 Regression Tests ====================
+
+#[test]
+fn apply_path_traversal_fails_with_clear_error() {
+    let parent_dir = tempfile::TempDir::new().unwrap();
+    let repo_dir = parent_dir.path().join("repo");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_dir)
+        .output()
+        .unwrap();
+
+    let overlay = tempfile::TempDir::new().unwrap();
+    std::fs::write(overlay.path().join(".envrc"), "export FOO=bar").unwrap();
+    std::fs::write(
+        overlay.path().join("repoverlay.ccl"),
+        "mappings =\n  .envrc = ../escape/malicious\n",
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay.path().to_str().unwrap()])
+        .args(["--target", repo_dir.to_str().unwrap()])
+        .assert()
+        .failure(); // Must fail -- no conditional check
+}
+
+#[test]
+fn error_messages_use_display_not_debug_format() {
+    let temp = tempfile::TempDir::new().unwrap();
+    // Create a simple overlay (no repoverlay.ccl needed -- apply will fail at git check)
+    let overlay = tempfile::TempDir::new().unwrap();
+    std::fs::write(overlay.path().join(".envrc"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay.path().to_str().unwrap()])
+        .args(["--target", temp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        // Debug format markers that must NOT appear:
+        .stderr(predicate::str::contains("Os {").not())
+        .stderr(predicate::str::contains("kind: ").not());
+    // Note: do NOT assert specific message text as it may vary by OS
+}
