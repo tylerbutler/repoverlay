@@ -1018,6 +1018,61 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn save_meta_fails_gracefully_when_dir_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        // Make directory read-only so save_meta cannot write
+        fs::set_permissions(&repo_path, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+        let result = manager.save_meta(
+            &repo_path,
+            &source,
+            "abc123def456789012345678901234567890abcd",
+        );
+
+        // Restore permissions before asserting (so temp dir cleanup works)
+        fs::set_permissions(&repo_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            result.is_err(),
+            "save_meta should return Err when directory is read-only"
+        );
+    }
+
+    #[test]
+    fn ensure_cached_propagates_git_errors_cleanly() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+        let repo_path = manager.repo_path(&source);
+
+        // Create directory to trigger the "cache hit" branch (update=false path)
+        // but it's not a real git repo, so checkout_ref will fail
+        fs::create_dir_all(&repo_path).unwrap();
+
+        // ensure_cached(update=false): exists -> checkout_ref -> git checkout -> Err
+        let result = manager.ensure_cached(&source, false);
+        assert!(
+            result.is_err(),
+            "ensure_cached should propagate git error, not panic"
+        );
+        // Verify it's a meaningful error (not just empty)
+        let err_str = result.unwrap_err().to_string();
+        assert!(!err_str.is_empty(), "error message should not be empty");
+    }
+
+    #[test]
     fn test_list_cached_skips_files_in_owner_directory() {
         let temp = TempDir::new().unwrap();
         let manager = CacheManager {
