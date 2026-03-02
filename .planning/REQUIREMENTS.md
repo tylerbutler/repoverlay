@@ -106,10 +106,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | FIX-02 | Phase 1 | Complete |
 | FIX-03 | Phase 1 | Complete |
 | FIX-04 | Phase 1 | Complete |
-| TEST-01 | Phase 2 | Pending |
+| TEST-01 | Phase 2 | Complete |
 | TEST-02 | Phase 2 | Complete |
 | TEST-03 | Phase 2 | Complete (partial) |
-| TEST-04 | Phase 2 | Pending |
+| TEST-04 | Phase 2 | Complete |
 | TEST-05 | Phase 2 | Pending |
 | TEST-06 | Phase 2 | Pending |
 | API-01 | Phase 3 | Pending |
