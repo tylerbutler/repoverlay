@@ -1,0 +1,12 @@
+kind: Added
+body: |-
+    Always sync cache and overlay repos before operations
+
+    All commands that read from the overlay repo or GitHub cache now pull the
+    latest by default. The `--update` flag is replaced with `--no-update` to
+    opt out (e.g., for offline use). Affected commands: `apply`, `browse`,
+    `list`, `switch`, `create`, and `sync`.
+
+    **BREAKING:** The `--update` flag has been removed. Use `--no-update` to
+    skip syncing.
+time: 2026-03-02T12:00:00-08:00
