@@ -44,10 +44,12 @@ Plans:
   2. Cache update failure scenarios have tests verifying graceful recovery
   3. Every bug fixed in Phase 1 has a regression test
   4. Mutation testing has been run and surviving mutants have been addressed or documented
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: TBD
+- [ ] 02-01-PLAN.md -- Path traversal edge case tests (unconditional failure assertions) and FIX-02 regression test (Display format)
+- [ ] 02-02-PLAN.md -- Cache failure recovery unit tests and interactive conflict stdin injection test (TEST-03 scope)
+- [ ] 02-03-PLAN.md -- Install cargo-mutants, run scoped mutation baseline, address surviving mutants
 
 ### Phase 3: API Stabilization and Manual Testing
 **Goal**: Public API is locked for semver and all CLI workflows are verified through manual test documentation
