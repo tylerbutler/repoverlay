@@ -61,11 +61,11 @@ Plans:
   3. Public API items have doc comments
   4. Manual test documents exist for all 8 core CLI workflows (apply, remove, status, restore, update, create, switch/browse, source management)
   5. Manual test steps can be followed by a person and produce the documented results
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md -- Lock API surface (pub → pub(crate) conversion) and review module-level doc comments
+- [ ] 03-02-PLAN.md -- Create manual test documents for all 8 CLI workflows (apply, remove, status, restore, update, create, switch/browse, source management)
 
 ### Phase 4: Release Preparation
 **Goal**: 1.0 release artifacts are verified and ready to publish
