@@ -1,0 +1,26 @@
+--- src/sources.rs
++++ replace SourceManager::pull_all -> Result<()> with Ok(())
+@@ -93,22 +93,17 @@
+         for ms in &self.sources {
+             ms.manager.ensure_cloned()?;
+         }
+         Ok(())
+     }
+ 
+     /// Pull updates for all sources.
+     pub fn pull_all(&self) -> Result<()> {
+-        for ms in &self.sources {
+-            if !ms.manager.needs_clone() {
+-                ms.manager.pull()?;
+-            }
+-        }
+-        Ok(())
++        Ok(()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Resolve an overlay reference against all sources in priority order.
+     ///
+     /// Returns `None` if no source has the overlay.
+     /// If `source_filter` is provided, only that source is checked.
+     pub fn resolve(
+         &self,

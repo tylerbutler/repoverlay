@@ -1,0 +1,24 @@
+--- src/state.rs
++++ replace <impl SourceResolver for OverlaySource>::is_mutable -> bool with false
+@@ -279,20 +279,17 @@
+                 };
+                 let cached = cache.ensure_cached(&source, false)?;
+                 Ok(cached.path)
+             }
+         }
+     }
+ 
+     fn is_mutable(&self) -> bool {
+-        match self {
+-            Self::Local { .. } | Self::OverlayRepo { .. } => true,
+-            Self::GitHub { .. } => false,
+-        }
++        false /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn is_syncable(&self) -> bool {
+         match self {
+             Self::OverlayRepo { .. } => true,
+             Self::Local { .. } | Self::GitHub { .. } => false,
+         }
+     }

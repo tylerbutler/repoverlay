@@ -1,0 +1,21 @@
+--- src/state.rs
++++ replace == with != in OverlayState::remove_file
+@@ -354,17 +354,17 @@
+     /// Add a file entry to the state.
+     pub fn add_file(&mut self, entry: FileEntry) {
+         self.files.push(entry);
+     }
+ 
+     /// Remove a file entry by target path. Returns the removed entry, or None if not found.
+     #[allow(dead_code)]
+     pub fn remove_file(&mut self, target: &Path) -> Option<FileEntry> {
+-        if let Some(pos) = self.files.iter().position(|f| f.target == target) {
++        if let Some(pos) = self.files.iter().position(|f| f.target != /* ~ changed by cargo-mutants ~ */ target) {
+             Some(self.files.remove(pos))
+         } else {
+             None
+         }
+     }
+ 
+     /// Get the number of files in the overlay.
+     #[allow(clippy::missing_const_for_fn)]

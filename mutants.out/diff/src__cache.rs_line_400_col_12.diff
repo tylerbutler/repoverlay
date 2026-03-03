@@ -1,0 +1,21 @@
+--- src/cache.rs
++++ delete ! in CacheManager::check_for_updates
+@@ -392,17 +392,17 @@
+         if !repo_path.exists() {
+             return Ok(None);
+         }
+ 
+         let current_commit = self.get_current_commit(&repo_path)?;
+ 
+         // Fetch latest
+         let output = git_in_dir(&repo_path, &["fetch", "--depth", "1", "origin"])?;
+-        if !output.status.success() {
++        if  /* ~ changed by cargo-mutants ~ */output.status.success() {
+             return Ok(None);
+         }
+ 
+         // Get the remote HEAD commit
+         let ref_spec = match &source.git_ref {
+             GitRef::Default => "origin/HEAD".to_string(),
+             GitRef::Branch(b) => format!("origin/{b}"),
+             GitRef::Tag(_) | GitRef::Commit(_) => {

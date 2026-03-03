@@ -1,0 +1,21 @@
+--- src/state.rs
++++ replace exclude_marker_end -> String with String::new()
+@@ -543,17 +543,17 @@
+ 
+ /// Generate the start marker for a git exclude section.
+ pub fn exclude_marker_start(name: &str) -> String {
+     format!("# repoverlay:{name} start")
+ }
+ 
+ /// Generate the end marker for a git exclude section.
+ pub fn exclude_marker_end(name: &str) -> String {
+-    format!("# repoverlay:{name} end")
++    String::new() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Validate and normalize overlay name for use as filename.
+ pub fn normalize_overlay_name(name: &str) -> Result<String> {
+     let normalized: String = name
+         .to_lowercase()
+         .replace(' ', "-")
+         .chars()

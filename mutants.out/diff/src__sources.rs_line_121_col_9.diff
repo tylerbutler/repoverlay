@@ -1,0 +1,61 @@
+--- src/sources.rs
++++ replace SourceManager::resolve -> Result<Option<ResolvedOverlay>> with Ok(None)
+@@ -113,57 +113,17 @@
+     pub fn resolve(
+         &self,
+         org: &str,
+         repo: &str,
+         name: &str,
+         upstream: Option<&UpstreamInfo>,
+         source_filter: Option<&str>,
+     ) -> Result<Option<ResolvedOverlay>> {
+-        let sources_to_check: Vec<&ManagedSource> = if let Some(filter_name) = source_filter {
+-            // Only check the specified source
+-            let source = self
+-                .sources
+-                .iter()
+-                .find(|s| s.source.name == filter_name)
+-                .ok_or_else(|| {
+-                    let available: Vec<_> = self.source_names();
+-                    anyhow::anyhow!(
+-                        "Unknown source: {filter_name}\nAvailable sources: {}",
+-                        available.join(", ")
+-                    )
+-                })?;
+-            vec![source]
+-        } else {
+-            self.sources.iter().collect()
+-        };
+-
+-        for ms in sources_to_check {
+-            // Skip sources that aren't cloned yet
+-            if ms.manager.needs_clone() {
+-                continue;
+-            }
+-
+-            // Try to resolve from this source
+-            if let Ok((path, resolved_via)) = ms
+-                .manager
+-                .get_overlay_path_with_fallback(org, repo, name, upstream)
+-            {
+-                let commit = ms.manager.get_current_commit()?;
+-                return Ok(Some(ResolvedOverlay {
+-                    path,
+-                    source: ms.source.clone(),
+-                    resolved_via,
+-                    commit,
+-                }));
+-            }
+-            // Not found in this source, continue to next
+-        }
+-
+-        Ok(None)
++        Ok(None) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Find all sources that have a specific overlay.
+     ///
+     /// Returns a list of (source, `resolved_via`) pairs for each source
+     /// that has the overlay.
+     #[must_use]
+     #[allow(dead_code)] // Utility method for future `resolve` command

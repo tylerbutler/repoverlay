@@ -1,0 +1,23 @@
+--- src/state.rs
++++ replace external_state_dir_for_target -> Result<PathBuf> with Ok(Default::default())
+@@ -441,19 +441,17 @@
+ 
+     Ok(proj_dirs.data_dir().join("applied"))
+ }
+ 
+ /// Get the external state directory for a specific target repository.
+ ///
+ /// Uses a hash of the canonical target path to create a unique directory.
+ pub fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
+-    let base = external_state_dir()?;
+-    let target_hash = hash_path(target);
+-    Ok(base.join(target_hash))
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Save overlay state to the external backup location.
+ pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlayState) -> Result<()> {
+     debug!("save_external_state: {overlay_name}");
+     let dir = external_state_dir_for_target(target)?;
+     fs::create_dir_all(&dir)?;
+ 

@@ -1,0 +1,21 @@
+--- src/cache.rs
++++ replace && with || in CacheManager::remove_cached
+@@ -352,17 +352,17 @@
+     pub fn remove_cached(&self, owner: &str, repo: &str) -> Result<bool> {
+         let path = self.cache_dir.join("github").join(owner).join(repo);
+ 
+         if path.exists() {
+             fs::remove_dir_all(&path)?;
+ 
+             // Clean up empty parent directories
+             let owner_dir = self.cache_dir.join("github").join(owner);
+-            if owner_dir.exists() && owner_dir.read_dir()?.next().is_none() {
++            if owner_dir.exists() || /* ~ changed by cargo-mutants ~ */ owner_dir.read_dir()?.next().is_none() {
+                 fs::remove_dir(&owner_dir)?;
+             }
+ 
+             Ok(true)
+         } else {
+             Ok(false)
+         }
+     }

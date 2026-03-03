@@ -1,0 +1,28 @@
+--- src/state.rs
++++ replace OverlaySource::overlay_repo -> Self with Default::default()
+@@ -101,24 +101,17 @@
+             commit,
+             subpath,
+             cached_at: Utc::now(),
+         }
+     }
+ 
+     /// Create a new overlay repository source.
+     pub const fn overlay_repo(org: String, repo: String, name: String, commit: String) -> Self {
+-        Self::OverlayRepo {
+-            org,
+-            repo,
+-            name,
+-            commit,
+-            resolved_via: None,
+-            source_name: None,
+-        }
++        Default::default() /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Create a new overlay repository source with full info (resolution + source name).
+     pub const fn overlay_repo_full(
+         org: String,
+         repo: String,
+         name: String,
+         commit: String,

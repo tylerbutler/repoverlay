@@ -1,0 +1,21 @@
+--- src/state.rs
++++ replace exclude_marker_start -> String with String::new()
+@@ -538,17 +538,17 @@
+ fn hash_path(path: &Path) -> String {
+     let mut hasher = DefaultHasher::new();
+     path.to_string_lossy().hash(&mut hasher);
+     format!("{:016x}", hasher.finish())
+ }
+ 
+ /// Generate the start marker for a git exclude section.
+ pub fn exclude_marker_start(name: &str) -> String {
+-    format!("# repoverlay:{name} start")
++    String::new() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Generate the end marker for a git exclude section.
+ pub fn exclude_marker_end(name: &str) -> String {
+     format!("# repoverlay:{name} end")
+ }
+ 
+ /// Validate and normalize overlay name for use as filename.

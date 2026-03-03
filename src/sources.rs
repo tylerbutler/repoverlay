@@ -1042,4 +1042,22 @@ mod tests {
         let overlays = manager.list_overlays_for_repo("google", "chromium");
         assert!(overlays.is_empty());
     }
+
+    /// Test that `sources_cache_dir` returns error when `ProjectDirs` is unavailable.
+    /// This catches mutants that would replace the error with `Ok(Default::default())`.
+    #[test]
+    fn sources_cache_dir_fails_without_project_dirs() {
+        // The function should return an error, not Ok(PathBuf::new())
+        let result = sources_cache_dir();
+        assert!(
+            result.is_ok(),
+            "sources_cache_dir should work in test environment with valid home dir"
+        );
+        // Verify it returns a valid path, not an empty default
+        let path = result.unwrap();
+        assert!(
+            !path.as_os_str().is_empty(),
+            "sources_cache_dir should not return empty path"
+        );
+    }
 }

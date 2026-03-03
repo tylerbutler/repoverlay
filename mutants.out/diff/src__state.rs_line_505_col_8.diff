@@ -1,0 +1,21 @@
+--- src/state.rs
++++ delete ! in load_external_states
+@@ -497,17 +497,17 @@
+ 
+ /// Load all overlay states from the external backup location for a target.
+ ///
+ /// Only returns states that are eligible for restoration (not marked as removed).
+ pub fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
+     debug!("load_external_states: {}", target.display());
+     let dir = external_state_dir_for_target(target)?;
+ 
+-    if !dir.exists() {
++    if  /* ~ changed by cargo-mutants ~ */dir.exists() {
+         debug!("no external state directory found");
+         return Ok(Vec::new());
+     }
+ 
+     let mut states = Vec::new();
+ 
+     for entry in fs::read_dir(&dir)? {
+         let entry = entry?;

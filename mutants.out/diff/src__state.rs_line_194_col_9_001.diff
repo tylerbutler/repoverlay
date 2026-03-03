@@ -1,0 +1,24 @@
+--- src/state.rs
++++ replace OverlaySource::local_path -> Option<&Path> with Some(Box::leak(Box::new(Default::default())))
+@@ -186,20 +186,17 @@
+     #[allow(dead_code)]
+     pub const fn is_overlay_repo(&self) -> bool {
+         matches!(self, Self::OverlayRepo { .. })
+     }
+ 
+     /// Get the local path for this source (for local sources only).
+     #[allow(dead_code)]
+     pub fn local_path(&self) -> Option<&Path> {
+-        match self {
+-            Self::Local { path } => Some(path),
+-            Self::GitHub { .. } | Self::OverlayRepo { .. } => None,
+-        }
++        Some(Box::leak(Box::new(Default::default()))) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ /// Abstraction for resolving overlay sources to local paths and querying capabilities.
+ ///
+ /// Centralizes the `match` on `OverlaySource` variants so that each command
+ /// doesn't need to independently handle source-type dispatch. Adding a new
+ /// source variant only requires updating this implementation (compile-time

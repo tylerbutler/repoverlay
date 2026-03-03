@@ -1,0 +1,30 @@
+--- src/state.rs
++++ replace load_overlay_state -> Result<OverlayState> with Ok(Default::default())
+@@ -615,26 +615,17 @@
+         .collect();
+ 
+     names.sort();
+     Ok(names)
+ }
+ 
+ /// Load an overlay state from the in-repo state file.
+ pub fn load_overlay_state(target: &Path, name: &str) -> Result<OverlayState> {
+-    debug!("load_overlay_state: {name}");
+-    let state_file = target
+-        .join(STATE_DIR)
+-        .join(OVERLAYS_DIR)
+-        .join(format!("{name}.ccl"));
+-
+-    let content = fs::read_to_string(&state_file)
+-        .with_context(|| format!("Failed to read overlay state: {name}"))?;
+-
+-    sickle::from_str(&content).with_context(|| format!("Failed to parse overlay state: {name}"))
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Save an overlay state to the in-repo state file.
+ pub fn save_overlay_state(target: &Path, state: &OverlayState) -> Result<()> {
+     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+     fs::create_dir_all(&overlays_dir)?;
+ 
+     let normalized_name = normalize_overlay_name(&state.name)?;

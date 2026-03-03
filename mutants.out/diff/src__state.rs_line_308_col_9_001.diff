@@ -1,0 +1,25 @@
+--- src/state.rs
++++ replace <impl SourceResolver for OverlaySource>::source_type_label -> &'static str with "xyzzy"
+@@ -300,21 +300,17 @@
+     fn is_updatable(&self) -> bool {
+         match self {
+             Self::OverlayRepo { .. } | Self::GitHub { .. } => true,
+             Self::Local { .. } => false,
+         }
+     }
+ 
+     fn source_type_label(&self) -> &'static str {
+-        match self {
+-            Self::Local { .. } => "local",
+-            Self::OverlayRepo { .. } => "overlay repo",
+-            Self::GitHub { .. } => "GitHub",
+-        }
++        "xyzzy" /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ /// Global metadata for the .repoverlay directory.
+ #[derive(Debug, Deserialize, Serialize)]
+ pub struct GlobalMeta {
+     pub version: u32,
+ }

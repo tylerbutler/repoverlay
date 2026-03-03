@@ -1,0 +1,21 @@
+--- src/cache.rs
++++ replace CacheManager::cache_dir -> &Path with Box::leak(Box::new(Default::default()))
+@@ -84,17 +84,17 @@
+     /// Create a new cache manager.
+     pub fn new() -> Result<Self> {
+         let cache_dir = cache_dir()?;
+         Ok(Self { cache_dir })
+     }
+ 
+     /// Get the cache directory path.
+     pub fn cache_dir(&self) -> &Path {
+-        &self.cache_dir
++        Box::leak(Box::new(Default::default())) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Ensure a GitHub repository is cached and at the correct ref.
+     ///
+     /// Returns the path to the overlay files.
+     pub fn ensure_cached(&self, source: &GitHubSource, update: bool) -> Result<CachedOverlay> {
+         let repo_path = self.repo_path(source);
+         let owner = &source.owner;

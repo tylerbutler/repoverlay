@@ -1092,4 +1092,67 @@ mod tests {
         assert_eq!(repos.len(), 1);
         assert_eq!(repos[0].repo, "real-repo");
     }
+
+    /// Test that `clone_repo` propagates errors for non-existent repos.
+    /// This catches the mutant that replaces `clone_repo -> Result<()>` with `Ok(())`.
+    #[test]
+    fn clone_repo_propagates_errors_for_invalid_repo() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+        let source =
+            GitHubSource::parse("https://github.com/owner/non-existent-repo-12345").unwrap();
+        let target = temp.path().join("target");
+
+        // Attempt to clone a repo that definitely doesn't exist
+        let result = manager.clone_repo(&source, &target);
+
+        // Should return an error, not Ok(())
+        assert!(
+            result.is_err(),
+            "clone_repo should return Err for invalid repo, not Ok(())"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("not found") || err.to_string().contains("failed"),
+            "error should indicate repository not found"
+        );
+    }
+
+    /// Test that `check_for_updates` handles git fetch failures gracefully.
+    /// This catches mutants that would change the graceful degradation behavior.
+    #[test]
+    fn check_for_updates_handles_fetch_failure_gracefully() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a fake repo directory that isn't a valid git repo
+        let fake_repo = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&fake_repo).unwrap();
+
+        // Initialize a bare git repo in it (not a full clone)
+        let output = Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&fake_repo)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "git init should succeed");
+
+        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+
+        // check_for_updates should return Ok(None) when fetch fails, not propagate the error
+        let result = manager.check_for_updates(&source);
+        assert!(
+            result.is_ok(),
+            "check_for_updates should handle fetch failure gracefully"
+        );
+        assert!(
+            result.unwrap().is_none(),
+            "check_for_updates should return None when fetch fails"
+        );
+    }
 }

@@ -1,0 +1,38 @@
+--- src/state.rs
++++ replace list_applied_overlays -> Result<Vec<OverlayName>> with Ok(vec![Default::default()])
+@@ -593,34 +593,17 @@
+         }
+     }
+ 
+     Ok(targets)
+ }
+ 
+ /// List all applied overlays, returning their normalized names.
+ pub fn list_applied_overlays(target: &Path) -> Result<Vec<OverlayName>> {
+-    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+-
+-    if !overlays_dir.exists() {
+-        return Ok(Vec::new());
+-    }
+-
+-    let mut names: Vec<OverlayName> = fs::read_dir(&overlays_dir)?
+-        .filter_map(std::result::Result::ok)
+-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "ccl"))
+-        .filter_map(|e| {
+-            e.path()
+-                .file_stem()
+-                .map(|s| OverlayName::new(s.to_string_lossy().to_string()))
+-        })
+-        .collect();
+-
+-    names.sort();
+-    Ok(names)
++    Ok(vec![Default::default()]) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Load an overlay state from the in-repo state file.
+ pub fn load_overlay_state(target: &Path, name: &str) -> Result<OverlayState> {
+     debug!("load_overlay_state: {name}");
+     let state_file = target
+         .join(STATE_DIR)
+         .join(OVERLAYS_DIR)

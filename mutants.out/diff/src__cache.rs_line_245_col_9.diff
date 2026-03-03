@@ -1,0 +1,22 @@
+--- src/cache.rs
++++ replace CacheManager::do_checkout -> Result<()> with Ok(())
+@@ -237,18 +237,17 @@
+     /// Check if a ref exists in the repository.
+     fn ref_exists(&self, repo_path: &Path, ref_spec: &str) -> Result<bool> {
+         let output = git_in_dir(repo_path, &["rev-parse", "--verify", ref_spec])?;
+         Ok(output.status.success())
+     }
+ 
+     /// Perform the actual checkout.
+     fn do_checkout(&self, repo_path: &Path, ref_spec: &str) -> Result<()> {
+-        git_run(repo_path, &["checkout", ref_spec])
+-            .with_context(|| format!("Failed to checkout {ref_spec}"))
++        Ok(()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Fetch a specific commit.
+     fn fetch_commit(&self, repo_path: &Path, sha: &str) -> Result<()> {
+         // First, unshallow if needed to access the commit (ignore errors - might already be complete)
+         let _ = git_in_dir(repo_path, &["fetch", "--unshallow", "origin"]);
+ 
+         // Fetch the specific commit

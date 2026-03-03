@@ -1,0 +1,21 @@
+--- src/sources.rs
++++ replace == with != in SourceManager::get_source
+@@ -79,17 +79,17 @@
+             .collect()
+     }
+ 
+     /// Get a source by name.
+     #[allow(dead_code)] // Utility method for future use
+     pub fn get_source(&self, name: &str) -> Option<&Source> {
+         self.sources
+             .iter()
+-            .find(|s| s.source.name == name)
++            .find(|s| s.source.name != /* ~ changed by cargo-mutants ~ */ name)
+             .map(|s| &s.source)
+     }
+ 
+     /// Ensure all sources are cloned.
+     pub fn ensure_all_cloned(&self) -> Result<()> {
+         for ms in &self.sources {
+             ms.manager.ensure_cloned()?;
+         }

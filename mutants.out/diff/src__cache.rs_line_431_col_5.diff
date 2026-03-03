@@ -1,0 +1,24 @@
+--- src/cache.rs
++++ replace cache_dir -> Result<PathBuf> with Ok(Default::default())
+@@ -423,20 +423,17 @@
+         } else {
+             Ok(Some(remote_commit))
+         }
+     }
+ }
+ 
+ /// Get the cache directory.
+ pub fn cache_dir() -> Result<PathBuf> {
+-    let proj_dirs = ProjectDirs::from("", "", "repoverlay")
+-        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
+-
+-    Ok(proj_dirs.cache_dir().to_path_buf())
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     use tempfile::TempDir;
+ 
+     #[test]

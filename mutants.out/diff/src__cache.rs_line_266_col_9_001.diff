@@ -1,0 +1,25 @@
+--- src/cache.rs
++++ replace CacheManager::get_current_commit -> Result<String> with Ok("xyzzy".into())
+@@ -258,21 +258,17 @@
+ 
+         // Checkout the commit
+         git_run(repo_path, &["checkout", sha])
+             .with_context(|| format!("Failed to checkout commit {short_sha}"))
+     }
+ 
+     /// Get the current commit SHA.
+     fn get_current_commit(&self, repo_path: &Path) -> Result<String> {
+-        let output = git_in_dir(repo_path, &["rev-parse", "HEAD"])?;
+-        if !output.status.success() {
+-            bail!("Failed to get current commit");
+-        }
+-        Ok(String::from_utf8(output.stdout)?.trim().to_string())
++        Ok("xyzzy".into()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Save cache metadata.
+     fn save_meta(&self, repo_path: &Path, source: &GitHubSource, commit: &str) -> Result<()> {
+         let meta = CacheMeta {
+             clone_url: source.clone_url(),
+             last_fetched: Utc::now(),
+             requested_ref: source.git_ref.as_str().to_string(),

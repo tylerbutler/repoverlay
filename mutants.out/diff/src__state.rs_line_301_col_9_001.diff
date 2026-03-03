@@ -1,0 +1,24 @@
+--- src/state.rs
++++ replace <impl SourceResolver for OverlaySource>::is_updatable -> bool with false
+@@ -293,20 +293,17 @@
+     fn is_syncable(&self) -> bool {
+         match self {
+             Self::OverlayRepo { .. } => true,
+             Self::Local { .. } | Self::GitHub { .. } => false,
+         }
+     }
+ 
+     fn is_updatable(&self) -> bool {
+-        match self {
+-            Self::OverlayRepo { .. } | Self::GitHub { .. } => true,
+-            Self::Local { .. } => false,
+-        }
++        false /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn source_type_label(&self) -> &'static str {
+         match self {
+             Self::Local { .. } => "local",
+             Self::OverlayRepo { .. } => "overlay repo",
+             Self::GitHub { .. } => "GitHub",
+         }

@@ -1,0 +1,21 @@
+--- src/state.rs
++++ replace OverlayState::add_file with ()
+@@ -348,17 +348,17 @@
+             source,
+             files: Vec::new(),
+             removed_at: None,
+         }
+     }
+ 
+     /// Add a file entry to the state.
+     pub fn add_file(&mut self, entry: FileEntry) {
+-        self.files.push(entry);
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Remove a file entry by target path. Returns the removed entry, or None if not found.
+     #[allow(dead_code)]
+     pub fn remove_file(&mut self, target: &Path) -> Option<FileEntry> {
+         if let Some(pos) = self.files.iter().position(|f| f.target == target) {
+             Some(self.files.remove(pos))
+         } else {

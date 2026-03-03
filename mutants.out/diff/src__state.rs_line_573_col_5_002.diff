@@ -1,0 +1,44 @@
+--- src/state.rs
++++ replace load_all_overlay_targets -> Result<std::collections::HashMap<String, String>> with Ok(HashMap::from_iter([(String::new(), "xyzzy".into())]))
+@@ -565,40 +565,17 @@
+     }
+     Ok(normalized)
+ }
+ 
+ /// Load all target paths from all applied overlays, returning a map of path -> `overlay_name`.
+ pub fn load_all_overlay_targets(
+     target: &Path,
+ ) -> Result<std::collections::HashMap<String, String>> {
+-    let mut targets = std::collections::HashMap::new();
+-    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+-
+-    if !overlays_dir.exists() {
+-        return Ok(targets);
+-    }
+-
+-    for entry in fs::read_dir(&overlays_dir)? {
+-        let entry = entry?;
+-        let path = entry.path();
+-        if path.extension().is_some_and(|e| e == "ccl") {
+-            let content = fs::read_to_string(&path)?;
+-            if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
+-                for file in &state.files {
+-                    targets.insert(
+-                        file.target.to_string_lossy().to_string(),
+-                        state.name.clone(),
+-                    );
+-                }
+-            }
+-        }
+-    }
+-
+-    Ok(targets)
++    Ok(HashMap::from_iter([(String::new(), "xyzzy".into())])) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// List all applied overlays, returning their normalized names.
+ pub fn list_applied_overlays(target: &Path) -> Result<Vec<OverlayName>> {
+     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+ 
+     if !overlays_dir.exists() {
+         return Ok(Vec::new());

@@ -1,0 +1,21 @@
+--- src/state.rs
++++ replace OverlaySource::is_github -> bool with false
+@@ -174,17 +174,17 @@
+                 )
+             }
+         }
+     }
+ 
+     /// Check if this is a GitHub source.
+     #[allow(dead_code)]
+     pub const fn is_github(&self) -> bool {
+-        matches!(self, Self::GitHub { .. })
++        false /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Check if this is an overlay repository source.
+     #[allow(dead_code)]
+     pub const fn is_overlay_repo(&self) -> bool {
+         matches!(self, Self::OverlayRepo { .. })
+     }
+ 

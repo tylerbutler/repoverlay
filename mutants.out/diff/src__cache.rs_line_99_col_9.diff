@@ -1,0 +1,63 @@
+--- src/cache.rs
++++ replace CacheManager::ensure_cached -> Result<CachedOverlay> with Ok(Default::default())
+@@ -91,59 +91,17 @@
+     pub fn cache_dir(&self) -> &Path {
+         &self.cache_dir
+     }
+ 
+     /// Ensure a GitHub repository is cached and at the correct ref.
+     ///
+     /// Returns the path to the overlay files.
+     pub fn ensure_cached(&self, source: &GitHubSource, update: bool) -> Result<CachedOverlay> {
+-        let repo_path = self.repo_path(source);
+-        let owner = &source.owner;
+-        let repo = &source.repo;
+-        let git_ref = source.git_ref.as_str();
+-        debug!("ensure_cached: {owner}/{repo} at {git_ref} (update={update})");
+-
+-        let path = repo_path.display();
+-        if repo_path.exists() {
+-            debug!("cache hit: {path}");
+-            if update {
+-                self.update_repo(&repo_path)?;
+-            }
+-            self.checkout_ref(&repo_path, source)?;
+-        } else {
+-            debug!("cache miss, cloning to {path}");
+-            self.clone_repo(source, &repo_path)?;
+-        }
+-
+-        let overlay_path = match &source.subpath {
+-            Some(subpath) => {
+-                let path = repo_path.join(subpath);
+-                if !path.exists() {
+-                    let subpath_display = subpath.display();
+-                    let owner = &source.owner;
+-                    let repo = &source.repo;
+-                    bail!("Subpath '{subpath_display}' not found in repository {owner}/{repo}");
+-                }
+-                path
+-            }
+-            None => repo_path.clone(),
+-        };
+-
+-        let commit = self.get_current_commit(&repo_path)?;
+-        let cached_at = Utc::now();
+-
+-        // Save cache metadata
+-        self.save_meta(&repo_path, source, &commit)?;
+-
+-        Ok(CachedOverlay {
+-            path: overlay_path,
+-            commit,
+-            cached_at,
+-        })
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Get the path where a repository would be cached.
+     pub fn repo_path(&self, source: &GitHubSource) -> PathBuf {
+         self.cache_dir
+             .join("github")
+             .join(&source.owner)
+             .join(&source.repo)

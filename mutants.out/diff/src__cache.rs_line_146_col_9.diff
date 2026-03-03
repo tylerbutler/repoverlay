@@ -1,0 +1,24 @@
+--- src/cache.rs
++++ replace CacheManager::repo_path -> PathBuf with Default::default()
+@@ -138,20 +138,17 @@
+             path: overlay_path,
+             commit,
+             cached_at,
+         })
+     }
+ 
+     /// Get the path where a repository would be cached.
+     pub fn repo_path(&self, source: &GitHubSource) -> PathBuf {
+-        self.cache_dir
+-            .join("github")
+-            .join(&source.owner)
+-            .join(&source.repo)
++        Default::default() /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Clone a repository.
+     fn clone_repo(&self, source: &GitHubSource, target: &Path) -> Result<()> {
+         let owner = &source.owner;
+         let repo = &source.repo;
+         let target_display = target.display();
+         debug!("cloning {owner}/{repo} to {target_display}");

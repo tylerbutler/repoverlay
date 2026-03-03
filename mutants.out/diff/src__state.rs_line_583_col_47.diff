@@ -1,0 +1,21 @@
+--- src/state.rs
++++ replace == with != in load_all_overlay_targets
+@@ -575,17 +575,17 @@
+ 
+     if !overlays_dir.exists() {
+         return Ok(targets);
+     }
+ 
+     for entry in fs::read_dir(&overlays_dir)? {
+         let entry = entry?;
+         let path = entry.path();
+-        if path.extension().is_some_and(|e| e == "ccl") {
++        if path.extension().is_some_and(|e| e != /* ~ changed by cargo-mutants ~ */ "ccl") {
+             let content = fs::read_to_string(&path)?;
+             if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
+                 for file in &state.files {
+                     targets.insert(
+                         file.target.to_string_lossy().to_string(),
+                         state.name.clone(),
+                     );
+                 }

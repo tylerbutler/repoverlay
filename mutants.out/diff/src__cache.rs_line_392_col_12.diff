@@ -1,0 +1,21 @@
+--- src/cache.rs
++++ delete ! in CacheManager::check_for_updates
+@@ -384,17 +384,17 @@
+     }
+ 
+     /// Check for updates to a cached repository.
+     ///
+     /// Returns the latest commit on the default branch if different from current.
+     pub fn check_for_updates(&self, source: &GitHubSource) -> Result<Option<String>> {
+         let repo_path = self.repo_path(source);
+ 
+-        if !repo_path.exists() {
++        if  /* ~ changed by cargo-mutants ~ */repo_path.exists() {
+             return Ok(None);
+         }
+ 
+         let current_commit = self.get_current_commit(&repo_path)?;
+ 
+         // Fetch latest
+         let output = git_in_dir(&repo_path, &["fetch", "--depth", "1", "origin"])?;
+         if !output.status.success() {

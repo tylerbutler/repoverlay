@@ -1,0 +1,35 @@
+--- src/state.rs
++++ replace save_external_state -> Result<()> with Ok(())
+@@ -448,31 +448,17 @@
+ pub fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
+     let base = external_state_dir()?;
+     let target_hash = hash_path(target);
+     Ok(base.join(target_hash))
+ }
+ 
+ /// Save overlay state to the external backup location.
+ pub fn save_external_state(target: &Path, overlay_name: &str, state: &OverlayState) -> Result<()> {
+-    debug!("save_external_state: {overlay_name}");
+-    let dir = external_state_dir_for_target(target)?;
+-    fs::create_dir_all(&dir)?;
+-
+-    // Also save a marker file with the original target path for debugging
+-    let marker_path = dir.join(".target_path");
+-    if !marker_path.exists() {
+-        fs::write(&marker_path, target.display().to_string())?;
+-    }
+-
+-    let state_file = dir.join(format!("{overlay_name}.ccl"));
+-    let content = sickle::to_string(state).context("Failed to serialize state to CCL")?;
+-    fs::write(&state_file, content)?;
+-
+-    Ok(())
++    Ok(()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Mark overlay state as removed in the external backup location.
+ ///
+ /// Instead of deleting the external state, we mark it with a `removed_at` timestamp.
+ /// This allows `restore` to distinguish between overlays that were intentionally
+ /// removed vs. those that are missing due to `git clean`.
+ pub fn remove_external_state(target: &Path, overlay_name: &str) -> Result<()> {

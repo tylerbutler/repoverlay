@@ -1,0 +1,21 @@
+--- src/cache.rs
++++ delete ! in CacheManager::check_for_updates
+@@ -407,17 +407,17 @@
+             GitRef::Branch(b) => format!("origin/{b}"),
+             GitRef::Tag(_) | GitRef::Commit(_) => {
+                 // Tags and commits don't have "updates"
+                 return Ok(None);
+             }
+         };
+ 
+         let output = git_in_dir(&repo_path, &["rev-parse", &ref_spec])?;
+-        if !output.status.success() {
++        if  /* ~ changed by cargo-mutants ~ */output.status.success() {
+             return Ok(None);
+         }
+ 
+         let remote_commit = String::from_utf8(output.stdout)?.trim().to_string();
+ 
+         if remote_commit == current_commit {
+             Ok(None)
+         } else {

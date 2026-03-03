@@ -1,0 +1,21 @@
+--- src/cache.rs
++++ delete ! in CacheManager::list_cached
+@@ -321,17 +321,17 @@
+             if !owner_entry.file_type()?.is_dir() {
+                 continue;
+             }
+ 
+             let owner = owner_entry.file_name().to_string_lossy().to_string();
+ 
+             for repo_entry in fs::read_dir(owner_entry.path())? {
+                 let repo_entry = repo_entry?;
+-                if !repo_entry.file_type()?.is_dir() {
++                if  /* ~ changed by cargo-mutants ~ */repo_entry.file_type()?.is_dir() {
+                     continue;
+                 }
+ 
+                 let repo = repo_entry.file_name().to_string_lossy().to_string();
+                 let path = repo_entry.path();
+                 let meta = self.load_meta(&path);
+ 
+                 repos.push(CachedRepoInfo {

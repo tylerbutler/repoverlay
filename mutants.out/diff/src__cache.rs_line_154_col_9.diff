@@ -1,0 +1,70 @@
+--- src/cache.rs
++++ replace CacheManager::clone_repo -> Result<()> with Ok(())
+@@ -146,66 +146,17 @@
+         self.cache_dir
+             .join("github")
+             .join(&source.owner)
+             .join(&source.repo)
+     }
+ 
+     /// Clone a repository.
+     fn clone_repo(&self, source: &GitHubSource, target: &Path) -> Result<()> {
+-        let owner = &source.owner;
+-        let repo = &source.repo;
+-        let target_display = target.display();
+-        debug!("cloning {owner}/{repo} to {target_display}");
+-
+-        // Create parent directories
+-        if let Some(parent) = target.parent() {
+-            fs::create_dir_all(parent)?;
+-        }
+-
+-        let mut cmd = Command::new("git");
+-        cmd.args(["clone", "--depth", "1"]);
+-
+-        // If specific branch/tag, clone that
+-        match &source.git_ref {
+-            GitRef::Branch(branch) | GitRef::Tag(branch) => {
+-                cmd.args(["--branch", branch]);
+-            }
+-            GitRef::Default | GitRef::Commit(_) => {
+-                // Clone default branch, will checkout specific commit after
+-            }
+-        }
+-
+-        cmd.arg("--");
+-        cmd.arg(source.clone_url());
+-        cmd.arg(target);
+-
+-        let output = cmd.output().context("Failed to execute git clone")?;
+-
+-        if !output.status.success() {
+-            let stderr = String::from_utf8_lossy(&output.stderr);
+-            let owner = &source.owner;
+-            let repo = &source.repo;
+-            if stderr.contains("not found") || stderr.contains("Repository not found") {
+-                bail!("Repository not found: {owner}/{repo}");
+-            }
+-            if stderr.contains("could not find remote branch") {
+-                let git_ref = source.git_ref.as_str();
+-                bail!("Branch or tag not found: {git_ref} in {owner}/{repo}");
+-            }
+-            let msg = stderr.trim();
+-            bail!("Failed to clone repository: {msg}");
+-        }
+-
+-        // If a specific commit was requested, we need to fetch and checkout
+-        if let GitRef::Commit(sha) = &source.git_ref {
+-            self.fetch_commit(target, sha)?;
+-        }
+-
+-        Ok(())
++        Ok(()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Update an existing cached repository.
+     fn update_repo(&self, repo_path: &Path) -> Result<()> {
+         let path = repo_path.display();
+         debug!("fetching updates for {path}");
+         git_run(repo_path, &["fetch", "--depth", "1", "origin"]).context("Failed to fetch updates")
+     }

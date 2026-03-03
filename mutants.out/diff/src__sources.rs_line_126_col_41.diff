@@ -1,0 +1,21 @@
+--- src/sources.rs
++++ replace == with != in SourceManager::resolve
+@@ -118,17 +118,17 @@
+         upstream: Option<&UpstreamInfo>,
+         source_filter: Option<&str>,
+     ) -> Result<Option<ResolvedOverlay>> {
+         let sources_to_check: Vec<&ManagedSource> = if let Some(filter_name) = source_filter {
+             // Only check the specified source
+             let source = self
+                 .sources
+                 .iter()
+-                .find(|s| s.source.name == filter_name)
++                .find(|s| s.source.name != /* ~ changed by cargo-mutants ~ */ filter_name)
+                 .ok_or_else(|| {
+                     let available: Vec<_> = self.source_names();
+                     anyhow::anyhow!(
+                         "Unknown source: {filter_name}\nAvailable sources: {}",
+                         available.join(", ")
+                     )
+                 })?;
+             vec![source]

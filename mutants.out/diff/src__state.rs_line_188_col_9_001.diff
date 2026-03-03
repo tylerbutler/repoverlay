@@ -1,0 +1,21 @@
+--- src/state.rs
++++ replace OverlaySource::is_overlay_repo -> bool with false
+@@ -180,17 +180,17 @@
+     #[allow(dead_code)]
+     pub const fn is_github(&self) -> bool {
+         matches!(self, Self::GitHub { .. })
+     }
+ 
+     /// Check if this is an overlay repository source.
+     #[allow(dead_code)]
+     pub const fn is_overlay_repo(&self) -> bool {
+-        matches!(self, Self::OverlayRepo { .. })
++        false /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Get the local path for this source (for local sources only).
+     #[allow(dead_code)]
+     pub fn local_path(&self) -> Option<&Path> {
+         match self {
+             Self::Local { path } => Some(path),
+             Self::GitHub { .. } | Self::OverlayRepo { .. } => None,
