@@ -13,7 +13,7 @@ Repoverlay is feature-complete at v0.8.0. This roadmap delivers a credible 1.0 r
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Code Review and Bug Fixes** - Review all modules for correctness and fix every bug found
-- [ ] **Phase 2: Test Coverage** - Close coverage gaps and verify untested behaviors via mutation testing
+- [x] **Phase 2: Test Coverage** - Close coverage gaps and verify untested behaviors via mutation testing
 - [ ] **Phase 3: API Stabilization and Manual Testing** - Lock public API surface and create manual test suite for all CLI workflows
 - [ ] **Phase 4: Release Preparation** - Final release gate: README, crates.io metadata, and release artifacts
 
@@ -49,7 +49,7 @@ Plans:
 Plans:
 - [x] 02-01-PLAN.md -- Path traversal edge case tests (unconditional failure assertions) and FIX-02 regression test (Display format)
 - [x] 02-02-PLAN.md -- Cache failure recovery unit tests and interactive conflict stdin injection test (TEST-03 scope)
-- [ ] 02-03-PLAN.md -- Install cargo-mutants, run scoped mutation baseline, address surviving mutants
+- [x] 02-03-PLAN.md -- Install cargo-mutants, run scoped mutation baseline, address surviving mutants
 
 ### Phase 3: API Stabilization and Manual Testing
 **Goal**: Public API is locked for semver and all CLI workflows are verified through manual test documentation
@@ -87,6 +87,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Code Review and Bug Fixes | 2/2 | Complete | 2026-02-28 |
-| 2. Test Coverage | 2/3 | In progress | - |
+| 2. Test Coverage | 3/3 | Complete | 2026-03-03 |
 | 3. API Stabilization and Manual Testing | 0/2 | Not started | - |
 | 4. Release Preparation | 0/1 | Not started | - |
