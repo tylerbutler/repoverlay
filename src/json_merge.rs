@@ -1,4 +1,7 @@
 //! JSON deep merge utilities for overlay application.
+//!
+//! When overlays contain JSON files that already exist in the target repo,
+//! this module merges them recursively instead of overwriting.
 
 use anyhow::Context;
 use serde_json::Value;

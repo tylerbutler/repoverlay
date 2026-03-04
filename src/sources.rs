@@ -1,7 +1,9 @@
 //! Multi-source overlay resolution.
 //!
 //! Manages multiple overlay sources with priority-based resolution.
-//! Sources are checked in order; first match wins.
+//! Sources are checked in order; first match wins. Key types are
+//! `SourceManager` (coordinates resolution across sources) and
+//! `ResolvedOverlay` (a successfully located overlay with its source metadata).
 
 use anyhow::Result;
 use std::path::PathBuf;

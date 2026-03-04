@@ -1,4 +1,6 @@
 //! Newtype wrapper for normalized overlay names.
+//!
+//! Ensures overlay names are consistently formatted for state lookups and display.
 
 use std::fmt;
 
