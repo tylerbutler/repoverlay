@@ -30,8 +30,8 @@ Requirements for 1.0 release. Each maps to roadmap phases.
 - [x] **TEST-02**: Coverage gaps closed for cache update failure recovery
 - [x] **TEST-03**: Coverage gaps closed for terminal recovery (Ctrl+C in interactive selection) -- prompt_conflict_interactive tested via stdin; selection.rs raw mode documented as manual-only
 - [x] **TEST-04**: Regression tests added for every bug fixed during review
-- [ ] **TEST-05**: Mutation testing run with cargo-mutants to identify untested behaviors
-- [ ] **TEST-06**: Surviving mutants from TEST-05 addressed with additional tests
+- [x] **TEST-05**: Mutation testing run with cargo-mutants to identify untested behaviors
+- [x] **TEST-06**: Surviving mutants from TEST-05 addressed with additional tests
 
 ### API Stabilization
 
@@ -108,10 +108,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | FIX-04 | Phase 1 | Complete |
 | TEST-01 | Phase 2 | Complete |
 | TEST-02 | Phase 2 | Complete |
-| TEST-03 | Phase 2 | Complete (partial) |
+| TEST-03 | Phase 2 | Complete |
 | TEST-04 | Phase 2 | Complete |
-| TEST-05 | Phase 2 | Pending |
-| TEST-06 | Phase 2 | Pending |
+| TEST-05 | Phase 2 | Complete |
+| TEST-06 | Phase 2 | Complete |
 | API-01 | Phase 3 | Complete |
 | API-02 | Phase 3 | Complete (skipped per user decision) |
 | API-03 | Phase 3 | Complete |
@@ -133,4 +133,4 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-02-27*
-*Last updated: 2026-02-27 after roadmap creation (4-phase structure)*
+*Last updated: 2026-03-04 after milestone audit (fix stale TEST-05/TEST-06 checkboxes)*
