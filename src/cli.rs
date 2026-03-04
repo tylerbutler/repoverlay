@@ -385,10 +385,12 @@ enum Commands {
 
     /// Edit an existing applied overlay
     ///
-    /// With no subcommand, launches interactive file selection.
+    /// With no subcommand, launches interactive file selection. If no overlay
+    /// name is given, prompts to select from applied overlays.
     ///
     /// Examples:
-    ///   repoverlay edit my-overlay                          # Interactive selection
+    ///   repoverlay edit                                     # Pick overlay, then edit
+    ///   repoverlay edit my-overlay                          # Interactive file selection
     ///   repoverlay edit add my-overlay newfile.txt          # Add files
     ///   repoverlay edit add my-overlay file1.txt file2.txt  # Add multiple files
     ///   repoverlay edit remove my-overlay oldfile.txt       # Remove files
@@ -833,14 +835,19 @@ pub fn run() -> Result<()> {
                 remove_files_from_overlay(&name, &target, &files, dry_run)?;
             }
             None => {
-                let name = name.expect("overlay name is required when no subcommand is given");
+                let target = target.unwrap_or_else(|| PathBuf::from("."));
                 if !add.is_empty() || !remove.is_empty() {
                     eprintln!(
                         "{}: --add/--remove flags are deprecated, use `edit add` or `edit remove` subcommands instead",
                         "Warning".yellow().bold()
                     );
                 }
-                let target = target.unwrap_or_else(|| PathBuf::from("."));
+                // When no name is given, interactively select an overlay
+                // and go straight to interactive file selection.
+                let (name, interactive) = match name {
+                    Some(n) => (n, interactive),
+                    None => (select_overlay_interactive(&target)?, true),
+                };
                 edit_overlay(&name, &target, &add, &remove, interactive, dry_run)?;
             }
         },
@@ -2141,6 +2148,59 @@ fn sync_single_overlay(
     }
 
     Ok(())
+}
+
+/// Interactively select an applied overlay by name.
+///
+/// Lists all applied overlays and lets the user pick one. Bails in non-TTY
+/// environments since interactive selection requires a terminal.
+fn select_overlay_interactive(target: &std::path::Path) -> Result<String> {
+    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+
+    let target = canonicalize_path(target, "Target directory")?;
+    let applied = list_applied_overlays(&target)?;
+
+    if applied.is_empty() {
+        bail!("No overlays are currently applied in: {}", target.display());
+    }
+
+    if applied.len() == 1 {
+        return Ok(applied[0].to_string());
+    }
+
+    if !is_interactive() {
+        bail!(
+            "Multiple overlays applied — specify which one to edit.\n\n\
+             Usage:\n  \
+             repoverlay edit <name>\n  \
+             repoverlay edit add <name> <files>...\n  \
+             repoverlay edit remove <name> <files>..."
+        );
+    }
+
+    let items: Vec<SelectableItem> = applied
+        .iter()
+        .map(|name| SelectableItem {
+            id: name.to_string(),
+            label: name.to_string(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        })
+        .collect();
+
+    let result = select_flat(
+        &items,
+        &FlatSelectionConfig {
+            prompt: "Select overlay to edit:".into(),
+        },
+    )?;
+
+    if result.cancelled || result.selected_ids.is_empty() {
+        bail!("No overlay selected");
+    }
+
+    Ok(result.selected_ids[0].clone())
 }
 
 /// Edit an existing applied overlay (add files, remove files, or re-select interactively).
@@ -7513,6 +7573,20 @@ directories =
                     assert!(dry_run);
                 }
                 _ => panic!("Expected Edit Add subcommand"),
+            }
+        }
+
+        #[test]
+        fn edit_no_args_parses_for_interactive_selection() {
+            let cli = Cli::try_parse_from(["repoverlay", "edit"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Edit {
+                    command: None,
+                    name: None,
+                    ..
+                }) => {}
+                _ => panic!("Expected Edit with no subcommand and no name"),
             }
         }
 

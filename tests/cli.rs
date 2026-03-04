@@ -1621,6 +1621,42 @@ fn edit_fails_when_no_operation_specified() {
         .stderr(predicate::str::contains("specify at least one"));
 }
 
+#[test]
+fn edit_no_name_fails_when_no_overlays_applied() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "No overlays are currently applied",
+        ));
+}
+
+#[test]
+fn edit_no_name_auto_selects_single_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // With only one overlay applied, `edit` (no name) should auto-select it
+    // and enter interactive mode. In non-TTY, interactive returns preselected → no changes.
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes"));
+}
+
 // ──────────────────────────────────────────────
 // Edit --add success tests
 // ──────────────────────────────────────────────
