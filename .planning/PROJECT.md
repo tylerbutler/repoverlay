@@ -1,12 +1,12 @@
-# Repoverlay 1.0 Stabilization
+# Repoverlay
 
 ## What This Is
 
-Repoverlay is a CLI tool for overlaying configuration files onto Git repositories using symlinks (or copies on Windows). It supports multiple overlay sources (local filesystem, GitHub, shared overlay repositories), conflict resolution strategies, and persistent state management. This milestone focuses on comprehensive code review, correctness verification, test coverage improvements, and 1.0 release preparation.
+Repoverlay is a CLI tool for overlaying configuration files onto Git repositories using symlinks (or copies on Windows). It supports multiple overlay sources (local filesystem, GitHub, shared overlay repositories), conflict resolution strategies, and persistent state management. v0.8 completed a full stabilization cycle: code review, test coverage hardening, API locking, and release preparation.
 
 ## Core Value
 
-Every feature that ships in 1.0 must work correctly and be verified — no silent failures, no untested code paths, no surprises.
+Every feature that ships must work correctly and be verified — no silent failures, no untested code paths, no surprises.
 
 ## Requirements
 
@@ -31,35 +31,35 @@ Every feature that ships in 1.0 must work correctly and be verified — no silen
 - ✓ Cross-platform support (Linux, macOS, Windows) — existing
 - ✓ Shell completion generation — existing
 - ✓ Global and per-repo configuration via CCL format — existing
+- ✓ Comprehensive code review across all modules — v0.8
+- ✓ All discovered bugs fixed (error display, SIGPIPE) — v0.8
+- ✓ Test coverage for untested code paths (path traversal, cache failure, mutation testing) — v0.8
+- ✓ Manual test suite with 41 test cases across 8 CLI workflows — v0.8
+- ✓ README and crates.io metadata ready for release — v0.8
 
 ### Active
 
-- [ ] Comprehensive code review across all modules (correctness, edge cases, coverage gaps)
-- [ ] Fix all bugs discovered during review
-- [ ] Add missing test coverage for untested code paths
-- [ ] Create manual test suite (CLI walkthroughs + real-world scenarios)
-- [ ] Prepare changelog and release documentation for 1.0
+(None — define with next milestone)
 
 ### Out of Scope
 
 - New features — 1.0 is feature-complete, this is stabilization only
 - Performance optimization — unless correctness issues are found
 - Refactoring for style — only fix actual bugs and coverage gaps
+- Offline mode — real-time GitHub caching is sufficient
 
 ## Context
 
-- Rust 2024 edition, minimum version 1.90
-- Clippy pedantic + nursery lints enabled
-- Tests use tempfile::TempDir for temporary git repos
-- Integration tests in tests/cli.rs (~1844 lines), unit tests inline
-- changie already configured for changelog management
-- CI: GitHub Actions with test, lint, format, coverage, security audits
-- Coverage reporting via cargo-llvm-cov + codecov
-- Distribution via cargo-dist (Linux, macOS, Windows binaries + Homebrew)
+Shipped v0.8 stabilization with ~31,000 LOC Rust.
+Tech stack: Rust 2024 edition (min 1.90), clap, anyhow, serde, sickle (CCL parser).
+Clippy pedantic + nursery lints enabled.
+Tests: 925 unit + 97 integration tests, mutation testing baseline established.
+CI: GitHub Actions with test, lint, format, coverage (cargo-llvm-cov + codecov), security audits.
+Distribution: cargo-dist (Linux, macOS, Windows binaries + Homebrew).
+Manual test suite: 41 test cases across 8 CLI workflows in docs/manual-tests/.
 
 ## Constraints
 
-- **Feature freeze**: No new features — only correctness fixes and test additions
 - **Backward compatibility**: No breaking changes to CLI interface or state format
 - **Test isolation**: Tests must not interfere with each other (use TempDir, isolated configs)
 
@@ -67,9 +67,13 @@ Every feature that ships in 1.0 must work correctly and be verified — no silen
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Feature-complete for 1.0 | Focus on quality over quantity | — Pending |
-| Fix all discovered bugs | Ship with confidence, not known issues | — Pending |
-| Manual + automated test suite | Automated catches regressions, manual verifies real workflows | — Pending |
+| Feature-complete for 1.0 | Focus on quality over quantity | ✓ Good — zero correctness bugs found in review |
+| Fix all discovered bugs | Ship with confidence, not known issues | ✓ Good — FIX-02 (Display format), FIX-03 (SIGPIPE), FIX-04 (issues #142-#148) |
+| Manual + automated test suite | Automated catches regressions, manual verifies real workflows | ✓ Good — 41 manual test cases + mutation testing baseline |
+| pub(crate) API locking | Binary-only tool, no external consumers | ✓ Good — only lib::run() is public |
+| Skip #[non_exhaustive] | Binary-only, no external consumers | ✓ Good — avoids unnecessary boilerplate |
+| Allow clippy::redundant_pub_crate | Explicit visibility in private modules | ✓ Good — clarity over lint silence |
+| Mutation testing with scoped targets | Full mutation run too expensive | ✓ Good — caught real gaps in error propagation |
 
 ---
-*Last updated: 2026-02-27 after initialization*
+*Last updated: 2026-03-04 after v0.8 milestone*
