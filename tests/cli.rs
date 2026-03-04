@@ -1622,6 +1622,62 @@ fn edit_fails_when_no_operation_specified() {
 }
 
 // ──────────────────────────────────────────────
+// Edit --add success tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_add_adds_file_to_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Verify overlay is applied
+    assert!(ctx.is_symlink(".envrc"));
+
+    // Create a new file in the target repo
+    ctx.create_repo_file("new-file.txt", "new content");
+    assert!(ctx.file_exists("new-file.txt"));
+
+    // Add the new file to the overlay
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "edit",
+            "org/repo/test-overlay",
+            "--add",
+            "new-file.txt",
+        ])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"));
+
+    // Verify new-file.txt is now a symlink (managed by overlay)
+    assert!(ctx.is_symlink("new-file.txt"));
+    // Verify content is preserved
+    assert_eq!(ctx.read_file("new-file.txt"), "new content");
+    // Verify original .envrc symlink still works
+    assert!(ctx.is_symlink(".envrc"));
+    assert_eq!(ctx.read_file(".envrc"), "export FOO=bar");
+
+    // Verify git exclude has BOTH files
+    let exclude = ctx.git_exclude_content();
+    assert!(
+        exclude.contains(".envrc"),
+        "git exclude should contain .envrc, got: {exclude}"
+    );
+    assert!(
+        exclude.contains("new-file.txt"),
+        "git exclude should contain new-file.txt, got: {exclude}"
+    );
+}
+
+// ──────────────────────────────────────────────
 // Edit --remove tests
 // ──────────────────────────────────────────────
 
