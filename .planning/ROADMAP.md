@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Code Review and Bug Fixes** - Review all modules for correctness and fix every bug found
 - [x] **Phase 2: Test Coverage** - Close coverage gaps and verify untested behaviors via mutation testing
 - [x] **Phase 3: API Stabilization and Manual Testing** - Lock public API surface and create manual test suite for all CLI workflows
-- [ ] **Phase 4: Release Preparation** - Final release gate: README, crates.io metadata, and release artifacts
+- [x] **Phase 4: Release Preparation** - Final release gate: README, crates.io metadata, and release artifacts
 
 ## Phase Details
 
@@ -77,7 +77,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 04-01-PLAN.md -- Review README for accuracy against actual CLI surface and verify crates.io metadata
+- [x] 04-01-PLAN.md -- Review README for accuracy against actual CLI surface and verify crates.io metadata
 
 ## Progress
 
@@ -89,4 +89,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 1. Code Review and Bug Fixes | 2/2 | Complete | 2026-02-28 |
 | 2. Test Coverage | 3/3 | Complete | 2026-03-03 |
 | 3. API Stabilization and Manual Testing | 2/2 | Complete | 2026-03-04 |
-| 4. Release Preparation | 0/1 | Not started | - |
+| 4. Release Preparation | 1/1 | Complete | 2026-03-04 |

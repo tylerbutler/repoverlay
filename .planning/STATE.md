@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.8
 milestone_name: milestone
-status: unknown
-last_updated: "2026-03-04T04:48:43.916Z"
+status: executing
+last_updated: "2026-03-04T07:45:35Z"
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 8
+  completed_plans: 8
 ---
 
 # Project State
@@ -18,23 +18,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Every feature that ships in 1.0 must work correctly and be verified
-**Current focus:** Phase 3: API Stabilization and Manual Testing
+**Current focus:** Phase 4: Release Preparation
 
 ## Current Position
 
-Phase: 3 of 4 (API Stabilization and Manual Testing) -- COMPLETE
-Plan: 2 of 2 -- ALL COMPLETE
+Phase: 4 of 4 (Release Preparation) -- IN PROGRESS
+Plan: 1 of 1 -- COMPLETE
 Status: Executing
-Last activity: 2026-03-04 -- Completed 03-01 (API surface lockdown)
+Last activity: 2026-03-04 -- Completed 04-01 (README review and crates.io metadata)
 
-Progress: [████████░░] 85%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 8min
-- Total execution time: 0.32 hours
+- Total plans completed: 8
+- Average duration: 7min
+- Total execution time: 0.35 hours
 
 **By Phase:**
 
@@ -51,6 +51,7 @@ Progress: [████████░░] 85%
 | Phase 02 P03 | 27min | 2 tasks | 3 files |
 | Phase 03 P02 | 3min | 2 tasks | 8 files |
 | Phase 03 P01 | 6min | 2 tasks | 15 files |
+| Phase 04 P01 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,9 @@ Recent decisions affecting current work:
 - 03-02: Hybrid markdown with embedded command blocks and expected output sections
 - 03-01: Allowed clippy::redundant_pub_crate lint to enable explicit pub(crate) in private modules
 - 03-01: No #[non_exhaustive] added per user decision (binary-only, no external consumers)
+- 04-01: Added "dotfiles" as 5th crates.io keyword for discoverability
+- 04-01: Excluded 10 directories/files from crate package (docs, .claude, .planning, website, etc.)
+- 04-01: Kept .changes/ directory in published crate (changelog history useful for users)
 
 ### Pending Todos
 
@@ -94,5 +98,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-04
-Stopped at: Completed 03-01-PLAN.md. Phase 3 fully complete (both plans). Ready for Phase 4.
+Stopped at: Completed 04-01-PLAN.md. Phase 4 plan 1 complete.
 Resume file: None

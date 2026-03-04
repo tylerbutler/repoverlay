@@ -52,8 +52,8 @@ Requirements for 1.0 release. Each maps to roadmap phases.
 
 ### Release Preparation
 
-- [ ] **REL-01**: README reviewed and accurate for 1.0
-- [ ] **REL-02**: crates.io metadata verified (description, categories, keywords, license)
+- [x] **REL-01**: README reviewed and accurate for 1.0
+- [x] **REL-02**: crates.io metadata verified (description, categories, keywords, license)
 
 ## v2 Requirements
 
@@ -123,8 +123,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | MANUAL-06 | Phase 3 | Complete |
 | MANUAL-07 | Phase 3 | Complete |
 | MANUAL-08 | Phase 3 | Complete |
-| REL-01 | Phase 4 | Pending |
-| REL-02 | Phase 4 | Pending |
+| REL-01 | Phase 4 | Complete |
+| REL-02 | Phase 4 | Complete |
 
 **Coverage:**
 - v1 requirements: 28 total
@@ -133,4 +133,4 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-02-27*
-*Last updated: 2026-03-04 after milestone audit (fix stale TEST-05/TEST-06 checkboxes)*
+*Last updated: 2026-03-04 after 04-01 completion (REL-01, REL-02 complete)*
