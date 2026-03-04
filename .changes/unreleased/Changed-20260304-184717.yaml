@@ -1,0 +1,17 @@
+kind: Changed
+body: |-
+    Split `edit` into `edit add` and `edit remove` subcommands
+
+    The `--add` and `--remove` flags used greedy `num_args = 1..` parsing, which
+    consumed trailing arguments and required the overlay name to appear before any
+    flags. This was confusing and the help text couldn't convey the constraint
+    clearly. The `edit` command now uses proper subcommands:
+
+      repoverlay edit add my-overlay file1.txt file2.txt
+      repoverlay edit remove my-overlay oldfile.txt
+      repoverlay edit my-overlay  # interactive selection (default)
+
+    The old `--add`/`--remove`/`--interactive` flags still work but are hidden
+    from help and print a deprecation warning.
+time: 2026-03-04T18:47:17Z
+component: edit

@@ -1574,8 +1574,8 @@ fn edit_add_fails_when_overlay_not_applied() {
     cargo_bin_cmd!("repoverlay")
         .args([
             "edit",
+            "add",
             "org/repo/nonexistent-overlay",
-            "--add",
             "some-file.txt",
         ])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
@@ -1599,8 +1599,8 @@ fn edit_add_fails_when_file_does_not_exist() {
     cargo_bin_cmd!("repoverlay")
         .args([
             "edit",
+            "add",
             "org/repo/test-overlay",
-            "--add",
             "nonexistent-file.txt",
         ])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
@@ -1646,7 +1646,7 @@ fn edit_add_adds_file_to_overlay() {
 
     // Add the new file to the overlay
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "org/repo/test-overlay", "--add", "new-file.txt"])
+        .args(["edit", "add", "org/repo/test-overlay", "new-file.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1694,7 +1694,7 @@ fn edit_remove_removes_file_from_overlay() {
 
     // Remove one file
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "extra.txt"])
+        .args(["edit", "remove", "test-overlay", "extra.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1725,7 +1725,7 @@ fn edit_remove_fails_when_file_not_in_overlay() {
         .success();
 
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "nonexistent.txt"])
+        .args(["edit", "remove", "test-overlay", "nonexistent.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .failure()
@@ -1746,7 +1746,7 @@ fn edit_remove_dry_run_does_not_modify() {
 
     // Dry run remove
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "extra.txt", "--dry-run"])
+        .args(["edit", "remove", "test-overlay", "extra.txt", "--dry-run"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1773,7 +1773,7 @@ fn edit_remove_multiple_files() {
 
     // Remove two files at once
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "a.txt", "b.txt"])
+        .args(["edit", "remove", "test-overlay", "a.txt", "b.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
