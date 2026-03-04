@@ -385,23 +385,29 @@ enum Commands {
 
     /// Edit an existing applied overlay (add files, remove files, or re-select interactively)
     ///
+    /// The overlay NAME must come before --add/--remove flags, since those flags
+    /// accept multiple values and will consume any arguments that follow them.
+    ///
     /// Examples:
     ///   repoverlay edit my-overlay --add newfile.txt
+    ///   repoverlay edit my-overlay --add file1.txt file2.txt
     ///   repoverlay edit my-overlay --remove oldfile.txt
     ///   repoverlay edit my-overlay --add new.txt --remove old.txt
     ///   repoverlay edit org/repo/my-overlay --interactive
     Edit {
         /// Overlay name or full path (org/repo/name)
         ///
+        /// Must appear before --add/--remove flags.
+        ///
         /// Short form: `my-overlay` - detects org/repo from git remote
         /// Full form: `org/repo/name` - uses explicit values
         name: String,
 
-        /// Files to add to the overlay
+        /// Files to add to the overlay (name must come first)
         #[arg(short, long, value_name = "FILE", num_args = 1..)]
         add: Vec<PathBuf>,
 
-        /// Files to remove from the overlay
+        /// Files to remove from the overlay (name must come first)
         #[arg(short, long, value_name = "FILE", num_args = 1..)]
         remove: Vec<PathBuf>,
 
