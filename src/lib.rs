@@ -45,10 +45,10 @@ use reference::SourceReference;
 use selection::is_interactive;
 use state::{
     CONFIG_FILE, EntryType, FileEntry, GlobalMeta, LinkType, MANAGED_SECTION_NAME, META_FILE,
-    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, STATE_DIR, SourceResolver,
-    exclude_marker_end, exclude_marker_start, list_applied_overlays, load_all_overlay_targets,
-    load_external_states, load_overlay_state, normalize_overlay_name, remove_external_state,
-    save_external_state, save_overlay_state,
+    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, ResolvedVia, STATE_DIR,
+    SourceResolver, exclude_marker_end, exclude_marker_start, list_applied_overlays,
+    load_all_overlay_targets, load_external_states, load_overlay_state, normalize_overlay_name,
+    remove_external_state, save_external_state, save_overlay_state,
 };
 use upstream::detect_upstream;
 
@@ -293,6 +293,76 @@ pub(crate) enum ResolvedSources {
 /// 5. Two-part reference (`org/repo`) - browse mode (Phase B)
 /// 6. One-part reference (`username`) - expands to `username/repo-overlays` (Phase C)
 ///
+/// Find a configured source whose URL matches the given GitHub owner/repo.
+///
+/// Loads the user config and checks each source URL against the provided
+/// owner and repo. Returns the first matching source, if any.
+fn find_matching_source(owner: &str, repo: &str) -> Option<config::Source> {
+    let config = config::load_config(None).ok()?;
+    config.sources.into_iter().find(|source| {
+        github::parse_remote_url(&source.url)
+            .is_some_and(|(src_owner, src_repo)| src_owner == owner && src_repo == repo)
+    })
+}
+
+/// Upgrade a GitHub overlay state to `OverlayRepo` if it matches a configured source.
+///
+/// When an overlay was originally applied via a GitHub URL that points to a configured
+/// overlay repo source, this converts the state from read-only `GitHub` to editable
+/// `OverlayRepo`. The upgrade is persisted to disk.
+///
+/// Returns `true` if the state was upgraded and saved.
+///
+/// # Errors
+///
+/// Returns an error if saving the upgraded state fails.
+pub(crate) fn try_upgrade_github_source(target: &Path, state: &mut OverlayState) -> Result<bool> {
+    let (owner, gh_repo, subpath, commit) = match &state.source {
+        OverlaySource::GitHub {
+            owner,
+            repo,
+            subpath: Some(subpath),
+            commit,
+            ..
+        } => (owner.clone(), repo.clone(), subpath.clone(), commit.clone()),
+        _ => return Ok(false),
+    };
+
+    // Parse subpath as org/repo/name (3 non-empty parts)
+    let parts: Vec<&str> = subpath.split('/').collect();
+    if parts.len() != 3 || parts.iter().any(|p| p.is_empty()) {
+        return Ok(false);
+    }
+    let (org, target_repo, name) = (
+        parts[0].to_string(),
+        parts[1].to_string(),
+        parts[2].to_string(),
+    );
+
+    let Some(source) = find_matching_source(&owner, &gh_repo) else {
+        return Ok(false);
+    };
+
+    state.source = OverlaySource::overlay_repo_full(
+        org,
+        target_repo,
+        name.clone(),
+        commit,
+        ResolvedVia::Direct,
+        source.name.clone(),
+    );
+    save_overlay_state(target, state)?;
+
+    println!(
+        "{} overlay '{}' from GitHub to overlay repo source '{}' (now editable)",
+        "Upgraded".green().bold(),
+        name,
+        source.name,
+    );
+
+    Ok(true)
+}
+
 /// # Errors
 ///
 /// Returns an error if:
@@ -318,6 +388,53 @@ pub(crate) fn resolve_source(
 
     match reference {
         SourceReference::GitHubUrl(url) => {
+            // Check if this GitHub URL matches a configured source — if so, resolve
+            // as an overlay repo (editable) instead of a read-only GitHub source.
+            if let Ok(github_source) = GitHubSource::parse(&url)
+                && let Some(matched) =
+                    find_matching_source(&github_source.owner, &github_source.repo)
+            {
+                // Check if the URL includes a subpath that looks like org/repo/name
+                if let Some(ref subpath) = github_source.subpath {
+                    let subpath_str = subpath.to_string_lossy().to_string();
+                    let parts: Vec<&str> =
+                        subpath_str.split('/').filter(|s| !s.is_empty()).collect();
+                    if parts.len() >= 3 {
+                        let (org, repo_name, name) = (parts[0], parts[1], parts[2]);
+                        println!(
+                            "{} Detected configured source '{}', resolving as overlay repo (editable)",
+                            "Info".cyan().bold(),
+                            matched.name,
+                        );
+                        return resolve_three_part(
+                            org,
+                            repo_name,
+                            name,
+                            target_path,
+                            source_filter,
+                            update,
+                        )
+                        .map(ResolvedSources::Single);
+                    }
+                }
+
+                // Bare repo URL (no qualifying subpath) — browse mode, but editable
+                println!(
+                    "{} Detected configured source '{}', resolving as overlay repo (editable)",
+                    "Info".cyan().bold(),
+                    matched.name,
+                );
+                return resolve_two_part(
+                    &github_source.owner,
+                    &github_source.repo,
+                    ref_override,
+                    update,
+                    target_path,
+                    source_filter,
+                    Some(&matched),
+                );
+            }
+
             resolve_github_url(&url, ref_override, update).map(ResolvedSources::Single)
         }
 
@@ -342,6 +459,7 @@ pub(crate) fn resolve_source(
             update,
             target_path,
             source_filter,
+            None,
         ),
 
         SourceReference::OnePart { username } => {
@@ -355,6 +473,7 @@ pub(crate) fn resolve_source(
                 update,
                 target_path,
                 source_filter,
+                None,
             )
         }
     }
@@ -456,8 +575,14 @@ fn resolve_two_part(
     update: bool,
     target_path: Option<&Path>,
     _source_filter: Option<&str>,
+    matched_source: Option<&config::Source>,
 ) -> Result<ResolvedSources> {
-    debug!("resolving two-part reference (GitHub browse mode): {owner}/{repo}");
+    let mode = if matched_source.is_some() {
+        "overlay repo browse"
+    } else {
+        "GitHub browse"
+    };
+    debug!("resolving two-part reference ({mode} mode): {owner}/{repo}");
 
     // Create a GitHubSource to fetch/cache the repo
     let github_url = format!("https://github.com/{owner}/{repo}");
@@ -531,10 +656,12 @@ fn resolve_two_part(
         }
     }
 
-    prompt_save_source(owner, repo)?;
+    // Skip save prompt when source is already configured
+    if matched_source.is_none() {
+        prompt_save_source(owner, repo)?;
+    }
 
     // Resolve each selected overlay to a ResolvedSource
-    let git_ref_str = github_source.git_ref.as_str().to_string();
     let commit = get_cached_repo_commit(&cached.path).unwrap_or_else(|| "unknown".to_string());
 
     let mut resolved_sources = Vec::with_capacity(selected_overlays.len());
@@ -550,16 +677,32 @@ fn resolve_two_part(
             bail!("Overlay directory not found: {}", overlay_path.display());
         }
 
-        resolved_sources.push(ResolvedSource {
-            path: overlay_path,
-            source_info: OverlaySource::github(
+        let source_info = if let Some(source) = matched_source {
+            // Resolve as overlay repo — editable and syncable
+            OverlaySource::overlay_repo_full(
+                selected.org.clone(),
+                selected.repo.clone(),
+                selected.name.clone(),
+                commit.clone(),
+                ResolvedVia::Direct,
+                source.name.clone(),
+            )
+        } else {
+            // Resolve as read-only GitHub source
+            let git_ref_str = github_source.git_ref.as_str().to_string();
+            OverlaySource::github(
                 github_url.clone(),
                 owner.to_string(),
                 repo.to_string(),
-                git_ref_str.clone(),
+                git_ref_str,
                 commit.clone(),
                 Some(selected.to_string()),
-            ),
+            )
+        };
+
+        resolved_sources.push(ResolvedSource {
+            path: overlay_path,
+            source_info,
         });
     }
 
