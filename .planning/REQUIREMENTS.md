@@ -35,9 +35,9 @@ Requirements for 1.0 release. Each maps to roadmap phases.
 
 ### API Stabilization
 
-- [ ] **API-01**: Public API surface reviewed (pub vs pub(crate) boundaries)
-- [ ] **API-02**: `#[non_exhaustive]` added to extensible public enums and structs
-- [ ] **API-03**: Public API documented with appropriate doc comments
+- [x] **API-01**: Public API surface reviewed (pub vs pub(crate) boundaries)
+- [x] **API-02**: `#[non_exhaustive]` skipped per user decision (binary-only, no external consumers)
+- [x] **API-03**: Public API documented with appropriate doc comments
 
 ### Manual Test Suite
 
@@ -112,9 +112,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | TEST-04 | Phase 2 | Complete |
 | TEST-05 | Phase 2 | Pending |
 | TEST-06 | Phase 2 | Pending |
-| API-01 | Phase 3 | Pending |
-| API-02 | Phase 3 | Pending |
-| API-03 | Phase 3 | Pending |
+| API-01 | Phase 3 | Complete |
+| API-02 | Phase 3 | Complete (skipped per user decision) |
+| API-03 | Phase 3 | Complete |
 | MANUAL-01 | Phase 3 | Complete |
 | MANUAL-02 | Phase 3 | Complete |
 | MANUAL-03 | Phase 3 | Complete |
