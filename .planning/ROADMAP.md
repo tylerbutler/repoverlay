@@ -74,10 +74,10 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. README accurately describes all commands and features shipping in 1.0
   2. crates.io metadata (description, categories, keywords, license) is complete and correct
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 04-01: TBD
+- [ ] 04-01-PLAN.md -- Review README for accuracy against actual CLI surface and verify crates.io metadata
 
 ## Progress
 
