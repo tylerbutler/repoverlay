@@ -305,6 +305,64 @@ fn find_matching_source(owner: &str, repo: &str) -> Option<config::Source> {
     })
 }
 
+/// Upgrade a GitHub overlay state to `OverlayRepo` if it matches a configured source.
+///
+/// When an overlay was originally applied via a GitHub URL that points to a configured
+/// overlay repo source, this converts the state from read-only `GitHub` to editable
+/// `OverlayRepo`. The upgrade is persisted to disk.
+///
+/// Returns `true` if the state was upgraded and saved.
+///
+/// # Errors
+///
+/// Returns an error if saving the upgraded state fails.
+pub(crate) fn try_upgrade_github_source(target: &Path, state: &mut OverlayState) -> Result<bool> {
+    let (owner, gh_repo, subpath, commit) = match &state.source {
+        OverlaySource::GitHub {
+            owner,
+            repo,
+            subpath: Some(subpath),
+            commit,
+            ..
+        } => (owner.clone(), repo.clone(), subpath.clone(), commit.clone()),
+        _ => return Ok(false),
+    };
+
+    // Parse subpath as org/repo/name (3 non-empty parts)
+    let parts: Vec<&str> = subpath.split('/').collect();
+    if parts.len() != 3 || parts.iter().any(|p| p.is_empty()) {
+        return Ok(false);
+    }
+    let (org, target_repo, name) = (
+        parts[0].to_string(),
+        parts[1].to_string(),
+        parts[2].to_string(),
+    );
+
+    let Some(source) = find_matching_source(&owner, &gh_repo) else {
+        return Ok(false);
+    };
+
+    state.source = OverlaySource::overlay_repo_full(
+        org,
+        target_repo,
+        name.clone(),
+        commit,
+        ResolvedVia::Direct,
+        source.name.clone(),
+    );
+    save_overlay_state(target, state)?;
+
+    println!(
+        "{} overlay '{}' from GitHub to overlay repo source '{}' (now editable)",
+        "Upgraded".green().bold(),
+        name,
+        source.name,
+    );
+
+    Ok(true)
+}
+
 /// # Errors
 ///
 /// Returns an error if:

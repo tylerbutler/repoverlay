@@ -1913,47 +1913,18 @@ fn handle_sync(
         let mut skipped = 0u32;
 
         for overlay_name in &applied_overlays {
-            let state = load_overlay_state(&target, overlay_name.as_str())?;
+            let mut state = load_overlay_state(&target, overlay_name.as_str())?;
+            crate::try_upgrade_github_source(&target, &mut state)?;
 
             // Use SourceResolver to check syncability (#146, #149)
             if !state.source.is_syncable() {
-                // Special case: GitHub sources that are actually overlay repos
-                // (applied via two-part browse mode) can still be synced.
-                let mut handled = false;
-                if let OverlaySource::GitHub {
-                    owner,
-                    repo: gh_repo,
-                    subpath,
-                    ..
-                } = &state.source
-                    && let Some(overlay_ref) =
-                        subpath.as_deref().and_then(parse_github_overlay_subpath)
-                {
-                    let is_overlay_repo = config
-                        .sources
-                        .iter()
-                        .any(|s| is_overlay_repo_url(&s.url, owner, gh_repo));
-
-                    if is_overlay_repo {
-                        let (ref org, ref repo, ref name) = overlay_ref;
-                        sync_single_overlay(&target, org, name, repo, &state, &manager, dry_run)?;
-                        if !dry_run {
-                            auto_commit_overlay(&manager, org, repo, name, false)?;
-                        }
-                        synced += 1;
-                        handled = true;
-                    }
-                }
-
-                if !handled {
-                    let label = state.source.source_type_label();
-                    println!(
-                        "{} Skipping '{}' ({label} source, not syncable to overlay repo)",
-                        "Warning:".yellow(),
-                        overlay_name
-                    );
-                    skipped += 1;
-                }
+                let label = state.source.source_type_label();
+                println!(
+                    "{} Skipping '{}' ({label} source, not syncable to overlay repo)",
+                    "Warning:".yellow(),
+                    overlay_name
+                );
+                skipped += 1;
                 continue;
             }
 
@@ -2044,32 +2015,6 @@ fn handle_sync(
     }
 
     Ok(())
-}
-
-/// Parse a GitHub overlay subpath like "org/repo/name" into its components.
-///
-/// Returns `Some((org, repo, name))` if the subpath has exactly three parts.
-fn parse_github_overlay_subpath(subpath: &str) -> Option<(String, String, String)> {
-    let parts: Vec<&str> = subpath.split('/').collect();
-    if parts.len() == 3 && parts.iter().all(|p| !p.is_empty()) {
-        Some((
-            parts[0].to_string(),
-            parts[1].to_string(),
-            parts[2].to_string(),
-        ))
-    } else {
-        None
-    }
-}
-
-/// Check if a configured source URL matches a GitHub owner/repo.
-///
-/// Handles both full URLs (`https://github.com/owner/repo`) and
-/// shorthand that was expanded during config deserialization.
-fn is_overlay_repo_url(source_url: &str, gh_owner: &str, gh_repo: &str) -> bool {
-    let expected_suffix = format!("/{gh_owner}/{gh_repo}");
-    let url_trimmed = source_url.trim_end_matches(".git");
-    url_trimmed.ends_with(&expected_suffix)
 }
 
 /// Sync a single overlay's files from the target repo back to the overlay repo.
@@ -2294,7 +2239,8 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
         bail!("Overlay '{overlay_name}' is not currently applied.");
     }
 
-    let state = load_overlay_state(&target, &normalized_name)?;
+    let mut state = load_overlay_state(&target, &normalized_name)?;
+    crate::try_upgrade_github_source(&target, &mut state)?;
 
     // Check mutability upfront before any changes (#142, #148, #149)
     {
@@ -2703,6 +2649,7 @@ fn add_files_to_overlay(
 
     // Load existing overlay state
     let mut state = load_overlay_state(&target, &normalized_name)?;
+    crate::try_upgrade_github_source(&target, &mut state)?;
 
     // Check source mutability upfront before any filesystem changes (#148)
     {
@@ -6428,80 +6375,18 @@ directories =
         }
 
         #[test]
-        fn parse_github_overlay_subpath_valid() {
-            let result = parse_github_overlay_subpath("microsoft/FluidFramework/claude-config");
-            assert!(result.is_some());
-            let (org, repo, name) = result.unwrap();
-            assert_eq!(org, "microsoft");
-            assert_eq!(repo, "FluidFramework");
-            assert_eq!(name, "claude-config");
-        }
-
-        #[test]
-        fn parse_github_overlay_subpath_invalid() {
-            // Two parts
-            assert!(parse_github_overlay_subpath("org/repo").is_none());
-            // One part
-            assert!(parse_github_overlay_subpath("overlay").is_none());
-            // Four parts
-            assert!(parse_github_overlay_subpath("a/b/c/d").is_none());
-            // Empty parts
-            assert!(parse_github_overlay_subpath("org//name").is_none());
-            assert!(parse_github_overlay_subpath("/repo/name").is_none());
-            assert!(parse_github_overlay_subpath("org/repo/").is_none());
-        }
-
-        #[test]
-        fn is_overlay_repo_url_matches_https() {
-            assert!(is_overlay_repo_url(
-                "https://github.com/tylerbutler/repo-overlays",
-                "tylerbutler",
-                "repo-overlays"
-            ));
-        }
-
-        #[test]
-        fn is_overlay_repo_url_matches_with_git_suffix() {
-            assert!(is_overlay_repo_url(
-                "https://github.com/tylerbutler/repo-overlays.git",
-                "tylerbutler",
-                "repo-overlays"
-            ));
-        }
-
-        #[test]
-        fn is_overlay_repo_url_no_match_different_owner() {
-            assert!(!is_overlay_repo_url(
-                "https://github.com/other/repo-overlays",
-                "tylerbutler",
-                "repo-overlays"
-            ));
-        }
-
-        #[test]
-        fn is_overlay_repo_url_no_match_different_repo() {
-            assert!(!is_overlay_repo_url(
-                "https://github.com/tylerbutler/other-repo",
-                "tylerbutler",
-                "repo-overlays"
-            ));
-        }
-
-        #[test]
-        fn github_source_from_overlay_repo_is_syncable() {
-            // When an overlay is applied via two-part browse mode from the overlay repo,
-            // it should be recognized as syncable (not skipped) by sync --all.
+        fn try_upgrade_github_source_no_matching_configured_source() {
+            // GitHub source with valid subpath but no matching configured source
+            // should not be upgraded.
             let repo = create_test_repo();
 
-            // This is what happens when a user applies via `repoverlay apply tylerbutler/repo-overlays`
-            // The source is stored as GitHub with the overlay identity in the subpath.
             save_test_state(
                 repo.path(),
                 "build-troubleshooter",
                 OverlaySource::github(
-                    "https://github.com/tylerbutler/repo-overlays".to_string(),
-                    "tylerbutler".to_string(),
-                    "repo-overlays".to_string(),
+                    "https://github.com/fake-owner-xyz/fake-repo-xyz".to_string(),
+                    "fake-owner-xyz".to_string(),
+                    "fake-repo-xyz".to_string(),
                     "main".to_string(),
                     "abc123def456".to_string(),
                     Some("microsoft/FluidFramework/build-troubleshooter".to_string()),
@@ -6509,27 +6394,18 @@ directories =
                 vec![(".envrc", ".envrc")],
             );
 
-            let state = crate::load_overlay_state(repo.path(), "build-troubleshooter").unwrap();
-            // Source is GitHub, not OverlayRepo
+            let mut state = crate::load_overlay_state(repo.path(), "build-troubleshooter").unwrap();
             assert!(state.source.is_github());
-            assert!(!state.source.is_overlay_repo());
 
-            // But subpath should be parseable as an overlay reference
-            if let OverlaySource::GitHub { subpath, .. } = &state.source {
-                let parsed = subpath.as_deref().and_then(parse_github_overlay_subpath);
-                assert!(parsed.is_some());
-                let (org, repo, name) = parsed.unwrap();
-                assert_eq!(org, "microsoft");
-                assert_eq!(repo, "FluidFramework");
-                assert_eq!(name, "build-troubleshooter");
-            } else {
-                panic!("Expected GitHub source");
-            }
+            // No matching configured source → no upgrade
+            let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state).unwrap();
+            assert!(!upgraded);
+            assert!(state.source.is_github());
         }
 
         #[test]
-        fn github_source_without_subpath_is_not_syncable() {
-            // A GitHub source without a subpath (direct repo apply) should still be skipped
+        fn try_upgrade_github_source_without_subpath_no_upgrade() {
+            // A GitHub source without a subpath should not be upgraded
             let repo = create_test_repo();
 
             save_test_state(
@@ -6546,13 +6422,221 @@ directories =
                 vec![(".envrc", ".envrc")],
             );
 
-            let state = crate::load_overlay_state(repo.path(), "direct-github").unwrap();
-            if let OverlaySource::GitHub { subpath, .. } = &state.source {
-                let parsed = subpath.as_deref().and_then(parse_github_overlay_subpath);
-                assert!(parsed.is_none());
-            } else {
-                panic!("Expected GitHub source");
+            let mut state = crate::load_overlay_state(repo.path(), "direct-github").unwrap();
+            assert!(state.source.is_github());
+
+            let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state).unwrap();
+            assert!(!upgraded);
+            assert!(state.source.is_github());
+        }
+
+        #[test]
+        fn try_upgrade_github_source_invalid_subpath_no_upgrade() {
+            // A GitHub source with an invalid subpath (not 3 parts) should not upgrade
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "bad-subpath",
+                OverlaySource::github(
+                    "https://github.com/someone/repo-overlays".to_string(),
+                    "someone".to_string(),
+                    "repo-overlays".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    Some("only-two/parts".to_string()),
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let mut state = crate::load_overlay_state(repo.path(), "bad-subpath").unwrap();
+            let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state).unwrap();
+            assert!(!upgraded);
+            assert!(state.source.is_github());
+        }
+
+        #[test]
+        fn try_upgrade_github_source_empty_subpath_parts_no_upgrade() {
+            // A GitHub source with empty parts in subpath (e.g., "org//name") should not upgrade
+            let repo = create_test_repo();
+
+            for (name, subpath) in [
+                ("empty-middle", "org//name"),
+                ("empty-start", "/repo/name"),
+                ("empty-end", "org/repo/"),
+            ] {
+                save_test_state(
+                    repo.path(),
+                    name,
+                    OverlaySource::github(
+                        "https://github.com/someone/repo-overlays".to_string(),
+                        "someone".to_string(),
+                        "repo-overlays".to_string(),
+                        "main".to_string(),
+                        "abc123def456".to_string(),
+                        Some(subpath.to_string()),
+                    ),
+                    vec![(".envrc", ".envrc")],
+                );
+
+                let mut state = crate::load_overlay_state(repo.path(), name).unwrap();
+                let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state).unwrap();
+                assert!(!upgraded, "Expected no upgrade for subpath '{subpath}'");
+                assert!(state.source.is_github());
             }
+        }
+
+        #[test]
+        fn try_upgrade_github_source_four_part_subpath_no_upgrade() {
+            // Too many parts in subpath
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "too-many-parts",
+                OverlaySource::github(
+                    "https://github.com/someone/repo-overlays".to_string(),
+                    "someone".to_string(),
+                    "repo-overlays".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    Some("a/b/c/d".to_string()),
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let mut state = crate::load_overlay_state(repo.path(), "too-many-parts").unwrap();
+            let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state).unwrap();
+            assert!(!upgraded);
+            assert!(state.source.is_github());
+        }
+
+        #[test]
+        fn try_upgrade_github_source_non_github_source_no_upgrade() {
+            // Non-GitHub sources (Local, OverlayRepo) should not be upgraded
+            let repo = create_test_repo();
+
+            // Local source
+            save_test_state(
+                repo.path(),
+                "local-overlay",
+                OverlaySource::local(PathBuf::from("/tmp/overlay")),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let mut state = crate::load_overlay_state(repo.path(), "local-overlay").unwrap();
+            let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state);
+            assert!(!upgraded.unwrap());
+
+            // OverlayRepo source (already upgraded, should be no-op)
+            save_test_state(
+                repo.path(),
+                "repo-overlay",
+                OverlaySource::overlay_repo(
+                    "org".to_string(),
+                    "repo".to_string(),
+                    "name".to_string(),
+                    "abc123".to_string(),
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let mut state = crate::load_overlay_state(repo.path(), "repo-overlay").unwrap();
+            let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state).unwrap();
+            assert!(!upgraded);
+            assert!(state.source.is_overlay_repo());
+        }
+
+        #[test]
+        fn try_upgrade_github_source_single_part_subpath_no_upgrade() {
+            // Single-part subpath (just an overlay name, no org/repo)
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "single-part",
+                OverlaySource::github(
+                    "https://github.com/someone/repo-overlays".to_string(),
+                    "someone".to_string(),
+                    "repo-overlays".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    Some("just-a-name".to_string()),
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let mut state = crate::load_overlay_state(repo.path(), "single-part").unwrap();
+            let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state).unwrap();
+            assert!(!upgraded);
+            assert!(state.source.is_github());
+        }
+
+        #[test]
+        fn try_upgrade_github_source_happy_path_with_configured_source() {
+            // Test the full upgrade path using a real configured source.
+            // Loads user config to find a source; if none configured, the test
+            // verifies no upgrade happens (which is also valid).
+            use crate::github;
+
+            let config = crate::config::load_config(None).unwrap();
+            let Some(source) = config.sources.first() else {
+                // No sources configured — nothing to test for the happy path
+                return;
+            };
+
+            let Some((owner, gh_repo)) = github::parse_remote_url(&source.url) else {
+                return;
+            };
+
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "test-overlay",
+                OverlaySource::github(
+                    format!("https://github.com/{owner}/{gh_repo}"),
+                    owner,
+                    gh_repo,
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    Some("test-org/test-repo/test-overlay".to_string()),
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let mut state = crate::load_overlay_state(repo.path(), "test-overlay").unwrap();
+            assert!(state.source.is_github());
+
+            let upgraded = crate::try_upgrade_github_source(repo.path(), &mut state).unwrap();
+            assert!(upgraded, "Expected upgrade when source matches config");
+            assert!(
+                state.source.is_overlay_repo(),
+                "Expected OverlayRepo after upgrade"
+            );
+
+            // Verify the OverlayRepo fields are correct
+            if let OverlaySource::OverlayRepo {
+                org,
+                repo: target_repo,
+                name,
+                commit,
+                source_name,
+                ..
+            } = &state.source
+            {
+                assert_eq!(org, "test-org");
+                assert_eq!(target_repo, "test-repo");
+                assert_eq!(name, "test-overlay");
+                assert_eq!(commit, "abc123def456");
+                assert_eq!(source_name.as_deref(), Some(source.name.as_str()));
+            } else {
+                panic!("Expected OverlayRepo source after upgrade");
+            }
+
+            // Verify the state was persisted to disk
+            let reloaded = crate::load_overlay_state(repo.path(), "test-overlay").unwrap();
+            assert!(reloaded.source.is_overlay_repo());
         }
     }
 
