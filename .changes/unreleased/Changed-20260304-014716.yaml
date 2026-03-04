@@ -1,0 +1,10 @@
+kind: Changed
+body: |-
+    Clarify that overlay NAME must precede --add/--remove flags
+
+    The --add and --remove flags accept multiple values and greedily consume
+    trailing arguments. Running `edit --add file.txt name` fails because `name`
+    is parsed as a second file. Updated help text to document the required
+    argument order.
+time: 2026-03-04T01:47:16Z
+component: edit
