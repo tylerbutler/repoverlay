@@ -1,4 +1,6 @@
 src/cache.rs:146:9: replace CacheManager::repo_path -> PathBuf with Default::default()
+src/cache.rs:154:9: replace CacheManager::clone_repo -> Result<()> with Ok(())
+src/cache.rs:183:12: delete ! in CacheManager::clone_repo
 src/cache.rs:239:9: replace CacheManager::ref_exists -> Result<bool> with Ok(true)
 src/cache.rs:239:9: replace CacheManager::ref_exists -> Result<bool> with Ok(false)
 src/cache.rs:266:9: replace CacheManager::get_current_commit -> Result<String> with Ok(String::new())
@@ -20,6 +22,7 @@ src/cache.rs:390:9: replace CacheManager::check_for_updates -> Result<Option<Str
 src/cache.rs:390:9: replace CacheManager::check_for_updates -> Result<Option<String>> with Ok(Some("xyzzy".into()))
 src/cache.rs:392:12: delete ! in CacheManager::check_for_updates
 src/cache.rs:431:5: replace cache_dir -> Result<PathBuf> with Ok(Default::default())
+src/sources.rs:44:5: replace sources_cache_dir -> Result<PathBuf> with Ok(Default::default())
 src/sources.rs:76:9: replace SourceManager::source_names -> Vec<&str> with vec![]
 src/sources.rs:76:9: replace SourceManager::source_names -> Vec<&str> with vec![""]
 src/sources.rs:76:9: replace SourceManager::source_names -> Vec<&str> with vec!["xyzzy"]
@@ -53,6 +56,7 @@ src/state.rs:362:68: replace == with != in OverlayState::remove_file
 src/state.rs:372:9: replace OverlayState::file_count -> usize with 0
 src/state.rs:372:9: replace OverlayState::file_count -> usize with 1
 src/state.rs:377:9: replace OverlayState::file_entries -> &[FileEntry] with Vec::leak(Vec::new())
+src/state.rs:439:5: replace external_state_dir -> Result<PathBuf> with Ok(Default::default())
 src/state.rs:449:5: replace external_state_dir_for_target -> Result<PathBuf> with Ok(Default::default())
 src/state.rs:456:5: replace save_external_state -> Result<()> with Ok(())
 src/state.rs:479:5: replace remove_external_state -> Result<()> with Ok(())
@@ -77,4 +81,3 @@ src/state.rs:583:47: replace == with != in load_all_overlay_targets
 src/state.rs:601:5: replace list_applied_overlays -> Result<Vec<OverlayName>> with Ok(vec![])
 src/state.rs:603:8: delete ! in list_applied_overlays
 src/state.rs:609:64: replace == with != in list_applied_overlays
-src/state.rs:637:5: replace save_overlay_state -> Result<()> with Ok(())

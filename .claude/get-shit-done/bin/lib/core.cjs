@@ -76,6 +76,7 @@ function loadConfig(cwd) {
     research: true,
     plan_checker: true,
     verifier: true,
+    nyquist_validation: false,
     parallelization: true,
     brave_search: false,
   };
@@ -109,6 +110,7 @@ function loadConfig(cwd) {
       research: get('research', { section: 'workflow', field: 'research' }) ?? defaults.research,
       plan_checker: get('plan_checker', { section: 'workflow', field: 'plan_check' }) ?? defaults.plan_checker,
       verifier: get('verifier', { section: 'workflow', field: 'verifier' }) ?? defaults.verifier,
+      nyquist_validation: get('nyquist_validation', { section: 'workflow', field: 'nyquist_validation' }) ?? defaults.nyquist_validation,
       parallelization,
       brave_search: get('brave_search') ?? defaults.brave_search,
       model_overrides: parsed.model_overrides || null,

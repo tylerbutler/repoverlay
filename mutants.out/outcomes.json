@@ -8,7 +8,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 20.239629694,
+          "duration": 22.446030465,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -21,7 +21,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.815824791,
+          "duration": 3.114477067,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -73,7 +73,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.252640472,
+          "duration": 1.252592913,
           "process_status": {
             "Failure": 101
           },
@@ -128,7 +128,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.217466203,
+          "duration": 2.462876973,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -141,7 +141,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.832482255,
+          "duration": 3.429225549,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -193,7 +193,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.252830592,
+          "duration": 1.30262799,
           "process_status": {
             "Failure": 101
           },
@@ -248,7 +248,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.25328853,
+          "duration": 1.2525617580000001,
           "process_status": {
             "Failure": 101
           },
@@ -303,7 +303,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.108374957,
+          "duration": 2.204991462,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -316,7 +316,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.7567417389999997,
+          "duration": 3.316006131,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -368,7 +368,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.003872574,
+          "duration": 2.053724784,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -381,7 +381,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.7072555249999999,
+          "duration": 2.003782672,
           "process_status": {
             "Failure": 100
           },
@@ -429,13 +429,13 @@
           "genre": "FnValue"
         }
       },
-      "summary": "MissedMutant",
+      "summary": "CaughtMutant",
       "log_path": "log/src__cache.rs_line_154_col_9.log",
       "diff_path": "diff/src__cache.rs_line_154_col_9.diff",
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.258183949,
+          "duration": 2.356606202,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -448,8 +448,10 @@
         },
         {
           "phase": "Test",
-          "duration": 2.769559946,
-          "process_status": "Success",
+          "duration": 1.7567932910000001,
+          "process_status": {
+            "Failure": 100
+          },
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
             "nextest",
@@ -494,13 +496,13 @@
           "genre": "UnaryOperator"
         }
       },
-      "summary": "MissedMutant",
+      "summary": "CaughtMutant",
       "log_path": "log/src__cache.rs_line_183_col_12.log",
       "diff_path": "diff/src__cache.rs_line_183_col_12.diff",
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.255153348,
+          "duration": 2.455087501,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -513,8 +515,10 @@
         },
         {
           "phase": "Test",
-          "duration": 2.663592887,
-          "process_status": "Success",
+          "duration": 2.310386645,
+          "process_status": {
+            "Failure": 100
+          },
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
             "nextest",
@@ -565,7 +569,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.8060848680000001,
+          "duration": 1.803916919,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -578,7 +582,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.70933409,
+          "duration": 3.212925355,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -630,7 +634,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.406204184,
+          "duration": 2.505298362,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -643,7 +647,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.819309292,
+          "duration": 3.261198505,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -695,7 +699,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.455554492,
+          "duration": 2.555329243,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -708,7 +712,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.9120726770000003,
+          "duration": 3.218837875,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -760,7 +764,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.056249815,
+          "duration": 2.055707268,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -773,7 +777,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.703268629,
+          "duration": 1.957347621,
           "process_status": {
             "Failure": 100
           },
@@ -827,7 +831,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.755530057,
+          "duration": 1.857760539,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -840,7 +844,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.7569490349999999,
+          "duration": 2.010684437,
           "process_status": {
             "Failure": 100
           },
@@ -894,7 +898,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.90363266,
+          "duration": 1.906090119,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -907,7 +911,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.763118361,
+          "duration": 3.366655629,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -959,7 +963,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.30470715,
+          "duration": 2.558525495,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -972,7 +976,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.916373869,
+          "duration": 3.371310759,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1024,7 +1028,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.2043132500000002,
+          "duration": 2.457999689,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1037,7 +1041,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.658981129,
+          "duration": 2.004498234,
           "process_status": {
             "Failure": 100
           },
@@ -1091,7 +1095,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.7084140429999999,
+          "duration": 1.858520112,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1104,7 +1108,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.7033884129999999,
+          "duration": 1.953892144,
           "process_status": {
             "Failure": 100
           },
@@ -1158,7 +1162,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.006405328,
+          "duration": 1.9546554889999999,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1171,7 +1175,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.705740088,
+          "duration": 1.905415906,
           "process_status": {
             "Failure": 100
           },
@@ -1225,7 +1229,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.95365181,
+          "duration": 2.007718302,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1238,7 +1242,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.704540146,
+          "duration": 1.90398144,
           "process_status": {
             "Failure": 100
           },
@@ -1292,7 +1296,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.011576456,
+          "duration": 2.00608753,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1305,7 +1309,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.703724061,
+          "duration": 1.905530062,
           "process_status": {
             "Failure": 100
           },
@@ -1359,7 +1363,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.052620684,
+          "duration": 1.052614019,
           "process_status": {
             "Failure": 101
           },
@@ -1414,7 +1418,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.6048844410000003,
+          "duration": 2.604621628,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1427,7 +1431,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.70359097,
+          "duration": 1.903738119,
           "process_status": {
             "Failure": 100
           },
@@ -1481,7 +1485,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.002358264,
+          "duration": 1.00255739,
           "process_status": {
             "Failure": 101
           },
@@ -1536,7 +1540,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.605763363,
+          "duration": 2.706958974,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1549,7 +1553,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.705272657,
+          "duration": 2.054331784,
           "process_status": {
             "Failure": 100
           },
@@ -1603,7 +1607,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.803437026,
+          "duration": 1.803349496,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1616,7 +1620,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.855191441,
+          "duration": 5.462646986,
           "process_status": {
             "Failure": 100
           },
@@ -1670,7 +1674,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.805433039,
+          "duration": 1.804205431,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1683,7 +1687,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.70646099,
+          "duration": 17.087616763,
           "process_status": {
             "Failure": 100
           },
@@ -1737,7 +1741,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.056149768,
+          "duration": 4.659323534,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1750,7 +1754,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.6535989359999999,
+          "duration": 17.536422824,
           "process_status": {
             "Failure": 100
           },
@@ -1804,7 +1808,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.806647959,
+          "duration": 2.154161054,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1817,7 +1821,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.7049808720000001,
+          "duration": 27.110597744,
           "process_status": {
             "Failure": 100
           },
@@ -1871,7 +1875,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.003816432,
+          "duration": 2.05687048,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1884,7 +1888,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.705857034,
+          "duration": 12.180648226,
           "process_status": {
             "Failure": 100
           },
@@ -1938,7 +1942,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.105769678,
+          "duration": 2.406991555,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -1951,7 +1955,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.7052873179999999,
+          "duration": 1.904018429,
           "process_status": {
             "Failure": 100
           },
@@ -2005,7 +2009,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.753357373,
+          "duration": 1.7556841140000001,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2018,7 +2022,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.704146264,
+          "duration": 1.903971151,
           "process_status": {
             "Failure": 100
           },
@@ -2072,7 +2076,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.006335469,
+          "duration": 2.1060331899999998,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2085,7 +2089,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.704982741,
+          "duration": 1.903696163,
           "process_status": {
             "Failure": 100
           },
@@ -2139,7 +2143,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.054498888,
+          "duration": 2.05531547,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2152,7 +2156,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.668524628,
+          "duration": 2.706280507,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2204,7 +2208,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.803591798,
+          "duration": 1.807769162,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2217,7 +2221,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.70392623,
+          "duration": 1.903690538,
           "process_status": {
             "Failure": 100
           },
@@ -2271,7 +2275,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.759574578,
+          "duration": 1.753551808,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2284,7 +2288,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.6540494319999999,
+          "duration": 1.956612491,
           "process_status": {
             "Failure": 100
           },
@@ -2338,7 +2342,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.004930597,
+          "duration": 2.056175391,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2351,7 +2355,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.7044391399999999,
+          "duration": 1.955539847,
           "process_status": {
             "Failure": 100
           },
@@ -2405,7 +2409,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.75343191,
+          "duration": 1.808377454,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2418,7 +2422,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.7145498850000003,
+          "duration": 2.759696726,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2470,7 +2474,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.753794798,
+          "duration": 1.806990228,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2483,7 +2487,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.914706003,
+          "duration": 3.111972905,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2535,7 +2539,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.8069021539999999,
+          "duration": 1.803600732,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2548,7 +2552,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.862098175,
+          "duration": 3.061567364,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2600,7 +2604,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.003806579,
+          "duration": 2.15551396,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2613,7 +2617,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.70367514,
+          "duration": 2.053930195,
           "process_status": {
             "Failure": 100
           },
@@ -2661,13 +2665,13 @@
           "genre": "FnValue"
         }
       },
-      "summary": "MissedMutant",
+      "summary": "CaughtMutant",
       "log_path": "log/src__sources.rs_line_44_col_5.log",
       "diff_path": "diff/src__sources.rs_line_44_col_5.diff",
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.205899114,
+          "duration": 2.2059551649999998,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2680,8 +2684,10 @@
         },
         {
           "phase": "Test",
-          "duration": 2.911636809,
-          "process_status": "Success",
+          "duration": 2.8142952770000003,
+          "process_status": {
+            "Failure": 100
+          },
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
             "nextest",
@@ -2732,7 +2738,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.55806338,
+          "duration": 2.706912973,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2745,7 +2751,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.462040256,
+          "duration": 2.558931827,
           "process_status": {
             "Failure": 100
           },
@@ -2799,7 +2805,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.7555300109999998,
+          "duration": 1.804971973,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2812,7 +2818,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.361240392,
+          "duration": 2.460765846,
           "process_status": {
             "Failure": 100
           },
@@ -2866,7 +2872,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.806851597,
+          "duration": 1.7534405020000001,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2879,7 +2885,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.463380934,
+          "duration": 2.460961201,
           "process_status": {
             "Failure": 100
           },
@@ -2933,7 +2939,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.405917882,
+          "duration": 2.406912825,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -2946,7 +2952,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.407812261,
+          "duration": 2.6654311550000003,
           "process_status": {
             "Failure": 100
           },
@@ -3000,7 +3006,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.104206643,
+          "duration": 1.002391793,
           "process_status": {
             "Failure": 101
           },
@@ -3055,7 +3061,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.206140039,
+          "duration": 2.204604698,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3068,7 +3074,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.309832951,
+          "duration": 2.558621173,
           "process_status": {
             "Failure": 100
           },
@@ -3122,7 +3128,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.005832658,
+          "duration": 2.003795454,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3135,7 +3141,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.971552345,
+          "duration": 3.27005399,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3187,7 +3193,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.953973669,
+          "duration": 2.005023928,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3200,7 +3206,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.919539774,
+          "duration": 3.3200701,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3252,7 +3258,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.955619515,
+          "duration": 2.003806186,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3265,7 +3271,7 @@
         },
         {
           "phase": "Test",
-          "duration": 3.069299004,
+          "duration": 3.117521953,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3317,7 +3323,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.656318555,
+          "duration": 2.754882132,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3330,7 +3336,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.306105603,
+          "duration": 2.611045075,
           "process_status": {
             "Failure": 100
           },
@@ -3384,7 +3390,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.00232192,
+          "duration": 1.002448213,
           "process_status": {
             "Failure": 101
           },
@@ -3439,7 +3445,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.606446615,
+          "duration": 2.755250731,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3452,7 +3458,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.507774796,
+          "duration": 2.769064614,
           "process_status": {
             "Failure": 100
           },
@@ -3506,7 +3512,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.304345738,
+          "duration": 2.455686318,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3519,7 +3525,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.522827174,
+          "duration": 2.71278152,
           "process_status": {
             "Failure": 100
           },
@@ -3573,7 +3579,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.052579734,
+          "duration": 1.052401653,
           "process_status": {
             "Failure": 101
           },
@@ -3628,7 +3634,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.307228527,
+          "duration": 2.504355105,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3641,7 +3647,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.308681443,
+          "duration": 2.611036268,
           "process_status": {
             "Failure": 100
           },
@@ -3695,7 +3701,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.002451451,
+          "duration": 1.002343264,
           "process_status": {
             "Failure": 101
           },
@@ -3750,7 +3756,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.356154985,
+          "duration": 2.60669043,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -3763,7 +3769,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.359359987,
+          "duration": 2.823217325,
           "process_status": {
             "Failure": 100
           },
@@ -3817,7 +3823,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.054234036,
+          "duration": 1.052577598,
           "process_status": {
             "Failure": 101
           },
@@ -3872,7 +3878,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.103297528,
+          "duration": 1.102643466,
           "process_status": {
             "Failure": 101
           },
@@ -3927,7 +3933,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.553809867,
+          "duration": 1.5544938799999999,
           "process_status": {
             "Failure": 101
           },
@@ -3982,7 +3988,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.604836241,
+          "duration": 1.5530711990000001,
           "process_status": {
             "Failure": 101
           },
@@ -4037,7 +4043,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.604998103,
+          "duration": 1.553206761,
           "process_status": {
             "Failure": 101
           },
@@ -4092,7 +4098,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.856303267,
+          "duration": 2.85746025,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4105,7 +4111,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.311684419,
+          "duration": 2.458315348,
           "process_status": {
             "Failure": 100
           },
@@ -4159,7 +4165,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.810816212,
+          "duration": 1.753682328,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4172,7 +4178,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.306626028,
+          "duration": 2.407693419,
           "process_status": {
             "Failure": 100
           },
@@ -4226,7 +4232,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.709350944,
+          "duration": 2.7080531260000003,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4239,7 +4245,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.308291794,
+          "duration": 2.5080738350000003,
           "process_status": {
             "Failure": 100
           },
@@ -4293,7 +4299,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.8537228620000001,
+          "duration": 1.853533361,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4306,7 +4312,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.357857521,
+          "duration": 2.561362196,
           "process_status": {
             "Failure": 100
           },
@@ -4360,7 +4366,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.756124963,
+          "duration": 1.7561144990000002,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4373,7 +4379,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.157705706,
+          "duration": 2.256666914,
           "process_status": {
             "Failure": 100
           },
@@ -4427,7 +4433,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.753596968,
+          "duration": 1.80500864,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4440,7 +4446,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.2064083070000002,
+          "duration": 2.614246547,
           "process_status": {
             "Failure": 100
           },
@@ -4494,7 +4500,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.803713074,
+          "duration": 1.954330626,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4507,7 +4513,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.20862277,
+          "duration": 2.310368966,
           "process_status": {
             "Failure": 100
           },
@@ -4561,7 +4567,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.55712206,
+          "duration": 2.504419323,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4574,7 +4580,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.564706683,
+          "duration": 2.758341187,
           "process_status": {
             "Failure": 100
           },
@@ -4628,7 +4634,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.003289765,
+          "duration": 1.002426721,
           "process_status": {
             "Failure": 101
           },
@@ -4683,7 +4689,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.607277305,
+          "duration": 2.7050103610000003,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4696,7 +4702,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.906732652,
+          "duration": 2.105991855,
           "process_status": {
             "Failure": 100
           },
@@ -4750,7 +4756,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.7059577,
+          "duration": 2.856629365,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4763,7 +4769,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.206623423,
+          "duration": 2.360440895,
           "process_status": {
             "Failure": 100
           },
@@ -4817,7 +4823,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.805962963,
+          "duration": 1.857720482,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4830,7 +4836,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.307734255,
+          "duration": 2.3047227120000002,
           "process_status": {
             "Failure": 100
           },
@@ -4884,7 +4890,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.804880303,
+          "duration": 1.805097838,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4897,7 +4903,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.308723805,
+          "duration": 2.306791973,
           "process_status": {
             "Failure": 100
           },
@@ -4951,7 +4957,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.8039813489999998,
+          "duration": 1.755018433,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -4964,7 +4970,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.56090054,
+          "duration": 2.7171124989999997,
           "process_status": {
             "Failure": 100
           },
@@ -5018,7 +5024,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.804419023,
+          "duration": 2.004293115,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5031,7 +5037,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.354995831,
+          "duration": 2.259532956,
           "process_status": {
             "Failure": 100
           },
@@ -5085,7 +5091,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.8033384730000002,
+          "duration": 1.758015366,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5098,7 +5104,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.309484969,
+          "duration": 2.258764584,
           "process_status": {
             "Failure": 100
           },
@@ -5152,7 +5158,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.454401554,
+          "duration": 2.5048455,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5165,7 +5171,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.210084521,
+          "duration": 2.309486293,
           "process_status": {
             "Failure": 100
           },
@@ -5219,7 +5225,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.155896427,
+          "duration": 1.803901635,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5232,7 +5238,7 @@
         },
         {
           "phase": "Test",
-          "duration": 6.914984999,
+          "duration": 2.308840547,
           "process_status": {
             "Failure": 100
           },
@@ -5286,7 +5292,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.504072432,
+          "duration": 2.5544687230000003,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5299,7 +5305,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.7534373589999999,
+          "duration": 1.955135796,
           "process_status": {
             "Failure": 100
           },
@@ -5353,7 +5359,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.60619706,
+          "duration": 2.807784211,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5366,7 +5372,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.310428547,
+          "duration": 2.8635516770000002,
           "process_status": {
             "Failure": 100
           },
@@ -5420,7 +5426,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.00220967,
+          "duration": 1.052601198,
           "process_status": {
             "Failure": 101
           },
@@ -5475,7 +5481,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.604694403,
+          "duration": 3.017818696,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5488,7 +5494,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.46072002,
+          "duration": 2.919352374,
           "process_status": {
             "Failure": 100
           },
@@ -5542,7 +5548,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.9593970189999999,
+          "duration": 2.256836645,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5555,7 +5561,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.807305393,
+          "duration": 2.108259173,
           "process_status": {
             "Failure": 100
           },
@@ -5609,7 +5615,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.006727715,
+          "duration": 1.7534210890000002,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5622,7 +5628,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.855297516,
+          "duration": 1.903605733,
           "process_status": {
             "Failure": 100
           },
@@ -5676,7 +5682,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.054655596,
+          "duration": 1.957579971,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5689,7 +5695,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.905390894,
+          "duration": 1.957568574,
           "process_status": {
             "Failure": 100
           },
@@ -5743,7 +5749,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.0526135189999999,
+          "duration": 1.102598384,
           "process_status": {
             "Failure": 101
           },
@@ -5792,13 +5798,13 @@
           "genre": "FnValue"
         }
       },
-      "summary": "MissedMutant",
+      "summary": "CaughtMutant",
       "log_path": "log/src__state.rs_line_439_col_5.log",
       "diff_path": "diff/src__state.rs_line_439_col_5.diff",
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.504613514,
+          "duration": 2.508004555,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5811,8 +5817,10 @@
         },
         {
           "phase": "Test",
-          "duration": 3.770262141,
-          "process_status": "Success",
+          "duration": 2.56966334,
+          "process_status": {
+            "Failure": 100
+          },
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
             "nextest",
@@ -5863,7 +5871,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.454665173,
+          "duration": 2.354484328,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5876,7 +5884,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.665320758,
+          "duration": 2.612727004,
           "process_status": {
             "Failure": 100
           },
@@ -5930,7 +5938,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.3560092839999998,
+          "duration": 2.3575035509999998,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -5943,7 +5951,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.568664843,
+          "duration": 2.56044689,
           "process_status": {
             "Failure": 100
           },
@@ -5997,7 +6005,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.255399415,
+          "duration": 2.254199344,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6010,7 +6018,7 @@
         },
         {
           "phase": "Test",
-          "duration": 3.068530531,
+          "duration": 3.159987752,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6062,7 +6070,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.206233852,
+          "duration": 2.404302059,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6075,7 +6083,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.772003046,
+          "duration": 2.564750228,
           "process_status": {
             "Failure": 100
           },
@@ -6129,7 +6137,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.606000826,
+          "duration": 2.604709818,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6142,7 +6150,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.763256526,
+          "duration": 2.763598386,
           "process_status": {
             "Failure": 100
           },
@@ -6196,7 +6204,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.05267499,
+          "duration": 1.002432523,
           "process_status": {
             "Failure": 101
           },
@@ -6251,7 +6259,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.7549011549999998,
+          "duration": 2.656544392,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6264,7 +6272,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.765881285,
+          "duration": 2.609507384,
           "process_status": {
             "Failure": 100
           },
@@ -6318,7 +6326,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.005389437,
+          "duration": 2.011387304,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6331,7 +6339,7 @@
         },
         {
           "phase": "Test",
-          "duration": 3.41734751,
+          "duration": 3.314621577,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6383,7 +6391,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.203764369,
+          "duration": 2.056066766,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6396,7 +6404,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.763156859,
+          "duration": 2.617777667,
           "process_status": {
             "Failure": 100
           },
@@ -6450,7 +6458,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.154062888,
+          "duration": 2.105521589,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6463,7 +6471,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.713868496,
+          "duration": 2.557369836,
           "process_status": {
             "Failure": 100
           },
@@ -6517,7 +6525,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.555476948,
+          "duration": 2.404500892,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6530,7 +6538,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.613700493,
+          "duration": 2.66707799,
           "process_status": {
             "Failure": 100
           },
@@ -6584,7 +6592,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.853559841,
+          "duration": 1.853696744,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6597,7 +6605,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.711800718,
+          "duration": 2.6124992110000003,
           "process_status": {
             "Failure": 100
           },
@@ -6651,7 +6659,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.455942217,
+          "duration": 2.455645604,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6664,7 +6672,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.805196001,
+          "duration": 2.058193327,
           "process_status": {
             "Failure": 100
           },
@@ -6718,7 +6726,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.805911188,
+          "duration": 1.854194489,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6731,7 +6739,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.80722346,
+          "duration": 2.105520468,
           "process_status": {
             "Failure": 100
           },
@@ -6785,7 +6793,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.8040457060000001,
+          "duration": 1.7576603899999999,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6798,7 +6806,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.214160516,
+          "duration": 2.006446218,
           "process_status": {
             "Failure": 100
           },
@@ -6852,7 +6860,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.157867642,
+          "duration": 1.8045823479999998,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6865,7 +6873,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.953745826,
+          "duration": 1.960486651,
           "process_status": {
             "Failure": 100
           },
@@ -6919,7 +6927,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.304137198,
+          "duration": 2.304239929,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6932,7 +6940,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.7544423980000001,
+          "duration": 2.007476467,
           "process_status": {
             "Failure": 100
           },
@@ -6986,7 +6994,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.853348775,
+          "duration": 1.86157887,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -6999,7 +7007,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.853650833,
+          "duration": 2.157934439,
           "process_status": {
             "Failure": 100
           },
@@ -7053,7 +7061,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.405864476,
+          "duration": 2.507469855,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7066,7 +7074,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.959186436,
+          "duration": 2.25980937,
           "process_status": {
             "Failure": 100
           },
@@ -7120,7 +7128,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.054807304,
+          "duration": 2.054702458,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7133,7 +7141,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.957063555,
+          "duration": 2.105716507,
           "process_status": {
             "Failure": 100
           },
@@ -7187,7 +7195,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.954252022,
+          "duration": 1.9047753410000001,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7200,7 +7208,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.858221317,
+          "duration": 2.161812387,
           "process_status": {
             "Failure": 100
           },
@@ -7254,7 +7262,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.8547376230000001,
+          "duration": 1.903616547,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7267,7 +7275,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.6086754880000003,
+          "duration": 2.662964202,
           "process_status": {
             "Failure": 100
           },
@@ -7321,7 +7329,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 3.2052366,
+          "duration": 3.3556629669999998,
           "process_status": {
             "Failure": 101
           },
@@ -7376,7 +7384,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 3.204978502,
+          "duration": 3.4559305,
           "process_status": {
             "Failure": 101
           },
@@ -7431,7 +7439,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 3.256454222,
+          "duration": 3.156678352,
           "process_status": {
             "Failure": 101
           },
@@ -7486,7 +7494,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 3.205056419,
+          "duration": 3.207160253,
           "process_status": {
             "Failure": 101
           },
@@ -7541,7 +7549,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 3.255220015,
+          "duration": 3.155399974,
           "process_status": {
             "Failure": 101
           },
@@ -7596,7 +7604,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.108059846,
+          "duration": 1.9049008729999999,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7609,7 +7617,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.805532462,
+          "duration": 2.055647948,
           "process_status": {
             "Failure": 100
           },
@@ -7663,7 +7671,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.354024466,
+          "duration": 2.204146899,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7676,7 +7684,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.106917311,
+          "duration": 2.004114353,
           "process_status": {
             "Failure": 100
           },
@@ -7730,7 +7738,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 3.41011901,
+          "duration": 2.955054127,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7743,7 +7751,7 @@
         },
         {
           "phase": "Test",
-          "duration": 2.005319267,
+          "duration": 1.958178997,
           "process_status": {
             "Failure": 100
           },
@@ -7797,7 +7805,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.052290798,
+          "duration": 1.054311927,
           "process_status": {
             "Failure": 101
           },
@@ -7852,7 +7860,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 3.010665867,
+          "duration": 2.806955136,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7865,7 +7873,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.856105127,
+          "duration": 2.056710878,
           "process_status": {
             "Failure": 100
           },
@@ -7919,7 +7927,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 2.153675724,
+          "duration": 2.255181386,
           "process_status": "Success",
           "argv": [
             "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
@@ -7932,7 +7940,7 @@
         },
         {
           "phase": "Test",
-          "duration": 1.909096099,
+          "duration": 2.007538067,
           "process_status": {
             "Failure": 100
           },
@@ -7986,7 +7994,7 @@
       "phase_results": [
         {
           "phase": "Build",
-          "duration": 1.352696377,
+          "duration": 1.30297208,
           "process_status": {
             "Failure": 101
           },
@@ -8000,82 +8008,15 @@
           ]
         }
       ]
-    },
-    {
-      "scenario": {
-        "Mutant": {
-          "name": "src/state.rs:637:5: replace save_overlay_state -> Result<()> with Ok(())",
-          "package": "repoverlay",
-          "file": "src/state.rs",
-          "function": {
-            "function_name": "save_overlay_state",
-            "return_type": "-> Result<()>",
-            "span": {
-              "start": {
-                "line": 635,
-                "column": 1
-              },
-              "end": {
-                "line": 647,
-                "column": 2
-              }
-            }
-          },
-          "span": {
-            "start": {
-              "line": 637,
-              "column": 5
-            },
-            "end": {
-              "line": 646,
-              "column": 11
-            }
-          },
-          "replacement": "Ok(())",
-          "genre": "FnValue"
-        }
-      },
-      "summary": "CaughtMutant",
-      "log_path": "log/src__state.rs_line_637_col_5.log",
-      "diff_path": "diff/src__state.rs_line_637_col_5.diff",
-      "phase_results": [
-        {
-          "phase": "Build",
-          "duration": 2.5567091189999998,
-          "process_status": "Success",
-          "argv": [
-            "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
-            "nextest",
-            "run",
-            "--no-run",
-            "--verbose",
-            "--package=repoverlay@0.8.0"
-          ]
-        },
-        {
-          "phase": "Test",
-          "duration": 1.8559627779999999,
-          "process_status": {
-            "Failure": 100
-          },
-          "argv": [
-            "/home/tylerbu/.rustup/toolchains/1.90-x86_64-unknown-linux-gnu/bin/cargo",
-            "nextest",
-            "run",
-            "--verbose",
-            "--package=repoverlay@0.8.0"
-          ]
-        }
-      ]
     }
   ],
-  "total_mutants": 125,
-  "missed": 20,
-  "caught": 80,
+  "total_mutants": 124,
+  "missed": 16,
+  "caught": 83,
   "timeout": 0,
   "unviable": 25,
   "success": 0,
-  "start_time": "2026-03-03T04:57:44.435299809Z",
-  "end_time": "2026-03-03T05:06:17.574051238Z",
+  "start_time": "2026-03-03T05:14:27.993738751Z",
+  "end_time": null,
   "cargo_mutants_version": "26.2.0"
 }
