@@ -8,8 +8,26 @@ description = "Overlay config files into git repositories without committing the
 license = "MIT"
 repository = "https://github.com/tylerbutler/repoverlay"
 homepage = "https://github.com/tylerbutler/repoverlay"
-keywords = ["git", "overlay", "config", "symlink"]
+keywords = ["git", "overlay", "config", "symlink", "dotfiles"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    ".claude/",
+    ".github/",
+    ".planning/",
+    ".serena/",
+    ".vscode/",
+    "docs/",
+    "metrics/",
+    "mutants.out/",
+    "mutants.out.old/",
+    "scripts/",
+    "website/",
+    "repopo.config.ts",
+    "package.json",
+    "pnpm-lock.yaml",
+    "hk.pkl",
+    "codecov.yml",
+]
 
 [lib]
 name = "repoverlay"
