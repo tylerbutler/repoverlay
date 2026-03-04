@@ -38,64 +38,68 @@ fn git_run(repo_path: &Path, args: &[&str]) -> Result<()> {
 
 /// Metadata about a cached repository.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct CacheMeta {
+pub(crate) struct CacheMeta {
     /// The clone URL
-    pub clone_url: String,
+    pub(crate) clone_url: String,
     /// When the cache was last fetched
-    pub last_fetched: DateTime<Utc>,
+    pub(crate) last_fetched: DateTime<Utc>,
     /// The git ref that was requested
-    pub requested_ref: String,
+    pub(crate) requested_ref: String,
     /// The resolved commit SHA
-    pub commit: String,
+    pub(crate) commit: String,
 }
 
 /// Result of caching a GitHub repository.
 #[derive(Debug)]
-pub struct CachedOverlay {
+pub(crate) struct CachedOverlay {
     /// Path to the overlay files (may include subpath)
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// The resolved commit SHA
-    pub commit: String,
+    pub(crate) commit: String,
     /// When the cache was created/updated
     #[allow(dead_code)]
-    pub cached_at: DateTime<Utc>,
+    pub(crate) cached_at: DateTime<Utc>,
 }
 
 /// Information about a cached repository.
 #[derive(Debug)]
-pub struct CachedRepoInfo {
+pub(crate) struct CachedRepoInfo {
     /// Owner name
-    pub owner: String,
+    pub(crate) owner: String,
     /// Repository name
-    pub repo: String,
+    pub(crate) repo: String,
     /// Path to the cached repo
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// Cache metadata (if available)
-    pub meta: Option<CacheMeta>,
+    pub(crate) meta: Option<CacheMeta>,
 }
 
 /// Manager for the overlay cache.
-pub struct CacheManager {
+pub(crate) struct CacheManager {
     cache_dir: PathBuf,
 }
 
 #[allow(clippy::unused_self)]
 impl CacheManager {
     /// Create a new cache manager.
-    pub fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         let cache_dir = cache_dir()?;
         Ok(Self { cache_dir })
     }
 
     /// Get the cache directory path.
-    pub fn cache_dir(&self) -> &Path {
+    pub(crate) fn cache_dir(&self) -> &Path {
         &self.cache_dir
     }
 
     /// Ensure a GitHub repository is cached and at the correct ref.
     ///
     /// Returns the path to the overlay files.
-    pub fn ensure_cached(&self, source: &GitHubSource, update: bool) -> Result<CachedOverlay> {
+    pub(crate) fn ensure_cached(
+        &self,
+        source: &GitHubSource,
+        update: bool,
+    ) -> Result<CachedOverlay> {
         let repo_path = self.repo_path(source);
         let owner = &source.owner;
         let repo = &source.repo;
@@ -142,7 +146,7 @@ impl CacheManager {
     }
 
     /// Get the path where a repository would be cached.
-    pub fn repo_path(&self, source: &GitHubSource) -> PathBuf {
+    pub(crate) fn repo_path(&self, source: &GitHubSource) -> PathBuf {
         self.cache_dir
             .join("github")
             .join(&source.owner)
@@ -307,7 +311,7 @@ impl CacheManager {
     }
 
     /// List all cached repositories.
-    pub fn list_cached(&self) -> Result<Vec<CachedRepoInfo>> {
+    pub(crate) fn list_cached(&self) -> Result<Vec<CachedRepoInfo>> {
         let github_dir = self.cache_dir.join("github");
 
         if !github_dir.exists() {
@@ -349,7 +353,7 @@ impl CacheManager {
     }
 
     /// Remove a specific cached repository.
-    pub fn remove_cached(&self, owner: &str, repo: &str) -> Result<bool> {
+    pub(crate) fn remove_cached(&self, owner: &str, repo: &str) -> Result<bool> {
         let path = self.cache_dir.join("github").join(owner).join(repo);
 
         if path.exists() {
@@ -368,7 +372,7 @@ impl CacheManager {
     }
 
     /// Clear the entire cache.
-    pub fn clear_cache(&self) -> Result<usize> {
+    pub(crate) fn clear_cache(&self) -> Result<usize> {
         let github_dir = self.cache_dir.join("github");
 
         if !github_dir.exists() {
@@ -386,7 +390,7 @@ impl CacheManager {
     /// Check for updates to a cached repository.
     ///
     /// Returns the latest commit on the default branch if different from current.
-    pub fn check_for_updates(&self, source: &GitHubSource) -> Result<Option<String>> {
+    pub(crate) fn check_for_updates(&self, source: &GitHubSource) -> Result<Option<String>> {
         let repo_path = self.repo_path(source);
 
         if !repo_path.exists() {
@@ -427,7 +431,7 @@ impl CacheManager {
 }
 
 /// Get the cache directory.
-pub fn cache_dir() -> Result<PathBuf> {
+pub(crate) fn cache_dir() -> Result<PathBuf> {
     let proj_dirs = ProjectDirs::from("", "", "repoverlay")
         .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
 

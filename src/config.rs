@@ -13,10 +13,10 @@ use std::str::FromStr;
 
 /// Global repoverlay configuration.
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
-pub struct RepoverlayConfig {
+pub(crate) struct RepoverlayConfig {
     /// Configured overlay sources (checked in order for resolution).
     #[serde(default)]
-    pub sources: Vec<Source>,
+    pub(crate) sources: Vec<Source>,
 }
 
 impl RepoverlayConfig {
@@ -24,7 +24,7 @@ impl RepoverlayConfig {
     ///
     /// Commands that need a single overlay repo (create, inspect, sync, etc.)
     /// should use this method.
-    pub fn get_default_overlay_repo_config(&self) -> Result<OverlayRepoConfig> {
+    pub(crate) fn get_default_overlay_repo_config(&self) -> Result<OverlayRepoConfig> {
         let source = self.sources.first().ok_or_else(|| {
             anyhow::anyhow!(
                 "Overlay repository not configured.\n\n\
@@ -45,7 +45,7 @@ impl RepoverlayConfig {
     ///
     /// Looks up the source by name in the configured sources list.
     /// Falls back to `get_default_overlay_repo_config` if `source_name` is `None`.
-    pub fn get_overlay_repo_config_by_name(
+    pub(crate) fn get_overlay_repo_config_by_name(
         &self,
         source_name: Option<&str>,
     ) -> Result<OverlayRepoConfig> {
@@ -85,26 +85,26 @@ impl RepoverlayConfig {
 /// Sources are checked in order when resolving overlay references.
 /// Earlier sources have higher priority.
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
-pub struct Source {
+pub(crate) struct Source {
     /// Name for this source (used in CLI output and `--source` flag).
-    pub name: String,
+    pub(crate) name: String,
     /// Git URL of the overlay repository.
     /// Accepts full URLs or GitHub shorthand (`owner/repo`), which is expanded
     /// to `https://github.com/owner/repo` during deserialization.
     #[serde(deserialize_with = "deserialize_source_url")]
-    pub url: String,
+    pub(crate) url: String,
 }
 
 /// Default overlay repository name for the one-part shorthand syntax.
 /// When user types `username`, it expands to `username/repo-overlays`.
-pub const DEFAULT_OVERLAY_REPO_NAME: &str = "repo-overlays";
+pub(crate) const DEFAULT_OVERLAY_REPO_NAME: &str = "repo-overlays";
 
 /// Returns the overlay repository name for the one-part shorthand syntax.
 ///
 /// Checks `REPOVERLAY_DEFAULT_REPO_NAME` env var first, falling back to
 /// [`DEFAULT_OVERLAY_REPO_NAME`].
 #[must_use]
-pub fn default_overlay_repo_name() -> String {
+pub(crate) fn default_overlay_repo_name() -> String {
     default_overlay_repo_name_with_env(std::env::var("REPOVERLAY_DEFAULT_REPO_NAME").ok())
 }
 
@@ -121,7 +121,7 @@ fn default_overlay_repo_name_with_env(env_val: Option<String>) -> String {
 /// - GitHub shorthand (`owner/repo`)
 /// - Bare GitHub owner/username (`owner`)
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceUrlInput {
+pub(crate) enum SourceUrlInput {
     /// A full git-cloneable URL.
     GitUrl(String),
     /// GitHub shorthand (`owner/repo`), expanded to `https://github.com/owner/repo`.
@@ -133,7 +133,7 @@ pub enum SourceUrlInput {
 impl SourceUrlInput {
     /// Returns the expanded git URL for this input.
     #[must_use]
-    pub fn to_url(&self) -> String {
+    pub(crate) fn to_url(&self) -> String {
         self.to_url_with_repo_name(&default_overlay_repo_name())
     }
 
@@ -216,7 +216,7 @@ fn is_bare_owner(s: &str) -> bool {
 
 /// Expand GitHub shorthand to a full URL.
 #[must_use]
-pub fn expand_github_shorthand(s: &str) -> String {
+pub(crate) fn expand_github_shorthand(s: &str) -> String {
     format!("https://github.com/{s}")
 }
 
@@ -228,7 +228,7 @@ pub fn expand_github_shorthand(s: &str) -> String {
 /// - Bare owner name (`owner`) - expanded to `https://github.com/owner/repo-overlays`
 ///
 /// Returns an error for invalid formats (empty, whitespace).
-pub fn validate_source_url(url: &str) -> std::result::Result<String, String> {
+pub(crate) fn validate_source_url(url: &str) -> std::result::Result<String, String> {
     if is_git_url(url) {
         Ok(url.to_string())
     } else if is_github_shorthand(url) {
@@ -255,20 +255,20 @@ where
 
 /// Configuration for a shared overlay repository.
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct OverlayRepoConfig {
+pub(crate) struct OverlayRepoConfig {
     /// Git URL of the overlay repository.
-    pub url: String,
+    pub(crate) url: String,
     /// Optional override for the local clone path.
     /// Default: `~/.local/share/repoverlay/overlay-repo/`
     #[serde(default)]
-    pub local_path: Option<PathBuf>,
+    pub(crate) local_path: Option<PathBuf>,
 }
 
 /// Get the global config directory path.
 ///
 /// Returns `~/.config/repoverlay/` on all Unix-like systems.
 /// Respects `XDG_CONFIG_HOME` if set.
-pub fn config_dir() -> Result<PathBuf> {
+pub(crate) fn config_dir() -> Result<PathBuf> {
     config_dir_with_env(std::env::var("XDG_CONFIG_HOME").ok().as_deref())
 }
 
@@ -286,18 +286,18 @@ fn config_dir_with_env(xdg: Option<&str>) -> Result<PathBuf> {
 }
 
 /// Get the path to the global config file.
-pub fn global_config_path() -> Result<PathBuf> {
+pub(crate) fn global_config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.ccl"))
 }
 
 /// Get the path to the per-repo config file.
 #[cfg(test)]
-pub fn repo_config_path(repo_path: &Path) -> PathBuf {
+pub(crate) fn repo_config_path(repo_path: &Path) -> PathBuf {
     repo_path.join(".repoverlay").join("config.ccl")
 }
 
 /// Load the global configuration.
-pub fn load_global_config() -> Result<RepoverlayConfig> {
+pub(crate) fn load_global_config() -> Result<RepoverlayConfig> {
     let config_path = global_config_path()?;
 
     if !config_path.exists() {
@@ -315,7 +315,7 @@ pub fn load_global_config() -> Result<RepoverlayConfig> {
 
 /// Load the per-repo configuration.
 #[cfg(test)]
-pub fn load_repo_config(repo_path: &Path) -> Result<Option<RepoverlayConfig>> {
+pub(crate) fn load_repo_config(repo_path: &Path) -> Result<Option<RepoverlayConfig>> {
     let config_path = repo_config_path(repo_path);
 
     if !config_path.exists() {
@@ -332,12 +332,12 @@ pub fn load_repo_config(repo_path: &Path) -> Result<Option<RepoverlayConfig>> {
 }
 
 /// Load the repoverlay configuration.
-pub fn load_config(_repo_path: Option<&Path>) -> Result<RepoverlayConfig> {
+pub(crate) fn load_config(_repo_path: Option<&Path>) -> Result<RepoverlayConfig> {
     load_global_config()
 }
 
 /// Generate a config file for multi-source configuration.
-pub fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
+pub(crate) fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
     let mut output = String::new();
     output.push_str("/= repoverlay global configuration\n");
     output.push_str("/= This file configures repoverlay's overlay sources.\n\n");
@@ -362,7 +362,7 @@ pub fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
 }
 
 /// Save the global configuration.
-pub fn save_config(config: &RepoverlayConfig) -> Result<()> {
+pub(crate) fn save_config(config: &RepoverlayConfig) -> Result<()> {
     let config_path = global_config_path()?;
 
     // Ensure config directory exists

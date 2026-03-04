@@ -11,7 +11,7 @@ use crate::github::GitHubSource;
 /// This enum represents all valid input formats for overlay sources,
 /// enabling the resolution layer to handle each type appropriately.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceReference {
+pub(crate) enum SourceReference {
     /// GitHub URL (e.g., `https://github.com/owner/repo`)
     GitHubUrl(String),
 
@@ -57,7 +57,7 @@ impl SourceReference {
     /// it's treated as a local path with `needs_prefix_warning = true` to indicate
     /// that users should use `./` prefix in the future.
     #[must_use]
-    pub fn parse(input: &str) -> Self {
+    pub(crate) fn parse(input: &str) -> Self {
         // 1. Check for GitHub URL
         if GitHubSource::is_github_url(input) {
             return Self::GitHubUrl(input.to_string());
@@ -147,7 +147,7 @@ impl SourceReference {
     /// Check if this reference requires a deprecation warning about local path syntax.
     #[must_use]
     #[allow(dead_code)] // Available for future use
-    pub const fn needs_local_path_warning(&self) -> bool {
+    pub(crate) const fn needs_local_path_warning(&self) -> bool {
         matches!(
             self,
             Self::LocalPath {

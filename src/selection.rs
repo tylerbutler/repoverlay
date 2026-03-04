@@ -22,7 +22,7 @@ const MAX_VISIBLE_ITEMS: usize = 15;
 
 /// Format a number in a human-readable way (e.g., 1.2K, 3.5M).
 #[allow(clippy::cast_precision_loss)]
-pub fn humanize_count(n: usize) -> String {
+pub(crate) fn humanize_count(n: usize) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
     } else if n >= 1_000 {
@@ -33,40 +33,40 @@ pub fn humanize_count(n: usize) -> String {
 }
 
 /// Result of the interactive selection process.
-pub struct SelectionResult {
+pub(crate) struct SelectionResult {
     /// Files that were selected by the user.
-    pub selected_files: Vec<PathBuf>,
+    pub(crate) selected_files: Vec<PathBuf>,
     /// Whether the selection was cancelled.
-    pub cancelled: bool,
+    pub(crate) cancelled: bool,
 }
 
 /// An item in a flat (non-tree) selection list.
 #[derive(Debug, Clone)]
-pub struct SelectableItem {
+pub(crate) struct SelectableItem {
     /// Unique identifier for this item (used in results).
-    pub id: String,
+    pub(crate) id: String,
     /// Display label shown to the user.
-    pub label: String,
+    pub(crate) label: String,
     /// Optional secondary description (shown dimmed after label).
-    pub description: Option<String>,
+    pub(crate) description: Option<String>,
     /// Whether this item starts selected.
-    pub preselected: bool,
+    pub(crate) preselected: bool,
     /// Whether this item is disabled (visible but cannot be toggled).
-    pub disabled: bool,
+    pub(crate) disabled: bool,
 }
 
 /// Result of a flat selection.
-pub struct FlatSelectionResult {
+pub(crate) struct FlatSelectionResult {
     /// IDs of the selected items.
-    pub selected_ids: Vec<String>,
+    pub(crate) selected_ids: Vec<String>,
     /// Whether the selection was cancelled.
-    pub cancelled: bool,
+    pub(crate) cancelled: bool,
 }
 
 /// Configuration for the flat selection UI.
-pub struct FlatSelectionConfig {
+pub(crate) struct FlatSelectionConfig {
     /// Prompt text shown at the top.
-    pub prompt: String,
+    pub(crate) prompt: String,
 }
 
 /// Internal state for the flat list selector.
@@ -160,11 +160,11 @@ impl FlatSelectionState {
 }
 
 /// Configuration for the selection UI.
-pub struct SelectionConfig {
+pub(crate) struct SelectionConfig {
     /// Prompt text shown at the top.
-    pub prompt: String,
+    pub(crate) prompt: String,
     /// Categories to hide by default.
-    pub default_hidden_categories: HashSet<FileCategory>,
+    pub(crate) default_hidden_categories: HashSet<FileCategory>,
 }
 
 impl Default for SelectionConfig {
@@ -636,7 +636,7 @@ fn restore_terminal() -> anyhow::Result<()> {
 ///
 /// If stdin is not a TTY (e.g., piped input), this function falls back to
 /// returning all preselected files (AI configs) without showing the UI.
-pub fn select_files(
+pub(crate) fn select_files(
     files: &[DetectedFile],
     config: &SelectionConfig,
 ) -> anyhow::Result<SelectionResult> {
@@ -678,7 +678,7 @@ pub fn select_files(
 /// # Non-TTY Fallback
 ///
 /// If stdin is not a TTY, returns all preselected (non-disabled) items.
-pub fn select_flat(
+pub(crate) fn select_flat(
     items: &[SelectableItem],
     config: &FlatSelectionConfig,
 ) -> anyhow::Result<FlatSelectionResult> {
@@ -1023,7 +1023,7 @@ fn render_flat_help(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::
 /// - Running as a cargo test binary (executable in target/*/deps/)
 /// - TERM is unset or "dumb"
 /// - `REPOVERLAY_NON_INTERACTIVE` env var is set
-pub fn is_interactive() -> bool {
+pub(crate) fn is_interactive() -> bool {
     use std::io::IsTerminal;
 
     // Explicit non-interactive override

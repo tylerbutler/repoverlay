@@ -35,26 +35,26 @@ const OVERLAY_REPO_META: &str = ".repoverlay-overlay-repo-meta.ccl";
 
 /// Metadata about the overlay repository clone.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct OverlayRepoMeta {
+pub(crate) struct OverlayRepoMeta {
     /// The clone URL
-    pub clone_url: String,
+    pub(crate) clone_url: String,
     /// When the repo was last fetched
-    pub last_fetched: DateTime<Utc>,
+    pub(crate) last_fetched: DateTime<Utc>,
     /// The current commit SHA
-    pub commit: String,
+    pub(crate) commit: String,
 }
 
 /// Information about an available overlay in the repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AvailableOverlay {
+pub(crate) struct AvailableOverlay {
     /// Target organization (e.g., "microsoft")
-    pub org: String,
+    pub(crate) org: String,
     /// Target repository (e.g., `FluidFramework`)
-    pub repo: String,
+    pub(crate) repo: String,
     /// Overlay name (e.g., "claude-config")
-    pub name: String,
+    pub(crate) name: String,
     /// Whether the overlay has a repoverlay.ccl config file
-    pub has_config: bool,
+    pub(crate) has_config: bool,
 }
 
 impl std::fmt::Display for AvailableOverlay {
@@ -65,14 +65,14 @@ impl std::fmt::Display for AvailableOverlay {
 
 impl AvailableOverlay {
     /// Format the overlay path for display with the overlay name in bold.
-    pub fn display_bold(&self) -> String {
+    pub(crate) fn display_bold(&self) -> String {
         use colored::Colorize;
         format!("{}/{}/{}", self.org, self.repo, self.name.bold())
     }
 }
 
 /// Manager for the overlay repository.
-pub struct OverlayRepoManager {
+pub(crate) struct OverlayRepoManager {
     /// Path to the cloned overlay repository
     repo_path: PathBuf,
     /// Configuration for the overlay repo
@@ -81,7 +81,7 @@ pub struct OverlayRepoManager {
 
 impl OverlayRepoManager {
     /// Create a new overlay repository manager.
-    pub fn new(config: OverlayRepoConfig) -> Result<Self> {
+    pub(crate) fn new(config: OverlayRepoConfig) -> Result<Self> {
         let repo_path = match &config.local_path {
             Some(path) => path.clone(),
             None => default_overlay_repo_path()?,
@@ -91,17 +91,17 @@ impl OverlayRepoManager {
     }
 
     /// Get the path to the overlay repository.
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.repo_path
     }
 
     /// Check if the overlay repository needs to be cloned.
-    pub fn needs_clone(&self) -> bool {
+    pub(crate) fn needs_clone(&self) -> bool {
         !self.repo_path.exists() || !self.repo_path.join(".git").exists()
     }
 
     /// Ensure the overlay repo is cloned.
-    pub fn ensure_cloned(&self) -> Result<()> {
+    pub(crate) fn ensure_cloned(&self) -> Result<()> {
         if self.needs_clone() {
             self.clone_repo()?;
         }
@@ -163,7 +163,7 @@ impl OverlayRepoManager {
     }
 
     /// Pull latest changes from the remote.
-    pub fn pull(&self) -> Result<()> {
+    pub(crate) fn pull(&self) -> Result<()> {
         if !self.repo_path.exists() {
             bail!("Overlay repository not cloned. Run 'repoverlay source add <url>' first.");
         }
@@ -184,7 +184,7 @@ impl OverlayRepoManager {
     }
 
     /// Get the current commit SHA.
-    pub fn get_current_commit(&self) -> Result<String> {
+    pub(crate) fn get_current_commit(&self) -> Result<String> {
         let output = Command::new("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(&self.repo_path)
@@ -214,7 +214,7 @@ impl OverlayRepoManager {
     }
 
     /// List all available overlays in the repository.
-    pub fn list_overlays(&self) -> Result<Vec<AvailableOverlay>> {
+    pub(crate) fn list_overlays(&self) -> Result<Vec<AvailableOverlay>> {
         if !self.repo_path.exists() {
             bail!("Overlay repository not cloned. Run 'repoverlay source add <url>' first.");
         }
@@ -276,7 +276,11 @@ impl OverlayRepoManager {
     }
 
     /// List overlays for a specific target repository.
-    pub fn list_overlays_for_repo(&self, org: &str, repo: &str) -> Result<Vec<AvailableOverlay>> {
+    pub(crate) fn list_overlays_for_repo(
+        &self,
+        org: &str,
+        repo: &str,
+    ) -> Result<Vec<AvailableOverlay>> {
         let all = self.list_overlays()?;
         Ok(all
             .into_iter()
@@ -285,7 +289,7 @@ impl OverlayRepoManager {
     }
 
     /// Get the path to a specific overlay.
-    pub fn get_overlay_path(&self, org: &str, repo: &str, name: &str) -> Result<PathBuf> {
+    pub(crate) fn get_overlay_path(&self, org: &str, repo: &str, name: &str) -> Result<PathBuf> {
         validate_path_component(org, "org")?;
         validate_path_component(repo, "repo")?;
         validate_path_component(name, "overlay name")?;
@@ -305,7 +309,7 @@ impl OverlayRepoManager {
     /// 2. If upstream provided, try: `upstream.org/upstream.repo/name`
     ///
     /// Returns the path and how it was resolved.
-    pub fn get_overlay_path_with_fallback(
+    pub(crate) fn get_overlay_path_with_fallback(
         &self,
         org: &str,
         repo: &str,
@@ -347,7 +351,7 @@ impl OverlayRepoManager {
     /// Copies files from `source_dir` to the overlay repo at org/repo/name/
     /// Returns the destination path.
     #[cfg(test)]
-    pub fn stage_overlay(
+    pub(crate) fn stage_overlay(
         &self,
         org: &str,
         repo: &str,
@@ -381,7 +385,7 @@ impl OverlayRepoManager {
     }
 
     /// Check if there are staged changes.
-    pub fn has_staged_changes(&self) -> Result<bool> {
+    pub(crate) fn has_staged_changes(&self) -> Result<bool> {
         let output = Command::new("git")
             .args(["diff", "--cached", "--quiet"])
             .current_dir(&self.repo_path)
@@ -393,7 +397,7 @@ impl OverlayRepoManager {
     }
 
     /// Commit staged changes.
-    pub fn commit(&self, message: &str) -> Result<()> {
+    pub(crate) fn commit(&self, message: &str) -> Result<()> {
         let output = Command::new("git")
             .args(["commit", "-m", message])
             .current_dir(&self.repo_path)
@@ -412,7 +416,7 @@ impl OverlayRepoManager {
     }
 
     /// Push to remote.
-    pub fn push(&self) -> Result<()> {
+    pub(crate) fn push(&self) -> Result<()> {
         let output = Command::new("git")
             .args(["push"])
             .current_dir(&self.repo_path)
@@ -432,7 +436,7 @@ impl OverlayRepoManager {
 ///
 /// Returns `~/.config/repoverlay/overlay-repo/` - stored alongside config
 /// since it's user-managed content.
-pub fn default_overlay_repo_path() -> Result<PathBuf> {
+pub(crate) fn default_overlay_repo_path() -> Result<PathBuf> {
     Ok(crate::config::config_dir()?.join(OVERLAY_REPO_DIR))
 }
 
@@ -444,7 +448,7 @@ const MAX_COPY_DEPTH: usize = 64;
 ///
 /// Rejects symlinks that point outside the source root to prevent
 /// exfiltration of files from the host filesystem via malicious overlays.
-pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     let canonical_root = src
         .canonicalize()
         .with_context(|| format!("Failed to canonicalize source root: {}", src.display()))?;
@@ -511,7 +515,7 @@ fn copy_dir_recursive_inner(
 
 /// Parse an overlay reference in the format "org/repo/name".
 #[allow(dead_code)] // Kept for backward compatibility; new code uses reference::SourceReference
-pub fn parse_overlay_reference(s: &str) -> Option<(String, String, String)> {
+pub(crate) fn parse_overlay_reference(s: &str) -> Option<(String, String, String)> {
     // Must have exactly 3 parts separated by /
     let parts: Vec<_> = s.split('/').collect();
     if parts.len() != 3 {

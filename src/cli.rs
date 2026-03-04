@@ -544,7 +544,7 @@ enum CacheCommand {
     Path,
 }
 
-pub fn run() -> Result<()> {
+pub(crate) fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle markdown help generation (for documentation)
