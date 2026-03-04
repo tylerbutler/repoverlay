@@ -2657,7 +2657,6 @@ fn add_files_to_overlay(
     // Track completed operations for rollback on failure.
     // Each entry is (target_file, overlay_file, original_content).
     let mut completed: Vec<(PathBuf, PathBuf, Vec<u8>)> = Vec::new();
-    let mut exclude_entries: Vec<String> = Vec::new();
     let mut added_count = 0;
 
     let result: Result<()> = (|| {
@@ -2712,10 +2711,6 @@ fn add_files_to_overlay(
                 entry_type: EntryType::File,
             });
 
-            // Add to exclude list
-            let exclude_path = file.to_string_lossy().replace('\\', "/");
-            exclude_entries.push(exclude_path);
-
             println!("  {} {}", "+".green(), file.display());
             added_count += 1;
         }
@@ -2744,8 +2739,19 @@ fn add_files_to_overlay(
         return result;
     }
 
-    // Update git exclude with new entries
-    update_git_exclude(&target, &normalized_name, &exclude_entries, true)?;
+    // Rebuild full exclude list from state (which now includes both old and new files)
+    let all_exclude_entries: Vec<String> = state
+        .file_entries()
+        .iter()
+        .map(|e| {
+            let path = e.target.to_string_lossy().replace('\\', "/");
+            match e.entry_type {
+                EntryType::Directory => format!("{path}/"),
+                EntryType::File => path,
+            }
+        })
+        .collect();
+    update_git_exclude(&target, &normalized_name, &all_exclude_entries, true)?;
 
     // Save updated overlay state
     save_overlay_state(&target, &state)?;
