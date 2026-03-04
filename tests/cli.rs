@@ -1646,12 +1646,7 @@ fn edit_add_adds_file_to_overlay() {
 
     // Add the new file to the overlay
     cargo_bin_cmd!("repoverlay")
-        .args([
-            "edit",
-            "org/repo/test-overlay",
-            "--add",
-            "new-file.txt",
-        ])
+        .args(["edit", "org/repo/test-overlay", "--add", "new-file.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
