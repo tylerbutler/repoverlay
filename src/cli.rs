@@ -383,36 +383,38 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Edit an existing applied overlay (add files, remove files, or re-select interactively)
+    /// Edit an existing applied overlay
     ///
-    /// The overlay NAME must come before --add/--remove flags, since those flags
-    /// accept multiple values and will consume any arguments that follow them.
+    /// With no subcommand, launches interactive file selection. If no overlay
+    /// name is given, prompts to select from applied overlays.
     ///
     /// Examples:
-    ///   repoverlay edit my-overlay --add newfile.txt
-    ///   repoverlay edit my-overlay --add file1.txt file2.txt
-    ///   repoverlay edit my-overlay --remove oldfile.txt
-    ///   repoverlay edit my-overlay --add new.txt --remove old.txt
-    ///   repoverlay edit org/repo/my-overlay --interactive
+    ///   repoverlay edit                                     # Pick overlay, then edit
+    ///   repoverlay edit my-overlay                          # Interactive file selection
+    ///   repoverlay edit add my-overlay newfile.txt          # Add files
+    ///   repoverlay edit add my-overlay file1.txt file2.txt  # Add multiple files
+    ///   repoverlay edit remove my-overlay oldfile.txt       # Remove files
+    #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
     Edit {
+        #[command(subcommand)]
+        command: Option<EditCommand>,
+
         /// Overlay name or full path (org/repo/name)
-        ///
-        /// Must appear before --add/--remove flags.
         ///
         /// Short form: `my-overlay` - detects org/repo from git remote
         /// Full form: `org/repo/name` - uses explicit values
-        name: String,
+        name: Option<String>,
 
-        /// Files to add to the overlay (name must come first)
-        #[arg(short, long, value_name = "FILE", num_args = 1..)]
+        /// Files to add to the overlay
+        #[arg(short, long, value_name = "FILE", num_args = 1.., hide = true)]
         add: Vec<PathBuf>,
 
-        /// Files to remove from the overlay (name must come first)
-        #[arg(short, long, value_name = "FILE", num_args = 1..)]
+        /// Files to remove from the overlay
+        #[arg(short, long, value_name = "FILE", num_args = 1.., hide = true)]
         remove: Vec<PathBuf>,
 
         /// Re-run interactive file selection with current files pre-selected
-        #[arg(short, long, conflicts_with_all = ["add", "remove"])]
+        #[arg(short, long, conflicts_with_all = ["add", "remove"], hide = true)]
         interactive: bool,
 
         /// Target repository directory (defaults to current directory)
@@ -552,6 +554,59 @@ enum CacheCommand {
 
     /// Show cache location
     Path,
+}
+
+#[derive(Subcommand)]
+enum EditCommand {
+    /// Add files to an applied overlay
+    ///
+    /// Examples:
+    ///   repoverlay edit add my-overlay newfile.txt
+    ///   repoverlay edit add my-overlay file1.txt file2.txt
+    ///   repoverlay edit add org/repo/my-overlay newfile.txt
+    Add {
+        /// Overlay name or full path (org/repo/name)
+        ///
+        /// Short form: `my-overlay` - detects org/repo from git remote
+        /// Full form: `org/repo/name` - uses explicit values
+        name: String,
+
+        /// Files to add to the overlay
+        files: Vec<PathBuf>,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Show what would change without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Remove files from an applied overlay
+    ///
+    /// Examples:
+    ///   repoverlay edit remove my-overlay oldfile.txt
+    ///   repoverlay edit remove my-overlay file1.txt file2.txt
+    ///   repoverlay edit remove org/repo/my-overlay oldfile.txt
+    Remove {
+        /// Overlay name or full path (org/repo/name)
+        ///
+        /// Short form: `my-overlay` - detects org/repo from git remote
+        /// Full form: `org/repo/name` - uses explicit values
+        name: String,
+
+        /// Files to remove from the overlay
+        files: Vec<PathBuf>,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Show what would change without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub fn run() -> Result<()> {
@@ -753,16 +808,49 @@ pub fn run() -> Result<()> {
             handle_sync(&target, name, all, dry_run)?;
         }
         Commands::Edit {
+            command,
             name,
             add,
             remove,
             interactive,
             target,
             dry_run,
-        } => {
-            let target = target.unwrap_or_else(|| PathBuf::from("."));
-            edit_overlay(&name, &target, &add, &remove, interactive, dry_run)?;
-        }
+        } => match command {
+            Some(EditCommand::Add {
+                name,
+                files,
+                target,
+                dry_run,
+            }) => {
+                let target = target.unwrap_or_else(|| PathBuf::from("."));
+                add_files_to_overlay(&name, &target, &files, dry_run)?;
+            }
+            Some(EditCommand::Remove {
+                name,
+                files,
+                target,
+                dry_run,
+            }) => {
+                let target = target.unwrap_or_else(|| PathBuf::from("."));
+                remove_files_from_overlay(&name, &target, &files, dry_run)?;
+            }
+            None => {
+                let target = target.unwrap_or_else(|| PathBuf::from("."));
+                if !add.is_empty() || !remove.is_empty() {
+                    eprintln!(
+                        "{}: --add/--remove flags are deprecated, use `edit add` or `edit remove` subcommands instead",
+                        "Warning".yellow().bold()
+                    );
+                }
+                // When no name is given, interactively select an overlay
+                // and go straight to interactive file selection.
+                let (name, interactive) = match name {
+                    Some(n) => (n, interactive),
+                    None => (select_overlay_interactive(&target)?, true),
+                };
+                edit_overlay(&name, &target, &add, &remove, interactive, dry_run)?;
+            }
+        },
         Commands::CreateLocal {
             include,
             source,
@@ -2060,6 +2148,59 @@ fn sync_single_overlay(
     }
 
     Ok(())
+}
+
+/// Interactively select an applied overlay by name.
+///
+/// Lists all applied overlays and lets the user pick one. Bails in non-TTY
+/// environments since interactive selection requires a terminal.
+fn select_overlay_interactive(target: &std::path::Path) -> Result<String> {
+    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+
+    let target = canonicalize_path(target, "Target directory")?;
+    let applied = list_applied_overlays(&target)?;
+
+    if applied.is_empty() {
+        bail!("No overlays are currently applied in: {}", target.display());
+    }
+
+    if applied.len() == 1 {
+        return Ok(applied[0].to_string());
+    }
+
+    if !is_interactive() {
+        bail!(
+            "Multiple overlays applied — specify which one to edit.\n\n\
+             Usage:\n  \
+             repoverlay edit <name>\n  \
+             repoverlay edit add <name> <files>...\n  \
+             repoverlay edit remove <name> <files>..."
+        );
+    }
+
+    let items: Vec<SelectableItem> = applied
+        .iter()
+        .map(|name| SelectableItem {
+            id: name.to_string(),
+            label: name.to_string(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        })
+        .collect();
+
+    let result = select_flat(
+        &items,
+        &FlatSelectionConfig {
+            prompt: "Select overlay to edit:".into(),
+        },
+    )?;
+
+    if result.cancelled || result.selected_ids.is_empty() {
+        bail!("No overlay selected");
+    }
+
+    Ok(result.selected_ids[0].clone())
 }
 
 /// Edit an existing applied overlay (add files, remove files, or re-select interactively).
@@ -7359,14 +7500,120 @@ directories =
             }
         }
 
+        // --- edit subcommand tests ---
+
         #[test]
-        fn edit_requires_name() {
-            let result = Cli::try_parse_from(["repoverlay", "edit"]);
-            assert!(result.is_err());
+        fn edit_add_subcommand_parses() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "add",
+                "my-overlay",
+                "file1.txt",
+                "file2.txt",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit {
+                    command: Some(EditCommand::Add { name, files, .. }),
+                    ..
+                }) => {
+                    assert_eq!(name, "my-overlay");
+                    assert_eq!(
+                        files,
+                        vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")]
+                    );
+                }
+                _ => panic!("Expected Edit Add subcommand"),
+            }
         }
 
         #[test]
-        fn edit_parses_add_flag() {
+        fn edit_remove_subcommand_parses() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "edit", "remove", "my-overlay", "file1.txt"])
+                    .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit {
+                    command: Some(EditCommand::Remove { name, files, .. }),
+                    ..
+                }) => {
+                    assert_eq!(name, "my-overlay");
+                    assert_eq!(files, vec![PathBuf::from("file1.txt")]);
+                }
+                _ => panic!("Expected Edit Remove subcommand"),
+            }
+        }
+
+        #[test]
+        fn edit_add_subcommand_with_target_and_dry_run() {
+            let cli = Cli::try_parse_from([
+                "repoverlay",
+                "edit",
+                "add",
+                "my-overlay",
+                "f.txt",
+                "-t",
+                "/repo",
+                "--dry-run",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Commands::Edit {
+                    command:
+                        Some(EditCommand::Add {
+                            target, dry_run, ..
+                        }),
+                    ..
+                }) => {
+                    assert_eq!(target, Some(PathBuf::from("/repo")));
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Edit Add subcommand"),
+            }
+        }
+
+        #[test]
+        fn edit_no_args_parses_for_interactive_selection() {
+            let cli = Cli::try_parse_from(["repoverlay", "edit"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Edit {
+                    command: None,
+                    name: None,
+                    ..
+                }) => {}
+                _ => panic!("Expected Edit with no subcommand and no name"),
+            }
+        }
+
+        #[test]
+        fn edit_name_only_is_interactive() {
+            let cli = Cli::try_parse_from(["repoverlay", "edit", "my-overlay"]).unwrap();
+
+            match cli.command {
+                Some(Commands::Edit {
+                    command: None,
+                    name,
+                    add,
+                    remove,
+                    ..
+                }) => {
+                    assert_eq!(name, Some("my-overlay".to_string()));
+                    assert!(add.is_empty());
+                    assert!(remove.is_empty());
+                }
+                _ => panic!("Expected Edit with no subcommand"),
+            }
+        }
+
+        // --- deprecated flag tests (backwards compat) ---
+
+        #[test]
+        fn edit_deprecated_add_flag_parses() {
             let cli = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
@@ -7379,42 +7626,43 @@ directories =
 
             match cli.command {
                 Some(Commands::Edit {
+                    command: None,
                     name,
                     add,
                     remove,
-                    interactive,
-                    dry_run,
                     ..
                 }) => {
-                    assert_eq!(name, "my-overlay");
+                    assert_eq!(name, Some("my-overlay".to_string()));
                     assert_eq!(
                         add,
                         vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")]
                     );
                     assert!(remove.is_empty());
-                    assert!(!interactive);
-                    assert!(!dry_run);
                 }
-                _ => panic!("Expected Edit command"),
+                _ => panic!("Expected Edit with deprecated flags"),
             }
         }
 
         #[test]
-        fn edit_parses_remove_flag() {
+        fn edit_deprecated_remove_flag_parses() {
             let cli =
                 Cli::try_parse_from(["repoverlay", "edit", "my-overlay", "--remove", "file1.txt"])
                     .unwrap();
 
             match cli.command {
-                Some(Commands::Edit { remove, .. }) => {
+                Some(Commands::Edit {
+                    command: None,
+                    remove,
+                    ..
+                }) => {
                     assert_eq!(remove, vec![PathBuf::from("file1.txt")]);
                 }
-                _ => panic!("Expected Edit command"),
+                _ => panic!("Expected Edit with deprecated flags"),
             }
         }
 
         #[test]
-        fn edit_parses_combined_add_remove() {
+        fn edit_deprecated_combined_add_remove() {
             let cli = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
@@ -7427,16 +7675,21 @@ directories =
             .unwrap();
 
             match cli.command {
-                Some(Commands::Edit { add, remove, .. }) => {
+                Some(Commands::Edit {
+                    command: None,
+                    add,
+                    remove,
+                    ..
+                }) => {
                     assert_eq!(add, vec![PathBuf::from("new.txt")]);
                     assert_eq!(remove, vec![PathBuf::from("old.txt")]);
                 }
-                _ => panic!("Expected Edit command"),
+                _ => panic!("Expected Edit with deprecated flags"),
             }
         }
 
         #[test]
-        fn edit_interactive_conflicts_with_add() {
+        fn edit_deprecated_interactive_conflicts_with_add() {
             let result = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
@@ -7449,7 +7702,7 @@ directories =
         }
 
         #[test]
-        fn edit_interactive_conflicts_with_remove() {
+        fn edit_deprecated_interactive_conflicts_with_remove() {
             let result = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
@@ -7462,7 +7715,7 @@ directories =
         }
 
         #[test]
-        fn edit_parses_dry_run() {
+        fn edit_deprecated_dry_run_parses() {
             let cli = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
@@ -7482,7 +7735,7 @@ directories =
         }
 
         #[test]
-        fn edit_parses_target_flag() {
+        fn edit_deprecated_target_flag_parses() {
             let cli = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
