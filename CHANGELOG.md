@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.9.1 - 2026-03-04
+
+
+### Command: `edit`
+
+
+#### Fixed
+
+##### Fix `edit --add` dropping existing git exclude entries
+
+When adding files to an applied overlay, the git exclude section was rewritten with only the newly added files, silently removing entries for previously managed files. This caused those files to reappear in `git status` after the add operation. Rebuilt the full exclude list from overlay state, matching the pattern already used by `edit --remove`.
+
+
+#### Changed
+
+##### Clarify that overlay NAME must precede --add/--remove flags
+
+The --add and --remove flags accept multiple values and greedily consume trailing arguments. Running `edit --add file.txt name` fails because `name` is parsed as a second file. Updated help text to document the required argument order.
+
+
 ## v0.9.0 - 2026-03-02
 
 
