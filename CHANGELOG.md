@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.9.2 - 2026-03-04
+
+
+### Command: `edit`
+
+
+#### Changed
+
+##### Split `edit` into `edit add` and `edit remove` subcommands
+
+The `--add` and `--remove` flags used greedy `num_args = 1..` parsing, which consumed trailing arguments and required the overlay name to appear before any flags. This was confusing and the help text couldn't convey the constraint clearly. The `edit` command now uses proper subcommands:
+
+  repoverlay edit add my-overlay file1.txt file2.txt   repoverlay edit remove my-overlay oldfile.txt   repoverlay edit my-overlay  # interactive file selection   repoverlay edit             # select overlay then edit interactively
+
+Running `edit` with no overlay name now presents an interactive overlay picker (auto-selects when only one overlay is applied). The old `--add`/`--remove`/`--interactive` flags still work but are hidden from help and print a deprecation warning.
+
+
 ## v0.9.1 - 2026-03-04
 
 
