@@ -41,14 +41,14 @@ Requirements for 1.0 release. Each maps to roadmap phases.
 
 ### Manual Test Suite
 
-- [ ] **MANUAL-01**: CLI walkthrough test cases for apply command (local + GitHub sources)
-- [ ] **MANUAL-02**: CLI walkthrough test cases for remove command
-- [ ] **MANUAL-03**: CLI walkthrough test cases for status command
-- [ ] **MANUAL-04**: CLI walkthrough test cases for restore command
-- [ ] **MANUAL-05**: CLI walkthrough test cases for update command
-- [ ] **MANUAL-06**: CLI walkthrough test cases for create command
-- [ ] **MANUAL-07**: CLI walkthrough test cases for switch/browse commands
-- [ ] **MANUAL-08**: CLI walkthrough test cases for source management commands (add, list, remove, sync)
+- [x] **MANUAL-01**: CLI walkthrough test cases for apply command (local + GitHub sources)
+- [x] **MANUAL-02**: CLI walkthrough test cases for remove command
+- [x] **MANUAL-03**: CLI walkthrough test cases for status command
+- [x] **MANUAL-04**: CLI walkthrough test cases for restore command
+- [x] **MANUAL-05**: CLI walkthrough test cases for update command
+- [x] **MANUAL-06**: CLI walkthrough test cases for create command
+- [x] **MANUAL-07**: CLI walkthrough test cases for switch/browse commands
+- [x] **MANUAL-08**: CLI walkthrough test cases for source management commands (add, list, remove, sync)
 
 ### Release Preparation
 
@@ -115,14 +115,14 @@ Deferred to future release. Tracked but not in current roadmap.
 | API-01 | Phase 3 | Pending |
 | API-02 | Phase 3 | Pending |
 | API-03 | Phase 3 | Pending |
-| MANUAL-01 | Phase 3 | Pending |
-| MANUAL-02 | Phase 3 | Pending |
-| MANUAL-03 | Phase 3 | Pending |
-| MANUAL-04 | Phase 3 | Pending |
-| MANUAL-05 | Phase 3 | Pending |
-| MANUAL-06 | Phase 3 | Pending |
-| MANUAL-07 | Phase 3 | Pending |
-| MANUAL-08 | Phase 3 | Pending |
+| MANUAL-01 | Phase 3 | Complete |
+| MANUAL-02 | Phase 3 | Complete |
+| MANUAL-03 | Phase 3 | Complete |
+| MANUAL-04 | Phase 3 | Complete |
+| MANUAL-05 | Phase 3 | Complete |
+| MANUAL-06 | Phase 3 | Complete |
+| MANUAL-07 | Phase 3 | Complete |
+| MANUAL-08 | Phase 3 | Complete |
 | REL-01 | Phase 4 | Pending |
 | REL-02 | Phase 4 | Pending |
 

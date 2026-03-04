@@ -65,7 +65,7 @@ Plans:
 
 Plans:
 - [ ] 03-01-PLAN.md -- Lock API surface (pub → pub(crate) conversion) and review module-level doc comments
-- [ ] 03-02-PLAN.md -- Create manual test documents for all 8 CLI workflows (apply, remove, status, restore, update, create, switch/browse, source management)
+- [x] 03-02-PLAN.md -- Create manual test documents for all 8 CLI workflows (apply, remove, status, restore, update, create, switch/browse, source management)
 
 ### Phase 4: Release Preparation
 **Goal**: 1.0 release artifacts are verified and ready to publish
@@ -88,5 +88,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 |-------|----------------|--------|-----------|
 | 1. Code Review and Bug Fixes | 2/2 | Complete | 2026-02-28 |
 | 2. Test Coverage | 3/3 | Complete | 2026-03-03 |
-| 3. API Stabilization and Manual Testing | 0/2 | Not started | - |
+| 3. API Stabilization and Manual Testing | 1/2 | In progress | - |
 | 4. Release Preparation | 0/1 | Not started | - |
