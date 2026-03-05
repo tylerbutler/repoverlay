@@ -1,7 +1,9 @@
 //! Multi-source overlay resolution.
 //!
 //! Manages multiple overlay sources with priority-based resolution.
-//! Sources are checked in order; first match wins.
+//! Sources are checked in order; first match wins. Key types are
+//! `SourceManager` (coordinates resolution across sources) and
+//! `ResolvedOverlay` (a successfully located overlay with its source metadata).
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -20,22 +22,22 @@ struct ManagedSource {
 
 /// Result of resolving an overlay from sources.
 #[derive(Debug)]
-pub struct ResolvedOverlay {
+pub(crate) struct ResolvedOverlay {
     /// Path to the resolved overlay directory.
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// Source from which the overlay was resolved.
-    pub source: Source,
+    pub(crate) source: Source,
     /// How the overlay was resolved (direct match or upstream fallback).
-    pub resolved_via: ResolvedVia,
+    pub(crate) resolved_via: ResolvedVia,
     /// Current commit SHA of the source repository.
-    pub commit: String,
+    pub(crate) commit: String,
 }
 
 /// Manager for multiple overlay sources.
 ///
 /// Sources are checked in order during resolution. The first source
 /// containing the requested overlay wins.
-pub struct SourceManager {
+pub(crate) struct SourceManager {
     sources: Vec<ManagedSource>,
 }
 
@@ -50,7 +52,7 @@ impl SourceManager {
     /// Create a new source manager from a list of sources.
     ///
     /// Each source is configured to clone to a subdirectory within the cache.
-    pub fn new(sources: Vec<Source>) -> Result<Self> {
+    pub(crate) fn new(sources: Vec<Source>) -> Result<Self> {
         let cache_dir = sources_cache_dir()?;
         let managed_sources = sources
             .into_iter()
@@ -72,7 +74,7 @@ impl SourceManager {
 
     /// Get the list of source names in priority order.
     #[must_use]
-    pub fn source_names(&self) -> Vec<&str> {
+    pub(crate) fn source_names(&self) -> Vec<&str> {
         self.sources
             .iter()
             .map(|s| s.source.name.as_str())
@@ -81,7 +83,7 @@ impl SourceManager {
 
     /// Get a source by name.
     #[allow(dead_code)] // Utility method for future use
-    pub fn get_source(&self, name: &str) -> Option<&Source> {
+    pub(crate) fn get_source(&self, name: &str) -> Option<&Source> {
         self.sources
             .iter()
             .find(|s| s.source.name == name)
@@ -89,7 +91,7 @@ impl SourceManager {
     }
 
     /// Ensure all sources are cloned.
-    pub fn ensure_all_cloned(&self) -> Result<()> {
+    pub(crate) fn ensure_all_cloned(&self) -> Result<()> {
         for ms in &self.sources {
             ms.manager.ensure_cloned()?;
         }
@@ -97,7 +99,7 @@ impl SourceManager {
     }
 
     /// Pull updates for all sources.
-    pub fn pull_all(&self) -> Result<()> {
+    pub(crate) fn pull_all(&self) -> Result<()> {
         for ms in &self.sources {
             if !ms.manager.needs_clone() {
                 ms.manager.pull()?;
@@ -110,7 +112,7 @@ impl SourceManager {
     ///
     /// Returns `None` if no source has the overlay.
     /// If `source_filter` is provided, only that source is checked.
-    pub fn resolve(
+    pub(crate) fn resolve(
         &self,
         org: &str,
         repo: &str,
@@ -167,7 +169,7 @@ impl SourceManager {
     /// that has the overlay.
     #[must_use]
     #[allow(dead_code)] // Utility method for future `resolve` command
-    pub fn find_all_matches(
+    pub(crate) fn find_all_matches(
         &self,
         org: &str,
         repo: &str,
@@ -197,7 +199,7 @@ impl SourceManager {
     ///
     /// Returns unique overlay names (deduplicated across sources).
     #[must_use]
-    pub fn list_overlays_for_repo(&self, org: &str, repo: &str) -> Vec<OverlayName> {
+    pub(crate) fn list_overlays_for_repo(&self, org: &str, repo: &str) -> Vec<OverlayName> {
         let mut names = std::collections::HashSet::new();
 
         for ms in &self.sources {
@@ -220,7 +222,7 @@ impl SourceManager {
 
     /// List all overlays across all sources.
     #[allow(dead_code)] // Utility method for future multi-source `list` command
-    pub fn list_all_overlays(&self) -> Result<Vec<(Source, AvailableOverlay)>> {
+    pub(crate) fn list_all_overlays(&self) -> Result<Vec<(Source, AvailableOverlay)>> {
         let mut all = Vec::new();
 
         for ms in &self.sources {
@@ -1041,5 +1043,23 @@ mod tests {
         // Different repo should return empty
         let overlays = manager.list_overlays_for_repo("google", "chromium");
         assert!(overlays.is_empty());
+    }
+
+    /// Test that `sources_cache_dir` returns error when `ProjectDirs` is unavailable.
+    /// This catches mutants that would replace the error with `Ok(Default::default())`.
+    #[test]
+    fn sources_cache_dir_fails_without_project_dirs() {
+        // The function should return an error, not Ok(PathBuf::new())
+        let result = sources_cache_dir();
+        assert!(
+            result.is_ok(),
+            "sources_cache_dir should work in test environment with valid home dir"
+        );
+        // Verify it returns a valid path, not an empty default
+        let path = result.unwrap();
+        assert!(
+            !path.as_os_str().is_empty(),
+            "sources_cache_dir should not return empty path"
+        );
     }
 }

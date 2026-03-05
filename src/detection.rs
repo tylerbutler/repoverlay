@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 /// Categories of detected files for overlay creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FileCategory {
+pub(crate) enum FileCategory {
     /// AI agent configuration files (Claude, Cursor, Copilot, etc.)
     AiConfig,
     /// AI agent configuration directories (like .claude/)
@@ -22,23 +22,23 @@ pub enum FileCategory {
 
 /// A detected file with its category and path.
 #[derive(Debug, Clone)]
-pub struct DetectedFile {
+pub(crate) struct DetectedFile {
     /// Relative path from repository root
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// Category of the file
-    pub category: FileCategory,
+    pub(crate) category: FileCategory,
     /// Whether this file should be pre-selected by default
-    pub preselected: bool,
+    pub(crate) preselected: bool,
     /// Depth in the tree (0 = top-level, 1+ = children of a directory)
-    pub depth: u8,
+    pub(crate) depth: u8,
     /// Parent directory path (None for top-level entries)
-    pub parent_dir: Option<PathBuf>,
+    pub(crate) parent_dir: Option<PathBuf>,
 }
 
 /// AI configuration file patterns.
 ///
 /// These patterns match configuration files for various AI coding assistants.
-pub const AI_CONFIG_PATTERNS: &[&str] = &[
+pub(crate) const AI_CONFIG_PATTERNS: &[&str] = &[
     // Claude Code
     ".claude",
     "CLAUDE.md",
@@ -67,11 +67,11 @@ pub const AI_CONFIG_PATTERNS: &[&str] = &[
 ///
 /// These are directories containing AI agent configuration that should
 /// be linked as a whole rather than having their contents walked.
-pub const AI_CONFIG_DIRECTORIES: &[&str] =
+pub(crate) const AI_CONFIG_DIRECTORIES: &[&str] =
     &[".claude", ".cursor", ".continue", ".cody", ".aider", ".ai"];
 
 /// Check if a path matches any AI config pattern.
-pub fn is_ai_config(path: &Path) -> bool {
+pub(crate) fn is_ai_config(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
 
     for pattern in AI_CONFIG_PATTERNS {
@@ -93,7 +93,7 @@ pub fn is_ai_config(path: &Path) -> bool {
 /// Detect AI configuration files in a repository.
 ///
 /// Returns paths relative to the repository root.
-pub fn detect_ai_configs(repo_path: &Path) -> Vec<DetectedFile> {
+pub(crate) fn detect_ai_configs(repo_path: &Path) -> Vec<DetectedFile> {
     let mut results = Vec::new();
 
     for pattern in AI_CONFIG_PATTERNS {
@@ -115,7 +115,7 @@ pub fn detect_ai_configs(repo_path: &Path) -> Vec<DetectedFile> {
 /// Detect AI configuration directories in a repository.
 ///
 /// Returns directories that should be symlinked as units.
-pub fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile> {
+pub(crate) fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile> {
     let mut results = Vec::new();
 
     for dir_name in AI_CONFIG_DIRECTORIES {
@@ -138,7 +138,7 @@ pub fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile> {
 ///
 /// Walks the directory tree and returns child entries with appropriate
 /// depth and parent directory information for tree display.
-pub fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Vec<DetectedFile> {
+pub(crate) fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Vec<DetectedFile> {
     let full_path = repo_path.join(dir_path);
     if !full_path.exists() || !full_path.is_dir() {
         return Vec::new();
@@ -179,7 +179,7 @@ pub fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Vec<Detec
 ///
 /// Uses `git ls-files --others --ignored --exclude-standard` to find files
 /// that are ignored by git but still exist in the repository.
-pub fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
+pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
     let output = Command::new("git")
         .args(["ls-files", "--others", "--ignored", "--exclude-standard"])
         .current_dir(repo_path)
@@ -209,7 +209,7 @@ pub fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
 ///
 /// Uses `git ls-files --others --exclude-standard` without --ignored
 /// to find files that are neither tracked nor ignored.
-pub fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
+pub(crate) fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
     let output = Command::new("git")
         .args(["ls-files", "--others", "--exclude-standard"])
         .current_dir(repo_path)
@@ -242,7 +242,7 @@ pub fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
 /// 2. AI configuration files that aren't inside directories (pre-selected)
 /// 3. Gitignored files
 /// 4. Untracked files
-pub fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
+pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
     let mut all_files = Vec::new();
 
     // Collect AI config directory paths for filtering
@@ -284,7 +284,7 @@ pub fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
 }
 
 /// Group detected files by category for display.
-pub fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Vec<&DetectedFile>)> {
+pub(crate) fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Vec<&DetectedFile>)> {
     let mut ai_configs: Vec<&DetectedFile> = Vec::new();
     let mut ai_config_dirs: Vec<&DetectedFile> = Vec::new();
     let mut gitignored: Vec<&DetectedFile> = Vec::new();

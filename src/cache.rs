@@ -38,64 +38,68 @@ fn git_run(repo_path: &Path, args: &[&str]) -> Result<()> {
 
 /// Metadata about a cached repository.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct CacheMeta {
+pub(crate) struct CacheMeta {
     /// The clone URL
-    pub clone_url: String,
+    pub(crate) clone_url: String,
     /// When the cache was last fetched
-    pub last_fetched: DateTime<Utc>,
+    pub(crate) last_fetched: DateTime<Utc>,
     /// The git ref that was requested
-    pub requested_ref: String,
+    pub(crate) requested_ref: String,
     /// The resolved commit SHA
-    pub commit: String,
+    pub(crate) commit: String,
 }
 
 /// Result of caching a GitHub repository.
 #[derive(Debug)]
-pub struct CachedOverlay {
+pub(crate) struct CachedOverlay {
     /// Path to the overlay files (may include subpath)
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// The resolved commit SHA
-    pub commit: String,
+    pub(crate) commit: String,
     /// When the cache was created/updated
     #[allow(dead_code)]
-    pub cached_at: DateTime<Utc>,
+    pub(crate) cached_at: DateTime<Utc>,
 }
 
 /// Information about a cached repository.
 #[derive(Debug)]
-pub struct CachedRepoInfo {
+pub(crate) struct CachedRepoInfo {
     /// Owner name
-    pub owner: String,
+    pub(crate) owner: String,
     /// Repository name
-    pub repo: String,
+    pub(crate) repo: String,
     /// Path to the cached repo
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// Cache metadata (if available)
-    pub meta: Option<CacheMeta>,
+    pub(crate) meta: Option<CacheMeta>,
 }
 
 /// Manager for the overlay cache.
-pub struct CacheManager {
+pub(crate) struct CacheManager {
     cache_dir: PathBuf,
 }
 
 #[allow(clippy::unused_self)]
 impl CacheManager {
     /// Create a new cache manager.
-    pub fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         let cache_dir = cache_dir()?;
         Ok(Self { cache_dir })
     }
 
     /// Get the cache directory path.
-    pub fn cache_dir(&self) -> &Path {
+    pub(crate) fn cache_dir(&self) -> &Path {
         &self.cache_dir
     }
 
     /// Ensure a GitHub repository is cached and at the correct ref.
     ///
     /// Returns the path to the overlay files.
-    pub fn ensure_cached(&self, source: &GitHubSource, update: bool) -> Result<CachedOverlay> {
+    pub(crate) fn ensure_cached(
+        &self,
+        source: &GitHubSource,
+        update: bool,
+    ) -> Result<CachedOverlay> {
         let repo_path = self.repo_path(source);
         let owner = &source.owner;
         let repo = &source.repo;
@@ -142,7 +146,7 @@ impl CacheManager {
     }
 
     /// Get the path where a repository would be cached.
-    pub fn repo_path(&self, source: &GitHubSource) -> PathBuf {
+    pub(crate) fn repo_path(&self, source: &GitHubSource) -> PathBuf {
         self.cache_dir
             .join("github")
             .join(&source.owner)
@@ -307,7 +311,7 @@ impl CacheManager {
     }
 
     /// List all cached repositories.
-    pub fn list_cached(&self) -> Result<Vec<CachedRepoInfo>> {
+    pub(crate) fn list_cached(&self) -> Result<Vec<CachedRepoInfo>> {
         let github_dir = self.cache_dir.join("github");
 
         if !github_dir.exists() {
@@ -349,7 +353,7 @@ impl CacheManager {
     }
 
     /// Remove a specific cached repository.
-    pub fn remove_cached(&self, owner: &str, repo: &str) -> Result<bool> {
+    pub(crate) fn remove_cached(&self, owner: &str, repo: &str) -> Result<bool> {
         let path = self.cache_dir.join("github").join(owner).join(repo);
 
         if path.exists() {
@@ -368,7 +372,7 @@ impl CacheManager {
     }
 
     /// Clear the entire cache.
-    pub fn clear_cache(&self) -> Result<usize> {
+    pub(crate) fn clear_cache(&self) -> Result<usize> {
         let github_dir = self.cache_dir.join("github");
 
         if !github_dir.exists() {
@@ -386,7 +390,7 @@ impl CacheManager {
     /// Check for updates to a cached repository.
     ///
     /// Returns the latest commit on the default branch if different from current.
-    pub fn check_for_updates(&self, source: &GitHubSource) -> Result<Option<String>> {
+    pub(crate) fn check_for_updates(&self, source: &GitHubSource) -> Result<Option<String>> {
         let repo_path = self.repo_path(source);
 
         if !repo_path.exists() {
@@ -427,7 +431,7 @@ impl CacheManager {
 }
 
 /// Get the cache directory.
-pub fn cache_dir() -> Result<PathBuf> {
+pub(crate) fn cache_dir() -> Result<PathBuf> {
     let proj_dirs = ProjectDirs::from("", "", "repoverlay")
         .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
 
@@ -1018,6 +1022,61 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn save_meta_fails_gracefully_when_dir_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+        let repo_path = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&repo_path).unwrap();
+
+        // Make directory read-only so save_meta cannot write
+        fs::set_permissions(&repo_path, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+        let result = manager.save_meta(
+            &repo_path,
+            &source,
+            "abc123def456789012345678901234567890abcd",
+        );
+
+        // Restore permissions before asserting (so temp dir cleanup works)
+        fs::set_permissions(&repo_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            result.is_err(),
+            "save_meta should return Err when directory is read-only"
+        );
+    }
+
+    #[test]
+    fn ensure_cached_propagates_git_errors_cleanly() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+        let repo_path = manager.repo_path(&source);
+
+        // Create directory to trigger the "cache hit" branch (update=false path)
+        // but it's not a real git repo, so checkout_ref will fail
+        fs::create_dir_all(&repo_path).unwrap();
+
+        // ensure_cached(update=false): exists -> checkout_ref -> git checkout -> Err
+        let result = manager.ensure_cached(&source, false);
+        assert!(
+            result.is_err(),
+            "ensure_cached should propagate git error, not panic"
+        );
+        // Verify it's a meaningful error (not just empty)
+        let err_str = result.unwrap_err().to_string();
+        assert!(!err_str.is_empty(), "error message should not be empty");
+    }
+
+    #[test]
     fn test_list_cached_skips_files_in_owner_directory() {
         let temp = TempDir::new().unwrap();
         let manager = CacheManager {
@@ -1036,5 +1095,69 @@ mod tests {
         let repos = manager.list_cached().unwrap();
         assert_eq!(repos.len(), 1);
         assert_eq!(repos[0].repo, "real-repo");
+    }
+
+    /// Test that `clone_repo` propagates errors for non-existent repos.
+    /// This catches the mutant that replaces `clone_repo -> Result<()>` with `Ok(())`.
+    #[test]
+    fn clone_repo_propagates_errors_for_invalid_repo() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+        let source =
+            GitHubSource::parse("https://github.com/owner/non-existent-repo-12345").unwrap();
+        let target = temp.path().join("target");
+
+        // Attempt to clone a repo that definitely doesn't exist
+        let result = manager.clone_repo(&source, &target);
+
+        // Should return an error, not Ok(())
+        assert!(
+            result.is_err(),
+            "clone_repo should return Err for invalid repo, not Ok(())"
+        );
+        // Verify the error has a non-empty message (exact wording varies by git version)
+        let err = result.unwrap_err();
+        assert!(
+            !err.to_string().is_empty(),
+            "error message should not be empty"
+        );
+    }
+
+    /// Test that `check_for_updates` handles git fetch failures gracefully.
+    /// This catches mutants that would change the graceful degradation behavior.
+    #[test]
+    fn check_for_updates_handles_fetch_failure_gracefully() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        // Create a fake repo directory that isn't a valid git repo
+        let fake_repo = temp.path().join("github/owner/repo");
+        fs::create_dir_all(&fake_repo).unwrap();
+
+        // Initialize a bare git repo in it (not a full clone)
+        let output = Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&fake_repo)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "git init should succeed");
+
+        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
+
+        // check_for_updates should return Ok(None) when fetch fails, not propagate the error
+        let result = manager.check_for_updates(&source);
+        assert!(
+            result.is_ok(),
+            "check_for_updates should handle fetch failure gracefully"
+        );
+        assert!(
+            result.unwrap().is_none(),
+            "check_for_updates should return None when fetch fails"
+        );
     }
 }

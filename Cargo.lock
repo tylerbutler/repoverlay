@@ -1234,6 +1234,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "fuzzy-matcher",
+ "libc",
  "log",
  "predicates",
  "serde",

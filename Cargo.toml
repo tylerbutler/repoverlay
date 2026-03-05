@@ -8,8 +8,26 @@ description = "Overlay config files into git repositories without committing the
 license = "MIT"
 repository = "https://github.com/tylerbutler/repoverlay"
 homepage = "https://github.com/tylerbutler/repoverlay"
-keywords = ["git", "overlay", "config", "symlink"]
+keywords = ["git", "overlay", "config", "symlink", "dotfiles"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    ".claude/",
+    ".github/",
+    ".planning/",
+    ".serena/",
+    ".vscode/",
+    "docs/",
+    "metrics/",
+    "mutants.out/",
+    "mutants.out.old/",
+    "scripts/",
+    "website/",
+    "repopo.config.ts",
+    "package.json",
+    "pnpm-lock.yaml",
+    "hk.pkl",
+    "codecov.yml",
+]
 
 [lib]
 name = "repoverlay"
@@ -39,6 +57,7 @@ crossterm = "0.29.0"
 sickle = { version = "0.1.2", features = ["serde"] }
 dirs = "6.0.0"
 fuzzy-matcher = "0.3"
+libc = "0.2"
 tiny-update-check = "1.0"
 similar = "2.7.0"
 
@@ -86,3 +105,5 @@ similar_names = "allow"
 too_many_lines = "allow"
 cognitive_complexity = "allow"
 significant_drop_tightening = "allow"
+# We explicitly use pub(crate) for API surface clarity even in private modules
+redundant_pub_crate = "allow"

@@ -2100,3 +2100,106 @@ fn edit_interactive_excludes_repoverlay_ccl_from_selection() {
         .success()
         .stdout(predicate::str::contains("No changes"));
 }
+
+// ==================== 1.0 Stabilization: Phase 2 Regression Tests ====================
+
+#[test]
+fn apply_path_traversal_fails_with_clear_error() {
+    let parent_dir = tempfile::TempDir::new().unwrap();
+    let repo_dir = parent_dir.path().join("repo");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_dir)
+        .output()
+        .unwrap();
+
+    let overlay = tempfile::TempDir::new().unwrap();
+    std::fs::write(overlay.path().join(".envrc"), "export FOO=bar").unwrap();
+    std::fs::write(
+        overlay.path().join("repoverlay.ccl"),
+        "mappings =\n  .envrc = ../escape/malicious\n",
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay.path().to_str().unwrap()])
+        .args(["--target", repo_dir.to_str().unwrap()])
+        .assert()
+        .failure(); // Must fail -- no conditional check
+}
+
+#[test]
+fn error_messages_use_display_not_debug_format() {
+    let temp = tempfile::TempDir::new().unwrap();
+    // Create a simple overlay (no repoverlay.ccl needed -- apply will fail at git check)
+    let overlay = tempfile::TempDir::new().unwrap();
+    std::fs::write(overlay.path().join(".envrc"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay.path().to_str().unwrap()])
+        .args(["--target", temp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        // Debug format markers that must NOT appear:
+        .stderr(predicate::str::contains("Os {").not())
+        .stderr(predicate::str::contains("kind: ").not());
+    // Note: do NOT assert specific message text as it may vary by OS
+}
+
+#[test]
+#[cfg(unix)]
+fn sigpipe_does_not_cause_panic_when_pipe_closes_early() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    // Spawn repoverlay --help (always produces output) piped to a reader
+    // that closes immediately. With SIGPIPE default restored, exit should be
+    // clean (0 or 141), not a Rust panic (exit code 101).
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin!("repoverlay"))
+        .args(["--help"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn repoverlay");
+
+    // Read just one byte then drop stdout to trigger SIGPIPE on next write
+    if let Some(ref mut stdout) = child.stdout {
+        let mut buf = [0u8; 1];
+        let _ = stdout.read(&mut buf);
+    }
+    drop(child.stdout.take());
+
+    let status = child.wait().expect("failed to wait on child");
+
+    // With SIGPIPE default restored, exit should be clean (0 from --help,
+    // or 141/SIGPIPE on platforms that report pipe death -- NOT a panic exit code)
+    let code = status.code().unwrap_or(0);
+    assert_ne!(
+        code, 101,
+        "exit code 101 indicates a Rust panic -- SIGPIPE not handled"
+    );
+}
+
+#[test]
+fn apply_interactive_conflict_abort_on_conflict() {
+    // Set up: repo with existing .envrc, overlay also provides .envrc
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+    // Pre-create conflicting file in the repo
+    ctx.create_repo_file(".envrc", "existing content");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--interactive"])
+        .write_stdin("a\n") // 'a' = abort in interactive prompt
+        .assert()
+        .failure(); // abort should exit non-zero
+
+    // Verify the existing file was not overwritten
+    let content = ctx.read_file(".envrc");
+    assert_eq!(
+        content, "existing content",
+        "abort should not overwrite existing file"
+    );
+}

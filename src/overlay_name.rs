@@ -1,4 +1,6 @@
 //! Newtype wrapper for normalized overlay names.
+//!
+//! Ensures overlay names are consistently formatted for state lookups and display.
 
 use std::fmt;
 
@@ -9,14 +11,14 @@ use std::fmt;
 ///
 /// An `OverlayName` must be a simple name (no path separators).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OverlayName(String);
+pub(crate) struct OverlayName(String);
 
 impl OverlayName {
     /// Create a new `OverlayName` from a string.
     ///
     /// The name must be a simple overlay name (e.g., `"my-overlay"`),
     /// not a path like `"org/repo/name"`.
-    pub fn new(name: impl Into<String>) -> Self {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         debug_assert!(
             !name.contains('/'),
@@ -26,7 +28,7 @@ impl OverlayName {
     }
 
     /// Get the underlying string slice.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }

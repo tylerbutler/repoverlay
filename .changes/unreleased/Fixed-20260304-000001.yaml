@@ -1,0 +1,8 @@
+kind: Fixed
+body: |-
+    Improve error display and add SIGPIPE handling
+
+    Fixed error output formatting to use Display instead of Debug format.
+    Added SIGPIPE signal handling so piped output to commands like `head`
+    exits cleanly without "Broken pipe" errors.
+time: 2026-03-04T00:00:01-08:00

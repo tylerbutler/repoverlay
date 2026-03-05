@@ -5969,6 +5969,72 @@ mod tests {
                 "baz should exist after apply"
             );
         }
+
+        #[test]
+        fn rejects_absolute_unix_path_in_mapping() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            make_overlay_with_config(
+                overlay.path(),
+                &[("secret.txt", "payload")],
+                "mappings =\n  secret.txt = /etc/passwd\n",
+            );
+
+            let result = try_apply(overlay.path(), repo.path());
+            assert!(
+                result.is_err(),
+                "should reject absolute path /etc/passwd in mapping"
+            );
+        }
+
+        #[test]
+        fn windows_style_absolute_path_in_mapping_on_unix() {
+            // FINDING: On Unix, Windows-style absolute paths (C:\...) are treated as
+            // relative paths because backslash is a valid filename character on Unix
+            // and the path doesn't start with '/'. This is a known gap — Windows-style
+            // paths are only dangerous on Windows systems where they resolve as absolute.
+            // On Unix, `C:\Windows\System32\cmd.exe` creates a file literally named
+            // that relative to the target, which is safe (stays within target dir).
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            make_overlay_with_config(
+                overlay.path(),
+                &[("secret.txt", "payload")],
+                "mappings =\n  secret.txt = C:\\Windows\\System32\\cmd.exe\n",
+            );
+
+            let result = try_apply(overlay.path(), repo.path());
+            // On Unix this succeeds (backslash is a valid filename char, path is relative)
+            // On Windows this should be rejected (absolute path). Document as known gap.
+            if cfg!(unix) {
+                assert!(
+                    result.is_ok(),
+                    "On Unix, Windows-style paths are treated as relative: {result:?}"
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "On Windows, should reject absolute path C:\\Windows\\System32\\cmd.exe"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_escape_through_deep_chain() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            make_overlay_with_config(
+                overlay.path(),
+                &[("file.txt", "content")],
+                "mappings =\n  file.txt = a/b/c/../../../../../../../etc/passwd\n",
+            );
+
+            let result = try_apply(overlay.path(), repo.path());
+            assert!(
+                result.is_err(),
+                "should reject deep chain traversal that escapes target"
+            );
+        }
     }
 
     mod symlink_escape_tests {

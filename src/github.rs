@@ -9,16 +9,16 @@ use url::Url;
 
 /// Parsed GitHub URL components.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitHubSource {
-    pub owner: String,
-    pub repo: String,
-    pub git_ref: GitRef,
-    pub subpath: Option<PathBuf>,
+pub(crate) struct GitHubSource {
+    pub(crate) owner: String,
+    pub(crate) repo: String,
+    pub(crate) git_ref: GitRef,
+    pub(crate) subpath: Option<PathBuf>,
 }
 
 /// Git reference type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GitRef {
+pub(crate) enum GitRef {
     /// Use repository's default branch
     Default,
     /// A branch name
@@ -40,7 +40,7 @@ impl GitHubSource {
     /// - `https://github.com/owner/repo/tree/branch/path/to/subdir`
     /// - `https://github.com/owner/repo/tree/v1.0.0`
     /// - `https://github.com/owner/repo/tree/abc123...` (commit SHA)
-    pub fn parse(input: &str) -> Result<Self> {
+    pub(crate) fn parse(input: &str) -> Result<Self> {
         let url = Url::parse(input).with_context(|| format!("Invalid URL: {input}"))?;
 
         if url.host_str() != Some("github.com") {
@@ -97,14 +97,14 @@ impl GitHubSource {
     ///
     /// This check is case-insensitive for the host portion, as HTTP URLs
     /// treat hosts as case-insensitive per RFC 3986.
-    pub fn is_github_url(input: &str) -> bool {
+    pub(crate) fn is_github_url(input: &str) -> bool {
         let lower = input.to_ascii_lowercase();
         lower.starts_with("https://github.com/") || lower.starts_with("http://github.com/")
     }
 
     /// Generate a unique cache directory name.
     #[allow(dead_code)]
-    pub fn cache_key(&self) -> String {
+    pub(crate) fn cache_key(&self) -> String {
         let ref_part = match &self.git_ref {
             GitRef::Default => "default".to_string(),
             GitRef::Branch(b) => format!("branch-{}", sanitize_for_path(b)),
@@ -115,13 +115,13 @@ impl GitHubSource {
     }
 
     /// Full clone URL for the repository.
-    pub fn clone_url(&self) -> String {
+    pub(crate) fn clone_url(&self) -> String {
         format!("https://github.com/{}/{}.git", self.owner, self.repo)
     }
 
     /// Human-readable display of the source.
     #[allow(dead_code)]
-    pub fn display_url(&self) -> String {
+    pub(crate) fn display_url(&self) -> String {
         let base = format!("https://github.com/{}/{}", self.owner, self.repo);
         match (&self.git_ref, &self.subpath) {
             (GitRef::Default, None) => base,
@@ -132,7 +132,7 @@ impl GitHubSource {
     }
 
     /// Apply a ref override from CLI.
-    pub fn with_ref_override(mut self, ref_override: Option<&str>) -> Result<Self> {
+    pub(crate) fn with_ref_override(mut self, ref_override: Option<&str>) -> Result<Self> {
         if let Some(ref_str) = ref_override {
             self.git_ref = ref_str.parse().map_err(|e: String| anyhow!(e))?;
         }
@@ -168,7 +168,7 @@ impl FromStr for GitRef {
 
 impl GitRef {
     /// Get the ref as a string for display and storage.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Default => "HEAD",
             Self::Branch(s) | Self::Tag(s) | Self::Commit(s) => s,
@@ -177,7 +177,7 @@ impl GitRef {
 
     /// Check if this is the default ref.
     #[allow(dead_code)]
-    pub const fn is_default(&self) -> bool {
+    pub(crate) const fn is_default(&self) -> bool {
         matches!(self, Self::Default)
     }
 }
@@ -196,7 +196,7 @@ impl std::fmt::Display for GitRef {
 /// Parse owner/repo from a git remote URL (HTTPS or SSH format).
 ///
 /// Returns `None` if the URL is not a GitHub URL or cannot be parsed.
-pub fn parse_remote_url(url: &str) -> Option<(String, String)> {
+pub(crate) fn parse_remote_url(url: &str) -> Option<(String, String)> {
     // Must be a GitHub URL
     if !url.contains("github.com") {
         return None;

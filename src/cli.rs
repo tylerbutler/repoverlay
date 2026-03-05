@@ -1,4 +1,7 @@
 //! CLI implementation for repoverlay.
+//!
+//! Defines the command structure using clap and dispatches to `lib.rs` functions.
+//! The `run()` function is the internal entry point called from `lib::run()`.
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -609,7 +612,7 @@ enum EditCommand {
     },
 }
 
-pub fn run() -> Result<()> {
+pub(crate) fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle markdown help generation (for documentation)
