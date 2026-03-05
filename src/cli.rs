@@ -1952,7 +1952,8 @@ fn handle_sync(
         println!("{check} Synced {synced} overlay(s), skipped {skipped}");
     } else if let Some(name_arg) = name {
         // Parse the name argument to get org/repo/name
-        let (org, repo, overlay_name) = parse_overlay_name_arg(&name_arg, &target)?;
+        let (detected_org, detected_repo, overlay_name) =
+            parse_overlay_name_arg(&name_arg, &target)?;
 
         // Verify the overlay is currently applied
         let normalized_name = normalize_overlay_name(&overlay_name)?;
@@ -1964,7 +1965,7 @@ fn handle_sync(
         {
             bail!(
                 "Overlay '{overlay_name}' is not currently applied.\n\n\
-                 To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
+                 To apply it first: repoverlay apply {detected_org}/{detected_repo}/{overlay_name}"
             );
         }
 
@@ -1983,6 +1984,17 @@ fn handle_sync(
                 );
             }
         }
+
+        // Use org/repo from saved state rather than git remote detection.
+        // When an overlay was applied via upstream fallback (e.g., fork
+        // alexvy86/FluidFramework resolved to upstream microsoft/FluidFramework),
+        // the state records the correct upstream org/repo. Using the git-remote-
+        // detected org/repo would point to the fork path which doesn't exist
+        // in the overlay repo.
+        let (org, repo) = match &state.source {
+            OverlaySource::OverlayRepo { org, repo, .. } => (org.clone(), repo.clone()),
+            _ => (detected_org, detected_repo),
+        };
 
         // Load overlay repo config (respects source_name for multi-source configs, #147)
         let config = load_config(None)?;
