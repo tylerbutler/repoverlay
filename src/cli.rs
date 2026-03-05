@@ -1966,7 +1966,8 @@ fn handle_sync(
         }
 
         // Load overlay state to get file mappings
-        let state = load_overlay_state(&target, &normalized_name)?;
+        let mut state = load_overlay_state(&target, &normalized_name)?;
+        crate::try_upgrade_github_source(&target, &mut state)?;
 
         // Check source syncability upfront (#146, #149)
         {
@@ -8199,6 +8200,59 @@ directories =
                 msg.contains("local") && (msg.contains("sync") || msg.contains("syncable")),
                 "Bug #146: sync error for local source should mention the source type \
                  and syncability. Got: {msg}"
+            );
+        }
+
+        /// Issue #171: `handle_sync` for a single name should call
+        /// `try_upgrade_github_source` before checking syncability, just like
+        /// the `--all` path does. Without this, a GitHub-sourced overlay that
+        /// matches a configured source won't be upgraded and sync will reject it.
+        #[test]
+        fn issue_171_sync_single_name_calls_try_upgrade_github_source() {
+            let repo = create_test_repo();
+
+            // Set up a git remote so parse_overlay_name_arg can detect org/repo
+            std::process::Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/testorg/testrepo.git",
+                ])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            // Create a GitHub-sourced overlay with a valid subpath but no
+            // matching configured source. The upgrade will be a no-op, but the
+            // code path must still load state as `mut` and call the upgrade.
+            save_test_state(
+                repo.path(),
+                "github-overlay",
+                OverlaySource::github(
+                    "https://github.com/fake-owner-xyz/fake-repo-xyz".to_string(),
+                    "fake-owner-xyz".to_string(),
+                    "fake-repo-xyz".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    Some("testorg/testrepo/github-overlay".to_string()),
+                ),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let result = handle_sync(
+                repo.path(),
+                Some("github-overlay".to_string()),
+                false, // not --all
+                false,
+            );
+
+            // Should fail because GitHub sources (without matching config) aren't syncable
+            assert!(result.is_err(), "sync should fail for GitHub sources");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("GitHub") && (msg.contains("sync") || msg.contains("syncable")),
+                "sync error for GitHub source should mention the source type. Got: {msg}"
             );
         }
 
