@@ -1,0 +1,10 @@
+kind: Fixed
+body: |-
+    Fix `sync <name>` failing for GitHub-sourced overlays that match a configured source
+
+    The single-name sync path was missing the `try_upgrade_github_source()` call
+    that was added to `sync --all`, `edit`, and `edit add` in #171. This caused
+    GitHub-sourced overlays to be rejected as non-syncable instead of being lazily
+    upgraded to editable overlay repo sources.
+time: 2026-03-04T17:30:00-08:00
+component: sync

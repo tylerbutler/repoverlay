@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.9.2 - 2026-03-04
+
+
+### Command: `edit`
+
+
+#### Changed
+
+##### Split `edit` into `edit add` and `edit remove` subcommands
+
+The `--add` and `--remove` flags used greedy `num_args = 1..` parsing, which consumed trailing arguments and required the overlay name to appear before any flags. This was confusing and the help text couldn't convey the constraint clearly. The `edit` command now uses proper subcommands:
+
+  repoverlay edit add my-overlay file1.txt file2.txt   repoverlay edit remove my-overlay oldfile.txt   repoverlay edit my-overlay  # interactive file selection   repoverlay edit             # select overlay then edit interactively
+
+Running `edit` with no overlay name now presents an interactive overlay picker (auto-selects when only one overlay is applied). The old `--add`/`--remove`/`--interactive` flags still work but are hidden from help and print a deprecation warning.
+
+
+## v0.9.1 - 2026-03-04
+
+
+### Command: `edit`
+
+
+#### Fixed
+
+##### Fix `edit --add` dropping existing git exclude entries
+
+When adding files to an applied overlay, the git exclude section was rewritten with only the newly added files, silently removing entries for previously managed files. This caused those files to reappear in `git status` after the add operation. Rebuilt the full exclude list from overlay state, matching the pattern already used by `edit --remove`.
+
+
+#### Changed
+
+##### Clarify that overlay NAME must precede --add/--remove flags
+
+The --add and --remove flags accept multiple values and greedily consume trailing arguments. Running `edit --add file.txt name` fails because `name` is parsed as a second file. Updated help text to document the required argument order.
+
+
+## v0.9.0 - 2026-03-02
+
+
+#### Added
+
+##### Always sync cache and overlay repos before operations
+
+All commands that read from the overlay repo or GitHub cache now pull the
+latest by default. The `--update` flag is replaced with `--no-update` to
+opt out (e.g., for offline use). Affected commands: `apply`, `browse`,
+`list`, `switch`, `create`, and `sync`.
+
+**BREAKING:** The `--update` flag has been removed. Use `--no-update` to
+skip syncing.
+
+
 ## v0.8.0 - 2026-02-28
 
 

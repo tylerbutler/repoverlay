@@ -88,7 +88,7 @@ jobs:
 
       - name: Download main binary size artifact
         id: download-main-size
-        uses: dawidd6/action-download-artifact@fe9d59ce33ce92db8a6ac90b2c8be6b6d90417c8 # ratchet:dawidd6/action-download-artifact@v15
+        uses: dawidd6/action-download-artifact@2536c51d3d126276eb39f74d6bc9c72ac6ef30d3 # ratchet:dawidd6/action-download-artifact@v16
         with:
           workflow: ci.yml
           branch: main
@@ -146,7 +146,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: tylerbutler/actions/changie-check@c697a813534c6364a835de8e2ed2c4e0c3638bbe # ratchet:tylerbutler/actions/changie-check@main
+      - uses: tylerbutler/actions/changie-check@231702af96884c81aba2e69d60ed8ed7d23da69b # ratchet:tylerbutler/actions/changie-check@main
         id: changelog
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}

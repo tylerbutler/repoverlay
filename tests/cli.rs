@@ -1574,8 +1574,8 @@ fn edit_add_fails_when_overlay_not_applied() {
     cargo_bin_cmd!("repoverlay")
         .args([
             "edit",
+            "add",
             "org/repo/nonexistent-overlay",
-            "--add",
             "some-file.txt",
         ])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
@@ -1599,8 +1599,8 @@ fn edit_add_fails_when_file_does_not_exist() {
     cargo_bin_cmd!("repoverlay")
         .args([
             "edit",
+            "add",
             "org/repo/test-overlay",
-            "--add",
             "nonexistent-file.txt",
         ])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
@@ -1619,6 +1619,93 @@ fn edit_fails_when_no_operation_specified() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("specify at least one"));
+}
+
+#[test]
+fn edit_no_name_fails_when_no_overlays_applied() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "No overlays are currently applied",
+        ));
+}
+
+#[test]
+fn edit_no_name_auto_selects_single_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // With only one overlay applied, `edit` (no name) should auto-select it
+    // and enter interactive mode. In non-TTY, interactive returns preselected → no changes.
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes"));
+}
+
+// ──────────────────────────────────────────────
+// Edit --add success tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_add_adds_file_to_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Verify overlay is applied
+    assert!(ctx.is_symlink(".envrc"));
+
+    // Create a new file in the target repo
+    ctx.create_repo_file("new-file.txt", "new content");
+    assert!(ctx.file_exists("new-file.txt"));
+
+    // Add the new file to the overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", "new-file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"));
+
+    // Verify new-file.txt is now a symlink (managed by overlay)
+    assert!(ctx.is_symlink("new-file.txt"));
+    // Verify content is preserved
+    assert_eq!(ctx.read_file("new-file.txt"), "new content");
+    // Verify original .envrc symlink still works
+    assert!(ctx.is_symlink(".envrc"));
+    assert_eq!(ctx.read_file(".envrc"), "export FOO=bar");
+
+    // Verify git exclude has BOTH files
+    let exclude = ctx.git_exclude_content();
+    assert!(
+        exclude.contains(".envrc"),
+        "git exclude should contain .envrc, got: {exclude}"
+    );
+    assert!(
+        exclude.contains("new-file.txt"),
+        "git exclude should contain new-file.txt, got: {exclude}"
+    );
 }
 
 // ──────────────────────────────────────────────
@@ -1643,7 +1730,7 @@ fn edit_remove_removes_file_from_overlay() {
 
     // Remove one file
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "extra.txt"])
+        .args(["edit", "remove", "test-overlay", "extra.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1674,7 +1761,7 @@ fn edit_remove_fails_when_file_not_in_overlay() {
         .success();
 
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "nonexistent.txt"])
+        .args(["edit", "remove", "test-overlay", "nonexistent.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .failure()
@@ -1695,7 +1782,7 @@ fn edit_remove_dry_run_does_not_modify() {
 
     // Dry run remove
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "extra.txt", "--dry-run"])
+        .args(["edit", "remove", "test-overlay", "extra.txt", "--dry-run"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1722,7 +1809,7 @@ fn edit_remove_multiple_files() {
 
     // Remove two files at once
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "a.txt", "b.txt"])
+        .args(["edit", "remove", "test-overlay", "a.txt", "b.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1806,6 +1893,177 @@ fn edit_interactive_includes_files_in_hidden_directories() {
         .success()
         .stdout(predicate::str::contains("No changes"));
 }
+
+// ──────────────────────────────────────────────
+// Edit add — additional coverage
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_add_dry_run_does_not_modify() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file("new-file.txt", "new content");
+
+    // Dry run add
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "edit",
+            "add",
+            "org/repo/test-overlay",
+            "new-file.txt",
+            "--dry-run",
+        ])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+
+    // File should still be a regular file, not a symlink
+    assert!(ctx.file_exists("new-file.txt"));
+    assert!(!ctx.is_symlink("new-file.txt"));
+}
+
+#[test]
+fn edit_add_multiple_files() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file("a.txt", "content a");
+    ctx.create_repo_file("b.txt", "content b");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", "a.txt", "b.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 2 file"));
+
+    assert!(ctx.is_symlink("a.txt"));
+    assert!(ctx.is_symlink("b.txt"));
+    assert_eq!(ctx.read_file("a.txt"), "content a");
+    assert_eq!(ctx.read_file("b.txt"), "content b");
+}
+
+// ──────────────────────────────────────────────
+// Edit remove — additional coverage
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_remove_fails_when_overlay_not_applied() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "nonexistent-overlay", "file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not currently applied"));
+}
+
+// ──────────────────────────────────────────────
+// Edit interactive overlay selection
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_no_name_multiple_overlays_fails_in_non_tty() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply first overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "overlay-one"])
+        .assert()
+        .success();
+
+    // Create and apply a second overlay
+    let overlay2 = common::create_overlay_dir(&[("readme.txt", "hello")]);
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay2.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "overlay-two"])
+        .assert()
+        .success();
+
+    // With multiple overlays and no TTY, edit with no name should fail
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("specify which one to edit"));
+}
+
+// ──────────────────────────────────────────────
+// Deprecated flag backward compatibility
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_deprecated_add_flag_works_with_warning() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file("new-file.txt", "new content");
+
+    // Use deprecated --add flag
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "org/repo/test-overlay", "--add", "new-file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"))
+        .stderr(predicate::str::contains("deprecated"));
+
+    assert!(ctx.is_symlink("new-file.txt"));
+}
+
+#[test]
+fn edit_deprecated_remove_flag_works_with_warning() {
+    let ctx = TestContext::new()
+        .with_overlay(&[(".envrc", "export FOO=bar"), ("extra.txt", "extra content")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Use deprecated --remove flag
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--remove", "extra.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 1 file"))
+        .stderr(predicate::str::contains("deprecated"));
+
+    assert!(!ctx.file_exists("extra.txt"));
+    assert!(ctx.file_exists(".envrc"));
+}
+
+// ──────────────────────────────────────────────
+// Edit interactive — existing tests
+// ──────────────────────────────────────────────
 
 #[test]
 fn edit_interactive_excludes_repoverlay_ccl_from_selection() {
