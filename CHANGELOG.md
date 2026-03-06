@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.10.1 - 2026-03-05
+
+
+### Command: `sync`
+
+
+#### Fixed
+
+##### Fix `sync <name>` using wrong org/repo for overlays applied via upstream fallback
+
+When syncing a single overlay by name in a fork repository, the sync command detected the org/repo from the git remote (e.g., `alexvy86/FluidFramework`) instead of using the org/repo saved in the overlay state (e.g., `microsoft/FluidFramework`). This caused sync to fail with "does not exist in overlay repo" because the fork's org/repo path doesn't exist in the overlay repo. Now uses the org/repo from the saved state, matching the behavior of `sync --all`.
+
+
 ## v0.10.0 - 2026-03-05
 
 
