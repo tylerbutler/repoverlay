@@ -17,6 +17,20 @@ use crossterm::{
 
 use crate::detection::{DetectedFile, FileCategory};
 
+/// Conversion trait for types that can be represented as a [`SelectableItem`]
+/// in the interactive selection UI.
+///
+/// Implementations provide the mapping from domain types (like overlay names)
+/// to the generic selection UI model, including display labels, descriptions,
+/// and disabled state.
+pub(crate) trait ToSelectableItem {
+    /// Convert this value into a [`SelectableItem`] for display in the selection UI.
+    ///
+    /// `target` is the path to the target repository, used to load overlay state
+    /// for timestamp information.
+    fn to_selectable_item(&self, target: &Path) -> SelectableItem;
+}
+
 /// Maximum number of items visible in the scrollable viewport.
 const MAX_VISIBLE_ITEMS: usize = 15;
 

@@ -655,10 +655,141 @@ pub(crate) fn save_overlay_state(target: &Path, state: &OverlayState) -> Result<
     Ok(())
 }
 
+/// Format a `DateTime<Utc>` as a human-readable relative time string (e.g. "2 days ago").
+pub(crate) fn format_relative_time(dt: &DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let duration = now.signed_duration_since(*dt);
+
+    if duration.num_seconds() < 0 {
+        return "just now".to_string();
+    }
+
+    let seconds = duration.num_seconds();
+    let minutes = duration.num_minutes();
+    let hours = duration.num_hours();
+    let days = duration.num_days();
+    let weeks = days / 7;
+    let months = days / 30;
+    let years = days / 365;
+
+    if seconds < 60 {
+        "just now".to_string()
+    } else if minutes == 1 {
+        "1 minute ago".to_string()
+    } else if minutes < 60 {
+        format!("{minutes} minutes ago")
+    } else if hours == 1 {
+        "1 hour ago".to_string()
+    } else if hours < 24 {
+        format!("{hours} hours ago")
+    } else if days == 1 {
+        "1 day ago".to_string()
+    } else if days < 7 {
+        format!("{days} days ago")
+    } else if weeks == 1 {
+        "1 week ago".to_string()
+    } else if weeks < 5 {
+        format!("{weeks} weeks ago")
+    } else if months == 1 {
+        "1 month ago".to_string()
+    } else if months < 12 {
+        format!("{months} months ago")
+    } else if years == 1 {
+        "1 year ago".to_string()
+    } else {
+        format!("{years} years ago")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_format_relative_time_just_now() {
+        let now = Utc::now();
+        assert_eq!(format_relative_time(&now), "just now");
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::seconds(30))),
+            "just now"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_minutes() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::minutes(1))),
+            "1 minute ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::minutes(45))),
+            "45 minutes ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_hours() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::hours(1))),
+            "1 hour ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::hours(5))),
+            "5 hours ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_days() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(1))),
+            "1 day ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(4))),
+            "4 days ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_weeks() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::weeks(1))),
+            "1 week ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::weeks(3))),
+            "3 weeks ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_months_and_years() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(45))),
+            "1 month ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(400))),
+            "1 year ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(800))),
+            "2 years ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_future() {
+        let future = Utc::now() + chrono::Duration::hours(1);
+        assert_eq!(format_relative_time(&future), "just now");
+    }
 
     #[test]
     fn test_normalize_overlay_name() {
