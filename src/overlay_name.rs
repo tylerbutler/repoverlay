@@ -57,6 +57,26 @@ impl PartialEq<&str> for OverlayName {
     }
 }
 
+impl crate::selection::ToSelectableItem for OverlayName {
+    fn to_selectable_item(&self, target: &std::path::Path) -> crate::selection::SelectableItem {
+        let description = crate::load_overlay_state(target, self.as_str())
+            .ok()
+            .map(|state| {
+                format!(
+                    "last updated {}",
+                    crate::state::format_relative_time(&state.applied_at)
+                )
+            });
+        crate::selection::SelectableItem {
+            id: self.to_string(),
+            label: self.to_string(),
+            description,
+            preselected: false,
+            disabled: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

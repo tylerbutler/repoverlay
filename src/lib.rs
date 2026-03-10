@@ -2448,7 +2448,7 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
     }
 
     println!(
-        "    Applied: {}",
+        "    Updated: {}",
         state.applied_at.format("%Y-%m-%d %H:%M:%S UTC")
     );
     println!("    Files:   {}", state.file_count());

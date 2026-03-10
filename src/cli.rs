@@ -1145,7 +1145,7 @@ fn handle_remove(
     dry_run: bool,
     interactive: bool,
 ) -> Result<()> {
-    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+    use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
 
     // If name or --all is specified, use direct removal
     if remove_all || name.is_some() {
@@ -1179,13 +1179,7 @@ fn handle_remove(
 
     let items: Vec<SelectableItem> = applied_overlays
         .iter()
-        .map(|name| SelectableItem {
-            id: name.to_string(),
-            label: name.to_string(),
-            description: None,
-            preselected: false,
-            disabled: false,
-        })
+        .map(|name| name.to_selectable_item(&target))
         .collect();
 
     let result = select_flat(
@@ -1700,8 +1694,8 @@ fn browse_and_apply<F>(
 where
     F: Fn(&crate::overlay_repo::AvailableOverlay) -> Result<ResolvedSource>,
 {
-    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
-    use crate::state::normalize_overlay_name;
+    use crate::overlay_repo::BrowseOverlayItem;
+    use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
 
     // Auto-filter by current repo when no explicit filter and not --show-all
     let (display_overlays, filtered) =
@@ -1735,15 +1729,11 @@ where
     let items: Vec<SelectableItem> = display_overlays
         .iter()
         .map(|o| {
-            let disabled = normalize_overlay_name(&o.name)
-                .is_ok_and(|normalized| applied_overlays.iter().any(|n| n == normalized.as_str()));
-            SelectableItem {
-                id: o.to_string(),
-                label: o.display_bold(),
-                description: disabled.then(|| "already applied".into()),
-                preselected: false,
-                disabled,
+            BrowseOverlayItem {
+                overlay: o,
+                applied_overlays: &applied_overlays,
             }
+            .to_selectable_item(&target)
         })
         .collect();
 
@@ -2368,7 +2358,7 @@ fn sync_single_overlay(
 /// Lists all applied overlays and lets the user pick one. Bails in non-TTY
 /// environments since interactive selection requires a terminal.
 fn select_overlay_interactive(target: &std::path::Path) -> Result<String> {
-    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+    use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
 
     let target = canonicalize_path(target, "Target directory")?;
     let applied = list_applied_overlays(&target)?;
@@ -2393,13 +2383,7 @@ fn select_overlay_interactive(target: &std::path::Path) -> Result<String> {
 
     let items: Vec<SelectableItem> = applied
         .iter()
-        .map(|name| SelectableItem {
-            id: name.to_string(),
-            label: name.to_string(),
-            description: None,
-            preselected: false,
-            disabled: false,
-        })
+        .map(|name| name.to_selectable_item(&target))
         .collect();
 
     let result = select_flat(
