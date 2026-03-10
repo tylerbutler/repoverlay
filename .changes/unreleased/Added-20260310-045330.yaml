@@ -1,0 +1,9 @@
+kind: Added
+body: |-
+    Show last-updated timestamps for applied overlays in browse UI
+
+    Applied overlays now display relative timestamps (e.g. '2 days ago') in the
+    browse selection UI instead of a plain 'already applied' label, making it
+    easier to see how recently each overlay was synced.
+time: 2026-03-10T04:53:30Z
+component: browse

@@ -71,6 +71,49 @@ impl AvailableOverlay {
     }
 }
 
+/// Wraps an [`AvailableOverlay`] with context about which overlays are already applied,
+/// enabling conversion to a [`SelectableItem`][crate::selection::SelectableItem] for the
+/// browse UI.
+pub(crate) struct BrowseOverlayItem<'a> {
+    /// The available overlay to display.
+    pub(crate) overlay: &'a AvailableOverlay,
+    /// Names of overlays already applied in the target repo.
+    pub(crate) applied_overlays: &'a [crate::OverlayName],
+}
+
+impl crate::selection::ToSelectableItem for BrowseOverlayItem<'_> {
+    fn to_selectable_item(&self, target: &Path) -> crate::selection::SelectableItem {
+        let normalized = crate::state::normalize_overlay_name(&self.overlay.name).ok();
+        let disabled = normalized
+            .as_ref()
+            .is_some_and(|n| self.applied_overlays.iter().any(|name| name == n.as_str()));
+        let description = if disabled {
+            let name = normalized
+                .as_ref()
+                .map_or(self.overlay.name.as_str(), |n| n.as_str());
+            let desc = crate::load_overlay_state(target, name).ok().map_or_else(
+                || "already applied".into(),
+                |state| {
+                    format!(
+                        "last updated {}",
+                        crate::state::format_relative_time(&state.applied_at)
+                    )
+                },
+            );
+            Some(desc)
+        } else {
+            None
+        };
+        crate::selection::SelectableItem {
+            id: self.overlay.to_string(),
+            label: self.overlay.display_bold(),
+            description,
+            preselected: false,
+            disabled,
+        }
+    }
+}
+
 /// Manager for the overlay repository.
 pub(crate) struct OverlayRepoManager {
     /// Path to the cloned overlay repository

@@ -95,21 +95,21 @@ fn browse_help_shows_source_argument() {
 }
 
 #[test]
-fn browse_rejects_local_path_source() {
+fn browse_rejects_nonexistent_local_path_source() {
     cargo_bin_cmd!("repoverlay")
         .args(["browse", "./my-overlay"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid source for browse"));
+        .stderr(predicate::str::contains("Path does not exist"));
 }
 
 #[test]
-fn browse_rejects_absolute_path_source() {
+fn browse_rejects_nonexistent_absolute_path_source() {
     cargo_bin_cmd!("repoverlay")
         .args(["browse", "/tmp/my-overlay"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid source for browse"));
+        .stderr(predicate::str::contains("Path does not exist"));
 }
 
 #[test]
@@ -1367,6 +1367,164 @@ fn source_add_strips_git_suffix_from_name() {
         .assert()
         .success()
         .stdout(predicate::str::contains("source 'git-suffix'"));
+}
+
+// ============================================================================
+// Local Directory Source Tests
+// ============================================================================
+
+#[test]
+fn source_add_local_path_succeeds() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create a local overlays directory inside the repo
+    let overlays_dir = ctx.repo_path().join("my-overlays");
+    fs::create_dir_all(&overlays_dir).expect("Failed to create overlays dir");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "local-test"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added"));
+
+    // Verify .repoverlay/config.ccl was created with the path
+    let config_path = ctx.repo_path().join(".repoverlay/config.ccl");
+    assert!(config_path.exists(), ".repoverlay/config.ccl should exist");
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(
+        content.contains("local-test"),
+        "config should contain source name"
+    );
+    assert!(
+        content.contains("path = my-overlays"),
+        "config should contain path"
+    );
+}
+
+#[test]
+fn source_add_nonexistent_local_path_fails() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./nonexistent-dir"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("does not exist").or(predicate::str::contains("No such file")),
+        );
+}
+
+#[test]
+fn source_add_path_outside_repo_fails() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create a directory outside the repo
+    let outside_dir = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", outside_dir.path().to_str().unwrap()])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be within the repository"));
+}
+
+#[test]
+fn source_list_shows_local_sources() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create overlay dir and add as local source
+    let overlays_dir = ctx.repo_path().join("my-overlays");
+    fs::create_dir_all(&overlays_dir).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "local-src"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // List should show "Repository sources" and the path
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "list"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Repository sources"))
+        .stdout(predicate::str::contains("local-src"))
+        .stdout(predicate::str::contains("path:"));
+}
+
+#[test]
+fn source_remove_local_source() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create overlay dir and add as local source
+    let overlays_dir = ctx.repo_path().join("my-overlays");
+    fs::create_dir_all(&overlays_dir).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "removable"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Verify it exists
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "list"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removable"));
+
+    // Remove it
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "remove", "removable"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    // Verify it's gone
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "list"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removable").not());
+}
+
+#[test]
+fn source_add_local_extracts_name_from_dir() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create overlay dir — name should be extracted from directory name
+    let overlays_dir = ctx.repo_path().join("team-overlays");
+    fs::create_dir_all(&overlays_dir).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./team-overlays"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("team-overlays"));
 }
 
 // ============================================================================
