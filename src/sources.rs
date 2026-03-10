@@ -5,7 +5,7 @@
 //! `SourceManager` (coordinates resolution across sources) and
 //! `ResolvedOverlay` (a successfully located overlay with its source metadata).
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -96,15 +96,27 @@ impl SourceManager {
                             source.name
                         )
                     })?;
-                    let abs_path = base.join(source.path()?);
-                    if !abs_path.exists() {
-                        anyhow::bail!(
+                    let base_canonical = base.canonicalize().with_context(|| {
+                        format!("Repository path does not exist: {}", base.display())
+                    })?;
+                    let source_path = base.join(source.path()?);
+                    let canonical_path = source_path.canonicalize().with_context(|| {
+                        format!(
                             "Local source '{}' path does not exist: {}",
                             source.name,
-                            abs_path.display()
+                            source_path.display()
+                        )
+                    })?;
+                    if !canonical_path.starts_with(&base_canonical) {
+                        anyhow::bail!(
+                            "Local source '{}' path escapes repository boundary: {}",
+                            source.name,
+                            canonical_path.display()
                         );
                     }
-                    ManagedSourceBackend::Local { path: abs_path }
+                    ManagedSourceBackend::Local {
+                        path: canonical_path,
+                    }
                 } else {
                     let local_path = cache_dir.join(&source.name);
                     let config = OverlayRepoConfig {
@@ -383,12 +395,30 @@ impl SourceManager {
 
 /// Check if an overlay exists at `base/org/repo/name`.
 fn get_overlay_path_in_dir(base: &Path, org: &str, repo: &str, name: &str) -> Option<PathBuf> {
+    if !is_valid_path_component(org)
+        || !is_valid_path_component(repo)
+        || !is_valid_path_component(name)
+    {
+        return None;
+    }
+
     let overlay_path = base.join(org).join(repo).join(name);
-    if overlay_path.is_dir() {
+    let canonical_overlay = overlay_path.canonicalize().ok()?;
+    let canonical_base = base.canonicalize().ok()?;
+    if canonical_overlay.starts_with(canonical_base) && canonical_overlay.is_dir() {
         Some(overlay_path)
     } else {
         None
     }
+}
+
+/// Validate path component safety for org/repo/overlay segments.
+fn is_valid_path_component(component: &str) -> bool {
+    !component.is_empty()
+        && component != "."
+        && component != ".."
+        && !component.contains('/')
+        && !component.contains('\\')
 }
 
 /// List all overlays in a directory using the org/repo/name structure.
@@ -1721,6 +1751,60 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().unwrap().to_string();
         assert!(err.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_local_source_path_escape_rejected() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path();
+        let repo_root = workspace.join("repo");
+        let outside = workspace.join("outside");
+        fs::create_dir_all(&repo_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        let sources = vec![Source {
+            name: "escape".to_string(),
+            url: None,
+            path: Some(PathBuf::from("../outside")),
+        }];
+
+        let result = SourceManager::new(sources, Some(&repo_root));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_local_source_absolute_path_rejected() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path();
+        let repo_root = workspace.join("repo");
+        let outside = workspace.join("outside");
+        fs::create_dir_all(&repo_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let outside_abs = outside.canonicalize().unwrap();
+
+        let sources = vec![Source {
+            name: "absolute".to_string(),
+            url: None,
+            path: Some(outside_abs),
+        }];
+
+        let result = SourceManager::new(sources, Some(&repo_root));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_overlay_path_in_dir_rejects_traversal_components() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path();
+        let base = workspace.join("base");
+        fs::create_dir_all(&base).unwrap();
+
+        fs::create_dir_all(workspace.join("outside/evil")).unwrap();
+        fs::create_dir_all(base.join("repo/overlay")).unwrap();
+
+        assert!(get_overlay_path_in_dir(&base, "..", "outside", "evil").is_none());
+        assert!(get_overlay_path_in_dir(&base, ".", "repo", "overlay").is_none());
+        assert!(get_overlay_path_in_dir(&base, "org/repo", "x", "y").is_none());
     }
 
     #[test]
