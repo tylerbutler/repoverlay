@@ -36,7 +36,7 @@ impl RepoverlayConfig {
             .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
         let local_path = cache_dir.cache_dir().join("sources").join(&source.name);
         Ok(OverlayRepoConfig {
-            url: source.url.clone(),
+            url: source.url()?.to_string(),
             local_path: Some(local_path),
         })
     }
@@ -74,7 +74,7 @@ impl RepoverlayConfig {
         let local_path = cache_dir.cache_dir().join("sources").join(&source.name);
 
         Ok(OverlayRepoConfig {
-            url: source.url.clone(),
+            url: source.url()?.to_string(),
             local_path: Some(local_path),
         })
     }
@@ -84,6 +84,8 @@ impl RepoverlayConfig {
 ///
 /// Sources are checked in order when resolving overlay references.
 /// Earlier sources have higher priority.
+///
+/// Each source must have exactly one of `url` (git-backed) or `path` (local directory).
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub(crate) struct Source {
     /// Name for this source (used in CLI output and `--source` flag).
@@ -91,8 +93,64 @@ pub(crate) struct Source {
     /// Git URL of the overlay repository.
     /// Accepts full URLs or GitHub shorthand (`owner/repo`), which is expanded
     /// to `https://github.com/owner/repo` during deserialization.
-    #[serde(deserialize_with = "deserialize_source_url")]
-    pub(crate) url: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_source_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) url: Option<String>,
+    /// Local directory path for the overlay source (repo-relative).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) path: Option<PathBuf>,
+}
+
+impl Source {
+    /// Returns `true` if this is a local directory source.
+    pub(crate) const fn is_local(&self) -> bool {
+        self.path.is_some()
+    }
+
+    /// Returns `true` if this is a git-based source.
+    #[allow(dead_code)] // Utility method for callers
+    pub(crate) const fn is_git(&self) -> bool {
+        self.url.is_some()
+    }
+
+    /// Get the URL. Returns an error if this is a local source.
+    pub(crate) fn url(&self) -> Result<&str> {
+        self.url.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Source '{}' is a local path source, not a git source",
+                self.name
+            )
+        })
+    }
+
+    /// Get the path. Returns an error if this is a git source.
+    pub(crate) fn path(&self) -> Result<&Path> {
+        self.path.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Source '{}' is a git source, not a local path source",
+                self.name
+            )
+        })
+    }
+
+    /// Validate that exactly one of url or path is set.
+    #[allow(dead_code)] // Utility method; used in tests
+    pub(crate) fn validate(&self) -> Result<()> {
+        match (&self.url, &self.path) {
+            (Some(_), None) | (None, Some(_)) => Ok(()),
+            (Some(_), Some(_)) => anyhow::bail!(
+                "Source '{}' has both url and path; only one is allowed",
+                self.name
+            ),
+            (None, None) => anyhow::bail!(
+                "Source '{}' has neither url nor path; one is required",
+                self.name
+            ),
+        }
+    }
 }
 
 /// Default overlay repository name for the one-part shorthand syntax.
@@ -128,10 +186,16 @@ pub(crate) enum SourceUrlInput {
     GitHubShorthand { owner: String, repo: String },
     /// Bare owner name, expanded to `https://github.com/owner/{default_repo}`.
     BareOwner(String),
+    /// A local directory path for overlay sources within the repo.
+    LocalPath(PathBuf),
 }
 
 impl SourceUrlInput {
     /// Returns the expanded git URL for this input.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a `LocalPath` variant.
     #[must_use]
     pub(crate) fn to_url(&self) -> String {
         self.to_url_with_repo_name(&default_overlay_repo_name())
@@ -146,6 +210,22 @@ impl SourceUrlInput {
                 expand_github_shorthand(&format!("{owner}/{repo}"))
             }
             Self::BareOwner(owner) => expand_github_shorthand(&format!("{owner}/{default_repo}")),
+            Self::LocalPath(_) => panic!("to_url() called on LocalPath variant"),
+        }
+    }
+
+    /// Returns `true` if this is a local path source.
+    #[must_use]
+    pub(crate) const fn is_local(&self) -> bool {
+        matches!(self, Self::LocalPath(_))
+    }
+
+    /// Returns the local path. Panics if called on a git variant.
+    #[must_use]
+    pub(crate) fn local_path(&self) -> &Path {
+        match self {
+            Self::LocalPath(p) => p,
+            _ => panic!("local_path() called on non-LocalPath variant"),
         }
     }
 }
@@ -160,6 +240,17 @@ impl FromStr for SourceUrlInput {
                  GitHub shorthand (owner/repo), or a GitHub username (owner)."
                     .to_string(),
             );
+        }
+
+        // Check for local path indicators before git URL checks.
+        // Require at least a directory name beyond the prefix.
+        let trimmed = s.trim_end_matches('/');
+        if (trimmed.starts_with("./") && trimmed.len() > 2)
+            || (trimmed.starts_with("../") && trimmed.len() > 3)
+            || (trimmed.starts_with('/') && trimmed.len() > 1)
+            || trimmed.starts_with('~')
+        {
+            return Ok(Self::LocalPath(PathBuf::from(s)));
         }
 
         if is_git_url(s) {
@@ -187,6 +278,7 @@ impl std::fmt::Display for SourceUrlInput {
             Self::GitUrl(url) => write!(f, "{url}"),
             Self::GitHubShorthand { owner, repo } => write!(f, "{owner}/{repo}"),
             Self::BareOwner(owner) => write!(f, "{owner}"),
+            Self::LocalPath(path) => write!(f, "{}", path.display()),
         }
     }
 }
@@ -244,13 +336,22 @@ pub(crate) fn validate_source_url(url: &str) -> std::result::Result<String, Stri
     }
 }
 
-/// Custom deserializer that validates and expands source URLs.
-fn deserialize_source_url<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+/// Custom deserializer for optional source URLs.
+fn deserialize_optional_source_url<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let raw = String::deserialize(deserializer)?;
-    validate_source_url(&raw).map_err(serde::de::Error::custom)
+    let raw = Option::<String>::deserialize(deserializer)?;
+    raw.map_or_else(
+        || Ok(None),
+        |s| {
+            validate_source_url(&s)
+                .map(Some)
+                .map_err(serde::de::Error::custom)
+        },
+    )
 }
 
 /// Configuration for a shared overlay repository.
@@ -290,10 +391,9 @@ pub(crate) fn global_config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.ccl"))
 }
 
-/// Get the path to the per-repo config file.
-#[cfg(test)]
-pub(crate) fn repo_config_path(repo_path: &Path) -> PathBuf {
-    repo_path.join(".repoverlay").join("config.ccl")
+/// Returns the path to the per-repo config file: `<repo_root>/.repoverlay/config.ccl`
+pub(crate) fn repo_config_path(repo_root: &Path) -> PathBuf {
+    repo_root.join(".repoverlay").join("config.ccl")
 }
 
 /// Load the global configuration.
@@ -314,26 +414,38 @@ pub(crate) fn load_global_config() -> Result<RepoverlayConfig> {
 }
 
 /// Load the per-repo configuration.
-#[cfg(test)]
-pub(crate) fn load_repo_config(repo_path: &Path) -> Result<Option<RepoverlayConfig>> {
-    let config_path = repo_config_path(repo_path);
+pub(crate) fn load_repo_config(repo_root: &Path) -> Result<Option<RepoverlayConfig>> {
+    let config_path = repo_config_path(repo_root);
 
     if !config_path.exists() {
         return Ok(None);
     }
 
     let content = fs::read_to_string(&config_path)
-        .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+        .with_context(|| format!("Failed to read repo config: {}", config_path.display()))?;
 
     let config: RepoverlayConfig = sickle::from_str(&content)
-        .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+        .with_context(|| format!("Failed to parse repo config: {}", config_path.display()))?;
 
     Ok(Some(config))
 }
 
-/// Load the repoverlay configuration.
-pub(crate) fn load_config(_repo_path: Option<&Path>) -> Result<RepoverlayConfig> {
-    load_global_config()
+/// Load the repoverlay configuration, merging global and per-repo configs.
+///
+/// When `repo_path` is provided, repo-local sources are loaded first (higher priority),
+/// followed by global sources. When `None`, only global config is loaded.
+pub(crate) fn load_config(repo_path: Option<&Path>) -> Result<RepoverlayConfig> {
+    let mut config = load_global_config()?;
+
+    if let Some(repo_root) = repo_path
+        && let Some(repo_config) = load_repo_config(repo_root)?
+    {
+        let mut merged_sources = repo_config.sources;
+        merged_sources.extend(config.sources);
+        config.sources = merged_sources;
+    }
+
+    Ok(config)
 }
 
 /// Generate a config file for multi-source configuration.
@@ -354,7 +466,12 @@ pub(crate) fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
         for source in &config.sources {
             output.push_str("  =\n");
             let _ = writeln!(output, "    name = {}", source.name);
-            let _ = writeln!(output, "    url = {}", source.url);
+            if let Some(url) = &source.url {
+                let _ = writeln!(output, "    url = {url}");
+            }
+            if let Some(path) = &source.path {
+                let _ = writeln!(output, "    path = {}", path.display());
+            }
         }
     }
 
@@ -375,6 +492,22 @@ pub(crate) fn save_config(config: &RepoverlayConfig) -> Result<()> {
 
     fs::write(&config_path, content)
         .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
+
+    Ok(())
+}
+
+/// Save per-repo configuration to `<repo_root>/.repoverlay/config.ccl`.
+pub(crate) fn save_repo_config(repo_root: &Path, config: &RepoverlayConfig) -> Result<()> {
+    let config_path = repo_config_path(repo_root);
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+    }
+
+    let content = generate_sources_config_ccl(config);
+    fs::write(&config_path, content)
+        .with_context(|| format!("Failed to write repo config: {}", config_path.display()))?;
 
     Ok(())
 }
@@ -436,7 +569,10 @@ sources =
         assert!(config.is_some());
         let config = config.unwrap();
         assert_eq!(config.sources.len(), 1);
-        assert_eq!(config.sources[0].url, "https://github.com/org/overlays");
+        assert_eq!(
+            config.sources[0].url().unwrap(),
+            "https://github.com/org/overlays"
+        );
     }
 
     #[test]
@@ -547,7 +683,10 @@ sources =
         let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
         assert_eq!(config.sources.len(), 1);
         assert_eq!(config.sources[0].name, "personal");
-        assert_eq!(config.sources[0].url, "https://github.com/me/my-overlays");
+        assert_eq!(
+            config.sources[0].url().unwrap(),
+            "https://github.com/me/my-overlays"
+        );
     }
 
     #[test]
@@ -594,16 +733,19 @@ sources =
     }
 
     #[test]
-    fn test_parse_sources_missing_url() {
-        // CCL list format: each list element is prefixed with `=`
+    fn test_parse_sources_missing_url_and_path() {
+        // A source with neither url nor path should parse but fail validation
         let ccl = r"
 sources =
   =
     name = personal
 ";
-        // Sickle should error when required field is missing
-        let result: Result<RepoverlayConfig, _> = sickle::from_str(ccl);
-        assert!(result.is_err());
+        let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
+        assert_eq!(config.sources.len(), 1);
+        let source = &config.sources[0];
+        assert!(source.url.is_none());
+        assert!(source.path.is_none());
+        assert!(source.validate().is_err());
     }
 
     #[test]
@@ -612,11 +754,13 @@ sources =
             sources: vec![
                 Source {
                     name: "personal".to_string(),
-                    url: "https://github.com/me/my-overlays".to_string(),
+                    url: Some("https://github.com/me/my-overlays".to_string()),
+                    path: None,
                 },
                 Source {
                     name: "team".to_string(),
-                    url: "https://github.com/org/overlays".to_string(),
+                    url: Some("https://github.com/org/overlays".to_string()),
+                    path: None,
                 },
             ],
         };
@@ -626,24 +770,33 @@ sources =
 
         assert_eq!(parsed.sources.len(), 2);
         assert_eq!(parsed.sources[0].name, "personal");
-        assert_eq!(parsed.sources[0].url, "https://github.com/me/my-overlays");
+        assert_eq!(
+            parsed.sources[0].url().unwrap(),
+            "https://github.com/me/my-overlays"
+        );
         assert_eq!(parsed.sources[1].name, "team");
-        assert_eq!(parsed.sources[1].url, "https://github.com/org/overlays");
+        assert_eq!(
+            parsed.sources[1].url().unwrap(),
+            "https://github.com/org/overlays"
+        );
     }
 
     #[test]
     fn test_source_equality() {
         let source1 = Source {
             name: "test".to_string(),
-            url: "https://github.com/test/repo".to_string(),
+            url: Some("https://github.com/test/repo".to_string()),
+            path: None,
         };
         let source2 = Source {
             name: "test".to_string(),
-            url: "https://github.com/test/repo".to_string(),
+            url: Some("https://github.com/test/repo".to_string()),
+            path: None,
         };
         let source3 = Source {
             name: "other".to_string(),
-            url: "https://github.com/test/repo".to_string(),
+            url: Some("https://github.com/test/repo".to_string()),
+            path: None,
         };
 
         assert_eq!(source1, source2);
@@ -729,7 +882,7 @@ sources =
         let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
         assert_eq!(config.sources.len(), 1);
         assert_eq!(
-            config.sources[0].url,
+            config.sources[0].url().unwrap(),
             "https://github.com/tylerbutler/repo-overlays"
         );
     }
@@ -745,7 +898,7 @@ sources =
         let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
         assert_eq!(config.sources.len(), 1);
         assert_eq!(
-            config.sources[0].url,
+            config.sources[0].url().unwrap(),
             "https://github.com/tylerbutler/repo-overlays"
         );
     }
@@ -757,7 +910,8 @@ sources =
         let config = RepoverlayConfig {
             sources: vec![Source {
                 name: "default".to_string(),
-                url: "https://github.com/test/overlays".to_string(),
+                url: Some("https://github.com/test/overlays".to_string()),
+                path: None,
             }],
         };
 
@@ -782,7 +936,8 @@ sources =
         let config = RepoverlayConfig {
             sources: vec![Source {
                 name: "default".to_string(),
-                url: "https://github.com/org/repo".to_string(),
+                url: Some("https://github.com/org/repo".to_string()),
+                path: None,
             }],
         };
 
@@ -797,11 +952,13 @@ sources =
             sources: vec![
                 Source {
                     name: "primary".to_string(),
-                    url: "https://github.com/org/primary".to_string(),
+                    url: Some("https://github.com/org/primary".to_string()),
+                    path: None,
                 },
                 Source {
                     name: "secondary".to_string(),
-                    url: "https://github.com/org/secondary".to_string(),
+                    url: Some("https://github.com/org/secondary".to_string()),
+                    path: None,
                 },
             ],
         };
@@ -816,7 +973,8 @@ sources =
         let config = RepoverlayConfig {
             sources: vec![Source {
                 name: "primary".to_string(),
-                url: "https://github.com/org/primary".to_string(),
+                url: Some("https://github.com/org/primary".to_string()),
+                path: None,
             }],
         };
 
@@ -894,6 +1052,64 @@ sources =
 
         let bare: SourceUrlInput = "user".parse().unwrap();
         assert_eq!(format!("{bare}"), "user");
+
+        let local: SourceUrlInput = "./my-overlays".parse().unwrap();
+        assert_eq!(format!("{local}"), "./my-overlays");
+    }
+
+    #[test]
+    fn test_source_url_input_local_path_relative() {
+        let input: SourceUrlInput = "./my-overlays".parse().unwrap();
+        assert_eq!(
+            input,
+            SourceUrlInput::LocalPath(PathBuf::from("./my-overlays"))
+        );
+        assert!(input.is_local());
+        assert_eq!(input.local_path(), Path::new("./my-overlays"));
+    }
+
+    #[test]
+    fn test_source_url_input_local_path_absolute() {
+        let input: SourceUrlInput = "/absolute/path".parse().unwrap();
+        assert_eq!(
+            input,
+            SourceUrlInput::LocalPath(PathBuf::from("/absolute/path"))
+        );
+        assert!(input.is_local());
+    }
+
+    #[test]
+    fn test_source_url_input_local_path_tilde() {
+        let input: SourceUrlInput = "~/overlays".parse().unwrap();
+        assert_eq!(
+            input,
+            SourceUrlInput::LocalPath(PathBuf::from("~/overlays"))
+        );
+        assert!(input.is_local());
+    }
+
+    #[test]
+    fn test_source_url_input_local_path_parent() {
+        let input: SourceUrlInput = "../parent/overlays".parse().unwrap();
+        assert_eq!(
+            input,
+            SourceUrlInput::LocalPath(PathBuf::from("../parent/overlays"))
+        );
+        assert!(input.is_local());
+    }
+
+    #[test]
+    fn test_source_url_input_owner_repo_not_local() {
+        let input: SourceUrlInput = "owner/repo".parse().unwrap();
+        assert!(!input.is_local());
+        assert!(matches!(input, SourceUrlInput::GitHubShorthand { .. }));
+    }
+
+    #[test]
+    fn test_source_url_input_bare_owner_not_local() {
+        let input: SourceUrlInput = "username".parse().unwrap();
+        assert!(!input.is_local());
+        assert!(matches!(input, SourceUrlInput::BareOwner(_)));
     }
 
     // ==================== default_overlay_repo_name tests ====================
@@ -915,5 +1131,333 @@ sources =
         let input = SourceUrlInput::BareOwner("myuser".to_string());
         let url = input.to_url_with_repo_name("custom-overlays");
         assert_eq!(url, "https://github.com/myuser/custom-overlays");
+    }
+
+    // ==================== Per-repo config merge tests ====================
+
+    #[test]
+    fn test_load_repo_config_no_file_returns_none() {
+        let temp = TempDir::new().unwrap();
+        let config = load_repo_config(temp.path()).unwrap();
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn test_load_repo_config_with_url_source() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let config_content = r"
+sources =
+  =
+    name = local-overlays
+    url = https://github.com/org/local-overlays
+";
+        fs::write(config_dir.join("config.ccl"), config_content).unwrap();
+
+        let config = load_repo_config(temp.path()).unwrap();
+        assert!(config.is_some());
+        let config = config.unwrap();
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].name, "local-overlays");
+        assert_eq!(
+            config.sources[0].url().unwrap(),
+            "https://github.com/org/local-overlays"
+        );
+    }
+
+    #[test]
+    fn test_load_config_merges_repo_before_global() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let config_content = r"
+sources =
+  =
+    name = repo-local
+    url = https://github.com/org/repo-overlays
+";
+        fs::write(config_dir.join("config.ccl"), config_content).unwrap();
+
+        let config = load_config(Some(temp.path())).unwrap();
+        // Repo sources should appear first
+        assert!(!config.sources.is_empty());
+        assert_eq!(config.sources[0].name, "repo-local");
+    }
+
+    #[test]
+    fn test_load_config_none_returns_global_only() {
+        let config = load_config(None).unwrap();
+        // Should work the same as load_global_config
+        let global = load_global_config().unwrap();
+        assert_eq!(config.sources.len(), global.sources.len());
+    }
+
+    #[test]
+    fn test_save_repo_config_roundtrip() {
+        let temp = TempDir::new().unwrap();
+
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "local-source".to_string(),
+                url: Some("https://github.com/org/overlays".to_string()),
+                path: None,
+            }],
+        };
+
+        save_repo_config(temp.path(), &config).unwrap();
+
+        let config_path = repo_config_path(temp.path());
+        assert!(config_path.exists());
+
+        let loaded = load_repo_config(temp.path()).unwrap();
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.sources.len(), 1);
+        assert_eq!(loaded.sources[0].name, "local-source");
+        assert_eq!(
+            loaded.sources[0].url().unwrap(),
+            "https://github.com/org/overlays"
+        );
+    }
+
+    #[test]
+    fn test_save_repo_config_creates_directory() {
+        let temp = TempDir::new().unwrap();
+        let config = RepoverlayConfig::default();
+
+        assert!(!temp.path().join(".repoverlay").exists());
+
+        save_repo_config(temp.path(), &config).unwrap();
+
+        assert!(temp.path().join(".repoverlay").exists());
+        assert!(repo_config_path(temp.path()).exists());
+    }
+
+    // ==================== Source validation tests ====================
+
+    #[test]
+    fn test_source_validate_url_only_ok() {
+        let source = Source {
+            name: "test".to_string(),
+            url: Some("https://github.com/org/repo".to_string()),
+            path: None,
+        };
+        assert!(source.validate().is_ok());
+        assert!(source.is_git());
+        assert!(!source.is_local());
+    }
+
+    #[test]
+    fn test_source_validate_path_only_ok() {
+        let source = Source {
+            name: "test".to_string(),
+            url: None,
+            path: Some(PathBuf::from("./my-overlays")),
+        };
+        assert!(source.validate().is_ok());
+        assert!(source.is_local());
+        assert!(!source.is_git());
+    }
+
+    #[test]
+    fn test_source_validate_both_set_err() {
+        let source = Source {
+            name: "test".to_string(),
+            url: Some("https://github.com/org/repo".to_string()),
+            path: Some(PathBuf::from("./my-overlays")),
+        };
+        let err = source.validate().unwrap_err();
+        assert!(err.to_string().contains("both url and path"));
+    }
+
+    #[test]
+    fn test_source_validate_neither_set_err() {
+        let source = Source {
+            name: "test".to_string(),
+            url: None,
+            path: None,
+        };
+        let err = source.validate().unwrap_err();
+        assert!(err.to_string().contains("neither url nor path"));
+    }
+
+    // ==================== CCL serialization roundtrip for path sources ====================
+
+    #[test]
+    fn test_source_with_path_ccl_roundtrip() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "local-overlays".to_string(),
+                url: None,
+                path: Some(PathBuf::from("my-overlays")),
+            }],
+        };
+
+        let ccl = generate_sources_config_ccl(&config);
+        assert!(ccl.contains("name = local-overlays"));
+        assert!(ccl.contains("path = my-overlays"));
+        assert!(!ccl.contains("url ="));
+
+        let parsed: RepoverlayConfig = sickle::from_str(&ccl).unwrap();
+        assert_eq!(parsed.sources.len(), 1);
+        assert_eq!(parsed.sources[0].name, "local-overlays");
+        assert!(parsed.sources[0].url.is_none());
+        assert_eq!(
+            parsed.sources[0].path.as_deref(),
+            Some(Path::new("my-overlays"))
+        );
+    }
+
+    #[test]
+    fn test_mixed_sources_ccl_roundtrip() {
+        let config = RepoverlayConfig {
+            sources: vec![
+                Source {
+                    name: "local".to_string(),
+                    url: None,
+                    path: Some(PathBuf::from("overlays")),
+                },
+                Source {
+                    name: "remote".to_string(),
+                    url: Some("https://github.com/org/overlays".to_string()),
+                    path: None,
+                },
+            ],
+        };
+
+        let ccl = generate_sources_config_ccl(&config);
+        let parsed: RepoverlayConfig = sickle::from_str(&ccl).unwrap();
+
+        assert_eq!(parsed.sources.len(), 2);
+        assert_eq!(parsed.sources[0].name, "local");
+        assert!(parsed.sources[0].is_local());
+        assert_eq!(
+            parsed.sources[0].path.as_deref(),
+            Some(Path::new("overlays"))
+        );
+        assert_eq!(parsed.sources[1].name, "remote");
+        assert!(parsed.sources[1].is_git());
+        assert_eq!(
+            parsed.sources[1].url().unwrap(),
+            "https://github.com/org/overlays"
+        );
+    }
+
+    // ==================== Config merge ordering tests ====================
+
+    #[test]
+    fn test_config_merge_repo_sources_come_first() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let repo_ccl = r"
+sources =
+  =
+    name = repo-source
+    path = my-overlays
+";
+        fs::write(config_dir.join("config.ccl"), repo_ccl).unwrap();
+
+        let config = load_config(Some(temp.path())).unwrap();
+        // Repo sources should be first in the merged list
+        assert!(!config.sources.is_empty());
+        assert_eq!(config.sources[0].name, "repo-source");
+
+        // If there are global sources, they should come after
+        if config.sources.len() > 1 {
+            assert_ne!(config.sources[1].name, "repo-source");
+        }
+    }
+
+    // ==================== SourceUrlInput local path parsing tests ====================
+
+    #[test]
+    fn test_source_url_input_dot_slash_is_local() {
+        let input: SourceUrlInput = "./foo".parse().unwrap();
+        assert!(input.is_local());
+        assert_eq!(input.local_path(), Path::new("./foo"));
+    }
+
+    #[test]
+    fn test_source_url_input_absolute_path_is_local() {
+        let input: SourceUrlInput = "/abs/path".parse().unwrap();
+        assert!(input.is_local());
+        assert_eq!(input.local_path(), Path::new("/abs/path"));
+    }
+
+    #[test]
+    fn test_source_url_input_tilde_is_local() {
+        let input: SourceUrlInput = "~/foo".parse().unwrap();
+        assert!(input.is_local());
+        assert_eq!(input.local_path(), Path::new("~/foo"));
+    }
+
+    #[test]
+    fn test_source_url_input_dot_dot_is_local() {
+        let input: SourceUrlInput = "../bar".parse().unwrap();
+        assert!(input.is_local());
+        assert_eq!(input.local_path(), Path::new("../bar"));
+    }
+
+    #[test]
+    fn test_source_url_input_owner_repo_still_github_shorthand() {
+        let input: SourceUrlInput = "owner/repo".parse().unwrap();
+        assert!(!input.is_local());
+        assert!(matches!(input, SourceUrlInput::GitHubShorthand { .. }));
+    }
+
+    // ==================== Save/load roundtrip for path-based repo config ====================
+
+    #[test]
+    fn test_save_repo_config_with_path_source_roundtrip() {
+        let temp = TempDir::new().unwrap();
+
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "local-source".to_string(),
+                url: None,
+                path: Some(PathBuf::from("my-overlays")),
+            }],
+        };
+
+        save_repo_config(temp.path(), &config).unwrap();
+
+        let loaded = load_repo_config(temp.path()).unwrap().unwrap();
+        assert_eq!(loaded.sources.len(), 1);
+        assert_eq!(loaded.sources[0].name, "local-source");
+        assert!(loaded.sources[0].is_local());
+        assert_eq!(
+            loaded.sources[0].path.as_deref(),
+            Some(Path::new("my-overlays"))
+        );
+        assert!(loaded.sources[0].url.is_none());
+    }
+
+    #[test]
+    fn test_parse_repo_config_with_path_source() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let config_content = r"
+sources =
+  =
+    name = local-overlays
+    path = my-overlays
+";
+        fs::write(config_dir.join("config.ccl"), config_content).unwrap();
+
+        let config = load_repo_config(temp.path()).unwrap().unwrap();
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.sources[0].name, "local-overlays");
+        assert!(config.sources[0].is_local());
+        assert_eq!(
+            config.sources[0].path.as_deref(),
+            Some(Path::new("my-overlays"))
+        );
     }
 }

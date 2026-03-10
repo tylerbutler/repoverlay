@@ -300,7 +300,10 @@ pub(crate) enum ResolvedSources {
 fn find_matching_source(owner: &str, repo: &str) -> Option<config::Source> {
     let config = config::load_config(None).ok()?;
     config.sources.into_iter().find(|source| {
-        github::parse_remote_url(&source.url)
+        source
+            .url
+            .as_deref()
+            .and_then(github::parse_remote_url)
             .is_some_and(|(src_owner, src_repo)| src_owner == owner && src_repo == repo)
     })
 }
@@ -730,7 +733,7 @@ fn prompt_save_source(owner: &str, repo: &str) -> Result<()> {
     if config
         .sources
         .iter()
-        .any(|s| s.url == url || s.name == source_name)
+        .any(|s| s.url.as_deref() == Some(&url) || s.name == source_name)
     {
         return Ok(());
     }
@@ -747,7 +750,8 @@ fn prompt_save_source(owner: &str, repo: &str) -> Result<()> {
 
     config.sources.push(config::Source {
         name: source_name.clone(),
-        url: url.clone(),
+        url: Some(url.clone()),
+        path: None,
     });
     config::save_config(&config)?;
 
@@ -955,6 +959,7 @@ fn resolve_three_part(
             upstream.as_ref(),
             source_filter,
             update,
+            target_path,
         );
     }
 
@@ -968,6 +973,7 @@ fn resolve_three_part(
 }
 
 /// Resolve an overlay from configured sources with fuzzy suggestions on failure.
+#[allow(clippy::too_many_arguments)]
 fn resolve_from_sources_with_suggestions(
     sources: &[config::Source],
     org: &str,
@@ -976,8 +982,9 @@ fn resolve_from_sources_with_suggestions(
     upstream: Option<&upstream::UpstreamInfo>,
     source_filter: Option<&str>,
     update: bool,
+    repo_root: Option<&Path>,
 ) -> Result<ResolvedSource> {
-    let manager = sources::SourceManager::new(sources.to_vec())?;
+    let manager = sources::SourceManager::new(sources.to_vec(), repo_root)?;
 
     // Ensure all sources are cloned and up-to-date
     manager.ensure_all_cloned()?;
