@@ -15,6 +15,10 @@ just test       # Run all tests
 just lint       # Run clippy lints
 ```
 
+## Version Control
+
+This repository optionally uses **jj (Jujutsu)** colocated with git. Check for a `.jj/` directory to determine which VCS is active; if present use `jj`, otherwise use `git`.
+
 ## Project Context
 
 - **Rust 2024 edition**, minimum version 1.90

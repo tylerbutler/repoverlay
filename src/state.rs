@@ -105,6 +105,7 @@ impl OverlaySource {
     }
 
     /// Create a new overlay repository source.
+    #[allow(dead_code)] // Useful constructor for sources without resolution metadata
     pub(crate) const fn overlay_repo(
         org: String,
         repo: String,

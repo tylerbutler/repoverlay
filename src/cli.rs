@@ -8,7 +8,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::{
@@ -509,10 +509,10 @@ enum Commands {
 enum SourceCommand {
     /// Add a new overlay source
     Add {
-        /// Git URL, GitHub shorthand (owner/repo), or GitHub username
-        url: config::SourceUrlInput,
+        /// Source: Git URL, GitHub shorthand (owner/repo), GitHub username, or local path (./path)
+        source: config::SourceUrlInput,
 
-        /// Name for this source (defaults to repo name)
+        /// Name for this source (defaults to repo/directory name)
         #[arg(long)]
         name: Option<String>,
     },
@@ -911,92 +911,230 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
     let mut config = config::load_config(None)?;
 
     match command {
-        SourceCommand::Add { url, name } => {
-            // URL is already validated and parsed by clap via FromStr
-            let validated_url = url.to_url();
+        SourceCommand::Add { source, name } => {
+            if source.is_local() {
+                // Local path source — save to per-repo config
+                let raw_path = source.local_path().to_path_buf();
+                let repo_root = find_repo_root()?;
 
-            // Extract name from validated URL if not provided
-            let source_name = name.unwrap_or_else(|| {
-                validated_url
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("source")
-                    .trim_end_matches(".git")
-                    .to_string()
-            });
+                // Canonicalize and validate path exists
+                let canonical = raw_path
+                    .canonicalize()
+                    .with_context(|| format!("Path does not exist: {}", raw_path.display()))?;
 
-            // Validate extracted name is not empty
-            if source_name.is_empty() {
-                anyhow::bail!(
-                    "Could not extract source name from URL. Please provide a name with --name"
+                // Validate within repo
+                let repo_root_canonical = repo_root.canonicalize()?;
+                if !canonical.starts_with(&repo_root_canonical) {
+                    bail!(
+                        "Path must be within the repository: {}",
+                        canonical.display()
+                    );
+                }
+
+                // Convert to repo-relative
+                let relative_path = canonical
+                    .strip_prefix(&repo_root_canonical)
+                    .context("Failed to compute repo-relative path")?;
+
+                // Extract name
+                let source_name = name.unwrap_or_else(|| {
+                    relative_path
+                        .file_name()
+                        .map_or_else(|| "local".to_string(), |n| n.to_string_lossy().to_string())
+                });
+
+                if source_name.is_empty() {
+                    bail!(
+                        "Could not extract source name from path. Please provide a name with --name"
+                    );
+                }
+
+                // Check name conflicts in both global and repo configs
+                let global_config = config::load_global_config()?;
+                let repo_config = config::load_repo_config(&repo_root)?;
+
+                if global_config.sources.iter().any(|s| s.name == source_name) {
+                    bail!("Source '{source_name}' already exists");
+                }
+                if let Some(ref rc) = repo_config
+                    && rc.sources.iter().any(|s| s.name == source_name)
+                {
+                    bail!("Source '{source_name}' already exists");
+                }
+
+                let new_source = config::Source {
+                    name: source_name.clone(),
+                    url: None,
+                    path: Some(PathBuf::from(relative_path)),
+                };
+
+                let mut updated_repo_config = repo_config.unwrap_or_default();
+                updated_repo_config.sources.push(new_source);
+                config::save_repo_config(&repo_root, &updated_repo_config)?;
+
+                println!(
+                    "{} local source '{}' at position {}",
+                    "Added".green().bold(),
+                    source_name,
+                    updated_repo_config.sources.len()
                 );
+                println!("       Path: {}", relative_path.display());
+                println!(
+                    "       Config: {}",
+                    config::repo_config_path(&repo_root).display()
+                );
+            } else {
+                // Git URL source — save to global config
+                let validated_url = source.to_url();
+                let source_name = name.unwrap_or_else(|| {
+                    validated_url
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("source")
+                        .trim_end_matches(".git")
+                        .to_string()
+                });
+
+                if source_name.is_empty() {
+                    bail!(
+                        "Could not extract source name from URL. Please provide a name with --name"
+                    );
+                }
+
+                // Check if name already exists
+                if config.sources.iter().any(|s| s.name == source_name) {
+                    bail!("Source '{source_name}' already exists");
+                }
+
+                let new_source = config::Source {
+                    name: source_name.clone(),
+                    url: Some(validated_url.clone()),
+                    path: None,
+                };
+                config.sources.push(new_source);
+                config::save_config(&config)?;
+
+                println!(
+                    "{} source '{}' at position {}",
+                    "Added".green().bold(),
+                    source_name,
+                    config.sources.len()
+                );
+                println!("       {validated_url}");
             }
-
-            // Check if name already exists
-            if config.sources.iter().any(|s| s.name == source_name) {
-                anyhow::bail!("Source '{source_name}' already exists");
-            }
-
-            let new_source = config::Source {
-                name: source_name.clone(),
-                url: validated_url.clone(),
-            };
-
-            // Append to end of sources list
-            config.sources.push(new_source);
-            config::save_config(&config)?;
-
-            println!(
-                "{} source '{}' at position {}",
-                "Added".green().bold(),
-                source_name,
-                config.sources.len()
-            );
-            println!("       URL: {validated_url}");
         }
         SourceCommand::List => {
-            if config.sources.is_empty() {
+            let repo_root = find_repo_root().ok();
+
+            let global_config = config::load_config(None)?;
+            let repo_config = repo_root
+                .as_ref()
+                .map(|r| config::load_repo_config(r))
+                .transpose()?
+                .flatten()
+                .unwrap_or_default();
+
+            let has_sources = !global_config.sources.is_empty() || !repo_config.sources.is_empty();
+
+            if !has_sources {
                 println!("No overlay sources configured.");
-                println!();
-                println!("Add a source with:");
-                println!("  repoverlay source add <url>");
+                println!("Add one with: repoverlay source add <url-or-path>");
                 return Ok(());
             }
 
-            println!("{}", "Configured overlay sources (priority order):".bold());
-            println!();
-
-            for (i, source) in config.sources.iter().enumerate() {
+            // Show repo sources first (higher priority)
+            if !repo_config.sources.is_empty() {
                 println!(
-                    "  {}. {} {}",
-                    i + 1,
-                    source.name.cyan(),
-                    "(highest priority)"
-                        .dimmed()
-                        .to_string()
-                        .chars()
-                        .take(if i == 0 { 18 } else { 0 })
-                        .collect::<String>()
+                    "{} ({})",
+                    "Repository sources".bold(),
+                    repo_root
+                        .as_ref()
+                        .map(|r| config::repo_config_path(r).display().to_string())
+                        .unwrap_or_default()
                 );
-                println!("     URL: {}", source.url);
+                for (i, source) in repo_config.sources.iter().enumerate() {
+                    print!("  {}. {}", i + 1, source.name.bold());
+                    if let Some(path) = &source.path {
+                        println!(" (path: {})", path.display());
+                    } else if let Some(url) = &source.url {
+                        println!(" (url: {url})");
+                    } else {
+                        println!();
+                    }
+                }
             }
+
+            if !global_config.sources.is_empty() {
+                if !repo_config.sources.is_empty() {
+                    println!();
+                }
+                println!(
+                    "{} (~/.config/repoverlay/config.ccl)",
+                    "Global sources".bold()
+                );
+                for (i, source) in global_config.sources.iter().enumerate() {
+                    let position = repo_config.sources.len() + i + 1;
+                    print!("  {}. {}", position, source.name.bold());
+                    if let Some(url) = &source.url {
+                        println!(" (url: {url})");
+                    } else if let Some(path) = &source.path {
+                        println!(" (path: {})", path.display());
+                    } else {
+                        println!();
+                    }
+                }
+            }
+
+            println!("\nSources are checked in priority order (lowest number = highest priority).");
         }
         SourceCommand::Remove { name } => {
-            let original_len = config.sources.len();
-            config.sources.retain(|s| s.name != name);
+            let repo_root = find_repo_root().ok();
 
-            if config.sources.len() == original_len {
-                anyhow::bail!("Source '{name}' not found");
+            // Check repo config first
+            if let Some(ref root) = repo_root
+                && let Some(mut repo_config) = config::load_repo_config(root)?
+                && let Some(pos) = repo_config.sources.iter().position(|s| s.name == name)
+            {
+                repo_config.sources.remove(pos);
+                config::save_repo_config(root, &repo_config)?;
+                println!(
+                    "{} source '{}' from repository config",
+                    "Removed".red().bold(),
+                    name
+                );
+                return Ok(());
             }
 
-            config::save_config(&config)?;
-
-            println!("{} source '{}'", "Removed".red().bold(), name);
+            // Fall back to global config
+            if let Some(pos) = config.sources.iter().position(|s| s.name == name) {
+                config.sources.remove(pos);
+                config::save_config(&config)?;
+                println!(
+                    "{} source '{}' from global config",
+                    "Removed".red().bold(),
+                    name
+                );
+            } else {
+                bail!("Source '{name}' not found in any config");
+            }
         }
     }
 
     Ok(())
+}
+
+/// Find the root of the current git repository.
+fn find_repo_root() -> Result<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .context("Failed to find git repository root")?;
+    if !output.status.success() {
+        bail!("Not inside a git repository");
+    }
+    let root = String::from_utf8(output.stdout)?.trim().to_string();
+    Ok(PathBuf::from(root))
 }
 
 /// Handle remove command with interactive selection support.
@@ -1283,8 +1421,8 @@ fn browse_overlays(
     show_all: bool,
 ) -> Result<()> {
     use crate::config::load_config;
-    use crate::overlay_repo::OverlayRepoManager;
-    use crate::state::OverlaySource;
+    use crate::sources::SourceManager;
+    use crate::state::{OverlaySource, ResolvedVia};
 
     if let Some(source_str) = source {
         return browse_ephemeral_source(
@@ -1298,37 +1436,72 @@ fn browse_overlays(
         );
     }
 
-    let config = load_config(None)?;
-    let overlay_config = config.get_default_overlay_repo_config()?;
+    let target_path = target.as_deref().unwrap_or_else(|| Path::new("."));
+    let target_canonical = fs::canonicalize(target_path)?;
 
-    let manager = OverlayRepoManager::new(overlay_config)?;
-    manager.ensure_cloned()?;
+    // Load merged config (repo-local + global sources)
+    let config = load_config(Some(&target_canonical))?;
 
-    if update {
-        println!("{} overlay repository...", "Updating".blue().bold());
-        manager.pull()?;
+    if config.sources.is_empty() {
+        bail!("No overlay sources configured. Add one with: repoverlay source add <url-or-path>");
     }
 
-    let overlays = if let Some(filter) = target_filter {
+    // Use SourceManager for multi-source browsing (handles both git and local)
+    let manager = SourceManager::new(config.sources, Some(&target_canonical))?;
+    manager.ensure_all_cloned()?;
+
+    if update {
+        println!("{} overlay sources...", "Updating".blue().bold());
+        manager.pull_all()?;
+    }
+
+    // Get all overlays with their source info
+    let all_with_sources = manager.list_all_overlays()?;
+
+    // Build a lookup map: overlay key -> Source
+    let source_map: std::collections::HashMap<String, config::Source> = all_with_sources
+        .iter()
+        .map(|(src, overlay)| (overlay.to_string(), src.clone()))
+        .collect();
+
+    // Extract just the overlays for browse_and_apply
+    let overlays: Vec<_> = if let Some(filter) = target_filter {
         let parts: Vec<&str> = filter.split('/').collect();
         if parts.len() != 2 {
             bail!("Invalid target filter format. Use: org/repo");
         }
-        manager.list_overlays_for_repo(parts[0], parts[1])?
+        let (filter_org, filter_repo) = (parts[0], parts[1]);
+        all_with_sources
+            .into_iter()
+            .filter(|(_, o)| {
+                o.org.eq_ignore_ascii_case(filter_org) && o.repo.eq_ignore_ascii_case(filter_repo)
+            })
+            .map(|(_, o)| o)
+            .collect()
     } else {
-        manager.list_overlays()?
+        all_with_sources.into_iter().map(|(_, o)| o).collect()
     };
 
-    let commit = manager.get_current_commit()?;
     let build_source_info = |o: &crate::overlay_repo::AvailableOverlay| {
-        let path = manager.get_overlay_path(&o.org, &o.repo, &o.name)?;
+        let overlay_key = o.to_string();
+        let source = source_map.get(&overlay_key).ok_or_else(|| {
+            anyhow::anyhow!("Could not determine source for overlay: {overlay_key}")
+        })?;
+        let base_path = manager
+            .get_source_base_path(&source.name)
+            .ok_or_else(|| anyhow::anyhow!("Source base path not found: {}", source.name))?;
+        let overlay_path = base_path.join(&o.org).join(&o.repo).join(&o.name);
+        let commit = manager.get_source_commit(&source.name)?;
+
         Ok(ResolvedSource {
-            path,
-            source_info: OverlaySource::overlay_repo(
+            path: overlay_path,
+            source_info: OverlaySource::overlay_repo_full(
                 o.org.clone(),
                 o.repo.clone(),
                 o.name.clone(),
-                commit.clone(),
+                commit,
+                ResolvedVia::Direct,
+                source.name.clone(),
             ),
         })
     };
@@ -1364,6 +1537,21 @@ fn browse_ephemeral_source(
 
     let reference = SourceReference::parse(source_str);
 
+    // Handle local paths directly
+    if let SourceReference::LocalPath { path, .. } = &reference {
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("Path does not exist: {}", path.display()))?;
+        return browse_local_source(
+            &canonical,
+            target_filter,
+            target,
+            no_interactive,
+            dry_run,
+            show_all,
+        );
+    }
+
     let (owner, repo) = match reference {
         SourceReference::OnePart { username } => {
             let default_repo = config::default_overlay_repo_name();
@@ -1374,12 +1562,13 @@ fn browse_ephemeral_source(
             let github_source = GitHubSource::parse(&url)?;
             (github_source.owner, github_source.repo)
         }
-        SourceReference::LocalPath { .. } | SourceReference::ThreePart { .. } => {
+        SourceReference::ThreePart { .. } => {
             bail!(
                 "Invalid source for browse: '{source_str}'\n\n\
-                 Use a GitHub username, owner/repo, or GitHub URL."
+                 Use a GitHub username, owner/repo, GitHub URL, or local path."
             );
         }
+        SourceReference::LocalPath { .. } => unreachable!(),
     };
 
     let github_url = format!("https://github.com/{owner}/{repo}");
@@ -1414,6 +1603,69 @@ fn browse_ephemeral_source(
                 commit.clone(),
                 Some(o.to_string()),
             ),
+        })
+    };
+
+    browse_and_apply(
+        overlays,
+        target_filter,
+        target,
+        no_interactive,
+        dry_run,
+        show_all,
+        build_source_info,
+    )
+}
+
+/// Browse overlays from an ephemeral local directory source.
+///
+/// Scans the local directory for overlays using the org/repo/name structure
+/// and presents them for selection and apply.
+#[allow(clippy::fn_params_excessive_bools)]
+fn browse_local_source(
+    local_path: &Path,
+    target_filter: Option<&str>,
+    target: Option<PathBuf>,
+    no_interactive: bool,
+    dry_run: bool,
+    show_all: bool,
+) -> Result<()> {
+    use crate::sources::list_overlays_in_dir;
+    use crate::state::OverlaySource;
+
+    println!(
+        "{} local source: {}",
+        "Scanning".blue().bold(),
+        local_path.display()
+    );
+
+    let all_overlays = list_overlays_in_dir(local_path)?;
+
+    let overlays = if let Some(filter) = target_filter {
+        let parts: Vec<&str> = filter.split('/').collect();
+        if parts.len() != 2 {
+            bail!("Invalid target filter format. Use: org/repo");
+        }
+        let (filter_org, filter_repo) = (parts[0], parts[1]);
+        all_overlays
+            .into_iter()
+            .filter(|o| {
+                o.org.eq_ignore_ascii_case(filter_org) && o.repo.eq_ignore_ascii_case(filter_repo)
+            })
+            .collect()
+    } else {
+        all_overlays
+    };
+
+    let local_base = local_path.to_path_buf();
+    let build_source_info = move |o: &crate::overlay_repo::AvailableOverlay| {
+        let overlay_path = local_base.join(&o.org).join(&o.repo).join(&o.name);
+        if !overlay_path.exists() {
+            bail!("Overlay directory not found: {}", overlay_path.display());
+        }
+        Ok(ResolvedSource {
+            path: overlay_path,
+            source_info: OverlaySource::local(local_base.clone()),
         })
     };
 
@@ -6585,7 +6837,8 @@ directories =
                 return;
             };
 
-            let Some((owner, gh_repo)) = github::parse_remote_url(&source.url) else {
+            let Some((owner, gh_repo)) = source.url.as_deref().and_then(github::parse_remote_url)
+            else {
                 return;
             };
 
