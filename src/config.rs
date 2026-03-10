@@ -509,6 +509,10 @@ pub(crate) fn save_repo_config(repo_root: &Path, config: &RepoverlayConfig) -> R
     fs::write(&config_path, content)
         .with_context(|| format!("Failed to write repo config: {}", config_path.display()))?;
 
+    // Ensure .repoverlay is in .git/info/exclude so it doesn't show as untracked.
+    // Best-effort: skip if not in a git repo (e.g., during tests).
+    let _ = crate::ensure_repoverlay_excluded(repo_root);
+
     Ok(())
 }
 

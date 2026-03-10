@@ -3237,6 +3237,39 @@ pub(crate) fn update_git_exclude(
     Ok(())
 }
 
+/// Ensure `.repoverlay` is in `.git/info/exclude`.
+///
+/// Called whenever repoverlay writes to the `.repoverlay/` directory,
+/// so the state directory doesn't show up as untracked even before
+/// any overlay is applied.
+pub(crate) fn ensure_repoverlay_excluded(repo_root: &Path) -> Result<()> {
+    let git_dir = resolve_git_dir(repo_root)?;
+    let exclude_path = git_dir.join("info").join("exclude");
+
+    if let Some(parent) = exclude_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
+
+    if content.contains(&exclude_marker_start(MANAGED_SECTION_NAME)) {
+        return Ok(());
+    }
+
+    if !content.ends_with('\n') && !content.is_empty() {
+        content.push('\n');
+    }
+    content.push_str(&exclude_marker_start(MANAGED_SECTION_NAME));
+    content.push('\n');
+    content.push_str(STATE_DIR);
+    content.push('\n');
+    content.push_str(&exclude_marker_end(MANAGED_SECTION_NAME));
+    content.push('\n');
+
+    fs::write(&exclude_path, content)?;
+    Ok(())
+}
+
 /// Remove an overlay section from git exclude content.
 pub(crate) fn remove_overlay_section(content: &str, name: &str) -> String {
     let start_marker = exclude_marker_start(name);
