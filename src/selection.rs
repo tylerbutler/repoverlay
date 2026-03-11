@@ -223,6 +223,8 @@ struct SelectionState {
     visible_categories: HashSet<FileCategory>,
     /// Expanded directory paths (directories whose children are visible).
     expanded_dirs: HashSet<PathBuf>,
+    /// Lookup from path → `parent_dir` for O(1) ancestor traversal.
+    parent_map: HashMap<PathBuf, Option<PathBuf>>,
     /// Current search query.
     search_query: String,
     /// Current input mode.
@@ -261,11 +263,18 @@ impl SelectionState {
             .map(|f| f.path.clone())
             .collect();
 
+        // Build parent lookup map for O(1) ancestor traversal
+        let parent_map: HashMap<PathBuf, Option<PathBuf>> = files
+            .iter()
+            .map(|f| (f.path.clone(), f.parent_dir.clone()))
+            .collect();
+
         Self {
             all_files: files,
             selections,
             visible_categories: visible,
             expanded_dirs,
+            parent_map,
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
@@ -294,7 +303,7 @@ impl SelectionState {
 
     /// Check that all ancestor directories of a file are expanded.
     ///
-    /// Walks up the parent chain: for each ancestor, checks it's in `expanded_dirs`.
+    /// Walks up the parent chain using the pre-built `parent_map` for O(1) lookups.
     /// If any ancestor is collapsed, the file should be hidden.
     fn all_ancestors_expanded(&self, file: &DetectedFile) -> bool {
         let mut current = file.parent_dir.as_deref();
@@ -302,12 +311,8 @@ impl SelectionState {
             if !self.expanded_dirs.contains(parent) {
                 return false;
             }
-            // Walk up: find the parent entry and check its parent_dir
-            current = self
-                .all_files
-                .iter()
-                .find(|f| f.path.as_path() == parent)
-                .and_then(|f| f.parent_dir.as_deref());
+            // Walk up using the pre-built parent map (O(1) per level)
+            current = self.parent_map.get(parent).and_then(|opt| opt.as_deref());
         }
         true
     }

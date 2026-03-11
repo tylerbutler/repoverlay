@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod detection;
 mod fuzzy;
+pub(crate) mod git;
 mod github;
 mod json_merge;
 mod overlay_name;
@@ -23,6 +24,7 @@ mod upstream;
 ///
 /// This is the only public entry point. All other functionality is internal.
 pub fn run() -> anyhow::Result<()> {
+    git::install_ctrlc_handler();
     cli::run()
 }
 
