@@ -453,22 +453,6 @@ impl OverlayRepoManager {
 
         Ok(())
     }
-
-    /// Push to remote.
-    pub(crate) fn push(&self) -> Result<()> {
-        let output = Command::new("git")
-            .args(["push"])
-            .current_dir(&self.repo_path)
-            .output()
-            .context("Failed to execute git push")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to push: {}", stderr.trim());
-        }
-
-        Ok(())
-    }
 }
 
 /// Get the default path for the overlay repository clone.
