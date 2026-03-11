@@ -136,7 +136,7 @@ pub(crate) fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile
 
 /// Directories inside AI config dirs that contain transient tool state
 /// and should be skipped during discovery to avoid scanning thousands of files.
-const SKIP_CHILD_DIRS: &[&str] = &[
+pub(crate) const SKIP_CHILD_DIRS: &[&str] = &[
     "worktrees", // Claude Code worktree state
     "todos",     // Claude Code todo state
 ];
