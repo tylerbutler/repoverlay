@@ -3083,4 +3083,154 @@ mod tests {
         };
         assert_eq!(config.prompt, "Choose overlays");
     }
+
+    /// Convert a ratatui Buffer to a trimmed string for snapshot testing.
+    fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
+        let mut s = String::new();
+        for y in 0..buffer.area.height {
+            let mut line = String::new();
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                line.push_str(cell.symbol());
+            }
+            s.push_str(line.trim_end());
+            s.push('\n');
+        }
+        while s.ends_with("\n\n") {
+            s.pop();
+        }
+        s
+    }
+
+    #[test]
+    fn snapshot_selection_ui_initial() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let state = SelectionState::new(files, HashSet::new());
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_with_selections() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        // Simulate selecting preselected files
+        for f in &state.all_files.clone() {
+            if f.preselected {
+                state.selections.insert(f.path.clone());
+            }
+        }
+        // Move cursor to third item
+        state.cursor = 2;
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_category_hidden() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.toggle_category(FileCategory::Gitignored);
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_initial() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![
+            SelectableItem {
+                id: "overlay-a".into(),
+                label: "my-overlay".into(),
+                description: Some("~/overlays/my-overlay".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-b".into(),
+                label: "work-config".into(),
+                description: Some("~/overlays/work".into()),
+                preselected: true,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-c".into(),
+                label: "shared".into(),
+                description: None,
+                preselected: false,
+                disabled: true,
+            },
+        ];
+        let state = FlatSelectionState::new(items);
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays to apply:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
 }

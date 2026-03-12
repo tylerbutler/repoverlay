@@ -1,0 +1,28 @@
+---
+source: src/selection.rs
+expression: buffer_to_string(&buffer)
+---
+Select files to include in overlay
+
+Categories: [1] AI (2/2) [2] DIR (0/0) [3] GI (0/2) [4] UT (0/1)
+Search: (press / to search)
+Selected: 2 AI
+
+  [✓] CLAUDE.md
+  [✓] .claude/settings.json
+  [ ] scratch.txt
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ move ←→ expand Space toggle Enter confirm a all 1-4 filter / search Esc cance
