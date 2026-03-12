@@ -31,9 +31,6 @@ pub(crate) trait ToSelectableItem {
     fn to_selectable_item(&self, target: &Path) -> SelectableItem;
 }
 
-/// Maximum number of items visible in the scrollable viewport.
-const MAX_VISIBLE_ITEMS: usize = 15;
-
 /// Format a number in a human-readable way (e.g., 1.2K, 3.5M).
 #[allow(clippy::cast_precision_loss)]
 pub(crate) fn humanize_count(n: usize) -> String {
@@ -230,8 +227,6 @@ struct SelectionState {
     mode: Mode,
     /// Current cursor position in the visible file list.
     cursor: usize,
-    /// Scroll offset for the file list.
-    scroll_offset: usize,
 }
 
 impl SelectionState {
@@ -277,7 +272,6 @@ impl SelectionState {
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
-            scroll_offset: 0,
         }
     }
 
@@ -436,10 +430,9 @@ impl SelectionState {
     }
 
     /// Move cursor up.
-    fn cursor_up(&mut self) {
+    const fn cursor_up(&mut self) {
         if self.cursor > 0 {
             self.cursor -= 1;
-            self.adjust_scroll();
         }
     }
 
@@ -448,7 +441,6 @@ impl SelectionState {
         let visible_count = self.visible_files().len();
         if self.cursor + 1 < visible_count {
             self.cursor += 1;
-            self.adjust_scroll();
         }
     }
 
@@ -459,18 +451,6 @@ impl SelectionState {
             self.cursor = 0;
         } else if self.cursor >= visible_count {
             self.cursor = visible_count - 1;
-        }
-        self.adjust_scroll();
-    }
-
-    /// Adjust scroll offset to keep cursor visible.
-    #[allow(clippy::missing_const_for_fn)]
-    fn adjust_scroll(&mut self) {
-        let max_visible = MAX_VISIBLE_ITEMS;
-        if self.cursor < self.scroll_offset {
-            self.scroll_offset = self.cursor;
-        } else if self.cursor >= self.scroll_offset + max_visible {
-            self.scroll_offset = self.cursor - max_visible + 1;
         }
     }
 
@@ -576,7 +556,6 @@ impl SelectionState {
                 let visible_after = self.visible_files();
                 if let Some(pos) = visible_after.iter().position(|f| f.path == parent) {
                     self.cursor = pos;
-                    self.adjust_scroll();
                 }
             }
         }
@@ -1778,71 +1757,6 @@ mod tests {
 
         // Now all visible (AI configs only) are selected
         assert!(state.all_visible_selected());
-    }
-
-    #[test]
-    fn test_scroll_offset_adjustment_down() {
-        // Create more files to trigger scrolling
-        let mut files = Vec::new();
-        for i in 0..20 {
-            files.push(DetectedFile {
-                path: PathBuf::from(format!("file{i}.txt")),
-                category: FileCategory::Untracked,
-                preselected: false,
-                depth: 0,
-                parent_dir: None,
-            });
-        }
-
-        let mut state = SelectionState::new(files, HashSet::new());
-
-        // Initially at top
-        assert_eq!(state.cursor, 0);
-        assert_eq!(state.scroll_offset, 0);
-
-        // Move down past visible area (MAX_VISIBLE_ITEMS = 15)
-        for _ in 0..16 {
-            state.cursor_down();
-        }
-
-        // Cursor should be at 16, scroll_offset should have adjusted
-        assert_eq!(state.cursor, 16);
-        assert!(state.scroll_offset > 0);
-    }
-
-    #[test]
-    fn test_scroll_offset_adjustment_up() {
-        // Create more files to trigger scrolling
-        let mut files = Vec::new();
-        for i in 0..20 {
-            files.push(DetectedFile {
-                path: PathBuf::from(format!("file{i}.txt")),
-                category: FileCategory::Untracked,
-                preselected: false,
-                depth: 0,
-                parent_dir: None,
-            });
-        }
-
-        let mut state = SelectionState::new(files, HashSet::new());
-
-        // Move to bottom
-        for _ in 0..19 {
-            state.cursor_down();
-        }
-
-        // Scroll offset should be > 0
-        let scroll_after_down = state.scroll_offset;
-        assert!(scroll_after_down > 0);
-
-        // Move back up
-        for _ in 0..19 {
-            state.cursor_up();
-        }
-
-        // Should be back at top
-        assert_eq!(state.cursor, 0);
-        assert_eq!(state.scroll_offset, 0);
     }
 
     #[test]
