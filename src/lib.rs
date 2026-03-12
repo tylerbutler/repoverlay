@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod detection;
 mod fuzzy;
+pub(crate) mod git;
 mod github;
 mod json_merge;
 mod overlay_name;
@@ -23,6 +24,7 @@ mod upstream;
 ///
 /// This is the only public entry point. All other functionality is internal.
 pub fn run() -> anyhow::Result<()> {
+    git::install_ctrlc_handler();
     cli::run()
 }
 
@@ -3060,6 +3062,20 @@ pub(crate) fn copy_files_to_overlay(
         if src_path.is_dir() {
             for entry in walkdir::WalkDir::new(&src_path)
                 .into_iter()
+                .filter_entry(|e| {
+                    // Skip transient tool state directories that can contain
+                    // thousands of files (matching detection.rs skip logic).
+                    if e.file_type().is_dir() && e.depth() > 0 {
+                        let name = e.file_name().to_string_lossy();
+                        if detection::SKIP_CHILD_DIRS
+                            .iter()
+                            .any(|skip| name.as_ref() == *skip)
+                        {
+                            return false;
+                        }
+                    }
+                    true
+                })
                 .filter_map(std::result::Result::ok)
                 .filter(|e| e.file_type().is_file())
             {
