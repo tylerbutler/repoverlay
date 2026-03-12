@@ -29,7 +29,10 @@ pub(crate) struct DetectedFile {
     pub(crate) category: FileCategory,
     /// Whether this file should be pre-selected by default
     pub(crate) preselected: bool,
-    /// Depth in the tree (0 = top-level, 1+ = children of a directory)
+    /// Depth in the tree (0 = top-level, 1+ = children of a directory).
+    /// Currently used only for populating tree structure; the tree widget
+    /// handles indentation natively.
+    #[allow(dead_code)]
     pub(crate) depth: u8,
     /// Parent directory path (None for top-level entries)
     pub(crate) parent_dir: Option<PathBuf>,

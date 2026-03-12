@@ -7,15 +7,21 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+// crossterm imports kept for the flat selector (to be migrated in Task 6)
 use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
-    style::{Color, Print, ResetColor, SetForegroundColor},
+    cursor, execute,
+    style::{Color as CtColor, Print, ResetColor, SetForegroundColor},
     terminal::{self, ClearType},
 };
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::detection::{DetectedFile, FileCategory};
+use crate::widgets::multi_select_tree::{MultiSelectTree, MultiSelectTreeState, TreeNode};
 
 /// Conversion trait for types that can be represented as a [`SelectableItem`]
 /// in the interactive selection UI.
@@ -203,6 +209,7 @@ enum Mode {
 }
 
 /// Selection state of a directory's children.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DirSelectionState {
     /// No children selected.
@@ -519,6 +526,7 @@ impl SelectionState {
     }
 
     /// Get the selection state of a directory based on all descendants.
+    #[cfg(test)]
     fn dir_selection_state(&self, dir_path: &Path) -> DirSelectionState {
         let descendants = self.descendants_of(dir_path);
         if descendants.is_empty() {
@@ -630,23 +638,6 @@ impl SelectionState {
     }
 }
 
-/// Restore terminal state after raw mode UI.
-///
-/// Shows the cursor, clears the screen, and flushes stdout.
-fn restore_terminal() -> anyhow::Result<()> {
-    let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        cursor::Show,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::All),
-    )?;
-    // Print newline to ensure clean state for subsequent prompts
-    println!();
-    stdout.flush()?;
-    Ok(())
-}
-
 /// Run the interactive file selection UI.
 ///
 /// Returns the selected files, or a cancelled result if the user aborts.
@@ -681,13 +672,8 @@ pub(crate) fn select_files(
     }
 
     let mut state = SelectionState::new(files.to_vec(), config.default_hidden_categories.clone());
-
-    terminal::enable_raw_mode()?;
-    let result = run_selection_loop(&mut state, &config.prompt);
-    terminal::disable_raw_mode()?;
-    restore_terminal()?;
-
-    result
+    // ratatui::init() handles raw mode and alternate screen
+    run_selection_loop(&mut state, &config.prompt)
 }
 
 /// Run the interactive flat list selection UI.
@@ -725,7 +711,16 @@ pub(crate) fn select_flat(
     terminal::enable_raw_mode()?;
     let result = run_flat_loop(&mut state, &config.prompt);
     terminal::disable_raw_mode()?;
-    restore_terminal()?;
+    // Restore terminal state
+    let mut stdout = io::stdout();
+    execute!(
+        stdout,
+        cursor::Show,
+        cursor::MoveTo(0, 0),
+        terminal::Clear(ClearType::All),
+    )?;
+    println!();
+    stdout.flush()?;
 
     result
 }
@@ -849,7 +844,7 @@ fn render_flat_ui(
     // Prompt
     execute!(
         stdout,
-        SetForegroundColor(Color::Cyan),
+        SetForegroundColor(CtColor::Cyan),
         Print(prompt),
         ResetColor,
         Print("\r\n\r\n")
@@ -882,7 +877,7 @@ fn render_search_line_flat(stdout: &mut io::Stdout, state: &FlatSelectionState) 
     if state.mode == Mode::Search {
         execute!(
             stdout,
-            SetForegroundColor(Color::Yellow),
+            SetForegroundColor(CtColor::Yellow),
             Print(&state.search_query),
             Print("_"),
             ResetColor
@@ -890,7 +885,7 @@ fn render_search_line_flat(stdout: &mut io::Stdout, state: &FlatSelectionState) 
     } else if state.search_query.is_empty() {
         execute!(
             stdout,
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(CtColor::DarkGrey),
             Print("(press / to search)"),
             ResetColor
         )?;
@@ -898,7 +893,7 @@ fn render_search_line_flat(stdout: &mut io::Stdout, state: &FlatSelectionState) 
         execute!(
             stdout,
             Print(&state.search_query),
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(CtColor::DarkGrey),
             Print(" (Esc to clear)"),
             ResetColor
         )?;
@@ -913,7 +908,7 @@ fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io:
     if visible.is_empty() {
         execute!(
             stdout,
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(CtColor::DarkGrey),
             Print("  No items match the current search\r\n"),
             ResetColor
         )?;
@@ -923,7 +918,7 @@ fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io:
     if state.scroll_offset > 0 {
         execute!(
             stdout,
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(CtColor::DarkGrey),
             Print(format!(
                 "  ↑ {} more above\r\n",
                 humanize_count(state.scroll_offset)
@@ -943,7 +938,7 @@ fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io:
 
         // Cursor
         if is_cursor {
-            execute!(stdout, SetForegroundColor(Color::Cyan), Print("> "))?;
+            execute!(stdout, SetForegroundColor(CtColor::Cyan), Print("> "))?;
         } else {
             execute!(stdout, Print("  "))?;
         }
@@ -952,14 +947,14 @@ fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io:
         if item.disabled {
             execute!(
                 stdout,
-                SetForegroundColor(Color::DarkGrey),
+                SetForegroundColor(CtColor::DarkGrey),
                 Print("[✓] "),
                 ResetColor
             )?;
         } else if is_selected {
             execute!(
                 stdout,
-                SetForegroundColor(Color::Green),
+                SetForegroundColor(CtColor::Green),
                 Print("[✓] "),
                 ResetColor
             )?;
@@ -971,11 +966,15 @@ fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io:
         if item.disabled {
             execute!(
                 stdout,
-                SetForegroundColor(Color::DarkGrey),
+                SetForegroundColor(CtColor::DarkGrey),
                 Print(&item.label),
             )?;
         } else if is_cursor {
-            execute!(stdout, SetForegroundColor(Color::Cyan), Print(&item.label),)?;
+            execute!(
+                stdout,
+                SetForegroundColor(CtColor::Cyan),
+                Print(&item.label),
+            )?;
         } else {
             execute!(stdout, Print(&item.label))?;
         }
@@ -984,7 +983,7 @@ fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io:
         if let Some(desc) = &item.description {
             execute!(
                 stdout,
-                SetForegroundColor(Color::DarkGrey),
+                SetForegroundColor(CtColor::DarkGrey),
                 Print(format!("  ({desc})")),
             )?;
         }
@@ -998,7 +997,7 @@ fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io:
     if remaining > 0 {
         execute!(
             stdout,
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(CtColor::DarkGrey),
             Print(format!("  ↓ {} more below\r\n", humanize_count(remaining))),
             ResetColor
         )?;
@@ -1012,14 +1011,14 @@ fn render_flat_help(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::
     if state.mode == Mode::Search {
         execute!(
             stdout,
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(CtColor::DarkGrey),
             Print("Type to search | "),
             ResetColor
         )?;
         render_key_hint(stdout, "Enter/Esc", "done")?;
         execute!(
             stdout,
-            SetForegroundColor(Color::DarkGrey),
+            SetForegroundColor(CtColor::DarkGrey),
             Print("| "),
             ResetColor
         )?;
@@ -1076,25 +1075,29 @@ pub(crate) fn is_interactive() -> bool {
 
 /// Main selection loop.
 fn run_selection_loop(state: &mut SelectionState, prompt: &str) -> anyhow::Result<SelectionResult> {
-    let mut stdout = io::stdout();
+    let mut terminal = ratatui::init();
+    let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
 
-    loop {
-        // Render the UI
-        render_ui(&mut stdout, state, prompt)?;
+    let result = loop {
+        // Sync tree state from selection state
+        sync_tree_state(state, &mut tree_state);
 
-        // Wait for input
+        terminal.draw(|frame| {
+            render_selection_frame(frame, state, &mut tree_state, prompt);
+        })?;
+
         if let Event::Key(key) = event::read()? {
             match state.mode {
                 Mode::Selection => match handle_selection_key(state, key) {
                     SelectionAction::Continue => {}
                     SelectionAction::Confirm => {
-                        return Ok(SelectionResult {
+                        break Ok(SelectionResult {
                             selected_files: state.resolve_selected_paths(),
                             cancelled: false,
                         });
                     }
                     SelectionAction::Cancel => {
-                        return Ok(SelectionResult {
+                        break Ok(SelectionResult {
                             selected_files: Vec::new(),
                             cancelled: true,
                         });
@@ -1110,7 +1113,10 @@ fn run_selection_loop(state: &mut SelectionState, prompt: &str) -> anyhow::Resul
                 }
             }
         }
-    }
+    };
+
+    ratatui::restore();
+    result
 }
 
 /// Actions that can result from key handling.
@@ -1202,205 +1208,224 @@ fn handle_search_key(state: &mut SelectionState, key: KeyEvent) -> bool {
     }
 }
 
-/// Render the selection UI.
-fn render_ui(stdout: &mut io::Stdout, state: &SelectionState, prompt: &str) -> io::Result<()> {
-    // Move to top and clear
-    execute!(
-        stdout,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::FromCursorDown)
-    )?;
+/// Sync `MultiSelectTreeState` from `SelectionState`.
+///
+/// Copies the checked set and the cursor highlight into the tree state
+/// so the widget can render correctly.
+fn sync_tree_state(state: &SelectionState, tree_state: &mut MultiSelectTreeState<PathBuf>) {
+    // Sync selections
+    tree_state.clear_selection();
+    for path in &state.selections {
+        tree_state.select(path.clone());
+    }
+
+    // Sync expanded dirs
+    for file in &state.all_files {
+        if file.category == FileCategory::AiConfigDirectory {
+            let tree_path = vec![file.path.clone()];
+            if state.expanded_dirs.contains(&file.path) {
+                tree_state.tree.open(tree_path);
+            } else {
+                tree_state.tree.close(&tree_path);
+            }
+        }
+    }
+
+    // Sync cursor position: map flat cursor to tree identifier path
+    let visible = state.visible_files();
+    if let Some(file) = visible.get(state.cursor) {
+        let tree_path = file.parent_dir.as_ref().map_or_else(
+            || vec![file.path.clone()],
+            |parent| vec![parent.clone(), file.path.clone()],
+        );
+        tree_state.tree.select(tree_path);
+    }
+}
+
+/// Build `TreeNode` descriptors from the current selection state.
+fn build_tree_nodes<'a>(state: &'a SelectionState) -> Vec<TreeNode<'a, PathBuf>> {
+    let visible = state.visible_files();
+    let mut nodes: Vec<TreeNode<'a, PathBuf>> = Vec::new();
+
+    for file in &visible {
+        // Skip children — they'll be added under their parent
+        if file.parent_dir.is_some() {
+            continue;
+        }
+
+        if file.category == FileCategory::AiConfigDirectory {
+            // Build children for this directory
+            let children: Vec<TreeNode<'a, PathBuf>> = visible
+                .iter()
+                .filter(|f| f.parent_dir.as_deref() == Some(&file.path))
+                .map(|f| {
+                    let name = f.path.file_name().map_or_else(
+                        || f.path.to_string_lossy().to_string(),
+                        |n| n.to_string_lossy().to_string(),
+                    );
+                    TreeNode {
+                        id: f.path.clone(),
+                        text: Line::from(name),
+                        children: vec![],
+                    }
+                })
+                .collect();
+
+            let label = format!("{}/", file.path.display());
+            nodes.push(TreeNode {
+                id: file.path.clone(),
+                text: Line::from(label),
+                children,
+            });
+        } else {
+            let label = file.path.to_string_lossy().to_string();
+            nodes.push(TreeNode {
+                id: file.path.clone(),
+                text: Line::from(label),
+                children: vec![],
+            });
+        }
+    }
+
+    nodes
+}
+
+/// Render the full selection frame using ratatui.
+fn render_selection_frame(
+    frame: &mut Frame,
+    state: &SelectionState,
+    tree_state: &mut MultiSelectTreeState<PathBuf>,
+    prompt: &str,
+) {
+    let area = frame.area();
+
+    let chunks = Layout::vertical([
+        Constraint::Length(2), // prompt + blank line
+        Constraint::Length(1), // category toggles
+        Constraint::Length(1), // search
+        Constraint::Length(1), // selection summary
+        Constraint::Length(1), // separator
+        Constraint::Min(3),    // file tree
+        Constraint::Length(2), // help line
+    ])
+    .split(area);
 
     // Prompt
-    execute!(
-        stdout,
-        SetForegroundColor(Color::Cyan),
-        Print(prompt),
-        ResetColor,
-        Print("\r\n\r\n")
-    )?;
+    let prompt_line = Line::from(Span::styled(prompt, Style::default().fg(Color::Cyan)));
+    frame.render_widget(Paragraph::new(prompt_line), chunks[0]);
 
-    // Category toggles with counts
-    render_category_line(stdout, state)?;
+    // Category toggles
+    render_category_line_ratatui(frame, chunks[1], state);
 
-    // Search line
-    render_search_line(stdout, state)?;
+    // Search
+    render_search_line_ratatui(frame, chunks[2], state);
 
     // Selection summary
-    render_selection_summary(stdout, state)?;
+    render_summary_ratatui(frame, chunks[3], state);
 
-    // Separator
-    execute!(stdout, Print("\r\n"))?;
+    // File tree using MultiSelectTree widget
+    let nodes = build_tree_nodes(state);
+    let descendants_state = state;
+    let widget = MultiSelectTree::new(&nodes).descendants_fn(Box::new(|id: &PathBuf| {
+        descendants_state
+            .descendants_of(id)
+            .into_iter()
+            .collect::<Vec<_>>()
+    }));
+    frame.render_stateful_widget(widget, chunks[5], tree_state);
 
-    // File list
-    render_file_list(stdout, state)?;
-
-    // Help line
-    render_help_line(stdout, state)?;
-
-    stdout.flush()
+    // Help
+    render_help_ratatui(frame, chunks[6], state);
 }
 
-/// Render the category toggle line.
-fn render_category_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
+/// Render category toggle line.
+fn render_category_line_ratatui(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    state: &SelectionState,
+) {
     let counts = state.selection_counts();
 
-    execute!(stdout, Print("Categories: "))?;
+    let categories = [
+        (FileCategory::AiConfig, "1", "AI", Color::Green),
+        (FileCategory::AiConfigDirectory, "2", "DIR", Color::Magenta),
+        (FileCategory::Gitignored, "3", "GI", Color::Yellow),
+        (FileCategory::Untracked, "4", "UT", Color::Blue),
+    ];
 
-    // AI Config
-    let ai_visible = state.visible_categories.contains(&FileCategory::AiConfig);
-    let (ai_sel, ai_total) = counts.get(&FileCategory::AiConfig).unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "1",
-        "AI",
-        *ai_sel,
-        *ai_total,
-        ai_visible,
-        Color::Green,
-    )?;
+    let mut spans = vec![Span::raw("Categories: ")];
+    for (i, (cat, key, label, color)) in categories.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let visible = state.visible_categories.contains(cat);
+        let (sel, total) = counts.get(cat).unwrap_or(&(0, 0));
+        let count_str = format!("({}/{})", humanize_count(*sel), humanize_count(*total));
 
-    execute!(stdout, Print(" "))?;
-
-    // AI Config Directories
-    let aid_visible = state
-        .visible_categories
-        .contains(&FileCategory::AiConfigDirectory);
-    let (aid_sel, aid_total) = counts
-        .get(&FileCategory::AiConfigDirectory)
-        .unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "2",
-        "DIR",
-        *aid_sel,
-        *aid_total,
-        aid_visible,
-        Color::Magenta,
-    )?;
-
-    execute!(stdout, Print(" "))?;
-
-    // Gitignored
-    let gi_visible = state.visible_categories.contains(&FileCategory::Gitignored);
-    let (gi_sel, gi_total) = counts.get(&FileCategory::Gitignored).unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "3",
-        "GI",
-        *gi_sel,
-        *gi_total,
-        gi_visible,
-        Color::Yellow,
-    )?;
-
-    execute!(stdout, Print(" "))?;
-
-    // Untracked
-    let ut_visible = state.visible_categories.contains(&FileCategory::Untracked);
-    let (ut_sel, ut_total) = counts.get(&FileCategory::Untracked).unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "4",
-        "UT",
-        *ut_sel,
-        *ut_total,
-        ut_visible,
-        Color::Blue,
-    )?;
-
-    execute!(stdout, Print("\r\n"))
-}
-
-/// Render a single category toggle button.
-fn render_category_toggle(
-    stdout: &mut io::Stdout,
-    key: &str,
-    label: &str,
-    selected: usize,
-    total: usize,
-    visible: bool,
-    color: Color,
-) -> io::Result<()> {
-    let count_str = format!("({}/{})", humanize_count(selected), humanize_count(total));
-    if visible {
-        execute!(
-            stdout,
-            Print("["),
-            SetForegroundColor(color),
-            Print(key),
-            ResetColor,
-            Print("] "),
-            SetForegroundColor(color),
-            Print(label),
-            ResetColor,
-            Print(format!(" {count_str}"))
-        )
-    } else {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!("[{key}] {label} {count_str}")),
-            ResetColor
-        )
+        if visible {
+            spans.push(Span::raw("["));
+            spans.push(Span::styled(*key, Style::default().fg(*color)));
+            spans.push(Span::raw("] "));
+            spans.push(Span::styled(*label, Style::default().fg(*color)));
+            spans.push(Span::raw(format!(" {count_str}")));
+        } else {
+            spans.push(Span::styled(
+                format!("[{key}] {label} {count_str}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
     }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Render the search line.
-fn render_search_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
-    execute!(stdout, Print("Search: "))?;
+/// Render search line.
+fn render_search_line_ratatui(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    state: &SelectionState,
+) {
+    let mut spans = vec![Span::raw("Search: ")];
 
     if state.mode == Mode::Search {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::Yellow),
-            Print(&state.search_query),
-            Print("_"),
-            ResetColor
-        )?;
+        spans.push(Span::styled(
+            format!("{}_", state.search_query),
+            Style::default().fg(Color::Yellow),
+        ));
     } else if state.search_query.is_empty() {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("(press / to search)"),
-            ResetColor
-        )?;
+        spans.push(Span::styled(
+            "(press / to search)",
+            Style::default().fg(Color::DarkGray),
+        ));
     } else {
-        execute!(
-            stdout,
-            Print(&state.search_query),
-            SetForegroundColor(Color::DarkGrey),
-            Print(" (Esc to clear)"),
-            ResetColor
-        )?;
+        spans.push(Span::raw(&state.search_query));
+        spans.push(Span::styled(
+            " (Esc to clear)",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
 
-    execute!(stdout, Print("\r\n"))
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Render the selection summary line.
-fn render_selection_summary(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
+/// Render selection summary.
+fn render_summary_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &SelectionState) {
     let counts = state.selection_counts();
     let total_selected: usize = counts.values().map(|(s, _)| s).sum();
 
-    execute!(stdout, Print("Selected: "))?;
+    let mut spans = vec![Span::raw("Selected: ")];
 
     if total_selected == 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("none"),
-            ResetColor
-        )?;
+        spans.push(Span::styled("none", Style::default().fg(Color::DarkGray)));
     } else {
         let parts: Vec<String> = [
-            (FileCategory::AiConfig, "AI", Color::Green),
-            (FileCategory::AiConfigDirectory, "DIR", Color::Magenta),
-            (FileCategory::Gitignored, "GI", Color::Yellow),
-            (FileCategory::Untracked, "UT", Color::Blue),
+            (FileCategory::AiConfig, "AI"),
+            (FileCategory::AiConfigDirectory, "DIR"),
+            (FileCategory::Gitignored, "GI"),
+            (FileCategory::Untracked, "UT"),
         ]
         .iter()
-        .filter_map(|(cat, label, _color)| {
+        .filter_map(|(cat, label)| {
             let (selected, _) = counts.get(cat).unwrap_or(&(0, 0));
             if *selected > 0 {
                 Some(format!("{selected} {label}"))
@@ -1409,206 +1434,67 @@ fn render_selection_summary(stdout: &mut io::Stdout, state: &SelectionState) -> 
             }
         })
         .collect();
-
-        execute!(stdout, Print(parts.join(", ")))?;
+        spans.push(Span::raw(parts.join(", ")));
     }
 
-    execute!(stdout, Print("\r\n"))
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Render the file list.
-fn render_file_list(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
-    let visible = state.visible_files();
-    let max_visible = MAX_VISIBLE_ITEMS;
+/// Render help line.
+fn render_help_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &SelectionState) {
+    let hint_style = Style::default().fg(Color::DarkGray);
+    let key_style = Style::default().fg(Color::Cyan);
 
-    if visible.is_empty() {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("  No files match the current filters\r\n"),
-            ResetColor
-        )?;
-        return Ok(());
-    }
+    let spans = if state.mode == Mode::Search {
+        vec![
+            Span::styled("Type to search | ", hint_style),
+            Span::styled("Enter/Esc", key_style),
+            Span::styled(" done ", hint_style),
+            Span::styled("| ", hint_style),
+            Span::styled("Ctrl+C", key_style),
+            Span::styled(" clear", hint_style),
+        ]
+    } else {
+        vec![
+            Span::styled("↑↓", key_style),
+            Span::styled(" move ", hint_style),
+            Span::styled("←→", key_style),
+            Span::styled(" expand ", hint_style),
+            Span::styled("Space", key_style),
+            Span::styled(" toggle ", hint_style),
+            Span::styled("Enter", key_style),
+            Span::styled(" confirm ", hint_style),
+            Span::styled("a", key_style),
+            Span::styled(" all ", hint_style),
+            Span::styled("1-4", key_style),
+            Span::styled(" filter ", hint_style),
+            Span::styled("/", key_style),
+            Span::styled(" search ", hint_style),
+            Span::styled("Esc", key_style),
+            Span::styled(" cancel", hint_style),
+        ]
+    };
 
-    // Show scroll indicator if needed
-    if state.scroll_offset > 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!(
-                "  ↑ {} more above\r\n",
-                humanize_count(state.scroll_offset)
-            )),
-            ResetColor
-        )?;
-    }
-
-    for (i, file) in visible
-        .iter()
-        .enumerate()
-        .skip(state.scroll_offset)
-        .take(max_visible)
-    {
-        let is_cursor = i == state.cursor;
-        let is_selected = state.selections.contains(&file.path);
-
-        // Cursor indicator
-        if is_cursor {
-            execute!(stdout, SetForegroundColor(Color::Cyan), Print("> "))?;
-        } else {
-            execute!(stdout, Print("  "))?;
-        }
-
-        // Indentation for tree children
-        let indent = "  ".repeat(file.depth as usize);
-        if !indent.is_empty() {
-            execute!(stdout, Print(&indent))?;
-        }
-
-        // Checkbox (tri-state for directories)
-        if file.category == FileCategory::AiConfigDirectory {
-            let dir_state = state.dir_selection_state(&file.path);
-            match dir_state {
-                DirSelectionState::All => {
-                    execute!(
-                        stdout,
-                        SetForegroundColor(Color::Green),
-                        Print("[✓] "),
-                        ResetColor
-                    )?;
-                }
-                DirSelectionState::Partial => {
-                    execute!(
-                        stdout,
-                        SetForegroundColor(Color::Yellow),
-                        Print("[-] "),
-                        ResetColor
-                    )?;
-                }
-                DirSelectionState::None => {
-                    execute!(stdout, Print("[ ] "))?;
-                }
-            }
-        } else if is_selected {
-            execute!(
-                stdout,
-                SetForegroundColor(Color::Green),
-                Print("[✓] "),
-                ResetColor
-            )?;
-        } else {
-            execute!(stdout, Print("[ ] "))?;
-        }
-
-        // Category indicator
-        let cat_color = match file.category {
-            FileCategory::AiConfig => Color::Green,
-            FileCategory::AiConfigDirectory => Color::Magenta,
-            FileCategory::Gitignored => Color::Yellow,
-            FileCategory::Untracked => Color::Blue,
-        };
-
-        // Expand/collapse indicator for directories
-        if file.category == FileCategory::AiConfigDirectory {
-            let indicator = if state.expanded_dirs.contains(&file.path) {
-                "▾ "
-            } else {
-                "▸ "
-            };
-            execute!(
-                stdout,
-                SetForegroundColor(Color::DarkGrey),
-                Print(indicator),
-                ResetColor
-            )?;
-        }
-
-        // File path display
-        // For children, show just the filename (parent path implied by tree)
-        let path_str = if file.parent_dir.is_some() {
-            file.path.file_name().map_or_else(
-                || file.path.to_string_lossy().to_string(),
-                |n| n.to_string_lossy().to_string(),
-            )
-        } else if file.category == FileCategory::AiConfigDirectory {
-            format!("{}/", file.path.to_string_lossy())
-        } else {
-            file.path.to_string_lossy().to_string()
-        };
-        if is_cursor {
-            execute!(
-                stdout,
-                SetForegroundColor(cat_color),
-                Print(&path_str),
-                ResetColor
-            )?;
-        } else {
-            execute!(stdout, Print(&path_str))?;
-        }
-
-        execute!(stdout, ResetColor, Print("\r\n"))?;
-    }
-
-    // Show scroll indicator if more below
-    let remaining = visible
-        .len()
-        .saturating_sub(state.scroll_offset + max_visible);
-    if remaining > 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!("  ↓ {} more below\r\n", humanize_count(remaining))),
-            ResetColor
-        )?;
-    }
-
-    Ok(())
+    // Render on second line of the 2-row area (first is blank separator)
+    let lines = vec![Line::from(vec![]), Line::from(spans)];
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Render a key hint with highlighted key.
+// Old crossterm rendering functions removed — now using ratatui (render_*_ratatui above).
+
+// Keep render_key_hint for the flat selector (Task 6 migrates it).
+/// Render a key hint with highlighted key (crossterm version for flat selector).
 fn render_key_hint(stdout: &mut io::Stdout, key: &str, action: &str) -> io::Result<()> {
+    use crossterm::execute;
+    use crossterm::style::{Print, ResetColor, SetForegroundColor};
     execute!(
         stdout,
-        SetForegroundColor(Color::Cyan),
+        SetForegroundColor(crossterm::style::Color::Cyan),
         Print(key),
-        SetForegroundColor(Color::DarkGrey),
+        SetForegroundColor(crossterm::style::Color::DarkGrey),
         Print(format!(" {action} ")),
         ResetColor
     )
-}
-
-/// Render the help line.
-fn render_help_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
-    execute!(stdout, Print("\r\n"))?;
-
-    if state.mode == Mode::Search {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("Type to search | "),
-            ResetColor
-        )?;
-        render_key_hint(stdout, "Enter/Esc", "done")?;
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("| "),
-            ResetColor
-        )?;
-        render_key_hint(stdout, "Ctrl+C", "clear")?;
-        Ok(())
-    } else {
-        render_key_hint(stdout, "↑↓", "move")?;
-        render_key_hint(stdout, "←→", "expand")?;
-        render_key_hint(stdout, "Space", "toggle")?;
-        render_key_hint(stdout, "Enter", "confirm")?;
-        render_key_hint(stdout, "a", "all")?;
-        render_key_hint(stdout, "1-4", "filter")?;
-        render_key_hint(stdout, "/", "search")?;
-        render_key_hint(stdout, "Esc", "cancel")?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
