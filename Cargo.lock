@@ -1539,7 +1539,6 @@ dependencies = [
  "clap-markdown",
  "clap_complete",
  "colored",
- "crossterm",
  "ctrlc",
  "dialoguer",
  "directories",
