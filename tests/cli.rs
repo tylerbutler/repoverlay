@@ -2115,6 +2115,47 @@ fn edit_add_multiple_files() {
     assert_eq!(ctx.read_file("b.txt"), "content b");
 }
 
+#[test]
+fn edit_add_directory_to_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Create a directory with files in the target repo
+    ctx.create_repo_file(".claude/commands/build.md", "# Build command");
+    ctx.create_repo_file(".claude/commands/test.md", "# Test command");
+
+    // Add the directory to the overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", ".claude/commands"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"));
+
+    // Verify .claude/commands is now a symlink to the overlay directory
+    assert!(ctx.is_symlink(".claude/commands"));
+    // Verify content is preserved
+    assert_eq!(
+        ctx.read_file(".claude/commands/build.md"),
+        "# Build command"
+    );
+    assert_eq!(ctx.read_file(".claude/commands/test.md"), "# Test command");
+
+    // Verify git exclude has the directory entry with trailing slash
+    let exclude = ctx.git_exclude_content();
+    assert!(
+        exclude.contains(".claude/commands/"),
+        "git exclude should contain .claude/commands/, got: {exclude}"
+    );
+}
+
 // ──────────────────────────────────────────────
 // Edit remove — additional coverage
 // ──────────────────────────────────────────────
