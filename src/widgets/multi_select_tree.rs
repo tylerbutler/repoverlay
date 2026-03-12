@@ -130,4 +130,52 @@ mod tests {
         state.toggle(&"child-a".to_string());
         assert!(!state.is_selected(&"child-a".to_string()));
     }
+
+    #[test]
+    fn check_state_all_selected() {
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.select("child-a".to_string());
+        state.select("child-b".to_string());
+        let descendants = vec!["child-a".to_string(), "child-b".to_string()];
+        assert_eq!(state.check_state(&descendants), CheckState::Checked);
+    }
+
+    #[test]
+    fn check_state_partial() {
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.select("child-a".to_string());
+        let descendants = vec!["child-a".to_string(), "child-b".to_string()];
+        assert_eq!(state.check_state(&descendants), CheckState::Partial);
+    }
+
+    #[test]
+    fn check_state_none_selected() {
+        let state = MultiSelectTreeState::<String>::default();
+        let descendants = vec!["child-a".to_string(), "child-b".to_string()];
+        assert_eq!(state.check_state(&descendants), CheckState::Unchecked);
+    }
+
+    #[test]
+    fn check_state_empty_descendants() {
+        let state = MultiSelectTreeState::<String>::default();
+        assert_eq!(state.check_state(&[]), CheckState::Unchecked);
+    }
+
+    #[test]
+    fn select_many_and_deselect_many() {
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.select_many(["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(state.selected_count(), 3);
+        state.deselect_many(&["a".to_string(), "b".to_string()]);
+        assert_eq!(state.selected_count(), 1);
+        assert!(state.is_selected(&"c".to_string()));
+    }
+
+    #[test]
+    fn clear_selection() {
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.select_many(["a".to_string(), "b".to_string()]);
+        state.clear_selection();
+        assert_eq!(state.selected_count(), 0);
+    }
 }
