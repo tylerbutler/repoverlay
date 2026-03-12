@@ -19,6 +19,7 @@ mod state;
 #[cfg(test)]
 mod testutil;
 mod upstream;
+mod widgets;
 
 /// Run the CLI application.
 ///
