@@ -62,6 +62,7 @@ tiny-update-check = "1.0"
 similar = "2.7.0"
 indicatif = "0.18.4"
 ctrlc = "3.5.2"
+glob = "0.3.3"
 
 [build-dependencies]
 vergen = { version = "9", features = ["build"] }

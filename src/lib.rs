@@ -2771,6 +2771,43 @@ pub(crate) fn update_overlays(
     Ok(())
 }
 
+/// Expand glob patterns in include paths relative to the source directory.
+///
+/// Paths that contain glob metacharacters (`*`, `?`, `[`) are expanded using
+/// [`glob::glob`]. Paths without metacharacters are passed through unchanged.
+/// Returns an error if a glob pattern matches no files or if a literal path
+/// does not exist.
+pub(crate) fn expand_include_globs(source: &Path, include: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut expanded = Vec::new();
+    for path in include {
+        let path_str = path.to_string_lossy();
+        if path_str.contains('*') || path_str.contains('?') || path_str.contains('[') {
+            let pattern = source.join(path).to_string_lossy().to_string();
+            let matches: Vec<PathBuf> = glob::glob(&pattern)
+                .with_context(|| format!("Invalid glob pattern: {path_str}"))?
+                .filter_map(Result::ok)
+                .collect();
+            if matches.is_empty() {
+                bail!("Glob pattern matched no files: {path_str}");
+            }
+            for matched in matches {
+                let rel = matched
+                    .strip_prefix(source)
+                    .unwrap_or(&matched)
+                    .to_path_buf();
+                expanded.push(rel);
+            }
+        } else {
+            let full_path = source.join(path);
+            if !full_path.exists() {
+                bail!("Include path does not exist: {}", path.display());
+            }
+            expanded.push(path.clone());
+        }
+    }
+    Ok(expanded)
+}
+
 /// Create a new overlay from files in a repository.
 ///
 /// # Modes
@@ -2975,13 +3012,8 @@ pub(crate) fn create_overlay(
         return create_overlay_with_files(source, &output_dir, &preselected, name);
     }
 
-    // Validate all include paths exist
-    for path in include {
-        let full_path = source.join(path);
-        if !full_path.exists() {
-            bail!("Include path does not exist: {}", path.display());
-        }
-    }
+    // Expand globs and validate include paths
+    let expanded = expand_include_globs(source, include)?;
 
     if dry_run {
         println!(
@@ -2991,7 +3023,7 @@ pub(crate) fn create_overlay(
         );
         println!();
         println!("Files to include:");
-        for path in include {
+        for path in &expanded {
             let full_path = source.join(path);
             if full_path.is_dir() {
                 for entry in walkdir::WalkDir::new(&full_path)
@@ -3013,7 +3045,7 @@ pub(crate) fn create_overlay(
     }
 
     // Use shared helper to copy files and generate config
-    create_overlay_with_files(source, &output_dir, include, name)
+    create_overlay_with_files(source, &output_dir, &expanded, name)
 }
 
 /// Copy files from source to output directory.
@@ -8231,6 +8263,78 @@ mod tests {
             let canonical = repo.path().canonicalize().unwrap();
             assert!(canonical.join(".vscode").exists());
             assert!(canonical.join(".vscode/settings.json").exists());
+        }
+    }
+
+    mod expand_include_globs_tests {
+        use super::*;
+
+        #[test]
+        fn literal_path_passes_through() {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("file.txt"), "content").unwrap();
+
+            let result = expand_include_globs(dir.path(), &[PathBuf::from("file.txt")]).unwrap();
+            assert_eq!(result, vec![PathBuf::from("file.txt")]);
+        }
+
+        #[test]
+        fn literal_path_missing_errors() {
+            let dir = TempDir::new().unwrap();
+            let result = expand_include_globs(dir.path(), &[PathBuf::from("missing.txt")]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn glob_star_matches_files() {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("a.md"), "").unwrap();
+            fs::write(dir.path().join("b.md"), "").unwrap();
+            fs::write(dir.path().join("c.txt"), "").unwrap();
+
+            let mut result = expand_include_globs(dir.path(), &[PathBuf::from("*.md")]).unwrap();
+            result.sort();
+            assert_eq!(result, vec![PathBuf::from("a.md"), PathBuf::from("b.md")]);
+        }
+
+        #[test]
+        fn glob_no_match_errors() {
+            let dir = TempDir::new().unwrap();
+            let result = expand_include_globs(dir.path(), &[PathBuf::from("*.xyz")]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn glob_double_star_matches_nested() {
+            let dir = TempDir::new().unwrap();
+            let sub = dir.path().join("sub");
+            fs::create_dir_all(&sub).unwrap();
+            fs::write(dir.path().join("top.md"), "").unwrap();
+            fs::write(sub.join("nested.md"), "").unwrap();
+
+            let mut result = expand_include_globs(dir.path(), &[PathBuf::from("**/*.md")]).unwrap();
+            result.sort();
+            assert_eq!(
+                result,
+                vec![PathBuf::from("sub/nested.md"), PathBuf::from("top.md")]
+            );
+        }
+
+        #[test]
+        fn mixed_literal_and_glob() {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("keep.txt"), "").unwrap();
+            fs::write(dir.path().join("a.md"), "").unwrap();
+
+            let result = expand_include_globs(
+                dir.path(),
+                &[PathBuf::from("keep.txt"), PathBuf::from("*.md")],
+            )
+            .unwrap();
+            assert_eq!(
+                result,
+                vec![PathBuf::from("keep.txt"), PathBuf::from("a.md")]
+            );
         }
     }
 }
