@@ -303,6 +303,7 @@ impl<'a, Id: Clone + Eq + Hash + 'a> StatefulWidget for MultiSelectTree<'a, Id> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::buffer_to_string;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -410,24 +411,5 @@ mod tests {
 
         let buffer = terminal.backend().buffer().clone();
         insta::assert_snapshot!(buffer_to_string(&buffer));
-    }
-
-    /// Convert a ratatui Buffer to a trimmed string for snapshot testing.
-    fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
-        let mut s = String::new();
-        for y in 0..buffer.area.height {
-            let mut line = String::new();
-            for x in 0..buffer.area.width {
-                let cell = &buffer[(x, y)];
-                line.push_str(cell.symbol());
-            }
-            s.push_str(line.trim_end());
-            s.push('\n');
-        }
-        // Trim trailing empty lines
-        while s.ends_with("\n\n") {
-            s.pop();
-        }
-        s
     }
 }

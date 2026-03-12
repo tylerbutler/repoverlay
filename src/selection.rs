@@ -310,9 +310,12 @@ impl SelectionState {
         true
     }
 
+    /// Total number of file categories in the system.
+    const CATEGORY_COUNT: usize = 4;
+
     /// Check if any filters are active.
     fn has_active_filters(&self) -> bool {
-        !self.search_query.is_empty() || self.visible_categories.len() < 4 // Not all categories visible
+        !self.search_query.is_empty() || self.visible_categories.len() < Self::CATEGORY_COUNT
     }
 
     /// Toggle visibility of a category.
@@ -1128,51 +1131,53 @@ fn sync_tree_state(state: &SelectionState, tree_state: &mut MultiSelectTreeState
 }
 
 /// Build `TreeNode` descriptors from the current selection state.
-fn build_tree_nodes<'a>(state: &'a SelectionState) -> Vec<TreeNode<'a, PathBuf>> {
+fn build_tree_nodes(state: &SelectionState) -> Vec<TreeNode<'_, PathBuf>> {
     let visible = state.visible_files();
-    let mut nodes: Vec<TreeNode<'a, PathBuf>> = Vec::new();
+    build_children_for(&visible, None)
+}
 
-    for file in &visible {
-        // Skip children — they'll be added under their parent
-        if file.parent_dir.is_some() {
-            continue;
-        }
-
-        if file.category == FileCategory::AiConfigDirectory {
-            // Build children for this directory
-            let children: Vec<TreeNode<'a, PathBuf>> = visible
-                .iter()
-                .filter(|f| f.parent_dir.as_deref() == Some(&file.path))
-                .map(|f| {
-                    let name = f.path.file_name().map_or_else(
+/// Recursively build tree nodes for files whose parent matches `parent`.
+fn build_children_for<'a>(
+    visible: &[&'a DetectedFile],
+    parent: Option<&Path>,
+) -> Vec<TreeNode<'a, PathBuf>> {
+    visible
+        .iter()
+        .filter(|f| f.parent_dir.as_deref() == parent)
+        .map(|f| {
+            if f.category == FileCategory::AiConfigDirectory {
+                let label = if parent.is_some() {
+                    // Nested directory: show just the directory name
+                    f.path.file_name().map_or_else(
                         || f.path.to_string_lossy().to_string(),
                         |n| n.to_string_lossy().to_string(),
-                    );
-                    TreeNode {
-                        id: f.path.clone(),
-                        text: Line::from(name),
-                        children: vec![],
-                    }
-                })
-                .collect();
-
-            let label = format!("{}/", file.path.display());
-            nodes.push(TreeNode {
-                id: file.path.clone(),
-                text: Line::from(label),
-                children,
-            });
-        } else {
-            let label = file.path.to_string_lossy().to_string();
-            nodes.push(TreeNode {
-                id: file.path.clone(),
-                text: Line::from(label),
-                children: vec![],
-            });
-        }
-    }
-
-    nodes
+                    ) + "/"
+                } else {
+                    format!("{}/", f.path.display())
+                };
+                let children = build_children_for(visible, Some(&f.path));
+                TreeNode {
+                    id: f.path.clone(),
+                    text: Line::from(label),
+                    children,
+                }
+            } else {
+                let name = if parent.is_some() {
+                    f.path.file_name().map_or_else(
+                        || f.path.to_string_lossy().to_string(),
+                        |n| n.to_string_lossy().to_string(),
+                    )
+                } else {
+                    f.path.to_string_lossy().to_string()
+                };
+                TreeNode {
+                    id: f.path.clone(),
+                    text: Line::from(name),
+                    children: vec![],
+                }
+            }
+        })
+        .collect()
 }
 
 /// Render the full selection frame using ratatui.
@@ -1199,14 +1204,17 @@ fn render_selection_frame(
     let prompt_line = Line::from(Span::styled(prompt, Style::default().fg(Color::Cyan)));
     frame.render_widget(Paragraph::new(prompt_line), chunks[0]);
 
+    // Compute counts once for both category line and summary
+    let counts = state.selection_counts();
+
     // Category toggles
-    render_category_line_ratatui(frame, chunks[1], state);
+    render_category_line_ratatui(frame, chunks[1], state, &counts);
 
     // Search
     render_search_line_ratatui(frame, chunks[2], state);
 
     // Selection summary
-    render_summary_ratatui(frame, chunks[3], state);
+    render_summary_ratatui(frame, chunks[3], &counts);
 
     // File tree using MultiSelectTree widget
     let nodes = build_tree_nodes(state);
@@ -1228,9 +1236,8 @@ fn render_category_line_ratatui(
     frame: &mut Frame,
     area: ratatui::layout::Rect,
     state: &SelectionState,
+    counts: &HashMap<FileCategory, (usize, usize)>,
 ) {
-    let counts = state.selection_counts();
-
     let categories = [
         (FileCategory::AiConfig, "1", "AI", Color::Green),
         (FileCategory::AiConfigDirectory, "2", "DIR", Color::Magenta),
@@ -1294,8 +1301,11 @@ fn render_search_line_ratatui(
 }
 
 /// Render selection summary.
-fn render_summary_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &SelectionState) {
-    let counts = state.selection_counts();
+fn render_summary_ratatui(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    counts: &HashMap<FileCategory, (usize, usize)>,
+) {
     let total_selected: usize = counts.values().map(|(s, _)| s).sum();
 
     let mut spans = vec![Span::raw("Selected: ")];
@@ -1368,6 +1378,7 @@ fn render_help_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::buffer_to_string;
 
     fn make_test_files() -> Vec<DetectedFile> {
         vec![
@@ -1375,35 +1386,30 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude/settings.json"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".env.local"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("scratch.txt"),
                 category: FileCategory::Untracked,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
         ]
@@ -1868,35 +1874,30 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".cursor"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("notes.txt"),
                 category: FileCategory::Untracked,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
         ]
@@ -2026,42 +2027,36 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude/settings.json"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 1,
                 parent_dir: Some(PathBuf::from(".claude")),
             },
             DetectedFile {
                 path: PathBuf::from(".claude/commands"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 1,
                 parent_dir: Some(PathBuf::from(".claude")),
             },
             DetectedFile {
                 path: PathBuf::from(".claude/commands/test.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 2,
                 parent_dir: Some(PathBuf::from(".claude/commands")),
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
         ]
@@ -2655,14 +2650,12 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".empty-dir"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
         ];
@@ -2996,24 +2989,6 @@ mod tests {
             prompt: "Choose overlays".into(),
         };
         assert_eq!(config.prompt, "Choose overlays");
-    }
-
-    /// Convert a ratatui Buffer to a trimmed string for snapshot testing.
-    fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
-        let mut s = String::new();
-        for y in 0..buffer.area.height {
-            let mut line = String::new();
-            for x in 0..buffer.area.width {
-                let cell = &buffer[(x, y)];
-                line.push_str(cell.symbol());
-            }
-            s.push_str(line.trim_end());
-            s.push('\n');
-        }
-        while s.ends_with("\n\n") {
-            s.pop();
-        }
-        s
     }
 
     #[test]

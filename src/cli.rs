@@ -2569,7 +2569,6 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
                 path: relative,
                 category: FileCategory::Untracked, // Generic category for overlay files
                 preselected: is_currently_applied,
-                depth: 0,
                 parent_dir: None,
             });
         }
