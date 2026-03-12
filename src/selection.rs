@@ -4,16 +4,10 @@
 //! in an overlay, with support for category filtering, search, and bulk selection.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-// crossterm imports kept for the flat selector (to be migrated in Task 6)
-use crossterm::{
-    cursor, execute,
-    style::{Color as CtColor, Print, ResetColor, SetForegroundColor},
-    terminal::{self, ClearType},
-};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};
@@ -96,7 +90,6 @@ struct FlatSelectionState {
     search_query: String,
     mode: Mode,
     cursor: usize,
-    scroll_offset: usize,
 }
 
 impl FlatSelectionState {
@@ -112,7 +105,6 @@ impl FlatSelectionState {
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
-            scroll_offset: 0,
         }
     }
 
@@ -707,33 +699,19 @@ pub(crate) fn select_flat(
     }
 
     let mut state = FlatSelectionState::new(items.to_vec());
-
-    terminal::enable_raw_mode()?;
-    let result = run_flat_loop(&mut state, &config.prompt);
-    terminal::disable_raw_mode()?;
-    // Restore terminal state
-    let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        cursor::Show,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::All),
-    )?;
-    println!();
-    stdout.flush()?;
-
-    result
+    run_flat_loop(&mut state, &config.prompt)
 }
 
 fn run_flat_loop(
     state: &mut FlatSelectionState,
     prompt: &str,
 ) -> anyhow::Result<FlatSelectionResult> {
-    let mut stdout = io::stdout();
-    execute!(stdout, cursor::Hide, terminal::Clear(ClearType::All))?;
+    let mut terminal = ratatui::init();
 
-    loop {
-        render_flat_ui(&mut stdout, state, prompt)?;
+    let result = loop {
+        terminal.draw(|frame| {
+            render_flat_frame(frame, state, prompt);
+        })?;
 
         if let Event::Key(key) = event::read()? {
             match state.mode {
@@ -744,7 +722,7 @@ fn run_flat_loop(
                 }
                 Mode::Selection => match key.code {
                     KeyCode::Esc => {
-                        return Ok(FlatSelectionResult {
+                        break Ok(FlatSelectionResult {
                             selected_ids: Vec::new(),
                             cancelled: true,
                         });
@@ -756,13 +734,13 @@ fn run_flat_loop(
                             .filter(|i| state.selections.contains(&i.id))
                             .map(|i| i.id.clone())
                             .collect();
-                        return Ok(FlatSelectionResult {
+                        break Ok(FlatSelectionResult {
                             selected_ids: selected,
                             cancelled: false,
                         });
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(FlatSelectionResult {
+                        break Ok(FlatSelectionResult {
                             selected_ids: Vec::new(),
                             cancelled: true,
                         });
@@ -771,14 +749,12 @@ fn run_flat_loop(
                         if state.cursor > 0 {
                             state.cursor -= 1;
                         }
-                        adjust_flat_scroll(state);
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         let len = state.visible_items().len();
                         if state.cursor + 1 < len {
                             state.cursor += 1;
                         }
-                        adjust_flat_scroll(state);
                     }
                     KeyCode::Char(' ') => {
                         state.toggle_selection(state.cursor);
@@ -793,16 +769,149 @@ fn run_flat_loop(
                 },
             }
         }
-    }
+    };
+
+    ratatui::restore();
+    result
 }
 
-const fn adjust_flat_scroll(state: &mut FlatSelectionState) {
-    let max_visible = MAX_VISIBLE_ITEMS;
-    if state.cursor < state.scroll_offset {
-        state.scroll_offset = state.cursor;
-    } else if state.cursor >= state.scroll_offset + max_visible {
-        state.scroll_offset = state.cursor - max_visible + 1;
+/// Render the flat selection UI using ratatui.
+fn render_flat_frame(frame: &mut Frame, state: &FlatSelectionState, prompt: &str) {
+    let area = frame.area();
+
+    let chunks = Layout::vertical([
+        Constraint::Length(2), // prompt + blank
+        Constraint::Length(1), // search
+        Constraint::Length(1), // count summary
+        Constraint::Length(1), // blank
+        Constraint::Min(3),    // item list
+        Constraint::Length(2), // help
+    ])
+    .split(area);
+
+    // Prompt
+    let prompt_line = Line::from(Span::styled(prompt, Style::default().fg(Color::Cyan)));
+    frame.render_widget(Paragraph::new(prompt_line), chunks[0]);
+
+    // Search
+    let search_spans = if state.mode == Mode::Search {
+        vec![
+            Span::raw("Search: "),
+            Span::styled(
+                format!("{}_", state.search_query),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]
+    } else if state.search_query.is_empty() {
+        vec![
+            Span::raw("Search: "),
+            Span::styled("(press / to search)", Style::default().fg(Color::DarkGray)),
+        ]
+    } else {
+        vec![
+            Span::raw("Search: "),
+            Span::raw(&state.search_query),
+            Span::styled(" (Esc to clear)", Style::default().fg(Color::DarkGray)),
+        ]
+    };
+    frame.render_widget(Paragraph::new(Line::from(search_spans)), chunks[1]);
+
+    // Count summary
+    let enabled_count = state.items.iter().filter(|i| !i.disabled).count();
+    let selected_count = state.selections.len();
+    frame.render_widget(
+        Paragraph::new(format!("Selected: {selected_count}/{enabled_count}")),
+        chunks[2],
+    );
+
+    // Item list
+    let visible = state.visible_items();
+    let mut lines: Vec<Line> = Vec::new();
+
+    if visible.is_empty() {
+        lines.push(Line::styled(
+            "  No items match the current search",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        for (i, item) in visible.iter().enumerate() {
+            let is_cursor = i == state.cursor;
+            let is_selected = state.selections.contains(&item.id);
+
+            let mut spans = Vec::new();
+
+            // Cursor
+            if is_cursor {
+                spans.push(Span::styled("> ", Style::default().fg(Color::Cyan)));
+            } else {
+                spans.push(Span::raw("  "));
+            }
+
+            // Checkbox
+            if item.disabled {
+                spans.push(Span::styled("[✓] ", Style::default().fg(Color::DarkGray)));
+            } else if is_selected {
+                spans.push(Span::styled("[✓] ", Style::default().fg(Color::Green)));
+            } else {
+                spans.push(Span::raw("[ ] "));
+            }
+
+            // Label
+            if item.disabled {
+                spans.push(Span::styled(
+                    &item.label,
+                    Style::default().fg(Color::DarkGray),
+                ));
+            } else if is_cursor {
+                spans.push(Span::styled(&item.label, Style::default().fg(Color::Cyan)));
+            } else {
+                spans.push(Span::raw(&item.label));
+            }
+
+            // Description
+            if let Some(desc) = &item.description {
+                spans.push(Span::styled(
+                    format!("  ({desc})"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            lines.push(Line::from(spans));
+        }
     }
+
+    frame.render_widget(Paragraph::new(lines), chunks[4]);
+
+    // Help
+    let hint_style = Style::default().fg(Color::DarkGray);
+    let key_style = Style::default().fg(Color::Cyan);
+    let help_spans = if state.mode == Mode::Search {
+        vec![
+            Span::styled("Type to search | ", hint_style),
+            Span::styled("Enter/Esc", key_style),
+            Span::styled(" done ", hint_style),
+            Span::styled("| ", hint_style),
+            Span::styled("Ctrl+C", key_style),
+            Span::styled(" clear", hint_style),
+        ]
+    } else {
+        vec![
+            Span::styled("↑↓", key_style),
+            Span::styled(" move ", hint_style),
+            Span::styled("Space", key_style),
+            Span::styled(" toggle ", hint_style),
+            Span::styled("Enter", key_style),
+            Span::styled(" confirm ", hint_style),
+            Span::styled("a", key_style),
+            Span::styled(" all ", hint_style),
+            Span::styled("/", key_style),
+            Span::styled(" search ", hint_style),
+            Span::styled("Esc", key_style),
+            Span::styled(" cancel", hint_style),
+        ]
+    };
+    let help_lines = vec![Line::from(vec![]), Line::from(help_spans)];
+    frame.render_widget(Paragraph::new(help_lines), chunks[5]);
 }
 
 fn handle_flat_search_key(key: KeyEvent, state: &mut FlatSelectionState) -> bool {
@@ -827,209 +936,6 @@ fn handle_flat_search_key(key: KeyEvent, state: &mut FlatSelectionState) -> bool
             true
         }
         _ => false,
-    }
-}
-
-fn render_flat_ui(
-    stdout: &mut io::Stdout,
-    state: &FlatSelectionState,
-    prompt: &str,
-) -> io::Result<()> {
-    execute!(
-        stdout,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::FromCursorDown)
-    )?;
-
-    // Prompt
-    execute!(
-        stdout,
-        SetForegroundColor(CtColor::Cyan),
-        Print(prompt),
-        ResetColor,
-        Print("\r\n\r\n")
-    )?;
-
-    // Search line
-    render_search_line_flat(stdout, state)?;
-
-    // Count summary
-    let enabled_count = state.items.iter().filter(|i| !i.disabled).count();
-    let selected_count = state.selections.len();
-    execute!(
-        stdout,
-        Print("Selected: "),
-        Print(format!("{selected_count}/{enabled_count}")),
-        Print("\r\n\r\n")
-    )?;
-
-    // Item list
-    render_flat_items(stdout, state)?;
-
-    // Help
-    render_flat_help(stdout, state)?;
-
-    stdout.flush()
-}
-
-fn render_search_line_flat(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
-    execute!(stdout, Print("Search: "))?;
-    if state.mode == Mode::Search {
-        execute!(
-            stdout,
-            SetForegroundColor(CtColor::Yellow),
-            Print(&state.search_query),
-            Print("_"),
-            ResetColor
-        )?;
-    } else if state.search_query.is_empty() {
-        execute!(
-            stdout,
-            SetForegroundColor(CtColor::DarkGrey),
-            Print("(press / to search)"),
-            ResetColor
-        )?;
-    } else {
-        execute!(
-            stdout,
-            Print(&state.search_query),
-            SetForegroundColor(CtColor::DarkGrey),
-            Print(" (Esc to clear)"),
-            ResetColor
-        )?;
-    }
-    execute!(stdout, Print("\r\n"))
-}
-
-fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
-    let visible = state.visible_items();
-    let max_visible = MAX_VISIBLE_ITEMS;
-
-    if visible.is_empty() {
-        execute!(
-            stdout,
-            SetForegroundColor(CtColor::DarkGrey),
-            Print("  No items match the current search\r\n"),
-            ResetColor
-        )?;
-        return Ok(());
-    }
-
-    if state.scroll_offset > 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(CtColor::DarkGrey),
-            Print(format!(
-                "  ↑ {} more above\r\n",
-                humanize_count(state.scroll_offset)
-            )),
-            ResetColor
-        )?;
-    }
-
-    for (i, item) in visible
-        .iter()
-        .enumerate()
-        .skip(state.scroll_offset)
-        .take(max_visible)
-    {
-        let is_cursor = i == state.cursor;
-        let is_selected = state.selections.contains(&item.id);
-
-        // Cursor
-        if is_cursor {
-            execute!(stdout, SetForegroundColor(CtColor::Cyan), Print("> "))?;
-        } else {
-            execute!(stdout, Print("  "))?;
-        }
-
-        // Checkbox
-        if item.disabled {
-            execute!(
-                stdout,
-                SetForegroundColor(CtColor::DarkGrey),
-                Print("[✓] "),
-                ResetColor
-            )?;
-        } else if is_selected {
-            execute!(
-                stdout,
-                SetForegroundColor(CtColor::Green),
-                Print("[✓] "),
-                ResetColor
-            )?;
-        } else {
-            execute!(stdout, Print("[ ] "))?;
-        }
-
-        // Label
-        if item.disabled {
-            execute!(
-                stdout,
-                SetForegroundColor(CtColor::DarkGrey),
-                Print(&item.label),
-            )?;
-        } else if is_cursor {
-            execute!(
-                stdout,
-                SetForegroundColor(CtColor::Cyan),
-                Print(&item.label),
-            )?;
-        } else {
-            execute!(stdout, Print(&item.label))?;
-        }
-
-        // Description
-        if let Some(desc) = &item.description {
-            execute!(
-                stdout,
-                SetForegroundColor(CtColor::DarkGrey),
-                Print(format!("  ({desc})")),
-            )?;
-        }
-
-        execute!(stdout, ResetColor, Print("\r\n"))?;
-    }
-
-    let remaining = visible
-        .len()
-        .saturating_sub(state.scroll_offset + max_visible);
-    if remaining > 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(CtColor::DarkGrey),
-            Print(format!("  ↓ {} more below\r\n", humanize_count(remaining))),
-            ResetColor
-        )?;
-    }
-
-    Ok(())
-}
-
-fn render_flat_help(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
-    execute!(stdout, Print("\r\n"))?;
-    if state.mode == Mode::Search {
-        execute!(
-            stdout,
-            SetForegroundColor(CtColor::DarkGrey),
-            Print("Type to search | "),
-            ResetColor
-        )?;
-        render_key_hint(stdout, "Enter/Esc", "done")?;
-        execute!(
-            stdout,
-            SetForegroundColor(CtColor::DarkGrey),
-            Print("| "),
-            ResetColor
-        )?;
-        render_key_hint(stdout, "Ctrl+C", "clear")
-    } else {
-        render_key_hint(stdout, "↑↓", "move")?;
-        render_key_hint(stdout, "Space", "toggle")?;
-        render_key_hint(stdout, "Enter", "confirm")?;
-        render_key_hint(stdout, "a", "all")?;
-        render_key_hint(stdout, "/", "search")?;
-        render_key_hint(stdout, "Esc", "cancel")
     }
 }
 
@@ -1478,23 +1384,6 @@ fn render_help_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &S
     // Render on second line of the 2-row area (first is blank separator)
     let lines = vec![Line::from(vec![]), Line::from(spans)];
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-// Old crossterm rendering functions removed — now using ratatui (render_*_ratatui above).
-
-// Keep render_key_hint for the flat selector (Task 6 migrates it).
-/// Render a key hint with highlighted key (crossterm version for flat selector).
-fn render_key_hint(stdout: &mut io::Stdout, key: &str, action: &str) -> io::Result<()> {
-    use crossterm::execute;
-    use crossterm::style::{Print, ResetColor, SetForegroundColor};
-    execute!(
-        stdout,
-        SetForegroundColor(crossterm::style::Color::Cyan),
-        Print(key),
-        SetForegroundColor(crossterm::style::Color::DarkGrey),
-        Print(format!(" {action} ")),
-        ResetColor
-    )
 }
 
 #[cfg(test)]
@@ -3074,43 +2963,6 @@ mod tests {
         state.cursor = 10;
         state.clamp_cursor();
         assert_eq!(state.cursor, 1); // clamped to len - 1
-    }
-
-    #[test]
-    fn test_adjust_flat_scroll_cursor_above_viewport() {
-        let items: Vec<_> = (0..20)
-            .map(|i| SelectableItem {
-                id: format!("item{i}"),
-                label: format!("Item {i}"),
-                description: None,
-                preselected: false,
-                disabled: false,
-            })
-            .collect();
-        let mut state = FlatSelectionState::new(items);
-        state.scroll_offset = 10;
-        state.cursor = 5;
-        adjust_flat_scroll(&mut state);
-        assert_eq!(state.scroll_offset, 5);
-    }
-
-    #[test]
-    fn test_adjust_flat_scroll_cursor_below_viewport() {
-        let items: Vec<_> = (0..20)
-            .map(|i| SelectableItem {
-                id: format!("item{i}"),
-                label: format!("Item {i}"),
-                description: None,
-                preselected: false,
-                disabled: false,
-            })
-            .collect();
-        let mut state = FlatSelectionState::new(items);
-        state.scroll_offset = 0;
-        state.cursor = 18;
-        adjust_flat_scroll(&mut state);
-        // MAX_VISIBLE_ITEMS = 15, so scroll_offset = 18 - 15 + 1 = 4
-        assert_eq!(state.scroll_offset, 4);
     }
 
     #[test]
