@@ -2041,36 +2041,43 @@ fn auto_commit_overlay(
     use std::process::Command;
 
     // Fetch latest from remote before committing to avoid divergence
-    println!("{} overlay repo...", "Syncing".blue().bold());
-    let fetch_output = Command::new("git")
-        .args(["fetch", "origin"])
-        .current_dir(manager.path())
-        .output()
-        .context("Failed to fetch from remote")?;
+    let fetch_result = crate::git::run_git_with_spinner(
+        &["fetch", "origin"],
+        Some(manager.path()),
+        "Fetching from remote...",
+        false,
+    );
 
-    if fetch_output.status.success() {
-        // Try to pull/rebase to incorporate remote changes
-        let pull_output = Command::new("git")
-            .args(["pull", "--rebase", "--autostash"])
-            .current_dir(manager.path())
-            .output()
-            .context("Failed to pull from remote")?;
+    match fetch_result {
+        Ok((status, _)) if status.success() => {
+            // Try to pull/rebase to incorporate remote changes
+            let pull_result = crate::git::run_git_with_spinner(
+                &["pull", "--rebase", "--autostash"],
+                Some(manager.path()),
+                "Pulling latest changes...",
+                false,
+            );
 
-        if !pull_output.status.success() {
-            let stderr = String::from_utf8_lossy(&pull_output.stderr);
-            // If pull fails due to conflicts, warn but continue
+            match pull_result {
+                Ok((status, _)) if !status.success() => {
+                    eprintln!(
+                        "{} Could not pull latest changes, continuing...",
+                        "Warning:".yellow(),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("{} Could not pull latest changes: {e}", "Warning:".yellow(),);
+                }
+                _ => {}
+            }
+        }
+        _ => {
+            // Fetch failed, but continue - might be offline
             eprintln!(
-                "{} Could not pull latest changes: {}",
-                "Warning:".yellow(),
-                stderr.trim()
+                "{} Could not fetch from remote (offline?), continuing...",
+                "Warning:".yellow()
             );
         }
-    } else {
-        // Fetch failed, but continue - might be offline
-        eprintln!(
-            "{} Could not fetch from remote (offline?), continuing...",
-            "Warning:".yellow()
-        );
     }
 
     // Check if there are changes to commit
@@ -2102,16 +2109,22 @@ fn auto_commit_overlay(
     manager.commit(&commit_msg)?;
 
     // Auto-push to remote
-    println!("{} to remote...", "Pushing".blue().bold());
-    match manager.push() {
-        Ok(()) => {
+    let push_result = crate::git::run_git_with_spinner(
+        &["push"],
+        Some(manager.path()),
+        "Pushing to remote...",
+        false,
+    );
+
+    match push_result {
+        Ok((status, _)) if status.success() => {
             let check = "✓".green().bold();
             let action_word = if is_new { "created" } else { "updated" };
             println!("\n{check} Overlay {action_word}: {org}/{repo}/{name}");
         }
-        Err(e) => {
+        Ok(_) | Err(_) => {
             let warn = "Warning:".yellow();
-            eprintln!("\n{warn} Committed locally but failed to push: {e}");
+            eprintln!("\n{warn} Committed locally but failed to push.");
             eprintln!("Run 'repoverlay push' to push manually when online.");
         }
     }
