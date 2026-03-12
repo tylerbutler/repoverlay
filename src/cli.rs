@@ -252,7 +252,7 @@ enum Commands {
         /// Omit when using --output for local directory output
         name: Option<String>,
 
-        /// Include specific files or directories (can be specified multiple times)
+        /// Include files/directories or glob patterns (can be specified multiple times)
         #[arg(short, long)]
         include: Vec<PathBuf>,
 
@@ -1985,13 +1985,8 @@ fn create_overlay_command(
         return Ok(());
     }
 
-    // Validate all include paths exist
-    for path in include {
-        let full_path = source.join(path);
-        if !full_path.exists() {
-            bail!("Include path does not exist: {}", path.display());
-        }
-    }
+    // Expand globs and validate include paths
+    let expanded = crate::expand_include_globs(source, include)?;
 
     // If force and exists, remove existing first
     if output_path.exists() && force {
@@ -1999,7 +1994,7 @@ fn create_overlay_command(
     }
 
     // Copy files and create overlay
-    let copied_files = crate::copy_files_to_overlay(source, &output_path, include)?;
+    let copied_files = crate::copy_files_to_overlay(source, &output_path, &expanded)?;
 
     // Generate config
     fs::write(

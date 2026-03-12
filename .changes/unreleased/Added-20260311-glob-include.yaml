@@ -1,0 +1,9 @@
+kind: Added
+body: |-
+    Support glob patterns in `--include` flag
+
+    The `--include` flag on `create` now accepts glob patterns (e.g., `*.md`,
+    `.claude/**`) in addition to exact file paths. Globs are expanded relative
+    to the source repository root using standard glob syntax.
+time: 2026-03-11T12:00:00-05:00
+component: create
