@@ -2875,6 +2875,19 @@ fn add_files_to_overlay(
         save_overlay_state, update_git_exclude,
     };
 
+    /// Tracks completed operations for rollback on failure.
+    enum RollbackEntry {
+        File {
+            target: PathBuf,
+            overlay: PathBuf,
+            original_content: Vec<u8>,
+        },
+        Directory {
+            target: PathBuf,
+            overlay: PathBuf,
+        },
+    }
+
     // Validate target is a git repo
     let target = canonicalize_path(target, "Target directory")?;
     if !target.join(".git").exists() {
@@ -3008,64 +3021,141 @@ fn add_files_to_overlay(
         }
     }
 
-    // Track completed operations for rollback on failure.
-    // Each entry is (target_file, overlay_file, original_content).
-    let mut completed: Vec<(PathBuf, PathBuf, Vec<u8>)> = Vec::new();
+    let mut completed: Vec<RollbackEntry> = Vec::new();
     let mut added_count = 0;
 
     let result: Result<()> = (|| {
         for file in files {
             let target_file = target.join(file);
             let overlay_file = overlay_repo_path.join(file);
+            let is_dir = target_file.is_dir();
 
-            // Read original content before any mutations (for rollback)
-            let original_content = fs::read(&target_file)
-                .with_context(|| format!("Failed to read {} for backup", target_file.display()))?;
-
-            // Copy file to overlay source directory
-            if let Some(parent) = overlay_file.parent() {
+            // Ensure overlay parent directory exists
+            if is_dir {
+                if let Some(parent) = overlay_file.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+            } else if let Some(parent) = overlay_file.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(&target_file, &overlay_file).with_context(|| {
-                format!("Failed to copy {} to overlay source", target_file.display())
-            })?;
 
-            // Remove original file (we'll replace it with symlink)
-            fs::remove_file(&target_file).with_context(|| {
-                format!("Failed to remove {} for linking", target_file.display())
-            })?;
+            if is_dir {
+                // Copy directory tree to overlay source
+                fs::create_dir_all(&overlay_file)?;
+                crate::overlay_repo::copy_dir_recursive(&target_file, &overlay_file).with_context(
+                    || {
+                        format!(
+                            "Failed to copy directory {} to overlay source",
+                            target_file.display()
+                        )
+                    },
+                )?;
 
-            // Create symlink/copy from overlay source to target
-            match link_type {
-                LinkType::Symlink => {
-                    #[cfg(unix)]
-                    std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(|| {
-                        format!("Failed to create symlink: {}", target_file.display())
-                    })?;
-                    #[cfg(windows)]
-                    std::os::windows::fs::symlink_file(&overlay_file, &target_file).with_context(
-                        || format!("Failed to create symlink: {}", target_file.display()),
-                    )?;
+                // Remove original directory
+                fs::remove_dir_all(&target_file).with_context(|| {
+                    format!(
+                        "Failed to remove directory {} for linking",
+                        target_file.display()
+                    )
+                })?;
+
+                // Create symlink/copy from overlay source to target
+                match link_type {
+                    LinkType::Symlink => {
+                        #[cfg(unix)]
+                        std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(
+                            || {
+                                format!(
+                                    "Failed to create directory symlink: {}",
+                                    target_file.display()
+                                )
+                            },
+                        )?;
+                        #[cfg(windows)]
+                        std::os::windows::fs::symlink_dir(&overlay_file, &target_file)
+                            .with_context(|| {
+                                format!(
+                                    "Failed to create directory symlink: {}",
+                                    target_file.display()
+                                )
+                            })?;
+                    }
+                    LinkType::Copy | LinkType::Merged => {
+                        fs::create_dir_all(&target_file).with_context(|| {
+                            format!("Failed to create directory: {}", target_file.display())
+                        })?;
+                        crate::overlay_repo::copy_dir_recursive(&overlay_file, &target_file)
+                            .with_context(|| {
+                                format!("Failed to copy directory: {}", target_file.display())
+                            })?;
+                    }
                 }
-                LinkType::Copy | LinkType::Merged => {
-                    fs::copy(&overlay_file, &target_file).with_context(|| {
-                        format!("Failed to copy file: {}", target_file.display())
-                    })?;
+
+                completed.push(RollbackEntry::Directory {
+                    target: target_file.clone(),
+                    overlay: overlay_file,
+                });
+
+                state.add_file(FileEntry {
+                    source: file.clone(),
+                    target: file.clone(),
+                    link_type,
+                    entry_type: EntryType::Directory,
+                });
+
+                println!("  {} {}/", "+".green(), file.display());
+            } else {
+                // Read original content before any mutations (for rollback)
+                let original_content = fs::read(&target_file).with_context(|| {
+                    format!("Failed to read {} for backup", target_file.display())
+                })?;
+
+                // Copy file to overlay source directory
+                fs::copy(&target_file, &overlay_file).with_context(|| {
+                    format!("Failed to copy {} to overlay source", target_file.display())
+                })?;
+
+                // Remove original file (we'll replace it with symlink)
+                fs::remove_file(&target_file).with_context(|| {
+                    format!("Failed to remove {} for linking", target_file.display())
+                })?;
+
+                // Create symlink/copy from overlay source to target
+                match link_type {
+                    LinkType::Symlink => {
+                        #[cfg(unix)]
+                        std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(
+                            || format!("Failed to create symlink: {}", target_file.display()),
+                        )?;
+                        #[cfg(windows)]
+                        std::os::windows::fs::symlink_file(&overlay_file, &target_file)
+                            .with_context(|| {
+                                format!("Failed to create symlink: {}", target_file.display())
+                            })?;
+                    }
+                    LinkType::Copy | LinkType::Merged => {
+                        fs::copy(&overlay_file, &target_file).with_context(|| {
+                            format!("Failed to copy file: {}", target_file.display())
+                        })?;
+                    }
                 }
+
+                completed.push(RollbackEntry::File {
+                    target: target_file.clone(),
+                    overlay: overlay_file,
+                    original_content,
+                });
+
+                state.add_file(FileEntry {
+                    source: file.clone(),
+                    target: file.clone(),
+                    link_type,
+                    entry_type: EntryType::File,
+                });
+
+                println!("  {} {}", "+".green(), file.display());
             }
 
-            // Track for potential rollback
-            completed.push((target_file.clone(), overlay_file, original_content));
-
-            // Add to state
-            state.add_file(FileEntry {
-                source: file.clone(),
-                target: file.clone(),
-                link_type,
-                entry_type: EntryType::File,
-            });
-
-            println!("  {} {}", "+".green(), file.display());
             added_count += 1;
         }
 
@@ -3080,15 +3170,39 @@ fn add_files_to_overlay(
             completed.len(),
             e
         );
-        for (target_file, overlay_file, original_content) in completed.iter().rev() {
-            // Remove the symlink/copy we created
-            if target_file.exists() || target_file.is_symlink() {
-                let _ = fs::remove_file(target_file);
+        for entry in completed.iter().rev() {
+            match entry {
+                RollbackEntry::File {
+                    target: target_file,
+                    overlay: overlay_file,
+                    original_content,
+                } => {
+                    // Remove the symlink/copy we created
+                    if target_file.exists() || target_file.is_symlink() {
+                        let _ = fs::remove_file(target_file);
+                    }
+                    // Restore original file content
+                    let _ = fs::write(target_file, original_content);
+                    // Remove the copy in overlay source
+                    let _ = fs::remove_file(overlay_file);
+                }
+                RollbackEntry::Directory {
+                    target: target_file,
+                    overlay: overlay_file,
+                } => {
+                    // Remove the symlink/copy we created
+                    if target_file.is_symlink() {
+                        let _ = fs::remove_file(target_file);
+                    } else if target_file.exists() {
+                        let _ = fs::remove_dir_all(target_file);
+                    }
+                    // Restore directory from overlay copy
+                    let _ = fs::create_dir_all(target_file);
+                    let _ = crate::overlay_repo::copy_dir_recursive(overlay_file, target_file);
+                    // Remove the copy in overlay source
+                    let _ = fs::remove_dir_all(overlay_file);
+                }
             }
-            // Restore original file content
-            let _ = fs::write(target_file, original_content);
-            // Remove the copy in overlay source
-            let _ = fs::remove_file(overlay_file);
         }
         return result;
     }
