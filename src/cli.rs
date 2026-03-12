@@ -2536,6 +2536,7 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
     // Only skip .git directory - hidden directories like .claude/, .vscode/, etc.
     // are valid overlay content and must be included.
     let mut detected_files: Vec<DetectedFile> = Vec::new();
+    let mut overlay_source_files: HashSet<PathBuf> = HashSet::new();
     for entry in WalkDir::new(&source_path)
         .min_depth(1)
         .into_iter()
@@ -2562,6 +2563,7 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
             }
 
             let is_currently_applied = current_files.contains(&relative);
+            overlay_source_files.insert(relative.clone());
 
             detected_files.push(DetectedFile {
                 path: relative,
@@ -2573,9 +2575,29 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
         }
     }
 
+    // Discover files in the target repo that could be added to the overlay (#190).
+    // This includes AI configs, gitignored files, and untracked files that aren't
+    // already in the overlay source.
+    let target_repo_candidates = crate::detection::discover_files(&target);
+    for candidate in target_repo_candidates {
+        // Skip files already in the overlay source
+        if overlay_source_files.contains(&candidate.path) {
+            continue;
+        }
+        // Skip files that are symlinks (already managed by an overlay)
+        let full_path = target.join(&candidate.path);
+        if full_path.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+            continue;
+        }
+        detected_files.push(DetectedFile {
+            preselected: false, // Target repo files start unselected
+            ..candidate
+        });
+    }
+
     if detected_files.is_empty() {
         bail!(
-            "No files found in overlay source: {}",
+            "No files found in overlay source or target repository: {}",
             source_path.display()
         );
     }
@@ -2632,18 +2654,20 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
         remove_files_from_overlay(name_arg, &target, &to_remove, false)?;
     }
     if !to_add.is_empty() {
-        // Copy files from overlay source to target, then add to overlay.
-        // The files exist in the overlay source but not in the target repo.
-        // add_files_to_overlay expects them to exist in the target first.
+        // Files from the overlay source need to be copied to the target first,
+        // since add_files_to_overlay expects them to exist in the target.
+        // Files from the target repo already exist there.
         for file in &to_add {
-            let source_file = source_path.join(file);
-            let target_file = target.join(file);
-            if let Some(parent) = target_file.parent() {
-                fs::create_dir_all(parent)?;
+            if overlay_source_files.contains(file) {
+                let source_file = source_path.join(file);
+                let target_file = target.join(file);
+                if let Some(parent) = target_file.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&source_file, &target_file).with_context(|| {
+                    format!("Failed to copy {} from overlay source", file.display())
+                })?;
             }
-            fs::copy(&source_file, &target_file).with_context(|| {
-                format!("Failed to copy {} from overlay source", file.display())
-            })?;
         }
         add_files_to_overlay(name_arg, &target, &to_add, false)?;
     }
