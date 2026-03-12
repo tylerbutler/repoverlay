@@ -106,7 +106,7 @@ impl crate::selection::ToSelectableItem for BrowseOverlayItem<'_> {
         };
         crate::selection::SelectableItem {
             id: self.overlay.to_string(),
-            label: self.overlay.display_bold(),
+            label: self.overlay.to_string(),
             description,
             preselected: false,
             disabled,

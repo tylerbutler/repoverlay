@@ -838,7 +838,8 @@ fn render_flat_frame(frame: &mut Frame, state: &FlatSelectionState, prompt: &str
                 spans.push(Span::raw("[ ] "));
             }
 
-            // Label
+            // Label — render with the last `/`-separated segment in bold when not
+            // overridden by disabled/cursor styling.
             if item.disabled {
                 spans.push(Span::styled(
                     &item.label,
@@ -846,6 +847,12 @@ fn render_flat_frame(frame: &mut Frame, state: &FlatSelectionState, prompt: &str
                 ));
             } else if is_cursor {
                 spans.push(Span::styled(&item.label, Style::default().fg(Color::Cyan)));
+            } else if let Some(pos) = item.label.rfind('/') {
+                spans.push(Span::raw(&item.label[..=pos]));
+                spans.push(Span::styled(
+                    &item.label[pos + 1..],
+                    Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+                ));
             } else {
                 spans.push(Span::raw(&item.label));
             }
