@@ -66,6 +66,7 @@ impl<Id: Clone + Eq + Hash> MultiSelectTreeState<Id> {
     }
 
     /// Toggle selection of a single item.
+    #[allow(dead_code)]
     pub(crate) fn toggle(&mut self, id: &Id) {
         if self.selected.contains(id) {
             self.selected.remove(id);
@@ -80,16 +81,19 @@ impl<Id: Clone + Eq + Hash> MultiSelectTreeState<Id> {
     }
 
     /// Deselect a single item.
+    #[allow(dead_code)]
     pub(crate) fn deselect(&mut self, id: &Id) {
         self.selected.remove(id);
     }
 
     /// Select multiple items.
+    #[allow(dead_code)]
     pub(crate) fn select_many(&mut self, ids: impl IntoIterator<Item = Id>) {
         self.selected.extend(ids);
     }
 
     /// Deselect multiple items.
+    #[allow(dead_code)]
     pub(crate) fn deselect_many<'a>(&mut self, ids: impl IntoIterator<Item = &'a Id>)
     where
         Id: 'a,
@@ -100,11 +104,13 @@ impl<Id: Clone + Eq + Hash> MultiSelectTreeState<Id> {
     }
 
     /// Get the number of selected items.
+    #[allow(dead_code)]
     pub(crate) fn selected_count(&self) -> usize {
         self.selected.len()
     }
 
     /// Get an iterator over selected identifiers.
+    #[allow(dead_code)]
     pub(crate) fn selected_ids(&self) -> impl Iterator<Item = &Id> {
         self.selected.iter()
     }
@@ -217,6 +223,7 @@ impl<'a, Id: Clone + Eq + Hash + 'a> MultiSelectTree<'a, Id> {
     }
 
     /// Set the highlight style for the focused node.
+    #[allow(dead_code)]
     pub(crate) const fn highlight_style(mut self, style: Style) -> Self {
         self.highlight_style = style;
         self

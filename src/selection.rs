@@ -15,6 +15,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::detection::{DetectedFile, FileCategory};
+#[cfg(test)]
+use crate::widgets::multi_select_tree::CheckState;
 use crate::widgets::multi_select_tree::{MultiSelectTree, MultiSelectTreeState, TreeNode};
 
 /// Conversion trait for types that can be represented as a [`SelectableItem`]
@@ -197,18 +199,6 @@ enum Mode {
     Search,
 }
 
-/// Selection state of a directory's children.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DirSelectionState {
-    /// No children selected.
-    None,
-    /// Some children selected.
-    Partial,
-    /// All children selected.
-    All,
-}
-
 /// Internal state for the selection UI.
 struct SelectionState {
     /// All files available for selection.
@@ -221,6 +211,8 @@ struct SelectionState {
     expanded_dirs: HashSet<PathBuf>,
     /// Lookup from path → `parent_dir` for O(1) ancestor traversal.
     parent_map: HashMap<PathBuf, Option<PathBuf>>,
+    /// Lookup from parent path → immediate children for O(1) descendant queries.
+    children_map: HashMap<PathBuf, Vec<PathBuf>>,
     /// Current search query.
     search_query: String,
     /// Current input mode.
@@ -263,12 +255,24 @@ impl SelectionState {
             .map(|f| (f.path.clone(), f.parent_dir.clone()))
             .collect();
 
+        // Build children lookup map for O(1) descendant queries
+        let mut children_map: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        for f in &files {
+            if let Some(parent) = &f.parent_dir {
+                children_map
+                    .entry(parent.clone())
+                    .or_default()
+                    .push(f.path.clone());
+            }
+        }
+
         Self {
             all_files: files,
             selections,
             visible_categories: visible,
             expanded_dirs,
             parent_map,
+            children_map,
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
@@ -474,11 +478,7 @@ impl SelectionState {
     /// Get immediate child paths belonging to a directory.
     #[cfg(test)]
     fn children_of(&self, dir_path: &Path) -> Vec<PathBuf> {
-        self.all_files
-            .iter()
-            .filter(|f| f.parent_dir.as_deref() == Some(dir_path))
-            .map(|f| f.path.clone())
-            .collect()
+        self.children_map.get(dir_path).cloned().unwrap_or_default()
     }
 
     /// Get all descendant paths of a directory (recursive).
@@ -487,11 +487,12 @@ impl SelectionState {
         let mut dirs_to_check = vec![dir_path.to_path_buf()];
 
         while let Some(dir) = dirs_to_check.pop() {
-            for f in &self.all_files {
-                if f.parent_dir.as_deref() == Some(&dir) {
-                    result.push(f.path.clone());
-                    if f.category == FileCategory::AiConfigDirectory {
-                        dirs_to_check.push(f.path.clone());
+            if let Some(children) = self.children_map.get(&dir) {
+                for child in children {
+                    result.push(child.clone());
+                    // If this child is itself a directory, recurse into it
+                    if self.children_map.contains_key(child) {
+                        dirs_to_check.push(child.clone());
                     }
                 }
             }
@@ -502,21 +503,21 @@ impl SelectionState {
 
     /// Get the selection state of a directory based on all descendants.
     #[cfg(test)]
-    fn dir_selection_state(&self, dir_path: &Path) -> DirSelectionState {
+    fn dir_selection_state(&self, dir_path: &Path) -> CheckState {
         let descendants = self.descendants_of(dir_path);
         if descendants.is_empty() {
-            return DirSelectionState::None;
+            return CheckState::Unchecked;
         }
         let selected_count = descendants
             .iter()
             .filter(|c| self.selections.contains(*c))
             .count();
         if selected_count == 0 {
-            DirSelectionState::None
+            CheckState::Unchecked
         } else if selected_count == descendants.len() {
-            DirSelectionState::All
+            CheckState::Checked
         } else {
-            DirSelectionState::Partial
+            CheckState::Partial
         }
     }
 
@@ -776,27 +777,7 @@ fn render_flat_frame(frame: &mut Frame, state: &FlatSelectionState, prompt: &str
     frame.render_widget(Paragraph::new(prompt_line), chunks[0]);
 
     // Search
-    let search_spans = if state.mode == Mode::Search {
-        vec![
-            Span::raw("Search: "),
-            Span::styled(
-                format!("{}_", state.search_query),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]
-    } else if state.search_query.is_empty() {
-        vec![
-            Span::raw("Search: "),
-            Span::styled("(press / to search)", Style::default().fg(Color::DarkGray)),
-        ]
-    } else {
-        vec![
-            Span::raw("Search: "),
-            Span::raw(&state.search_query),
-            Span::styled(" (Esc to clear)", Style::default().fg(Color::DarkGray)),
-        ]
-    };
-    frame.render_widget(Paragraph::new(Line::from(search_spans)), chunks[1]);
+    render_search_line(frame, chunks[1], state.mode, &state.search_query);
 
     // Count summary
     let enabled_count = state.items.iter().filter(|i| !i.disabled).count();
@@ -904,28 +885,9 @@ fn render_flat_frame(frame: &mut Frame, state: &FlatSelectionState, prompt: &str
 }
 
 fn handle_flat_search_key(key: KeyEvent, state: &mut FlatSelectionState) -> bool {
-    match key.code {
-        KeyCode::Esc | KeyCode::Enter => {
-            state.clamp_cursor();
-            true
-        }
-        KeyCode::Backspace => {
-            state.search_query.pop();
-            state.clamp_cursor();
-            false
-        }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.search_query.push(c);
-            state.clamp_cursor();
-            false
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.search_query.clear();
-            state.clamp_cursor();
-            true
-        }
-        _ => false,
-    }
+    let exit = handle_search_key_common(key, &mut state.search_query);
+    state.clamp_cursor();
+    exit
 }
 
 /// Check if the terminal is interactive.
@@ -1078,26 +1040,27 @@ fn handle_selection_key(state: &mut SelectionState, key: KeyEvent) -> SelectionA
 
 /// Handle a key press in search mode. Returns true if should exit search mode.
 fn handle_search_key(state: &mut SelectionState, key: KeyEvent) -> bool {
+    let exit = handle_search_key_common(key, &mut state.search_query);
+    state.clamp_cursor();
+    exit
+}
+
+/// Shared search key handler. Mutates the query string and returns true if
+/// the caller should exit search mode.
+fn handle_search_key_common(key: KeyEvent, query: &mut String) -> bool {
     match key.code {
-        KeyCode::Enter | KeyCode::Esc => {
-            // Exit search mode (keep the query)
+        KeyCode::Enter | KeyCode::Esc => true,
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            query.clear();
             true
         }
         KeyCode::Backspace => {
-            state.search_query.pop();
-            state.clamp_cursor();
+            query.pop();
             false
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.search_query.push(c);
-            state.clamp_cursor();
+            query.push(c);
             false
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // Clear search on Ctrl+C in search mode
-            state.search_query.clear();
-            state.clamp_cursor();
-            true
         }
         _ => false,
     }
@@ -1233,7 +1196,7 @@ fn render_selection_frame(
     render_category_line_ratatui(frame, chunks[1], state, &counts);
 
     // Search
-    render_search_line_ratatui(frame, chunks[2], state);
+    render_search_line(frame, chunks[2], state.mode, &state.search_query);
 
     // Selection summary
     render_summary_ratatui(frame, chunks[3], &counts);
@@ -1294,25 +1257,21 @@ fn render_category_line_ratatui(
 }
 
 /// Render search line.
-fn render_search_line_ratatui(
-    frame: &mut Frame,
-    area: ratatui::layout::Rect,
-    state: &SelectionState,
-) {
+fn render_search_line(frame: &mut Frame, area: ratatui::layout::Rect, mode: Mode, query: &str) {
     let mut spans = vec![Span::raw("Search: ")];
 
-    if state.mode == Mode::Search {
+    if mode == Mode::Search {
         spans.push(Span::styled(
-            format!("{}_", state.search_query),
+            format!("{query}_"),
             Style::default().fg(Color::Yellow),
         ));
-    } else if state.search_query.is_empty() {
+    } else if query.is_empty() {
         spans.push(Span::styled(
             "(press / to search)",
             Style::default().fg(Color::DarkGray),
         ));
     } else {
-        spans.push(Span::raw(&state.search_query));
+        spans.push(Span::raw(query));
         spans.push(Span::styled(
             " (Esc to clear)",
             Style::default().fg(Color::DarkGray),
@@ -1401,6 +1360,7 @@ fn render_help_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &S
 mod tests {
     use super::*;
     use crate::testutil::buffer_to_string;
+    use crate::widgets::multi_select_tree::CheckState;
 
     fn make_test_files() -> Vec<DetectedFile> {
         vec![
@@ -2232,7 +2192,7 @@ mod tests {
 
         assert_eq!(
             state.dir_selection_state(Path::new(".claude")),
-            DirSelectionState::None
+            CheckState::Unchecked
         );
     }
 
@@ -2249,7 +2209,7 @@ mod tests {
 
         assert_eq!(
             state.dir_selection_state(Path::new(".claude")),
-            DirSelectionState::Partial
+            CheckState::Partial
         );
     }
 
@@ -2261,7 +2221,7 @@ mod tests {
         // All children are preselected
         assert_eq!(
             state.dir_selection_state(Path::new(".claude")),
-            DirSelectionState::All
+            CheckState::Checked
         );
     }
 
@@ -2397,15 +2357,6 @@ mod tests {
         assert!(SelectionState::is_expandable(&state.all_files[3])); // .claude/commands directory
         assert!(!SelectionState::is_expandable(&state.all_files[0])); // CLAUDE.md file
         assert!(!SelectionState::is_expandable(&state.all_files[2])); // .claude/settings.json file
-    }
-
-    #[test]
-    fn test_dir_selection_state_enum_equality() {
-        assert_eq!(DirSelectionState::None, DirSelectionState::None);
-        assert_eq!(DirSelectionState::Partial, DirSelectionState::Partial);
-        assert_eq!(DirSelectionState::All, DirSelectionState::All);
-        assert_ne!(DirSelectionState::None, DirSelectionState::Partial);
-        assert_ne!(DirSelectionState::Partial, DirSelectionState::All);
     }
 
     #[test]
@@ -2686,7 +2637,7 @@ mod tests {
         // Directory with no children returns None
         assert_eq!(
             state.dir_selection_state(Path::new(".empty-dir")),
-            DirSelectionState::None
+            CheckState::Unchecked
         );
     }
 
