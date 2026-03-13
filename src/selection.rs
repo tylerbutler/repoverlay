@@ -3136,6 +3136,480 @@ mod tests {
         insta::assert_snapshot!(buffer_to_string(&buffer));
     }
 
+    /// Realistic test data matching a real repo with deeply nested .claude directory:
+    /// .claude/rules/*.md, .claude/scripts/*.sh, .claude/skills/*/SKILL.md
+    fn make_test_files_deep_nesting() -> Vec<DetectedFile> {
+        vec![
+            // .claude directory
+            DetectedFile {
+                path: PathBuf::from(".claude"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: None,
+            },
+            // .claude/rules/ directory and files
+            DetectedFile {
+                path: PathBuf::from(".claude/rules"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/rules/api-exports.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/rules")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/rules/testing.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/rules")),
+            },
+            // .claude/scripts/ directory and files
+            DetectedFile {
+                path: PathBuf::from(".claude/scripts"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/scripts/gh-prereqs.sh"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/scripts")),
+            },
+            // .claude/skills/ directory with subdirectories
+            DetectedFile {
+                path: PathBuf::from(".claude/skills"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/skills/create-pr"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/skills")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/skills/create-pr/SKILL.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/skills/create-pr")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/skills/fix-flaky-test"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/skills")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/skills/fix-flaky-test/SKILL.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/skills/fix-flaky-test")),
+            },
+            // .claude/settings.json
+            DetectedFile {
+                path: PathBuf::from(".claude/settings.json"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            // Root-level files
+            DetectedFile {
+                path: PathBuf::from("CLAUDE.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: None,
+            },
+            DetectedFile {
+                path: PathBuf::from(".DS_Store"),
+                category: FileCategory::Gitignored,
+                preselected: false,
+                parent_dir: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn snapshot_selection_ui_deep_nesting() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_deep_nesting();
+        let mut state = SelectionState::new(files, HashSet::new());
+        for f in &state.all_files.clone() {
+            if f.preselected {
+                state.selections.insert(f.path.clone());
+            }
+        }
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    /// Verify that every cursor position in a deeply nested tree has a unique
+    /// highlight row and that cursor-down advances the highlight each time.
+    #[test]
+    fn cursor_down_moves_highlight_deep_nesting() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_deep_nesting();
+        let mut state = SelectionState::new(files, HashSet::new());
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+
+        let visible: Vec<_> = state
+            .visible_files()
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+
+        let mut rows = Vec::new();
+        for (i, path) in visible.iter().enumerate() {
+            state.cursor = i;
+            let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+            let row = highlighted_row(&buf)
+                .unwrap_or_else(|| panic!("no highlight at cursor {i} ({path:?})"));
+            rows.push(row);
+        }
+
+        for i in 1..rows.len() {
+            assert!(
+                rows[i] > rows[i - 1],
+                "cursor {i} ({:?}) at row {} should be below cursor {} ({:?}) at row {}",
+                visible[i],
+                rows[i],
+                i - 1,
+                visible[i - 1],
+                rows[i - 1],
+            );
+        }
+    }
+
+    /// Verify that no file with a `parent_dir` ends up as a root-level tree node.
+    ///
+    /// This catches the bug where child files "leak" to the root of the tree
+    /// and render with full paths instead of being nested under their parent.
+    #[test]
+    fn no_child_files_at_root_level() {
+        let files = make_test_files_deep_nesting();
+        let state = SelectionState::new(files, HashSet::new());
+        let nodes = build_tree_nodes(&state);
+
+        // Collect root-level node IDs
+        let root_ids: Vec<_> = nodes.iter().map(|n| &n.id).collect();
+
+        // Every visible file with a parent_dir should NOT be at root level
+        for f in state.visible_files() {
+            if f.parent_dir.is_some() {
+                assert!(
+                    !root_ids.contains(&&f.path),
+                    "{:?} has parent_dir {:?} but appears at root level in tree",
+                    f.path,
+                    f.parent_dir,
+                );
+            }
+        }
+    }
+
+    /// Recursively collect all node IDs in a tree.
+    fn collect_ids(nodes: &[TreeNode<'_, PathBuf>]) -> HashSet<PathBuf> {
+        let mut ids = HashSet::new();
+        for node in nodes {
+            ids.insert(node.id.clone());
+            ids.extend(collect_ids(&node.children));
+        }
+        ids
+    }
+
+    /// Recursively check that each child's ID has the expected `parent_dir`.
+    fn verify_children(
+        nodes: &[TreeNode<'_, PathBuf>],
+        expected_parent: Option<&Path>,
+        file_map: &HashMap<PathBuf, Option<PathBuf>>,
+    ) {
+        for node in nodes {
+            let actual_parent = file_map.get(&node.id);
+            assert_eq!(
+                actual_parent.map(|p| p.as_deref()),
+                Some(expected_parent),
+                "node {:?} has parent_dir {:?} but is placed under {:?} in tree",
+                node.id,
+                actual_parent,
+                expected_parent,
+            );
+            verify_children(&node.children, Some(&node.id), file_map);
+        }
+    }
+
+    /// Verify that every directory node's children match the files with that
+    /// directory as `parent_dir` — no children should be missing.
+    #[test]
+    fn all_children_nested_under_parent() {
+        let files = make_test_files_deep_nesting();
+        let state = SelectionState::new(files, HashSet::new());
+        let nodes = build_tree_nodes(&state);
+        let all_tree_ids = collect_ids(&nodes);
+
+        // Every visible file should appear somewhere in the tree
+        for f in state.visible_files() {
+            assert!(
+                all_tree_ids.contains(&f.path),
+                "{:?} is visible but missing from tree entirely",
+                f.path,
+            );
+        }
+    }
+
+    /// Verify that deeply nested directories have their files as tree children,
+    /// not as siblings — i.e., the tree depth matches the `parent_dir` hierarchy.
+    #[test]
+    fn tree_depth_matches_parent_hierarchy() {
+        let files = make_test_files_deep_nesting();
+        let state = SelectionState::new(files, HashSet::new());
+        let nodes = build_tree_nodes(&state);
+
+        // Build a map of path → parent_dir for quick lookup
+        let file_map: HashMap<PathBuf, Option<PathBuf>> = state
+            .visible_files()
+            .iter()
+            .map(|f| (f.path.clone(), f.parent_dir.clone()))
+            .collect();
+
+        verify_children(&nodes, None, &file_map);
+    }
+
+    /// Integration test: use real `detect_directory_children` on a temp dir
+    /// and verify the resulting tree structure is correct.
+    #[test]
+    fn real_detection_produces_correct_tree_nesting() {
+        use crate::detection::{detect_ai_config_directories, detect_directory_children};
+        use crate::testutil::create_test_repo;
+        use std::fs;
+
+        let repo = create_test_repo();
+
+        // Create a realistic .claude directory structure
+        fs::create_dir_all(repo.path().join(".claude/rules")).unwrap();
+        fs::create_dir_all(repo.path().join(".claude/scripts")).unwrap();
+        fs::create_dir_all(repo.path().join(".claude/skills/create-pr")).unwrap();
+        fs::create_dir_all(repo.path().join(".claude/skills/fix-flaky-test")).unwrap();
+        fs::write(repo.path().join(".claude/settings.json"), "{}").unwrap();
+        fs::write(repo.path().join(".claude/rules/api-exports.md"), "# Rules").unwrap();
+        fs::write(repo.path().join(".claude/rules/testing.md"), "# Testing").unwrap();
+        fs::write(
+            repo.path().join(".claude/scripts/gh-prereqs.sh"),
+            "#!/bin/bash",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join(".claude/skills/create-pr/SKILL.md"),
+            "# Skill",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join(".claude/skills/fix-flaky-test/SKILL.md"),
+            "# Skill",
+        )
+        .unwrap();
+
+        // Detect files exactly as discover_files would
+        let dirs = detect_ai_config_directories(repo.path());
+        let mut all_files = Vec::new();
+        for dir in dirs {
+            let dir_path = dir.path.clone();
+            all_files.push(dir);
+            all_files.extend(detect_directory_children(repo.path(), &dir_path));
+        }
+
+        let state = SelectionState::new(all_files, HashSet::new());
+        let nodes = build_tree_nodes(&state);
+
+        // Root should have exactly one node: .claude/
+        assert_eq!(nodes.len(), 1, "expected one root node (.claude/)");
+        assert_eq!(nodes[0].id, PathBuf::from(".claude"));
+
+        // .claude/ should have children: rules/, scripts/, skills/, settings.json
+        let claude_children: Vec<_> = nodes[0].children.iter().map(|n| &n.id).collect();
+        assert!(
+            claude_children.contains(&&PathBuf::from(".claude/rules")),
+            "missing rules/ under .claude/"
+        );
+        assert!(
+            claude_children.contains(&&PathBuf::from(".claude/scripts")),
+            "missing scripts/ under .claude/"
+        );
+        assert!(
+            claude_children.contains(&&PathBuf::from(".claude/skills")),
+            "missing skills/ under .claude/"
+        );
+        assert!(
+            claude_children.contains(&&PathBuf::from(".claude/settings.json")),
+            "missing settings.json under .claude/"
+        );
+
+        // rules/ should have children (not be a leaf!)
+        let rules_node = nodes[0]
+            .children
+            .iter()
+            .find(|n| n.id.as_path() == Path::new(".claude/rules"))
+            .expect("rules/ node not found");
+        assert!(
+            !rules_node.children.is_empty(),
+            "rules/ should have children but is a leaf — files leaked to wrong level"
+        );
+        let rules_children: Vec<_> = rules_node.children.iter().map(|n| &n.id).collect();
+        assert!(
+            rules_children.contains(&&PathBuf::from(".claude/rules/api-exports.md")),
+            "api-exports.md not nested under rules/"
+        );
+        assert!(
+            rules_children.contains(&&PathBuf::from(".claude/rules/testing.md")),
+            "testing.md not nested under rules/"
+        );
+
+        // skills/ should have subdirectory children
+        let skills_node = nodes[0]
+            .children
+            .iter()
+            .find(|n| n.id.as_path() == Path::new(".claude/skills"))
+            .expect("skills/ node not found");
+        assert!(
+            !skills_node.children.is_empty(),
+            "skills/ should have children"
+        );
+
+        // skills/create-pr/ should have SKILL.md
+        let create_pr_node = skills_node
+            .children
+            .iter()
+            .find(|n| n.id.as_path() == Path::new(".claude/skills/create-pr"))
+            .expect("create-pr/ node not found");
+        assert!(
+            !create_pr_node.children.is_empty(),
+            "create-pr/ should have SKILL.md as child"
+        );
+    }
+
+    /// Find the row index (0-based) that has the highlight background color (Cyan).
+    /// Searches only in the tree area (rows 6+, after the header).
+    fn highlighted_row(buffer: &ratatui::buffer::Buffer) -> Option<u16> {
+        for y in 6..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.bg == Color::Cyan {
+                    return Some(y);
+                }
+            }
+        }
+        None
+    }
+
+    /// Render the selection frame and return the buffer.
+    fn render_to_buffer(
+        terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+        state: &SelectionState,
+        tree_state: &mut MultiSelectTreeState<PathBuf>,
+    ) -> ratatui::buffer::Buffer {
+        sync_tree_state(state, tree_state);
+        terminal
+            .draw(|frame| {
+                render_selection_frame(frame, state, tree_state, "Select files");
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn cursor_down_moves_highlight_each_press_flat() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+
+        // Initial render — cursor at 0
+        let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+        let row0 = highlighted_row(&buf).expect("should have a highlight");
+
+        // Press Down — cursor should move to next item
+        state.cursor_down();
+        let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+        let row1 = highlighted_row(&buf).expect("should have a highlight");
+        assert_eq!(row1, row0 + 1, "highlight should move down by one row");
+
+        // Press Down again
+        state.cursor_down();
+        let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+        let row2 = highlighted_row(&buf).expect("should have a highlight");
+        assert_eq!(row2, row1 + 1, "highlight should move down by one row");
+    }
+
+    #[test]
+    fn cursor_down_moves_highlight_each_press_nested() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+
+        // Collect all visible files for reference
+        let visible: Vec<_> = state
+            .visible_files()
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+
+        // Render at each cursor position and collect highlighted rows
+        let mut rows = Vec::new();
+        for (i, path) in visible.iter().enumerate() {
+            state.cursor = i;
+            let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+            let row = highlighted_row(&buf)
+                .unwrap_or_else(|| panic!("no highlight at cursor {i} ({path:?})"));
+            rows.push(row);
+        }
+
+        // Each cursor position should highlight a different, increasing row
+        for i in 1..rows.len() {
+            assert!(
+                rows[i] > rows[i - 1],
+                "cursor {i} ({:?}) at row {} should be below cursor {} ({:?}) at row {}",
+                visible[i],
+                rows[i],
+                i - 1,
+                visible[i - 1],
+                rows[i - 1],
+            );
+        }
+    }
+
     #[test]
     fn snapshot_flat_ui_initial() {
         use ratatui::Terminal;
