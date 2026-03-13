@@ -1103,6 +1103,24 @@ fn handle_search_key(state: &mut SelectionState, key: KeyEvent) -> bool {
     }
 }
 
+/// Build the full tree identifier path from root to a given node.
+///
+/// `tui-tree-widget` expects paths like `[grandparent, parent, child]` for
+/// navigation and expand/collapse operations. This walks up the `parent_map`
+/// to reconstruct the full ancestor chain.
+fn tree_path_for(path: &Path, parent_map: &HashMap<PathBuf, Option<PathBuf>>) -> Vec<PathBuf> {
+    let mut chain = vec![path.to_path_buf()];
+    let mut current = parent_map.get(path).and_then(|opt| opt.as_ref());
+    while let Some(parent) = current {
+        chain.push(parent.clone());
+        current = parent_map
+            .get(parent.as_path())
+            .and_then(|opt| opt.as_ref());
+    }
+    chain.reverse();
+    chain
+}
+
 /// Sync `MultiSelectTreeState` from `SelectionState`.
 ///
 /// Copies the checked set and the cursor highlight into the tree state
@@ -1114,10 +1132,10 @@ fn sync_tree_state(state: &SelectionState, tree_state: &mut MultiSelectTreeState
         tree_state.select(path.clone());
     }
 
-    // Sync expanded dirs
+    // Sync expanded dirs — use full tree paths so nested dirs are found
     for file in &state.all_files {
         if file.category == FileCategory::AiConfigDirectory {
-            let tree_path = vec![file.path.clone()];
+            let tree_path = tree_path_for(&file.path, &state.parent_map);
             if state.expanded_dirs.contains(&file.path) {
                 tree_state.tree.open(tree_path);
             } else {
@@ -1129,10 +1147,7 @@ fn sync_tree_state(state: &SelectionState, tree_state: &mut MultiSelectTreeState
     // Sync cursor position: map flat cursor to tree identifier path
     let visible = state.visible_files();
     if let Some(file) = visible.get(state.cursor) {
-        let tree_path = file.parent_dir.as_ref().map_or_else(
-            || vec![file.path.clone()],
-            |parent| vec![parent.clone(), file.path.clone()],
-        );
+        let tree_path = tree_path_for(&file.path, &state.parent_map);
         tree_state.tree.select(tree_path);
     }
 }
@@ -3070,6 +3085,39 @@ mod tests {
         let files = make_test_files();
         let mut state = SelectionState::new(files, HashSet::new());
         state.toggle_category(FileCategory::Gitignored);
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_nested() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        // Select preselected files
+        for f in &state.all_files.clone() {
+            if f.preselected {
+                state.selections.insert(f.path.clone());
+            }
+        }
         let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
         sync_tree_state(&state, &mut tree_state);
 
