@@ -134,10 +134,25 @@ pub(crate) fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile
     results
 }
 
+/// Directories inside AI config dirs that contain transient tool state
+/// and should be skipped during discovery to avoid scanning thousands of files.
+pub(crate) const SKIP_CHILD_DIRS: &[&str] = &[
+    "worktrees", // Claude Code worktree state
+    "todos",     // Claude Code todo state
+];
+
+/// Check if a directory name should be skipped during AI config directory walking.
+fn should_skip_child_dir(name: &std::ffi::OsStr) -> bool {
+    let s = name.to_string_lossy();
+    SKIP_CHILD_DIRS.iter().any(|skip| s == *skip) || s.starts_with('.')
+}
+
 /// Detect child files within an AI configuration directory.
 ///
 /// Walks the directory tree and returns child entries with appropriate
 /// depth and parent directory information for tree display.
+/// Skips transient tool state directories (e.g., `worktrees/`) that
+/// can contain thousands of files.
 pub(crate) fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Vec<DetectedFile> {
     let full_path = repo_path.join(dir_path);
     if !full_path.exists() || !full_path.is_dir() {
@@ -148,6 +163,14 @@ pub(crate) fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Ve
         .min_depth(1) // Skip the directory itself
         .sort_by_file_name()
         .into_iter()
+        .filter_entry(|e| {
+            // Skip transient tool state directories at depth 1 (direct children
+            // of the AI config dir) to avoid scanning thousands of files.
+            if e.file_type().is_dir() && e.depth() == 1 && should_skip_child_dir(e.file_name()) {
+                return false;
+            }
+            true
+        })
         .filter_map(Result::ok)
         .map(|entry| {
             let relative = entry

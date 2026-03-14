@@ -17,6 +17,20 @@ use crossterm::{
 
 use crate::detection::{DetectedFile, FileCategory};
 
+/// Conversion trait for types that can be represented as a [`SelectableItem`]
+/// in the interactive selection UI.
+///
+/// Implementations provide the mapping from domain types (like overlay names)
+/// to the generic selection UI model, including display labels, descriptions,
+/// and disabled state.
+pub(crate) trait ToSelectableItem {
+    /// Convert this value into a [`SelectableItem`] for display in the selection UI.
+    ///
+    /// `target` is the path to the target repository, used to load overlay state
+    /// for timestamp information.
+    fn to_selectable_item(&self, target: &Path) -> SelectableItem;
+}
+
 /// Maximum number of items visible in the scrollable viewport.
 const MAX_VISIBLE_ITEMS: usize = 15;
 
@@ -209,6 +223,8 @@ struct SelectionState {
     visible_categories: HashSet<FileCategory>,
     /// Expanded directory paths (directories whose children are visible).
     expanded_dirs: HashSet<PathBuf>,
+    /// Lookup from path → `parent_dir` for O(1) ancestor traversal.
+    parent_map: HashMap<PathBuf, Option<PathBuf>>,
     /// Current search query.
     search_query: String,
     /// Current input mode.
@@ -247,11 +263,18 @@ impl SelectionState {
             .map(|f| f.path.clone())
             .collect();
 
+        // Build parent lookup map for O(1) ancestor traversal
+        let parent_map: HashMap<PathBuf, Option<PathBuf>> = files
+            .iter()
+            .map(|f| (f.path.clone(), f.parent_dir.clone()))
+            .collect();
+
         Self {
             all_files: files,
             selections,
             visible_categories: visible,
             expanded_dirs,
+            parent_map,
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
@@ -280,7 +303,7 @@ impl SelectionState {
 
     /// Check that all ancestor directories of a file are expanded.
     ///
-    /// Walks up the parent chain: for each ancestor, checks it's in `expanded_dirs`.
+    /// Walks up the parent chain using the pre-built `parent_map` for O(1) lookups.
     /// If any ancestor is collapsed, the file should be hidden.
     fn all_ancestors_expanded(&self, file: &DetectedFile) -> bool {
         let mut current = file.parent_dir.as_deref();
@@ -288,12 +311,8 @@ impl SelectionState {
             if !self.expanded_dirs.contains(parent) {
                 return false;
             }
-            // Walk up: find the parent entry and check its parent_dir
-            current = self
-                .all_files
-                .iter()
-                .find(|f| f.path.as_path() == parent)
-                .and_then(|f| f.parent_dir.as_deref());
+            // Walk up using the pre-built parent map (O(1) per level)
+            current = self.parent_map.get(parent).and_then(|opt| opt.as_deref());
         }
         true
     }
@@ -1020,7 +1039,7 @@ fn render_flat_help(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::
 /// Returns false in these cases:
 /// - stdin or stdout is not a TTY
 /// - Running in a CI environment (CI env var is set)
-/// - Running as a cargo test binary (executable in target/*/deps/)
+/// - Running as a cargo test binary (compiled with cfg(test))
 /// - TERM is unset or "dumb"
 /// - `REPOVERLAY_NON_INTERACTIVE` env var is set
 pub(crate) fn is_interactive() -> bool {
@@ -1036,13 +1055,9 @@ pub(crate) fn is_interactive() -> bool {
         return false;
     }
 
-    // Detect cargo test environment by checking executable path
-    // Test binaries live in target/debug/deps/ or target/release/deps/
-    if let Ok(exe) = std::env::current_exe() {
-        let exe_str = exe.to_string_lossy();
-        if exe_str.contains("target") && exe_str.contains("deps") {
-            return false;
-        }
+    // When compiled with cfg(test), we're running inside a test binary
+    if cfg!(test) {
+        return false;
     }
 
     // Check TERM - if not set or "dumb", assume non-interactive
@@ -2297,7 +2312,7 @@ mod tests {
     #[test]
     fn is_interactive_returns_false_in_tests() {
         // In test context, is_interactive should return false
-        // because the executable is in target/*/deps/
+        // because cfg!(test) is true
         assert!(!is_interactive());
     }
 
@@ -2404,17 +2419,17 @@ mod tests {
         assert!(
             visible
                 .iter()
-                .all(|f| f.path != PathBuf::from(".claude/settings.json"))
+                .all(|f| f.path.as_path() != Path::new(".claude/settings.json"))
         );
         assert!(
             visible
                 .iter()
-                .all(|f| f.path != PathBuf::from(".claude/commands"))
+                .all(|f| f.path.as_path() != Path::new(".claude/commands"))
         );
         assert!(
             visible
                 .iter()
-                .all(|f| f.path != PathBuf::from(".claude/commands/test.md"))
+                .all(|f| f.path.as_path() != Path::new(".claude/commands/test.md"))
         );
     }
 
@@ -2701,13 +2716,13 @@ mod tests {
         assert!(
             visible
                 .iter()
-                .all(|f| f.path != PathBuf::from(".claude/commands/test.md"))
+                .all(|f| f.path.as_path() != Path::new(".claude/commands/test.md"))
         );
         // commands/ directory itself should still be visible
         assert!(
             visible
                 .iter()
-                .any(|f| f.path == PathBuf::from(".claude/commands"))
+                .any(|f| f.path.as_path() == Path::new(".claude/commands"))
         );
     }
 
@@ -2734,12 +2749,12 @@ mod tests {
         assert!(
             visible
                 .iter()
-                .all(|f| f.path != PathBuf::from(".claude/commands"))
+                .all(|f| f.path.as_path() != Path::new(".claude/commands"))
         );
         assert!(
             visible
                 .iter()
-                .all(|f| f.path != PathBuf::from(".claude/commands/test.md"))
+                .all(|f| f.path.as_path() != Path::new(".claude/commands/test.md"))
         );
     }
 

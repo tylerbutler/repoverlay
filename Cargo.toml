@@ -2,7 +2,7 @@
 name = "repoverlay"
 version = "0.10.1"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.91"
 authors = ["Tyler Butler <tyler@tylerbutler.com>"]
 description = "Overlay config files into git repositories without committing them"
 license = "MIT"
@@ -60,13 +60,16 @@ fuzzy-matcher = "0.3"
 libc = "0.2"
 tiny-update-check = "1.0"
 similar = "2.7.0"
+indicatif = "0.18.4"
+ctrlc = "3.5.2"
+glob = "0.3.3"
 
 [build-dependencies]
 vergen = { version = "9", features = ["build"] }
 
 [dev-dependencies]
 tempfile = "3"
-assert_cmd = "2"
+assert_cmd = "2.2"
 predicates = "3"
 
 [profile.release]

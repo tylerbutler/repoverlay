@@ -71,6 +71,49 @@ impl AvailableOverlay {
     }
 }
 
+/// Wraps an [`AvailableOverlay`] with context about which overlays are already applied,
+/// enabling conversion to a [`SelectableItem`][crate::selection::SelectableItem] for the
+/// browse UI.
+pub(crate) struct BrowseOverlayItem<'a> {
+    /// The available overlay to display.
+    pub(crate) overlay: &'a AvailableOverlay,
+    /// Names of overlays already applied in the target repo.
+    pub(crate) applied_overlays: &'a [crate::OverlayName],
+}
+
+impl crate::selection::ToSelectableItem for BrowseOverlayItem<'_> {
+    fn to_selectable_item(&self, target: &Path) -> crate::selection::SelectableItem {
+        let normalized = crate::state::normalize_overlay_name(&self.overlay.name).ok();
+        let disabled = normalized
+            .as_ref()
+            .is_some_and(|n| self.applied_overlays.iter().any(|name| name == n.as_str()));
+        let description = if disabled {
+            let name = normalized
+                .as_ref()
+                .map_or(self.overlay.name.as_str(), |n| n.as_str());
+            let desc = crate::load_overlay_state(target, name).ok().map_or_else(
+                || "already applied".into(),
+                |state| {
+                    format!(
+                        "last updated {}",
+                        crate::state::format_relative_time(&state.applied_at)
+                    )
+                },
+            );
+            Some(desc)
+        } else {
+            None
+        };
+        crate::selection::SelectableItem {
+            id: self.overlay.to_string(),
+            label: self.overlay.display_bold(),
+            description,
+            preselected: false,
+            disabled,
+        }
+    }
+}
+
 /// Manager for the overlay repository.
 pub(crate) struct OverlayRepoManager {
     /// Path to the cloned overlay repository
@@ -143,19 +186,15 @@ impl OverlayRepoManager {
             fs::create_dir_all(parent)?;
         }
 
-        let output = Command::new("git")
-            .args(["clone", "--depth", "1", "--"])
-            .arg(&self.config.url)
-            .arg(&self.repo_path)
-            .output()
-            .context("Failed to execute git clone")?;
+        let url = self.config.url.as_str();
+        let repo_path_str = self.repo_path.to_string_lossy();
+        let args = vec!["clone", "--depth", "1", "--", url, &repo_path_str];
+        let message = format!("Cloning {}...", self.config.url);
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("not found") || stderr.contains("Repository not found") {
-                bail!("Overlay repository not found: {}", self.config.url);
-            }
-            bail!("Failed to clone overlay repository: {}", stderr.trim());
+        let (status, _) = crate::git::run_git_with_spinner(&args, None, &message, false)?;
+
+        if !status.success() {
+            bail!("Failed to clone overlay repository: {}", self.config.url);
         }
 
         self.save_meta()?;
@@ -168,15 +207,15 @@ impl OverlayRepoManager {
             bail!("Overlay repository not cloned. Run 'repoverlay source add <url>' first.");
         }
 
-        let output = Command::new("git")
-            .args(["pull", "--ff-only"])
-            .current_dir(&self.repo_path)
-            .output()
-            .context("Failed to execute git pull")?;
+        let (status, _) = crate::git::run_git_with_spinner(
+            &["pull", "--ff-only"],
+            Some(&self.repo_path),
+            "Pulling latest changes...",
+            false,
+        )?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to pull overlay repository: {}", stderr.trim());
+        if !status.success() {
+            bail!("Failed to pull overlay repository");
         }
 
         self.save_meta()?;
@@ -410,22 +449,6 @@ impl OverlayRepoManager {
             if !stderr.contains("nothing to commit") {
                 bail!("Failed to commit: {}", stderr.trim());
             }
-        }
-
-        Ok(())
-    }
-
-    /// Push to remote.
-    pub(crate) fn push(&self) -> Result<()> {
-        let output = Command::new("git")
-            .args(["push"])
-            .current_dir(&self.repo_path)
-            .output()
-            .context("Failed to execute git push")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to push: {}", stderr.trim());
         }
 
         Ok(())
