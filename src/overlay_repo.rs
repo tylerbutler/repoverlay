@@ -1600,4 +1600,24 @@ mod tests {
         assert!(bold.contains("FluidFramework"));
         assert!(bold.contains("vscode-setup"));
     }
+
+    #[test]
+    fn snapshot_available_overlay_display() {
+        let overlays = [
+            AvailableOverlay {
+                org: "microsoft".to_string(),
+                repo: "FluidFramework".to_string(),
+                name: "claude-config".to_string(),
+                has_config: true,
+            },
+            AvailableOverlay {
+                org: "owner".to_string(),
+                repo: "repo".to_string(),
+                name: "my-overlay".to_string(),
+                has_config: false,
+            },
+        ];
+        let output: Vec<String> = overlays.iter().map(|o| format!("{o}")).collect();
+        insta::assert_snapshot!(output.join("\n"));
+    }
 }

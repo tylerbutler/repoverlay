@@ -1,0 +1,8 @@
+---
+source: src/config.rs
+expression: "output.join(\"\\n\")"
+---
+https://github.com/owner/repo
+git@github.com:owner/repo.git
+owner/repo
+myuser
