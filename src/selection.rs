@@ -1020,7 +1020,7 @@ fn render_flat_help(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::
 /// Returns false in these cases:
 /// - stdin or stdout is not a TTY
 /// - Running in a CI environment (CI env var is set)
-/// - Running as a cargo test binary (executable in target/*/deps/)
+/// - Running as a cargo test binary (compiled with cfg(test))
 /// - TERM is unset or "dumb"
 /// - `REPOVERLAY_NON_INTERACTIVE` env var is set
 pub(crate) fn is_interactive() -> bool {
@@ -1036,13 +1036,9 @@ pub(crate) fn is_interactive() -> bool {
         return false;
     }
 
-    // Detect cargo test environment by checking executable path
-    // Test binaries live in target/debug/deps/ or target/release/deps/
-    if let Ok(exe) = std::env::current_exe() {
-        let exe_str = exe.to_string_lossy();
-        if exe_str.contains("target") && exe_str.contains("deps") {
-            return false;
-        }
+    // When compiled with cfg(test), we're running inside a test binary
+    if cfg!(test) {
+        return false;
     }
 
     // Check TERM - if not set or "dumb", assume non-interactive
@@ -2297,7 +2293,7 @@ mod tests {
     #[test]
     fn is_interactive_returns_false_in_tests() {
         // In test context, is_interactive should return false
-        // because the executable is in target/*/deps/
+        // because cfg!(test) is true
         assert!(!is_interactive());
     }
 
