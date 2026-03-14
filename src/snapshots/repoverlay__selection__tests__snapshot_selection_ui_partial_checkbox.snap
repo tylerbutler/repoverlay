@@ -1,0 +1,34 @@
+---
+source: src/selection.rs
+expression: buffer_to_string(&buffer)
+---
+Select files to include in overlay
+
+Categories: [1] AI (1/7) [2] DIR (0/6) [3] GI (0/1) [4] UT (0/0)
+Search: (press / to search)
+Selected: 1 AI
+
+▼ [-] .claude/
+  ▼ [-] rules/
+      [✓] api-exports.md
+      [ ] testing.md
+  ▼ [ ] scripts/
+      [ ] gh-prereqs.sh
+  ▼ [ ] skills/
+    ▼ [ ] create-pr/
+        [ ] SKILL.md
+    ▼ [ ] fix-flaky-test/
+        [ ] SKILL.md
+    [ ] settings.json
+  [ ] CLAUDE.md
+  [ ] .DS_Store
+
+
+
+
+
+
+
+
+
+↑↓ move ←→ expand Space toggle Enter confirm a all 1-4 filter / search Esc cance

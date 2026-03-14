@@ -3562,6 +3562,183 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_selection_ui_search_mode() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.mode = Mode::Search;
+        state.search_query = "env".to_string();
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_collapsed_dir() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_deep_nesting();
+        let mut state = SelectionState::new(files, HashSet::new());
+        for f in &state.all_files.clone() {
+            if f.preselected {
+                state.selections.insert(f.path.clone());
+            }
+        }
+        state.expanded_dirs.remove(&PathBuf::from(".claude/rules"));
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_cursor_mid_list() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.cursor = 3;
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_select_all() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.select_all();
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_no_matches() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.set_search("zzzzz_no_match");
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_partial_checkbox() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_deep_nesting();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.selections.clear();
+        state
+            .selections
+            .insert(PathBuf::from(".claude/rules/api-exports.md"));
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
     fn snapshot_flat_ui_initial() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
