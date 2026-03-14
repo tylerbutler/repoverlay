@@ -419,4 +419,174 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
         insta::assert_snapshot!(buffer_to_string(&buffer));
     }
+
+    fn make_deep_nodes() -> Vec<TreeNode<'static, String>> {
+        vec![TreeNode {
+            id: "root".to_string(),
+            text: Line::from("root/"),
+            children: vec![
+                TreeNode {
+                    id: "sub".to_string(),
+                    text: Line::from("sub/"),
+                    children: vec![
+                        TreeNode {
+                            id: "deep-a".to_string(),
+                            text: Line::from("a.txt"),
+                            children: vec![],
+                        },
+                        TreeNode {
+                            id: "deep-b".to_string(),
+                            text: Line::from("b.txt"),
+                            children: vec![],
+                        },
+                    ],
+                },
+                TreeNode {
+                    id: "child-c".to_string(),
+                    text: Line::from("c.txt"),
+                    children: vec![],
+                },
+            ],
+        }]
+    }
+
+    #[test]
+    fn snapshot_tree_tristate_partial() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let nodes = make_nodes();
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.select("child-a".to_string());
+        state.tree.select(vec!["root".to_string()]);
+        state.tree.open(vec!["root".to_string()]);
+
+        terminal
+            .draw(|frame| {
+                let widget = MultiSelectTree::new(&nodes).descendants_fn(Box::new(
+                    |id: &String| -> Vec<String> {
+                        if id == "root" {
+                            vec!["child-a".to_string(), "child-b".to_string()]
+                        } else {
+                            vec![]
+                        }
+                    },
+                ));
+                frame.render_stateful_widget(widget, frame.area(), &mut state);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_tree_tristate_all_checked() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let nodes = make_nodes();
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.select("child-a".to_string());
+        state.select("child-b".to_string());
+        state.tree.select(vec!["root".to_string()]);
+        state.tree.open(vec!["root".to_string()]);
+
+        terminal
+            .draw(|frame| {
+                let widget = MultiSelectTree::new(&nodes).descendants_fn(Box::new(
+                    |id: &String| -> Vec<String> {
+                        if id == "root" {
+                            vec!["child-a".to_string(), "child-b".to_string()]
+                        } else {
+                            vec![]
+                        }
+                    },
+                ));
+                frame.render_stateful_widget(widget, frame.area(), &mut state);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_tree_all_unchecked() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let nodes = make_nodes();
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.tree.select(vec!["root".to_string()]);
+        state.tree.open(vec!["root".to_string()]);
+
+        terminal
+            .draw(|frame| {
+                let widget = MultiSelectTree::new(&nodes);
+                frame.render_stateful_widget(widget, frame.area(), &mut state);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_tree_deep_nesting() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let nodes = make_deep_nodes();
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.select("deep-a".to_string());
+        state.tree.select(vec!["root".to_string()]);
+        state.tree.open(vec!["root".to_string()]);
+        state.tree.open(vec!["root".to_string(), "sub".to_string()]);
+
+        terminal
+            .draw(|frame| {
+                let widget = MultiSelectTree::new(&nodes).descendants_fn(Box::new(
+                    |id: &String| -> Vec<String> {
+                        match id.as_str() {
+                            "root" => vec![
+                                "sub".to_string(),
+                                "deep-a".to_string(),
+                                "deep-b".to_string(),
+                                "child-c".to_string(),
+                            ],
+                            "sub" => vec!["deep-a".to_string(), "deep-b".to_string()],
+                            _ => vec![],
+                        }
+                    },
+                ));
+                frame.render_stateful_widget(widget, frame.area(), &mut state);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_tree_collapsed_parent() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let nodes = make_nodes();
+        let mut state = MultiSelectTreeState::<String>::default();
+        state.select("child-a".to_string());
+        state.tree.select(vec!["root".to_string()]);
+        // Don't open root — children should be hidden
+
+        terminal
+            .draw(|frame| {
+                let widget = MultiSelectTree::new(&nodes);
+                frame.render_stateful_widget(widget, frame.area(), &mut state);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
 }
