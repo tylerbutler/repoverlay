@@ -1,0 +1,24 @@
+---
+source: src/selection.rs
+expression: buffer_to_string(&buffer)
+---
+Choose overlays to apply:
+
+Search: work_
+Selected: 1/3
+
+> [✓] work-config  (~/overlays/work)
+
+
+
+
+
+
+
+
+
+
+
+
+
+Type to search | Enter/Esc done | Ctrl+C clear

@@ -1,0 +1,24 @@
+---
+source: src/selection.rs
+expression: buffer_to_string(&buffer)
+---
+Choose overlays to apply:
+
+Search: (press / to search)
+Selected: 2/3
+
+  [✓] my-overlay  (~/overlays/my-overlay)
+> [ ] work-config  (~/overlays/work)
+  [✓] shared
+
+
+
+
+
+
+
+
+
+
+
+↑↓ move Space toggle Enter confirm a all / search Esc cancel

@@ -3779,4 +3779,156 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
         insta::assert_snapshot!(buffer_to_string(&buffer));
     }
+
+    #[test]
+    fn snapshot_flat_ui_with_toggled_selections() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![
+            SelectableItem {
+                id: "overlay-a".into(),
+                label: "my-overlay".into(),
+                description: Some("~/overlays/my-overlay".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-b".into(),
+                label: "work-config".into(),
+                description: Some("~/overlays/work".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-c".into(),
+                label: "shared".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.selections.insert("overlay-a".into());
+        state.selections.insert("overlay-c".into());
+        state.cursor = 1;
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays to apply:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_search_mode() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![
+            SelectableItem {
+                id: "overlay-a".into(),
+                label: "my-overlay".into(),
+                description: Some("~/overlays/my-overlay".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-b".into(),
+                label: "work-config".into(),
+                description: Some("~/overlays/work".into()),
+                preselected: true,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-c".into(),
+                label: "shared".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.mode = Mode::Search;
+        state.search_query = "work".to_string();
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays to apply:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_disabled_highlighted() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![
+            SelectableItem {
+                id: "overlay-a".into(),
+                label: "my-overlay".into(),
+                description: Some("~/overlays/my-overlay".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-b".into(),
+                label: "shared".into(),
+                description: Some("already applied".into()),
+                preselected: false,
+                disabled: true,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.cursor = 1;
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays to apply:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_no_matches() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "my-overlay".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        state.search_query = "zzzzz".to_string();
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
 }
