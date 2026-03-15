@@ -71,6 +71,8 @@ fn check_for_updates() {
 }
 
 /// Overlay config files into git repositories without committing them
+///
+/// Get started: run `repoverlay browse` to interactively discover and apply overlays.
 #[derive(Parser)]
 #[command(name = "repoverlay")]
 #[command(version = version_string(), about, long_about = None)]
@@ -86,6 +88,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Apply an overlay to a git repository
+    ///
+    /// For interactive use, consider `repoverlay browse` instead.
     Apply {
         /// Path to overlay source directory OR GitHub URL
         ///
@@ -329,7 +333,11 @@ enum Commands {
         command: CacheCommand,
     },
 
-    /// Browse available overlays from the overlay repository
+    /// Browse and apply overlays interactively (recommended)
+    ///
+    /// Lists available overlays from configured sources and lets you select which to
+    /// apply. This is the easiest way to discover and apply overlays. To add sources,
+    /// run `repoverlay source add <path-or-url>`.
     #[command(name = "browse")]
     Browse {
         /// Overlay source (GitHub username, owner/repo, or URL)
@@ -1384,7 +1392,11 @@ fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay], filter
             if current_group.is_some() {
                 println!();
             }
-            println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
+            if overlay.flat {
+                println!("{}:", "(flat)".dimmed());
+            } else {
+                println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
+            }
             current_group = Some(group);
         }
         let config_marker = if overlay.has_config {
@@ -1449,7 +1461,20 @@ fn browse_overlays(
     let config = load_config(Some(&target_canonical))?;
 
     if config.sources.is_empty() {
-        bail!("No overlay sources configured. Add one with: repoverlay source add <url-or-path>");
+        eprintln!(
+            "{} No overlay sources configured.\n\n\
+             Add a source to get started:\n\
+             \n  repoverlay source add <path-or-url>\n\n\
+             Examples:\n\
+             \n  repoverlay source add ./my-overlays          # local directory\
+             \n  repoverlay source add owner/repo             # GitHub repo\
+             \n  repoverlay source add https://github.com/owner/repo\n\n\
+             Or browse an ephemeral source directly:\n\
+             \n  repoverlay browse ./my-overlays\
+             \n  repoverlay browse owner/repo\n",
+            "hint:".yellow().bold(),
+        );
+        bail!("No overlay sources configured");
     }
 
     // Use SourceManager for multi-source browsing (handles both git and local)
@@ -1625,8 +1650,8 @@ fn browse_ephemeral_source(
 
 /// Browse overlays from an ephemeral local directory source.
 ///
-/// Scans the local directory for overlays using the org/repo/name structure
-/// and presents them for selection and apply.
+/// Scans the local directory for overlays, auto-detecting whether the directory
+/// uses structured (org/repo/name) or flat layout.
 #[allow(clippy::fn_params_excessive_bools)]
 fn browse_local_source(
     local_path: &Path,
@@ -1665,7 +1690,7 @@ fn browse_local_source(
 
     let local_base = local_path.to_path_buf();
     let build_source_info = move |o: &crate::overlay_repo::AvailableOverlay| {
-        let overlay_path = local_base.join(&o.org).join(&o.repo).join(&o.name);
+        let overlay_path = local_base.join(o.relative_path());
         if !overlay_path.exists() {
             bail!("Overlay directory not found: {}", overlay_path.display());
         }

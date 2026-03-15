@@ -826,6 +826,7 @@ fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableOverlay>> {
                     repo: repo_name.clone(),
                     name: overlay_name,
                     has_config,
+                    flat: false,
                 });
             }
         }
