@@ -1248,10 +1248,29 @@ pub(crate) fn apply_resolved_overlay(
     let mut state = OverlayState::new(overlay_name.clone(), resolved.source_info.clone());
     let mut exclude_entries: Vec<String> = Vec::new();
 
+    // Load exclusions from previous external state (survives remove/reapply cycles)
+    let previous_exclusions =
+        crate::state::load_external_exclusions(target, &normalized_name).unwrap_or_default();
+    if !previous_exclusions.is_empty() {
+        debug!(
+            "loaded {} exclusion(s) from previous state",
+            previous_exclusions.len()
+        );
+        for excl in &previous_exclusions {
+            state.add_exclusion(excl.clone());
+        }
+    }
+
     // Process directories first (symlink as units)
     for dir_name in &config.directories {
         let dir_path = PathBuf::from(dir_name);
         let source_dir = source.join(&dir_path);
+
+        // Skip excluded directories
+        if state.is_excluded(&dir_path) {
+            debug!("skipping excluded directory: {}", dir_path.display());
+            continue;
+        }
 
         // Check if directory exists
         if !source_dir.exists() {
@@ -1429,6 +1448,13 @@ pub(crate) fn apply_resolved_overlay(
     for (rel_path, target_rel_str) in collect_overlay_files(source, &config) {
         let rel_str = rel_path.to_string_lossy().to_string();
         let target_rel = PathBuf::from(&target_rel_str);
+
+        // Skip excluded files
+        if state.is_excluded(&target_rel) {
+            debug!("skipping excluded file: {}", target_rel.display());
+            continue;
+        }
+
         let source_file = source.join(&rel_path);
         let target_file = target.join(&target_rel);
 

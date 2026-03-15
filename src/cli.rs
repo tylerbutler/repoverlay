@@ -2161,12 +2161,10 @@ fn handle_sync(
             return Ok(());
         }
 
-        // Load overlay repo config and manager once for all overlays
-        let config = load_config(None)?;
-        let overlay_config = config.get_default_overlay_repo_config()?;
-        let manager = OverlayRepoManager::new(overlay_config)?;
-        manager.ensure_cloned()?;
-        manager.pull()?;
+        // Lazily initialized — only created when we encounter a syncable overlay.
+        // This avoids failing when no overlay repo is configured but all applied
+        // overlays are local/GitHub sources (#205).
+        let mut manager: Option<OverlayRepoManager> = None;
 
         let mut synced = 0u32;
         let mut skipped = 0u32;
@@ -2179,7 +2177,7 @@ fn handle_sync(
             if !state.source.is_syncable() {
                 let label = state.source.source_type_label();
                 println!(
-                    "{} Skipping '{}' ({label} source, not syncable to overlay repo)",
+                    "{} Skipping '{}' ({label} source, not syncable)",
                     "Warning:".yellow(),
                     overlay_name
                 );
@@ -2187,14 +2185,27 @@ fn handle_sync(
                 continue;
             }
 
+            // Initialize the manager on first syncable overlay
+            let mgr = if let Some(m) = &manager {
+                m
+            } else {
+                let config = load_config(None)?;
+                let overlay_config = config.get_default_overlay_repo_config()?;
+                let m = OverlayRepoManager::new(overlay_config)?;
+                m.ensure_cloned()?;
+                m.pull()?;
+                manager = Some(m);
+                manager.as_ref().unwrap()
+            };
+
             // OverlayRepo source — sync directly
             match &state.source {
                 OverlaySource::OverlayRepo {
                     org, repo, name, ..
                 } => {
-                    sync_single_overlay(&target, org, name, repo, &state, &manager, dry_run)?;
+                    sync_single_overlay(&target, org, name, repo, &state, mgr, dry_run)?;
                     if !dry_run {
-                        auto_commit_overlay(&manager, org, repo, name, false)?;
+                        auto_commit_overlay(mgr, org, repo, name, false)?;
                     }
                     synced += 1;
                 }
@@ -2838,8 +2849,9 @@ fn remove_files_from_overlay(
             }
         }
 
-        // Remove from state
+        // Remove from state and add to exclusions
         state.remove_file(file);
+        state.add_exclusion(file.clone());
         removed_count += 1;
     }
 
@@ -3238,6 +3250,10 @@ fn add_files_to_overlay(
     }
 
     // Rebuild full exclude list from state (which now includes both old and new files)
+    // Also clear any exclusions for files that were just added back
+    for file in files {
+        state.remove_exclusion(file);
+    }
     let all_exclude_entries: Vec<String> = state
         .file_entries()
         .iter()
@@ -6452,6 +6468,8 @@ directories =
             assert_eq!(fs::read_to_string(overlay_file).unwrap(), "# Config");
         }
 
+        /// Issue #205: `sync --all` must skip local-source overlays without
+        /// trying to load an overlay-repo config (which may not exist).
         #[test]
         fn handle_sync_all_skips_local_sources() {
             let repo = create_test_repo();
@@ -6464,19 +6482,17 @@ directories =
                 vec![(".envrc", ".envrc")],
             );
 
-            // handle_sync --all should succeed (returns Ok) but needs config
-            // for the manager. Since there are no OverlayRepo sources to sync,
-            // we test that the state files with non-OverlayRepo sources are
-            // correctly identified by listing applied overlays.
-            let applied = crate::list_applied_overlays(repo.path()).unwrap();
-            assert_eq!(applied.len(), 1);
-            assert_eq!(applied[0], "local-overlay");
-
-            // Verify the source is Local (which would be skipped by --all)
-            let state = crate::load_overlay_state(repo.path(), "local-overlay").unwrap();
-            assert!(!state.source.is_overlay_repo());
+            // sync --all should succeed: the local overlay is skipped and no
+            // overlay repo manager is needed.
+            let result = handle_sync(repo.path(), None, true, false);
+            assert!(
+                result.is_ok(),
+                "sync --all should succeed when only local overlays are applied: {result:?}"
+            );
         }
 
+        /// Issue #205: `sync --all` must skip GitHub-source overlays without
+        /// trying to load an overlay-repo config.
         #[test]
         fn handle_sync_all_skips_github_sources() {
             let repo = create_test_repo();
@@ -6495,9 +6511,11 @@ directories =
                 vec![(".envrc", ".envrc")],
             );
 
-            let state = crate::load_overlay_state(repo.path(), "github-overlay").unwrap();
-            assert!(state.source.is_github());
-            assert!(!state.source.is_overlay_repo());
+            let result = handle_sync(repo.path(), None, true, false);
+            assert!(
+                result.is_ok(),
+                "sync --all should succeed when only GitHub overlays are applied: {result:?}"
+            );
         }
 
         #[test]
@@ -6572,6 +6590,39 @@ directories =
             }
             assert_eq!(overlay_repo_count, 1);
             assert_eq!(skipped_count, 2);
+        }
+
+        /// Issue #205: `sync --all` with a mix of local and GitHub overlays
+        /// (but no `OverlayRepo` sources) should skip all and succeed.
+        #[test]
+        fn handle_sync_all_skips_all_non_syncable_mixed() {
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "local-one",
+                OverlaySource::local(PathBuf::from("/path")),
+                vec![("a.txt", "a.txt")],
+            );
+            save_test_state(
+                repo.path(),
+                "github-one",
+                OverlaySource::github(
+                    "https://github.com/o/r".to_string(),
+                    "o".to_string(),
+                    "r".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    None,
+                ),
+                vec![("b.txt", "b.txt")],
+            );
+
+            let result = handle_sync(repo.path(), None, true, false);
+            assert!(
+                result.is_ok(),
+                "sync --all should succeed when all overlays are non-syncable: {result:?}"
+            );
         }
 
         #[test]

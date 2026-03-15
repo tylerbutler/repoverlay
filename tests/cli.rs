@@ -2446,3 +2446,65 @@ fn apply_interactive_conflict_abort_on_conflict() {
         "abort should not overwrite existing file"
     );
 }
+
+#[test]
+fn edit_remove_exclusions_persist_across_remove_reapply() {
+    let ctx = TestContext::new()
+        .with_overlay(&[(".envrc", "export FOO=bar"), ("extra.txt", "extra content")]);
+
+    // Apply overlay with both files
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.file_exists("extra.txt"));
+
+    // Edit remove one file
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "test-overlay", "extra.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 1 file"));
+
+    assert!(!ctx.file_exists("extra.txt"));
+    assert!(ctx.file_exists(".envrc"));
+
+    // Remove the overlay entirely
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "remove",
+            "test-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(!ctx.file_exists(".envrc"));
+    assert!(!ctx.file_exists("extra.txt"));
+
+    // Reapply the same overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // .envrc should be restored, but extra.txt should remain excluded
+    assert!(ctx.file_exists(".envrc"));
+    assert!(
+        !ctx.file_exists("extra.txt"),
+        "extra.txt should not reappear after reapply — edit remove exclusions should persist"
+    );
+
+    // Verify git exclude does not contain the excluded file
+    let exclude = ctx.git_exclude_content();
+    assert!(exclude.contains(".envrc"));
+    assert!(!exclude.contains("extra.txt"));
+}
