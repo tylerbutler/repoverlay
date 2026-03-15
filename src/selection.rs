@@ -238,11 +238,7 @@ struct SelectionState {
 impl SelectionState {
     fn new(files: Vec<DetectedFile>, hidden_categories: HashSet<FileCategory>) -> Self {
         // Start with all categories visible except those explicitly hidden
-        let mut visible = HashSet::new();
-        visible.insert(FileCategory::AiConfig);
-        visible.insert(FileCategory::AiConfigDirectory);
-        visible.insert(FileCategory::Gitignored);
-        visible.insert(FileCategory::Untracked);
+        let mut visible: HashSet<FileCategory> = FileCategory::ALL.iter().copied().collect();
 
         for cat in hidden_categories {
             visible.remove(&cat);
@@ -319,7 +315,7 @@ impl SelectionState {
 
     /// Check if any filters are active.
     fn has_active_filters(&self) -> bool {
-        !self.search_query.is_empty() || self.visible_categories.len() < 4 // Not all categories visible
+        !self.search_query.is_empty() || self.visible_categories.len() < FileCategory::ALL.len()
     }
 
     /// Toggle visibility of a category.
@@ -418,12 +414,7 @@ impl SelectionState {
     fn selection_counts(&self) -> HashMap<FileCategory, (usize, usize)> {
         let mut counts = HashMap::new();
 
-        for cat in &[
-            FileCategory::AiConfig,
-            FileCategory::AiConfigDirectory,
-            FileCategory::Gitignored,
-            FileCategory::Untracked,
-        ] {
+        for cat in FileCategory::ALL {
             let total = self.all_files.iter().filter(|f| f.category == *cat).count();
             let selected = self
                 .all_files
@@ -1141,8 +1132,9 @@ fn handle_selection_key(state: &mut SelectionState, key: KeyEvent) -> SelectionA
         // Category toggles
         KeyCode::Char('1') => state.toggle_category(FileCategory::AiConfig),
         KeyCode::Char('2') => state.toggle_category(FileCategory::AiConfigDirectory),
-        KeyCode::Char('3') => state.toggle_category(FileCategory::Gitignored),
-        KeyCode::Char('4') => state.toggle_category(FileCategory::Untracked),
+        KeyCode::Char('3') => state.toggle_category(FileCategory::TrackedConfig),
+        KeyCode::Char('4') => state.toggle_category(FileCategory::Gitignored),
+        KeyCode::Char('5') => state.toggle_category(FileCategory::Untracked),
 
         // Search
         KeyCode::Char('/') => return SelectionAction::EnterSearch,
@@ -1277,12 +1269,29 @@ fn render_category_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::
 
     execute!(stdout, Print(" "))?;
 
+    // Tracked Config
+    let tc_visible = state
+        .visible_categories
+        .contains(&FileCategory::TrackedConfig);
+    let (tc_sel, tc_total) = counts.get(&FileCategory::TrackedConfig).unwrap_or(&(0, 0));
+    render_category_toggle(
+        stdout,
+        "3",
+        "TC",
+        *tc_sel,
+        *tc_total,
+        tc_visible,
+        Color::Cyan,
+    )?;
+
+    execute!(stdout, Print(" "))?;
+
     // Gitignored
     let gi_visible = state.visible_categories.contains(&FileCategory::Gitignored);
     let (gi_sel, gi_total) = counts.get(&FileCategory::Gitignored).unwrap_or(&(0, 0));
     render_category_toggle(
         stdout,
-        "3",
+        "4",
         "GI",
         *gi_sel,
         *gi_total,
@@ -1297,7 +1306,7 @@ fn render_category_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::
     let (ut_sel, ut_total) = counts.get(&FileCategory::Untracked).unwrap_or(&(0, 0));
     render_category_toggle(
         stdout,
-        "4",
+        "5",
         "UT",
         *ut_sel,
         *ut_total,
@@ -1392,6 +1401,7 @@ fn render_selection_summary(stdout: &mut io::Stdout, state: &SelectionState) -> 
         let parts: Vec<String> = [
             (FileCategory::AiConfig, "AI", Color::Green),
             (FileCategory::AiConfigDirectory, "DIR", Color::Magenta),
+            (FileCategory::TrackedConfig, "TC", Color::Cyan),
             (FileCategory::Gitignored, "GI", Color::Yellow),
             (FileCategory::Untracked, "UT", Color::Blue),
         ]
@@ -1501,6 +1511,7 @@ fn render_file_list(stdout: &mut io::Stdout, state: &SelectionState) -> io::Resu
         let cat_color = match file.category {
             FileCategory::AiConfig => Color::Green,
             FileCategory::AiConfigDirectory => Color::Magenta,
+            FileCategory::TrackedConfig => Color::Cyan,
             FileCategory::Gitignored => Color::Yellow,
             FileCategory::Untracked => Color::Blue,
         };
@@ -2306,7 +2317,12 @@ mod tests {
         );
         assert!(state.visible_categories.contains(&FileCategory::Gitignored));
         assert!(state.visible_categories.contains(&FileCategory::Untracked));
-        assert_eq!(state.visible_categories.len(), 4);
+        assert!(
+            state
+                .visible_categories
+                .contains(&FileCategory::TrackedConfig)
+        );
+        assert_eq!(state.visible_categories.len(), FileCategory::ALL.len());
     }
 
     #[test]

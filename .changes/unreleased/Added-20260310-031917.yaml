@@ -2,10 +2,11 @@ kind: Added
 body: |-
     Support local directory sources for overlays
 
-    Register directories within your repo as overlay sources using `source add ./path`.
-    Local sources are stored in a per-repo config file (`.repoverlay/config.ccl`) that can
-    be committed and shared with your team. Paths must start with `/`, `./`, or `~` to be
-    recognized as local (otherwise treated as git URL/shorthand). Local sources skip
-    cloning and caching — overlays are read directly from the filesystem. Use `source list`
-    and `source remove` to manage both global git sources and repo-local sources.
+    Register directories as overlay sources using `source add ./path`.
+    Local sources are stored in a per-repo config file (`.repoverlay/config.ccl`),
+    which is automatically git-excluded. Paths must start with `/`, `./`, or `~`
+    to be recognized as local (otherwise treated as git URL/shorthand). Local
+    sources skip cloning and caching — overlays are read directly from the
+    filesystem. Use `source list` and `source remove` to manage both global git
+    sources and repo-local sources.
 time: 2026-03-10T03:19:17Z

@@ -826,6 +826,7 @@ fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableOverlay>> {
                     repo: repo_name.clone(),
                     name: overlay_name,
                     has_config,
+                    flat: false,
                 });
             }
         }
@@ -1248,10 +1249,29 @@ pub(crate) fn apply_resolved_overlay(
     let mut state = OverlayState::new(overlay_name.clone(), resolved.source_info.clone());
     let mut exclude_entries: Vec<String> = Vec::new();
 
+    // Load exclusions from previous external state (survives remove/reapply cycles)
+    let previous_exclusions =
+        crate::state::load_external_exclusions(target, &normalized_name).unwrap_or_default();
+    if !previous_exclusions.is_empty() {
+        debug!(
+            "loaded {} exclusion(s) from previous state",
+            previous_exclusions.len()
+        );
+        for excl in &previous_exclusions {
+            state.add_exclusion(excl.clone());
+        }
+    }
+
     // Process directories first (symlink as units)
     for dir_name in &config.directories {
         let dir_path = PathBuf::from(dir_name);
         let source_dir = source.join(&dir_path);
+
+        // Skip excluded directories
+        if state.is_excluded(&dir_path) {
+            debug!("skipping excluded directory: {}", dir_path.display());
+            continue;
+        }
 
         // Check if directory exists
         if !source_dir.exists() {
@@ -1429,6 +1449,13 @@ pub(crate) fn apply_resolved_overlay(
     for (rel_path, target_rel_str) in collect_overlay_files(source, &config) {
         let rel_str = rel_path.to_string_lossy().to_string();
         let target_rel = PathBuf::from(&target_rel_str);
+
+        // Skip excluded files
+        if state.is_excluded(&target_rel) {
+            debug!("skipping excluded file: {}", target_rel.display());
+            continue;
+        }
+
         let source_file = source.join(&rel_path);
         let target_file = target.join(&target_rel);
 
@@ -2574,7 +2601,8 @@ pub(crate) fn restore_overlays(
             OverlaySource::Local { .. } | OverlaySource::OverlayRepo { .. } => None,
         };
 
-        // Re-apply the overlay
+        // Re-apply the overlay. Always use Force since restore's purpose is to
+        // re-create missing/broken symlinks from external backup state.
         match apply_overlay(
             &source_str,
             &target,
@@ -2582,7 +2610,7 @@ pub(crate) fn restore_overlays(
             Some(state.name.clone()),
             ref_override,
             true, // Update cache
-            conflict_strategy,
+            ConflictStrategy::Force,
             merge,
             None,  // Use default source resolution for restore
             false, // Not a dry run
@@ -2879,6 +2907,10 @@ pub(crate) fn create_overlay(
             .iter()
             .filter(|f| f.category == detection::FileCategory::AiConfig)
             .count();
+        let tc_count = discovered
+            .iter()
+            .filter(|f| f.category == detection::FileCategory::TrackedConfig)
+            .count();
         let gi_count = discovered
             .iter()
             .filter(|f| f.category == detection::FileCategory::Gitignored)
@@ -2888,8 +2920,9 @@ pub(crate) fn create_overlay(
             .filter(|f| f.category == detection::FileCategory::Untracked)
             .count();
         println!(
-            " found {} AI, {} gitignored, {} untracked",
+            " found {} AI, {} tracked config, {} gitignored, {} untracked",
             selection::humanize_count(ai_count).green(),
+            selection::humanize_count(tc_count).cyan(),
             selection::humanize_count(gi_count).yellow(),
             selection::humanize_count(ut_count).blue()
         );
@@ -2916,6 +2949,7 @@ pub(crate) fn create_overlay(
                 let category_name = match category {
                     detection::FileCategory::AiConfig => "AI Configurations".green(),
                     detection::FileCategory::AiConfigDirectory => "AI Config Directories".magenta(),
+                    detection::FileCategory::TrackedConfig => "Tracked Config".cyan(),
                     detection::FileCategory::Gitignored => "Gitignored".yellow(),
                     detection::FileCategory::Untracked => "Untracked".blue(),
                 };
@@ -3176,7 +3210,7 @@ pub(crate) fn create_overlay_with_files(
 ///
 /// 1. Remove all existing overlays (if any)
 /// 2. Apply the new overlay
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(crate) fn switch_overlay(
     source: &str,
     target: &Path,
@@ -3186,6 +3220,7 @@ pub(crate) fn switch_overlay(
     update_cache: bool,
     conflict_strategy: ConflictStrategy,
     merge: bool,
+    dry_run: bool,
 ) -> Result<()> {
     validate_git_repo(target)?;
 
@@ -3196,7 +3231,7 @@ pub(crate) fn switch_overlay(
     if has_overlays {
         println!("{} existing overlays...", "Removing".yellow().bold());
         // Remove all existing overlays
-        remove_overlay(target, None, true, false)?;
+        remove_overlay(target, None, true, dry_run)?;
     }
 
     // Apply the new overlay
@@ -3211,7 +3246,7 @@ pub(crate) fn switch_overlay(
         conflict_strategy,
         merge,
         None,
-        false,
+        dry_run,
     )?;
 
     Ok(())

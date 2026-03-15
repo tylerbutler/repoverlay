@@ -1,0 +1,9 @@
+kind: Fixed
+body: |-
+    Persist edit exclusions across remove/reapply cycles
+
+    Files removed via `edit remove` now stay removed when an overlay is
+    removed and reapplied. Exclusions are tracked in overlay state and
+    persisted in the external backup so they survive the full lifecycle.
+time: 2026-03-15T15:39:04-07:00
+component: edit
