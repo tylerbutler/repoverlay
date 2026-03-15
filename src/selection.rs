@@ -238,12 +238,7 @@ struct SelectionState {
 impl SelectionState {
     fn new(files: Vec<DetectedFile>, hidden_categories: HashSet<FileCategory>) -> Self {
         // Start with all categories visible except those explicitly hidden
-        let mut visible = HashSet::new();
-        visible.insert(FileCategory::AiConfig);
-        visible.insert(FileCategory::AiConfigDirectory);
-        visible.insert(FileCategory::TrackedConfig);
-        visible.insert(FileCategory::Gitignored);
-        visible.insert(FileCategory::Untracked);
+        let mut visible: HashSet<FileCategory> = FileCategory::ALL.iter().copied().collect();
 
         for cat in hidden_categories {
             visible.remove(&cat);
@@ -320,7 +315,7 @@ impl SelectionState {
 
     /// Check if any filters are active.
     fn has_active_filters(&self) -> bool {
-        !self.search_query.is_empty() || self.visible_categories.len() < 5 // Not all categories visible
+        !self.search_query.is_empty() || self.visible_categories.len() < FileCategory::ALL.len()
     }
 
     /// Toggle visibility of a category.
@@ -419,13 +414,7 @@ impl SelectionState {
     fn selection_counts(&self) -> HashMap<FileCategory, (usize, usize)> {
         let mut counts = HashMap::new();
 
-        for cat in &[
-            FileCategory::AiConfig,
-            FileCategory::AiConfigDirectory,
-            FileCategory::TrackedConfig,
-            FileCategory::Gitignored,
-            FileCategory::Untracked,
-        ] {
+        for cat in FileCategory::ALL {
             let total = self.all_files.iter().filter(|f| f.category == *cat).count();
             let selected = self
                 .all_files
@@ -2333,7 +2322,7 @@ mod tests {
                 .visible_categories
                 .contains(&FileCategory::TrackedConfig)
         );
-        assert_eq!(state.visible_categories.len(), 5);
+        assert_eq!(state.visible_categories.len(), FileCategory::ALL.len());
     }
 
     #[test]

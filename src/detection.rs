@@ -3,6 +3,7 @@
 //! This module provides functionality to detect files that are good candidates
 //! for overlays, including AI configuration files and gitignored/untracked files.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
@@ -20,6 +21,17 @@ pub(crate) enum FileCategory {
     Gitignored,
     /// Files that are untracked (not in git, not ignored)
     Untracked,
+}
+
+impl FileCategory {
+    /// All category variants, used to avoid hardcoded counts elsewhere.
+    pub(crate) const ALL: &[Self] = &[
+        Self::AiConfig,
+        Self::AiConfigDirectory,
+        Self::TrackedConfig,
+        Self::Gitignored,
+        Self::Untracked,
+    ];
 }
 
 /// A detected file with its category and path.
@@ -347,22 +359,26 @@ pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
         }
     }
 
+    // Build a set of already-seen paths for O(1) dedup lookups
+    let mut seen: HashSet<PathBuf> = all_files.iter().map(|f| f.path.clone()).collect();
+
     // Then add tracked config files (committed dotfiles, etc.)
     let tracked = detect_tracked_config_files(repo_path);
     for file in tracked {
-        if !all_files.iter().any(|f| f.path == file.path) {
+        if seen.insert(file.path.clone()) {
             all_files.push(file);
         }
     }
 
     // Then add gitignored files
-    all_files.extend(detect_gitignored_files(repo_path));
+    for file in detect_gitignored_files(repo_path) {
+        seen.insert(file.path.clone());
+        all_files.push(file);
+    }
 
     // Finally add untracked files (excluding those already found as gitignored)
-    let untracked = detect_untracked_files(repo_path);
-    for file in untracked {
-        // Only add if not already in the list (gitignored files might overlap)
-        if !all_files.iter().any(|f| f.path == file.path) {
+    for file in detect_untracked_files(repo_path) {
+        if seen.insert(file.path.clone()) {
             all_files.push(file);
         }
     }
