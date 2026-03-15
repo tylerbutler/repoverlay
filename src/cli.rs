@@ -317,6 +317,10 @@ enum Commands {
         /// Deep merge conflicting JSON files instead of failing
         #[arg(long, env = "REPOVERLAY_MERGE")]
         merge: bool,
+
+        /// Show what would be switched without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Manage the overlay cache
@@ -757,6 +761,7 @@ pub(crate) fn run() -> Result<()> {
             skip_conflicts,
             interactive,
             merge,
+            dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = if force {
@@ -777,6 +782,7 @@ pub(crate) fn run() -> Result<()> {
                 !no_update, // default: sync before switching
                 conflict_strategy,
                 merge,
+                dry_run,
             )?;
         }
         Commands::Cache { command } => {
@@ -5787,6 +5793,7 @@ directories =
                 false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
+                false,
             );
             assert!(result.is_ok(), "switch_overlay failed: {result:?}");
 
@@ -5817,6 +5824,7 @@ directories =
                 false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
+                false,
             );
             assert!(result.is_ok());
 
@@ -5836,6 +5844,7 @@ directories =
                 None,
                 false, // no update for local paths
                 ConflictStrategy::default(),
+                false,
                 false,
             );
             assert!(result.is_err());
@@ -5896,6 +5905,7 @@ directories =
                 false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
+                false,
             )
             .unwrap();
 
@@ -5923,6 +5933,7 @@ directories =
                 None,
                 false, // no update for local paths
                 ConflictStrategy::Force,
+                false,
                 false,
             );
             assert!(
@@ -5956,6 +5967,7 @@ directories =
                 None,
                 false, // no update for local paths
                 ConflictStrategy::SkipConflicts,
+                false,
                 false,
             );
             assert!(
@@ -5995,6 +6007,7 @@ directories =
                 None,
                 false, // no update for local paths
                 ConflictStrategy::default(),
+                false,
                 false,
             );
             assert!(
@@ -7520,6 +7533,18 @@ directories =
                 "--interactive",
             ]);
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn switch_parses_dry_run() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "switch", "./overlay", "--dry-run"]).unwrap();
+            match cli.command {
+                Some(Commands::Switch { dry_run, .. }) => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Switch command"),
+            }
         }
 
         #[test]

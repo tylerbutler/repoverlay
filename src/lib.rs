@@ -3177,7 +3177,7 @@ pub(crate) fn create_overlay_with_files(
 ///
 /// 1. Remove all existing overlays (if any)
 /// 2. Apply the new overlay
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(crate) fn switch_overlay(
     source: &str,
     target: &Path,
@@ -3187,6 +3187,7 @@ pub(crate) fn switch_overlay(
     update_cache: bool,
     conflict_strategy: ConflictStrategy,
     merge: bool,
+    dry_run: bool,
 ) -> Result<()> {
     validate_git_repo(target)?;
 
@@ -3197,7 +3198,7 @@ pub(crate) fn switch_overlay(
     if has_overlays {
         println!("{} existing overlays...", "Removing".yellow().bold());
         // Remove all existing overlays
-        remove_overlay(target, None, true, false)?;
+        remove_overlay(target, None, true, dry_run)?;
     }
 
     // Apply the new overlay
@@ -3212,7 +3213,7 @@ pub(crate) fn switch_overlay(
         conflict_strategy,
         merge,
         None,
-        false,
+        dry_run,
     )?;
 
     Ok(())
