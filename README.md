@@ -11,7 +11,8 @@ Overlay config files into git repositories without committing them. Files are sy
 
 | Task | Command |
 |------|---------|
-| Apply overlay | `repoverlay apply <source>` |
+| **Browse & apply overlays** | **`repoverlay browse`** |
+| Apply overlay (scripting) | `repoverlay apply <source>` |
 | Check status | `repoverlay status` |
 | Remove overlay | `repoverlay remove <name>` |
 | Remove all | `repoverlay remove --all` |
@@ -22,7 +23,6 @@ Overlay config files into git repositories without committing them. Files are sy
 | Edit overlay | `repoverlay edit <name> --add <files>` |
 | Sync changes back | `repoverlay sync <name>` |
 | Switch overlays | `repoverlay switch <source>` |
-| Browse available overlays | `repoverlay browse` |
 | Manage sources | `repoverlay source add/list/remove` |
 | Shell completions | `repoverlay completions <shell>` |
 
@@ -31,7 +31,7 @@ Overlay config files into git repositories without committing them. Files are sy
 repoverlay manages four kinds of objects:
 
 - **Overlay** — a set of config files applied to a repo. Lifecycle: `create` → `apply` → `update` → `remove`.
-- **Source** — a configured location (GitHub repo) to find overlays. Lifecycle: `source add` → `source list` → `source remove`.
+- **Source** — a configured location (GitHub repo or local directory) to find overlays. Lifecycle: `source add` → `source list` → `source remove`.
 - **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
 - **File** — an individual file within an overlay. Managed via `edit` and `sync`.
 
@@ -63,6 +63,20 @@ cargo install repoverlay   # build from source
 ```
 
 ## Usage
+
+The easiest way to get started is with `browse`, which interactively lists available overlays and lets you select which to apply:
+
+```bash
+# Add a source, then browse and apply interactively
+repoverlay source add owner/repo
+repoverlay browse
+
+# Or browse an ephemeral source directly
+repoverlay browse ./path/to/overlays
+repoverlay browse owner/repo
+```
+
+For scripting or power-user workflows, use `apply` directly:
 
 ```bash
 # Apply from a local directory
