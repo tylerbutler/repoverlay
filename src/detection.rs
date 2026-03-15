@@ -289,25 +289,105 @@ pub(crate) fn detect_tracked_config_files(repo_path: &Path) -> Vec<DetectedFile>
     )
 }
 
-/// Check if a tracked file is a config-like file suitable for overlays.
+/// Source code and content file extensions that are not overlay candidates.
+const EXCLUDED_EXTENSIONS: &[&str] = &[
+    // Source code
+    "rs", "go", "py", "js", "ts", "tsx", "jsx", "c", "cpp", "h", "hpp", "java", "kt", "swift", "rb",
+    "php", "cs", "fs", "ex", "exs", "erl", "hrl", "gleam", "zig", "nim", "ml", "mli", "hs", "elm",
+    "clj", "cljs", "scala", "groovy", "lua", "r", "jl", "dart", "v", "d", "mjs", "cjs", "mts",
+    "cts", // Compiled / binary
+    "o", "a", "so", "dylib", "dll", "exe", "class", "pyc", "pyo", "wasm",
+    // Documentation / content
+    "md", "rst", "txt", "adoc", "org",
+    // Data / serialization (not config-like when committed)
+    "csv", "tsv", "sql", "parquet", // Media
+    "png", "jpg", "jpeg", "gif", "svg", "ico", "webp", "bmp", "mp3", "mp4", "wav", "ogg", "webm",
+    "mov", "avi", "ttf", "otf", "woff", "woff2", "eot", // Archives
+    "zip", "tar", "gz", "bz2", "xz", "7z", "rar", // Web assets
+    "css", "scss", "sass", "less", "html", "htm",
+];
+
+/// Directories whose contents are not overlay candidates.
+const EXCLUDED_DIRECTORIES: &[&str] = &[
+    "src",
+    "lib",
+    "bin",
+    "test",
+    "tests",
+    "spec",
+    "docs",
+    "doc",
+    "examples",
+    "benches",
+    "benchmarks",
+    "vendor",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    "pkg",
+    "assets",
+    "static",
+    "public",
+    "resources",
+    "migrations",
+    "scripts",
+    "cmd",
+    "internal",
+    "pkg",
+    "api",
+    "proto",
+    "fixtures",
+];
+
+/// Specific filenames that are not overlay candidates.
+const EXCLUDED_FILES: &[&str] = &[
+    ".gitmodules",
+    "package.json",
+    "LICENSE",
+    "LICENSE.md",
+    "LICENSE.txt",
+    "LICENCE",
+    "LICENCE.md",
+    "LICENCE.txt",
+    "CHANGELOG.md",
+    "CHANGELOG",
+    "CHANGES.md",
+    "HISTORY.md",
+];
+
+/// Check if a tracked file is suitable for overlays using an exclusion-based heuristic.
 ///
-/// Matches dotfiles (files/dirs starting with `.`) and other known
-/// config patterns. Excludes `.git` itself and `.gitmodules`.
+/// Rather than trying to allowlist config files (which is inherently incomplete),
+/// this excludes known source code, content, and non-config patterns. Anything
+/// not excluded is considered a potential overlay candidate.
 fn is_tracked_config(path: &Path) -> bool {
-    // Get the first component of the path
-    let first_component = path
+    let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+
+    // Exclude specific filenames
+    if EXCLUDED_FILES.contains(&file_name) {
+        return false;
+    }
+
+    // Exclude by extension
+    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+        && EXCLUDED_EXTENSIONS.contains(&ext)
+    {
+        return false;
+    }
+
+    // Exclude files inside known non-config directories
+    if let Some(first) = path
         .components()
         .next()
         .and_then(|c| c.as_os_str().to_str())
-        .unwrap_or("");
-
-    // Dotfiles and dotfile directories (but not .git* infrastructure)
-    if first_component.starts_with('.') {
-        // Exclude .gitmodules (git infrastructure, not config)
-        return first_component != ".gitmodules";
+        && EXCLUDED_DIRECTORIES.contains(&first)
+    {
+        return false;
     }
 
-    false
+    true
 }
 
 /// Discover all overlay candidate files in a repository.
@@ -918,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_tracked_config_dotfiles() {
+    fn test_is_tracked_config_includes_dotfiles() {
         assert!(is_tracked_config(Path::new(".envrc")));
         assert!(is_tracked_config(Path::new(".editorconfig")));
         assert!(is_tracked_config(Path::new(".gitignore")));
@@ -927,7 +1007,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_tracked_config_dotfile_directories() {
+    fn test_is_tracked_config_includes_dotfile_directories() {
         assert!(is_tracked_config(Path::new(".vscode/settings.json")));
         assert!(is_tracked_config(Path::new(
             ".devcontainer/devcontainer.json"
@@ -936,23 +1016,48 @@ mod tests {
     }
 
     #[test]
-    fn test_is_tracked_config_excludes_non_dotfiles() {
-        assert!(!is_tracked_config(Path::new("src/main.rs")));
-        assert!(!is_tracked_config(Path::new("README.md")));
-        assert!(!is_tracked_config(Path::new("Cargo.toml")));
-        assert!(!is_tracked_config(Path::new("package.json")));
+    fn test_is_tracked_config_includes_root_config_files() {
+        // Config files without extensions that aren't in the exclusion list
+        assert!(is_tracked_config(Path::new("justfile")));
+        assert!(is_tracked_config(Path::new("Makefile")));
+        assert!(is_tracked_config(Path::new("Dockerfile")));
+        assert!(is_tracked_config(Path::new("Cargo.toml")));
+        assert!(is_tracked_config(Path::new("Cargo.lock")));
+        assert!(is_tracked_config(Path::new("flake.nix")));
+        assert!(is_tracked_config(Path::new("biome.json")));
+        assert!(is_tracked_config(Path::new("tsconfig.json")));
     }
 
     #[test]
-    fn test_is_tracked_config_excludes_gitmodules() {
+    fn test_is_tracked_config_excludes_source_code() {
+        assert!(!is_tracked_config(Path::new("src/main.rs")));
+        assert!(!is_tracked_config(Path::new("lib/utils.py")));
+        assert!(!is_tracked_config(Path::new("bin/cli.js")));
+        assert!(!is_tracked_config(Path::new("test/foo_test.go")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_excludes_source_by_extension() {
+        assert!(!is_tracked_config(Path::new("main.rs")));
+        assert!(!is_tracked_config(Path::new("app.py")));
+        assert!(!is_tracked_config(Path::new("index.ts")));
+        assert!(!is_tracked_config(Path::new("README.md")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_excludes_specific_files() {
         assert!(!is_tracked_config(Path::new(".gitmodules")));
+        assert!(!is_tracked_config(Path::new("package.json")));
+        assert!(!is_tracked_config(Path::new("LICENSE")));
+        assert!(!is_tracked_config(Path::new("LICENSE.md")));
+        assert!(!is_tracked_config(Path::new("CHANGELOG.md")));
     }
 
     #[test]
     fn test_detect_tracked_config_files() {
         let repo = create_test_repo();
 
-        // Commit some config files
+        // Commit config files (dotfiles and root configs)
         fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
         fs::write(repo.path().join(".editorconfig"), "root = true").unwrap();
         fs::create_dir_all(repo.path().join(".vscode")).unwrap();
@@ -961,8 +1066,15 @@ mod tests {
             r#"{"editor.tabSize": 2}"#,
         )
         .unwrap();
-        // Also add a non-config file
-        fs::write(repo.path().join("src.rs"), "fn main() {}").unwrap();
+        fs::write(repo.path().join("justfile"), "test:\n\tcargo test").unwrap();
+        fs::write(repo.path().join("Cargo.toml"), "[package]").unwrap();
+
+        // Also add files that should be excluded
+        fs::write(repo.path().join("main.rs"), "fn main() {}").unwrap();
+        fs::write(repo.path().join("README.md"), "# Hello").unwrap();
+        fs::write(repo.path().join("package.json"), "{}").unwrap();
+        fs::create_dir_all(repo.path().join("src")).unwrap();
+        fs::write(repo.path().join("src/lib.rs"), "pub fn foo() {}").unwrap();
 
         Command::new("git")
             .args(["add", "."])
@@ -977,7 +1089,7 @@ mod tests {
 
         let tracked = detect_tracked_config_files(repo.path());
 
-        // Should find dotfiles
+        // Should find dotfiles and root config files
         assert!(tracked.iter().any(|f| f.path == Path::new(".envrc")));
         assert!(tracked.iter().any(|f| f.path == Path::new(".editorconfig")));
         assert!(
@@ -985,9 +1097,14 @@ mod tests {
                 .iter()
                 .any(|f| f.path == Path::new(".vscode/settings.json"))
         );
+        assert!(tracked.iter().any(|f| f.path == Path::new("justfile")));
+        assert!(tracked.iter().any(|f| f.path == Path::new("Cargo.toml")));
 
-        // Should NOT find non-config files
-        assert!(!tracked.iter().any(|f| f.path == Path::new("src.rs")));
+        // Should NOT find excluded files
+        assert!(!tracked.iter().any(|f| f.path == Path::new("main.rs")));
+        assert!(!tracked.iter().any(|f| f.path == Path::new("README.md")));
+        assert!(!tracked.iter().any(|f| f.path == Path::new("package.json")));
+        assert!(!tracked.iter().any(|f| f.path == Path::new("src/lib.rs")));
 
         // All should be TrackedConfig and not pre-selected
         assert!(

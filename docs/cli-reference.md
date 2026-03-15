@@ -1,5 +1,3 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.22s
-     Running `target/debug/repoverlay --markdown-help`
 # Command-Line Help for `repoverlay`
 
 This document contains the help content for the `repoverlay` command-line program.
