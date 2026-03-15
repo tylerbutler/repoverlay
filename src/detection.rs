@@ -212,13 +212,19 @@ pub(crate) fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Ve
         .collect()
 }
 
-/// Detect gitignored files that exist on disk.
+/// Run a git command and convert matching output lines to [`DetectedFile`]s.
 ///
-/// Uses `git ls-files --others --ignored --exclude-standard` to find files
-/// that are ignored by git but still exist in the repository.
-pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
+/// Runs `git <args>` in `repo_path`, splits stdout by lines, excludes AI
+/// config paths, applies an optional extra filter, and maps each remaining
+/// line to a `DetectedFile` with the given `category`.
+fn git_ls_to_detected(
+    repo_path: &Path,
+    args: &[&str],
+    category: FileCategory,
+    extra_filter: Option<fn(&Path) -> bool>,
+) -> Vec<DetectedFile> {
     let output = Command::new("git")
-        .args(["ls-files", "--others", "--ignored", "--exclude-standard"])
+        .args(args)
         .current_dir(repo_path)
         .output();
 
@@ -228,10 +234,11 @@ pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
             stdout
                 .lines()
                 .filter(|line| !line.is_empty())
-                .filter(|line| !is_ai_config(Path::new(line))) // Don't duplicate AI configs
+                .filter(|line| !is_ai_config(Path::new(line)))
+                .filter(|line| extra_filter.is_none_or(|f| f(Path::new(line))))
                 .map(|line| DetectedFile {
                     path: PathBuf::from(line),
-                    category: FileCategory::Gitignored,
+                    category,
                     preselected: false,
                     depth: 0,
                     parent_dir: None,
@@ -242,34 +249,30 @@ pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
     }
 }
 
+/// Detect gitignored files that exist on disk.
+///
+/// Uses `git ls-files --others --ignored --exclude-standard` to find files
+/// that are ignored by git but still exist in the repository.
+pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
+    git_ls_to_detected(
+        repo_path,
+        &["ls-files", "--others", "--ignored", "--exclude-standard"],
+        FileCategory::Gitignored,
+        None,
+    )
+}
+
 /// Detect untracked files (not in git, not ignored).
 ///
 /// Uses `git ls-files --others --exclude-standard` without --ignored
 /// to find files that are neither tracked nor ignored.
 pub(crate) fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
-    let output = Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(repo_path)
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout
-                .lines()
-                .filter(|line| !line.is_empty())
-                .filter(|line| !is_ai_config(Path::new(line))) // Don't duplicate AI configs
-                .map(|line| DetectedFile {
-                    path: PathBuf::from(line),
-                    category: FileCategory::Untracked,
-                    preselected: false,
-                    depth: 0,
-                    parent_dir: None,
-                })
-                .collect()
-        }
-        _ => Vec::new(),
-    }
+    git_ls_to_detected(
+        repo_path,
+        &["ls-files", "--others", "--exclude-standard"],
+        FileCategory::Untracked,
+        None,
+    )
 }
 
 /// Detect tracked (committed) config files in a repository.
@@ -278,30 +281,12 @@ pub(crate) fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
 /// overlay-relevant patterns: dotfiles and files in dotfile directories.
 /// Source code and non-config files are excluded.
 pub(crate) fn detect_tracked_config_files(repo_path: &Path) -> Vec<DetectedFile> {
-    let output = Command::new("git")
-        .args(["ls-files"])
-        .current_dir(repo_path)
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout
-                .lines()
-                .filter(|line| !line.is_empty())
-                .filter(|line| is_tracked_config(Path::new(line)))
-                .filter(|line| !is_ai_config(Path::new(line)))
-                .map(|line| DetectedFile {
-                    path: PathBuf::from(line),
-                    category: FileCategory::TrackedConfig,
-                    preselected: false,
-                    depth: 0,
-                    parent_dir: None,
-                })
-                .collect()
-        }
-        _ => Vec::new(),
-    }
+    git_ls_to_detected(
+        repo_path,
+        &["ls-files"],
+        FileCategory::TrackedConfig,
+        Some(is_tracked_config),
+    )
 }
 
 /// Check if a tracked file is a config-like file suitable for overlays.
@@ -372,8 +357,9 @@ pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
 
     // Then add gitignored files
     for file in detect_gitignored_files(repo_path) {
-        seen.insert(file.path.clone());
-        all_files.push(file);
+        if seen.insert(file.path.clone()) {
+            all_files.push(file);
+        }
     }
 
     // Finally add untracked files (excluding those already found as gitignored)
@@ -387,41 +373,22 @@ pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
 }
 
 /// Group detected files by category for display.
+///
+/// Returns groups in the order defined by [`FileCategory::ALL`], skipping
+/// categories that have no files.
 pub(crate) fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Vec<&DetectedFile>)> {
-    let mut ai_configs: Vec<&DetectedFile> = Vec::new();
-    let mut ai_config_dirs: Vec<&DetectedFile> = Vec::new();
-    let mut tracked_configs: Vec<&DetectedFile> = Vec::new();
-    let mut gitignored: Vec<&DetectedFile> = Vec::new();
-    let mut untracked: Vec<&DetectedFile> = Vec::new();
+    use std::collections::HashMap;
 
+    let mut by_category: HashMap<FileCategory, Vec<&DetectedFile>> = HashMap::new();
     for file in files {
-        match file.category {
-            FileCategory::AiConfig => ai_configs.push(file),
-            FileCategory::AiConfigDirectory => ai_config_dirs.push(file),
-            FileCategory::TrackedConfig => tracked_configs.push(file),
-            FileCategory::Gitignored => gitignored.push(file),
-            FileCategory::Untracked => untracked.push(file),
-        }
+        by_category.entry(file.category).or_default().push(file);
     }
 
-    let mut groups = Vec::new();
-    if !ai_configs.is_empty() {
-        groups.push((FileCategory::AiConfig, ai_configs));
-    }
-    if !ai_config_dirs.is_empty() {
-        groups.push((FileCategory::AiConfigDirectory, ai_config_dirs));
-    }
-    if !tracked_configs.is_empty() {
-        groups.push((FileCategory::TrackedConfig, tracked_configs));
-    }
-    if !gitignored.is_empty() {
-        groups.push((FileCategory::Gitignored, gitignored));
-    }
-    if !untracked.is_empty() {
-        groups.push((FileCategory::Untracked, untracked));
-    }
-
-    groups
+    FileCategory::ALL
+        .iter()
+        .copied()
+        .filter_map(|cat| by_category.remove(&cat).map(|files| (cat, files)))
+        .collect()
 }
 
 #[cfg(test)]
