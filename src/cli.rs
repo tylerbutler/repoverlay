@@ -50,11 +50,15 @@ fn version_string() -> &'static str {
 /// Check for updates and print a notification if a new version is available.
 ///
 /// Uses tiny-update-check to query crates.io with caching (24 hours).
+/// Fetches an update message from the website when an update is available.
 fn check_for_updates() {
     let name = env!("CARGO_PKG_NAME");
     let version = env!("CARGO_PKG_VERSION");
 
-    if let Ok(Some(update)) = tiny_update_check::check(name, version) {
+    let checker = tiny_update_check::UpdateChecker::new(name, version)
+        .message_url("https://repoverlay.tylerbutler.com/update-message.txt");
+
+    if let Ok(Some(update)) = checker.check_detailed() {
         eprintln!();
         eprintln!(
             "{} A new version of {} is available: {} → {}",
@@ -63,10 +67,15 @@ fn check_for_updates() {
             update.current,
             update.latest.green().bold()
         );
-        eprintln!(
-            "                  {}",
-            "https://github.com/tylerbutler/repoverlay/releases".cyan()
-        );
+        if let Some(msg) = &update.message {
+            eprintln!();
+            eprintln!("{msg}");
+        } else {
+            eprintln!(
+                "                  {}",
+                "https://github.com/tylerbutler/repoverlay/releases".cyan()
+            );
+        }
     }
 }
 
