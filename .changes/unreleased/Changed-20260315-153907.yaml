@@ -1,0 +1,10 @@
+kind: Changed
+body: |-
+    Promote browse as the primary overlay workflow
+
+    Updated help text, README, and CLI reference to recommend `browse` as the
+    primary entry point for interactive use. The `apply` command remains
+    available for scripting and power users. Improved the error message when
+    no sources are configured.
+time: 2026-03-15T15:39:07-07:00
+component: browse

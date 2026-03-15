@@ -1,0 +1,10 @@
+kind: Fixed
+body: |-
+    Discover committed config files in source repositories
+
+    `create` now discovers tracked dotfiles and config directories (e.g.,
+    `.envrc`, `.vscode/`) in addition to AI configs, gitignored, and untracked
+    files. Also fixes output path to create overlay at `output/<name>/`
+    subdirectory.
+time: 2026-03-15T15:39:02-07:00
+component: create

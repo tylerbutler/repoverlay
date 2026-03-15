@@ -1,0 +1,10 @@
+kind: Fixed
+body: |-
+    Skip non-syncable overlays gracefully in --all mode
+
+    `sync --all` no longer fails when only locally-applied overlays are present.
+    The overlay repo manager is now lazily initialized, only created when a
+    syncable overlay is encountered. Local and GitHub overlays are skipped with
+    a warning message.
+time: 2026-03-15T15:39:00-07:00
+component: sync
