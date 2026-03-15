@@ -14,6 +14,8 @@ pub(crate) enum FileCategory {
     AiConfig,
     /// AI agent configuration directories (like .claude/)
     AiConfigDirectory,
+    /// Tracked (committed) config files — dotfiles, editor configs, etc.
+    TrackedConfig,
     /// Files that are gitignored but exist on disk
     Gitignored,
     /// Files that are untracked (not in git, not ignored)
@@ -258,13 +260,67 @@ pub(crate) fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
     }
 }
 
+/// Detect tracked (committed) config files in a repository.
+///
+/// Uses `git ls-files` to find committed files, then filters for
+/// overlay-relevant patterns: dotfiles and files in dotfile directories.
+/// Source code and non-config files are excluded.
+pub(crate) fn detect_tracked_config_files(repo_path: &Path) -> Vec<DetectedFile> {
+    let output = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(repo_path)
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout
+                .lines()
+                .filter(|line| !line.is_empty())
+                .filter(|line| is_tracked_config(Path::new(line)))
+                .filter(|line| !is_ai_config(Path::new(line)))
+                .map(|line| DetectedFile {
+                    path: PathBuf::from(line),
+                    category: FileCategory::TrackedConfig,
+                    preselected: false,
+                    depth: 0,
+                    parent_dir: None,
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Check if a tracked file is a config-like file suitable for overlays.
+///
+/// Matches dotfiles (files/dirs starting with `.`) and other known
+/// config patterns. Excludes `.git` itself and `.gitmodules`.
+fn is_tracked_config(path: &Path) -> bool {
+    // Get the first component of the path
+    let first_component = path
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .unwrap_or("");
+
+    // Dotfiles and dotfile directories (but not .git* infrastructure)
+    if first_component.starts_with('.') {
+        // Exclude .gitmodules (git infrastructure, not config)
+        return first_component != ".gitmodules";
+    }
+
+    false
+}
+
 /// Discover all overlay candidate files in a repository.
 ///
 /// Returns files organized by category:
 /// 1. AI configuration directories with their children (pre-selected)
 /// 2. AI configuration files that aren't inside directories (pre-selected)
-/// 3. Gitignored files
-/// 4. Untracked files
+/// 3. Tracked config files — committed dotfiles, editor configs (not pre-selected)
+/// 4. Gitignored files
+/// 5. Untracked files
 pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
     let mut all_files = Vec::new();
 
@@ -291,6 +347,14 @@ pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
         }
     }
 
+    // Then add tracked config files (committed dotfiles, etc.)
+    let tracked = detect_tracked_config_files(repo_path);
+    for file in tracked {
+        if !all_files.iter().any(|f| f.path == file.path) {
+            all_files.push(file);
+        }
+    }
+
     // Then add gitignored files
     all_files.extend(detect_gitignored_files(repo_path));
 
@@ -310,6 +374,7 @@ pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
 pub(crate) fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Vec<&DetectedFile>)> {
     let mut ai_configs: Vec<&DetectedFile> = Vec::new();
     let mut ai_config_dirs: Vec<&DetectedFile> = Vec::new();
+    let mut tracked_configs: Vec<&DetectedFile> = Vec::new();
     let mut gitignored: Vec<&DetectedFile> = Vec::new();
     let mut untracked: Vec<&DetectedFile> = Vec::new();
 
@@ -317,6 +382,7 @@ pub(crate) fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Ve
         match file.category {
             FileCategory::AiConfig => ai_configs.push(file),
             FileCategory::AiConfigDirectory => ai_config_dirs.push(file),
+            FileCategory::TrackedConfig => tracked_configs.push(file),
             FileCategory::Gitignored => gitignored.push(file),
             FileCategory::Untracked => untracked.push(file),
         }
@@ -328,6 +394,9 @@ pub(crate) fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Ve
     }
     if !ai_config_dirs.is_empty() {
         groups.push((FileCategory::AiConfigDirectory, ai_config_dirs));
+    }
+    if !tracked_configs.is_empty() {
+        groups.push((FileCategory::TrackedConfig, tracked_configs));
     }
     if !gitignored.is_empty() {
         groups.push((FileCategory::Gitignored, gitignored));
@@ -863,5 +932,155 @@ mod tests {
             file_c.unwrap().parent_dir,
             Some(PathBuf::from(".claude/a/b"))
         );
+    }
+
+    #[test]
+    fn test_is_tracked_config_dotfiles() {
+        assert!(is_tracked_config(Path::new(".envrc")));
+        assert!(is_tracked_config(Path::new(".editorconfig")));
+        assert!(is_tracked_config(Path::new(".gitignore")));
+        assert!(is_tracked_config(Path::new(".gitattributes")));
+        assert!(is_tracked_config(Path::new(".prettierrc")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_dotfile_directories() {
+        assert!(is_tracked_config(Path::new(".vscode/settings.json")));
+        assert!(is_tracked_config(Path::new(
+            ".devcontainer/devcontainer.json"
+        )));
+        assert!(is_tracked_config(Path::new(".github/workflows/ci.yml")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_excludes_non_dotfiles() {
+        assert!(!is_tracked_config(Path::new("src/main.rs")));
+        assert!(!is_tracked_config(Path::new("README.md")));
+        assert!(!is_tracked_config(Path::new("Cargo.toml")));
+        assert!(!is_tracked_config(Path::new("package.json")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_excludes_gitmodules() {
+        assert!(!is_tracked_config(Path::new(".gitmodules")));
+    }
+
+    #[test]
+    fn test_detect_tracked_config_files() {
+        let repo = create_test_repo();
+
+        // Commit some config files
+        fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
+        fs::write(repo.path().join(".editorconfig"), "root = true").unwrap();
+        fs::create_dir_all(repo.path().join(".vscode")).unwrap();
+        fs::write(
+            repo.path().join(".vscode/settings.json"),
+            r#"{"editor.tabSize": 2}"#,
+        )
+        .unwrap();
+        // Also add a non-config file
+        fs::write(repo.path().join("src.rs"), "fn main() {}").unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add files"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let tracked = detect_tracked_config_files(repo.path());
+
+        // Should find dotfiles
+        assert!(tracked.iter().any(|f| f.path == Path::new(".envrc")));
+        assert!(tracked.iter().any(|f| f.path == Path::new(".editorconfig")));
+        assert!(
+            tracked
+                .iter()
+                .any(|f| f.path == Path::new(".vscode/settings.json"))
+        );
+
+        // Should NOT find non-config files
+        assert!(!tracked.iter().any(|f| f.path == Path::new("src.rs")));
+
+        // All should be TrackedConfig and not pre-selected
+        assert!(
+            tracked
+                .iter()
+                .all(|f| f.category == FileCategory::TrackedConfig)
+        );
+        assert!(tracked.iter().all(|f| !f.preselected));
+    }
+
+    #[test]
+    fn test_detect_tracked_config_excludes_ai_configs() {
+        let repo = create_test_repo();
+
+        // Commit AI config files
+        fs::write(repo.path().join("CLAUDE.md"), "# Claude").unwrap();
+        fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add files"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let tracked = detect_tracked_config_files(repo.path());
+
+        // CLAUDE.md is an AI config — should NOT appear in tracked config
+        assert!(!tracked.iter().any(|f| f.path == Path::new("CLAUDE.md")));
+        // .envrc should appear (it's a dotfile but not an AI config)
+        assert!(tracked.iter().any(|f| f.path == Path::new(".envrc")));
+    }
+
+    #[test]
+    fn test_discover_files_finds_committed_config() {
+        let repo = create_test_repo();
+
+        // Commit config files (no AI configs, no gitignored, no untracked)
+        fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
+        fs::write(repo.path().join(".gitignore"), "*.log").unwrap();
+        fs::create_dir_all(repo.path().join(".vscode")).unwrap();
+        fs::write(
+            repo.path().join(".vscode/settings.json"),
+            r#"{"editor.tabSize": 2}"#,
+        )
+        .unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add config"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let discovered = discover_files(repo.path());
+
+        // Should discover committed config files
+        assert!(
+            !discovered.is_empty(),
+            "Should discover committed config files"
+        );
+        assert!(
+            discovered
+                .iter()
+                .any(|f| f.category == FileCategory::TrackedConfig),
+            "Should have TrackedConfig category files"
+        );
+        assert!(discovered.iter().any(|f| f.path == Path::new(".envrc")));
+        assert!(discovered.iter().any(|f| f.path == Path::new(".gitignore")));
     }
 }

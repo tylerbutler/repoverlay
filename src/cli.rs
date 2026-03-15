@@ -1878,19 +1878,26 @@ fn create_overlay_command(
 
     // Handle --local mode (write to local directory)
     if let Some(local_path) = local {
+        // When a name is provided, create a subdirectory: output/<name>/
+        let (output_path, overlay_name) = if let Some(ref name) = name_arg {
+            (local_path.join(name), Some(name.clone()))
+        } else {
+            (local_path, None)
+        };
+
         // Use existing create_overlay function for local mode
         crate::create_overlay(
             source,
-            Some(local_path.clone()),
+            Some(output_path.clone()),
             include,
-            None, // name derived from directory
+            overlay_name,
             dry_run,
             yes,
         )?;
 
         // Auto-apply the newly created overlay back to the source repo
         if !dry_run {
-            let overlay_source = local_path.to_string_lossy().to_string();
+            let overlay_source = output_path.to_string_lossy().to_string();
             crate::apply_overlay(
                 &overlay_source,
                 source,
@@ -5536,8 +5543,48 @@ directories =
                 "Overlay directory should not exist in dry run"
             );
         }
-    }
 
+        #[test]
+        fn create_output_with_name_creates_subdirectory() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            // Simulate what create_overlay_command does: output/<name>/
+            let overlay_name = "my-overlay";
+            let output_path = output.path().join(overlay_name);
+
+            let result = create_overlay(
+                source.path(),
+                Some(output_path),
+                &[PathBuf::from(".envrc")],
+                Some(overlay_name.to_string()),
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "create_overlay failed: {result:?}");
+
+            // Files should be at output/my-overlay/, not directly in output/
+            let overlay_dir = output.path().join("my-overlay");
+            assert!(overlay_dir.exists(), "output/my-overlay/ should exist");
+            assert!(
+                overlay_dir.join(".envrc").exists(),
+                ".envrc should be in output/my-overlay/"
+            );
+            assert!(
+                overlay_dir.join("repoverlay.ccl").exists(),
+                "repoverlay.ccl should be in output/my-overlay/"
+            );
+
+            // The config should use the correct name
+            let config = fs::read_to_string(overlay_dir.join("repoverlay.ccl")).unwrap();
+            assert!(
+                config.contains("my-overlay"),
+                "Config should contain overlay name"
+            );
+        }
+    }
     // Unit tests for parse_overlay_name_arg
     mod parse_overlay_name_arg_tests {
         use super::*;

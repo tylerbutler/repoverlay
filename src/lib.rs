@@ -2906,6 +2906,10 @@ pub(crate) fn create_overlay(
             .iter()
             .filter(|f| f.category == detection::FileCategory::AiConfig)
             .count();
+        let tc_count = discovered
+            .iter()
+            .filter(|f| f.category == detection::FileCategory::TrackedConfig)
+            .count();
         let gi_count = discovered
             .iter()
             .filter(|f| f.category == detection::FileCategory::Gitignored)
@@ -2915,8 +2919,9 @@ pub(crate) fn create_overlay(
             .filter(|f| f.category == detection::FileCategory::Untracked)
             .count();
         println!(
-            " found {} AI, {} gitignored, {} untracked",
+            " found {} AI, {} tracked config, {} gitignored, {} untracked",
             selection::humanize_count(ai_count).green(),
+            selection::humanize_count(tc_count).cyan(),
             selection::humanize_count(gi_count).yellow(),
             selection::humanize_count(ut_count).blue()
         );
@@ -2943,6 +2948,7 @@ pub(crate) fn create_overlay(
                 let category_name = match category {
                     detection::FileCategory::AiConfig => "AI Configurations".green(),
                     detection::FileCategory::AiConfigDirectory => "AI Config Directories".magenta(),
+                    detection::FileCategory::TrackedConfig => "Tracked Config".cyan(),
                     detection::FileCategory::Gitignored => "Gitignored".yellow(),
                     detection::FileCategory::Untracked => "Untracked".blue(),
                 };
