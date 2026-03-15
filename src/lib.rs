@@ -2574,7 +2574,8 @@ pub(crate) fn restore_overlays(
             OverlaySource::Local { .. } | OverlaySource::OverlayRepo { .. } => None,
         };
 
-        // Re-apply the overlay
+        // Re-apply the overlay. Always use Force since restore's purpose is to
+        // re-create missing/broken symlinks from external backup state.
         match apply_overlay(
             &source_str,
             &target,
@@ -2582,7 +2583,7 @@ pub(crate) fn restore_overlays(
             Some(state.name.clone()),
             ref_override,
             true, // Update cache
-            conflict_strategy,
+            ConflictStrategy::Force,
             merge,
             None,  // Use default source resolution for restore
             false, // Not a dry run

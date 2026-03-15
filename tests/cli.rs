@@ -821,6 +821,50 @@ fn restore_all_overlays() {
 }
 
 #[test]
+fn restore_with_broken_symlinks_does_not_require_force() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "broken-symlink-test"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+
+    // Verify overlay state file exists in .repoverlay/
+    let state_path = ctx
+        .repo_path()
+        .join(".repoverlay/overlays/broken-symlink-test.ccl");
+    assert!(state_path.exists(), "State file should exist after apply");
+
+    // Delete the symlink (simulating `git clean` removing symlinks)
+    fs::remove_file(ctx.repo_path().join(".envrc")).unwrap();
+    assert!(!ctx.file_exists(".envrc"));
+
+    // State file still exists — this is the "broken symlink" scenario
+    assert!(
+        state_path.exists(),
+        "State file should still exist after deleting symlink"
+    );
+
+    // Restore WITHOUT --force should succeed (issue #202)
+    cargo_bin_cmd!("repoverlay")
+        .args(["restore"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // The file should be restored
+    assert!(
+        ctx.file_exists(".envrc"),
+        "Symlink should be restored without --force"
+    );
+}
+
+#[test]
 fn restore_when_no_overlays_shows_message() {
     let ctx = TestContext::new();
 
