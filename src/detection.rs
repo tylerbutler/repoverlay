@@ -130,7 +130,7 @@ pub(crate) fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile
 
     for dir_name in AI_CONFIG_DIRECTORIES {
         let full_path = repo_path.join(dir_name);
-        if full_path.exists() && full_path.is_dir() {
+        if full_path.is_dir() {
             results.push(DetectedFile {
                 path: PathBuf::from(dir_name),
                 category: FileCategory::AiConfigDirectory,

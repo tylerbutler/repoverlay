@@ -284,18 +284,16 @@ impl SelectionState {
 
     /// Get files that are currently visible (match category filter, search, and expand state).
     fn visible_files(&self) -> Vec<&DetectedFile> {
+        let query = self.search_query.to_lowercase();
         self.all_files
             .iter()
             .filter(|f| self.visible_categories.contains(&f.category))
             .filter(|f| self.all_ancestors_expanded(f))
             .filter(|f| {
-                if self.search_query.is_empty() {
+                if query.is_empty() {
                     true
                 } else {
-                    f.path
-                        .to_string_lossy()
-                        .to_lowercase()
-                        .contains(&self.search_query.to_lowercase())
+                    f.path.to_string_lossy().to_lowercase().contains(&query)
                 }
             })
             .collect()

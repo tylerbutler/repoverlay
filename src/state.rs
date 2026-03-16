@@ -59,6 +59,11 @@ pub(crate) enum OverlaySource {
         /// When the cache was last updated
         cached_at: DateTime<Utc>,
     },
+    /// Overlay from the in-repo library (.repoverlay/library/)
+    Library {
+        /// Overlay name within the library directory
+        name: String,
+    },
     /// Overlay from a shared overlay repository (org/repo/name format)
     OverlayRepo {
         /// Target organization (e.g., "microsoft")
@@ -141,11 +146,31 @@ impl OverlaySource {
         }
     }
 
+    /// Create a new library source.
+    pub(crate) const fn library(name: String) -> Self {
+        Self::Library { name }
+    }
+
+    /// Check if this is a library source.
+    pub(crate) const fn is_library(&self) -> bool {
+        matches!(self, Self::Library { .. })
+    }
+
+    /// Get the library overlay name (for library sources only).
+    #[allow(dead_code)]
+    pub(crate) fn library_name(&self) -> Option<&str> {
+        match self {
+            Self::Library { name } => Some(name),
+            _ => None,
+        }
+    }
+
     /// Get a display string for the source.
     #[allow(dead_code)]
     pub(crate) fn display(&self) -> String {
         match self {
             Self::Local { path } => path.display().to_string(),
+            Self::Library { name } => format!("{name} (library)"),
             Self::GitHub {
                 url,
                 git_ref,
@@ -188,6 +213,12 @@ impl OverlaySource {
         matches!(self, Self::GitHub { .. })
     }
 
+    /// Check if this is a local source.
+    #[allow(dead_code)]
+    pub(crate) const fn is_local(&self) -> bool {
+        matches!(self, Self::Local { .. })
+    }
+
     /// Check if this is an overlay repository source.
     #[allow(dead_code)]
     pub(crate) const fn is_overlay_repo(&self) -> bool {
@@ -199,7 +230,7 @@ impl OverlaySource {
     pub(crate) fn local_path(&self) -> Option<&Path> {
         match self {
             Self::Local { path } => Some(path),
-            Self::GitHub { .. } | Self::OverlayRepo { .. } => None,
+            Self::Library { .. } | Self::GitHub { .. } | Self::OverlayRepo { .. } => None,
         }
     }
 }
@@ -249,6 +280,14 @@ impl SourceResolver for OverlaySource {
     fn resolve_local_path(&self) -> Result<PathBuf> {
         match self {
             Self::Local { path } => Ok(path.clone()),
+            Self::Library { name } => {
+                // Library path resolution requires repo context — this is handled
+                // by the caller passing the resolved library path. Use
+                // library::get_library_path() to resolve it.
+                Err(anyhow::anyhow!(
+                    "Library source '{name}' requires repo context to resolve. Use library::get_library_path() instead."
+                ))
+            }
             Self::OverlayRepo {
                 org,
                 repo,
@@ -291,7 +330,7 @@ impl SourceResolver for OverlaySource {
 
     fn is_mutable(&self) -> bool {
         match self {
-            Self::Local { .. } | Self::OverlayRepo { .. } => true,
+            Self::Local { .. } | Self::Library { .. } | Self::OverlayRepo { .. } => true,
             Self::GitHub { .. } => false,
         }
     }
@@ -299,20 +338,21 @@ impl SourceResolver for OverlaySource {
     fn is_syncable(&self) -> bool {
         match self {
             Self::OverlayRepo { .. } => true,
-            Self::Local { .. } | Self::GitHub { .. } => false,
+            Self::Local { .. } | Self::Library { .. } | Self::GitHub { .. } => false,
         }
     }
 
     fn is_updatable(&self) -> bool {
         match self {
             Self::OverlayRepo { .. } | Self::GitHub { .. } => true,
-            Self::Local { .. } => false,
+            Self::Local { .. } | Self::Library { .. } => false,
         }
     }
 
     fn source_type_label(&self) -> &'static str {
         match self {
             Self::Local { .. } => "local",
+            Self::Library { .. } => "library",
             Self::OverlayRepo { .. } => "overlay repo",
             Self::GitHub { .. } => "GitHub",
         }
@@ -2031,5 +2071,94 @@ source =
         let state: OverlayState = sickle::from_str(ccl).unwrap();
         assert!(state.exclusions.is_empty());
         assert!(!state.is_excluded(Path::new("anything")));
+    }
+
+    // ==================== Library variant tests ====================
+
+    #[test]
+    fn library_source_construction() {
+        let source = OverlaySource::library("claude-config".to_string());
+        assert!(source.is_library());
+        if let OverlaySource::Library { name } = &source {
+            assert_eq!(name, "claude-config");
+        } else {
+            panic!("Expected Library variant");
+        }
+    }
+
+    #[test]
+    fn library_source_display() {
+        let source = OverlaySource::library("claude-config".to_string());
+        assert_eq!(source.display(), "claude-config (library)");
+    }
+
+    #[test]
+    fn library_source_query_methods() {
+        let source = OverlaySource::library("test".to_string());
+        assert!(source.is_library());
+        assert!(!source.is_github());
+        assert!(!source.is_overlay_repo());
+        assert_eq!(source.local_path(), None);
+        assert_eq!(source.library_name(), Some("test"));
+    }
+
+    #[test]
+    fn library_source_resolver_is_mutable() {
+        let source = OverlaySource::library("test-overlay".to_string());
+        assert!(source.is_mutable());
+    }
+
+    #[test]
+    fn library_source_resolver_not_syncable() {
+        let source = OverlaySource::library("test-overlay".to_string());
+        assert!(!source.is_syncable());
+    }
+
+    #[test]
+    fn library_source_resolver_not_updatable() {
+        let source = OverlaySource::library("test-overlay".to_string());
+        assert!(!source.is_updatable());
+    }
+
+    #[test]
+    fn library_source_resolver_label() {
+        let source = OverlaySource::library("test-overlay".to_string());
+        assert_eq!(source.source_type_label(), "library");
+    }
+
+    #[test]
+    fn library_source_resolver_resolve_path_errors() {
+        let source = OverlaySource::library("test-overlay".to_string());
+        let result = source.resolve_local_path();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn overlay_state_round_trip_library_source() {
+        let state = OverlayState {
+            name: "test-overlay".to_string(),
+            applied_at: Utc::now(),
+            source: OverlaySource::library("test-overlay".to_string()),
+            files: vec![FileEntry {
+                source: PathBuf::from(".envrc"),
+                target: PathBuf::from(".envrc"),
+                link_type: LinkType::Symlink,
+                entry_type: EntryType::File,
+            }],
+            exclusions: vec![],
+            removed_at: None,
+        };
+
+        let serialized = sickle::to_string(&state).unwrap();
+        let deserialized: OverlayState = sickle::from_str(&serialized).unwrap();
+
+        assert!(deserialized.source.is_library());
+        assert_eq!(deserialized.source.library_name(), Some("test-overlay"));
+    }
+
+    #[test]
+    fn non_library_source_library_name_is_none() {
+        let source = OverlaySource::local(PathBuf::from("/tmp"));
+        assert_eq!(source.library_name(), None);
     }
 }

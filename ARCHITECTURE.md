@@ -16,6 +16,7 @@ src/
 ├── sources.rs      # Multi-source overlay resolution with priority ordering
 ├── overlay_repo.rs # Shared overlay repository integration
 ├── upstream.rs     # Upstream repository detection for fork inheritance
+├── library.rs      # In-repo overlay library management
 ├── detection.rs    # File discovery for overlay creation
 ├── selection.rs    # Interactive file selection UI
 ├── widgets/        # Reusable ratatui UI components
@@ -56,6 +57,8 @@ tests/
 - **overlay_repo.rs** - Shared overlay repository support. Allows overlays to be referenced as `org/repo/name` from a centrally managed repository. Supports fallback resolution for fork inheritance.
 
 - **upstream.rs** - Upstream repository detection. Scans git remotes to identify parent repositories (forks), enabling automatic overlay inheritance from upstream.
+
+- **library.rs** - In-repo overlay library management. Handles the `.repoverlay/library/` directory for storing shareable overlays within a repository. Provides path resolution (configurable via per-repo config), overlay listing, import/export/remove operations, and gitignore detection. Library overlays are auto-discovered and resolved with highest priority.
 
 - **detection.rs** - File discovery for the `create` command. Identifies AI configs, gitignored files, and untracked files that might be candidates for overlay creation.
 
@@ -153,6 +156,7 @@ files =
 
 Source types are encoded as pipe-delimited strings:
 - Local: `local|/path/to/overlay`
+- Library: `library|name` (in-repo `.repoverlay/library/` overlay)
 - GitHub: `github|url|owner|repo|ref|commit|subpath|cached_at`
 - Overlay repo: `overlay_repo|org|repo|name|commit`
 
@@ -179,7 +183,8 @@ The `resolve_source()` function determines the overlay source type:
 
 1. **GitHub URL** (`https://github.com/...`) - Downloads to cache, returns cached path
 2. **Local path** (`./path` or `/path`) - Returns path directly after validation
-3. **Overlay repo reference** (`org/repo/name`) - Resolves from configured shared repository
+3. **Library overlay** (bare name) - Checks `.repoverlay/library/` first (highest priority)
+4. **Overlay repo reference** (`org/repo/name`) - Resolves from configured shared repository
 
 ## Fork Inheritance
 

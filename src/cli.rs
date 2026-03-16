@@ -14,9 +14,10 @@ use std::sync::LazyLock;
 use crate::{
     CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource, STATE_DIR,
     apply_multiple_overlays, apply_overlay, canonicalize_path, config, get_cached_repo_commit,
-    list_applied_overlays, list_overlays_from_cached_repo, parse_github_owner_repo, remove_overlay,
-    remove_single_overlay, restore_overlays, selection::is_interactive, show_status,
-    show_status_json, status_has_overlays, switch_overlay, update_overlays, validate_git_repo,
+    library, list_applied_overlays, list_overlays_from_cached_repo, parse_github_owner_repo,
+    remove_overlay, remove_single_overlay, restore_overlays, selection::is_interactive,
+    show_status, show_status_json, state, status_has_overlays, switch_overlay, update_overlays,
+    validate_git_repo,
 };
 
 /// Build version string with git info for local builds
@@ -519,6 +520,12 @@ enum Commands {
         command: SourceCommand,
     },
 
+    /// Manage the in-repo overlay library
+    Library {
+        #[command(subcommand)]
+        command: LibraryCommand,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -633,6 +640,62 @@ enum EditCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum LibraryCommand {
+    /// List overlays in the library
+    List {
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Import an overlay into the library
+    Import {
+        /// Overlay source (path, GitHub URL, or org/repo/name)
+        source: String,
+
+        /// Name for the imported overlay (defaults to source name)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Force overwrite if overlay already exists
+        #[arg(short, long)]
+        force: bool,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Export an overlay from the library
+    Export {
+        /// Name of the overlay to export
+        overlay: String,
+
+        /// Destination path
+        #[arg(long = "to")]
+        dest: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Remove an overlay from the library
+    Remove {
+        /// Name of the overlay to remove
+        overlay: String,
+
+        /// Force removal even if overlay is currently applied
+        #[arg(short, long)]
+        force: bool,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+}
+
 pub(crate) fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -664,15 +727,7 @@ pub(crate) fn run() -> Result<()> {
             dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            let conflict_strategy = if force {
-                ConflictStrategy::Force
-            } else if skip_conflicts {
-                ConflictStrategy::SkipConflicts
-            } else if interactive {
-                ConflictStrategy::Interactive
-            } else {
-                ConflictStrategy::Fail
-            };
+            let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
             apply_overlay(
                 &source,
                 &target,
@@ -723,15 +778,7 @@ pub(crate) fn run() -> Result<()> {
             merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            let conflict_strategy = if force {
-                ConflictStrategy::Force
-            } else if skip_conflicts {
-                ConflictStrategy::SkipConflicts
-            } else if interactive {
-                ConflictStrategy::Interactive
-            } else {
-                ConflictStrategy::Fail
-            };
+            let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
             restore_overlays(&target, dry_run, conflict_strategy, merge)?;
         }
         Commands::Update {
@@ -744,15 +791,7 @@ pub(crate) fn run() -> Result<()> {
             merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            let conflict_strategy = if force {
-                ConflictStrategy::Force
-            } else if skip_conflicts {
-                ConflictStrategy::SkipConflicts
-            } else if interactive {
-                ConflictStrategy::Interactive
-            } else {
-                ConflictStrategy::Fail
-            };
+            let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
             update_overlays(&target, name, dry_run, conflict_strategy, merge)?;
         }
         Commands::Create {
@@ -781,15 +820,7 @@ pub(crate) fn run() -> Result<()> {
             dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            let conflict_strategy = if force {
-                ConflictStrategy::Force
-            } else if skip_conflicts {
-                ConflictStrategy::SkipConflicts
-            } else if interactive {
-                ConflictStrategy::Interactive
-            } else {
-                ConflictStrategy::Fail
-            };
+            let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
             switch_overlay(
                 &source,
                 &target,
@@ -913,6 +944,9 @@ pub(crate) fn run() -> Result<()> {
         Commands::Source { command } => {
             handle_source_command(command)?;
         }
+        Commands::Library { command } => {
+            handle_library_command(command)?;
+        }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "repoverlay", &mut io::stdout());
@@ -923,6 +957,119 @@ pub(crate) fn run() -> Result<()> {
 
     // Check for updates after successful command execution
     check_for_updates();
+
+    Ok(())
+}
+
+/// Handle library subcommands.
+fn handle_library_command(command: LibraryCommand) -> Result<()> {
+    use colored::Colorize;
+
+    match command {
+        LibraryCommand::List { target } => {
+            let target = resolve_target(target)?;
+            let library_path = library::get_library_path(&target)?;
+            let overlays = library::list_library_overlays(&library_path)?;
+            if overlays.is_empty() {
+                println!("No overlays in library.");
+            } else {
+                for overlay in &overlays {
+                    println!("  {}", overlay.name);
+                }
+            }
+        }
+        LibraryCommand::Import {
+            source,
+            name,
+            force,
+            target,
+        } => {
+            let target = resolve_target(target)?;
+
+            // Resolve source path
+            let source_path = PathBuf::from(&source);
+            let source_path = source_path
+                .canonicalize()
+                .with_context(|| format!("Source path not found: {source}"))?;
+
+            if !source_path.is_dir() {
+                bail!("Source is not a directory: {}", source_path.display());
+            }
+
+            let overlay_name = name.unwrap_or_else(|| {
+                source_path.file_name().map_or_else(
+                    || "overlay".to_string(),
+                    |n| n.to_string_lossy().to_string(),
+                )
+            });
+
+            let library_path = library::get_library_path(&target)?;
+
+            // Warn if library path is gitignored
+            if library::check_library_gitignored(&target, &library_path) {
+                eprintln!(
+                    "{} Library path {} is gitignored. Overlays won't be tracked by git.",
+                    "Warning:".yellow().bold(),
+                    library_path.display()
+                );
+            }
+
+            let dest =
+                library::import_to_library(&source_path, &library_path, &overlay_name, force)?;
+            println!(
+                "{} overlay '{}' to library at {}",
+                "Imported".green().bold(),
+                overlay_name,
+                dest.display()
+            );
+        }
+        LibraryCommand::Export {
+            overlay,
+            dest,
+            target,
+        } => {
+            let target = resolve_target(target)?;
+            let library_path = library::get_library_path(&target)?;
+
+            let dest_path = PathBuf::from(&dest);
+            let exported = library::export_from_library(&library_path, &overlay, &dest_path)?;
+            println!(
+                "{} overlay '{}' to {}",
+                "Exported".green().bold(),
+                overlay,
+                exported.display()
+            );
+        }
+        LibraryCommand::Remove {
+            overlay,
+            force,
+            target,
+        } => {
+            let target = resolve_target(target)?;
+
+            // Check if overlay is currently applied
+            if !force {
+                let applied = state::list_applied_overlays(&target)?;
+                if applied.iter().any(|n| n.as_str() == overlay)
+                    && let Ok(state) = state::load_overlay_state(&target, &overlay)
+                    && state.source.is_library()
+                {
+                    bail!(
+                        "Overlay '{overlay}' is currently applied from the library. Use --force to remove anyway, or remove the overlay first with 'repoverlay remove {overlay}'.",
+                    );
+                }
+            }
+
+            let library_path = library::get_library_path(&target)?;
+
+            library::remove_from_library(&library_path, &overlay)?;
+            println!(
+                "{} overlay '{}' from library",
+                "Removed".green().bold(),
+                overlay
+            );
+        }
+    }
 
     Ok(())
 }
@@ -969,6 +1116,12 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                 if source_name.is_empty() {
                     bail!(
                         "Could not extract source name from path. Please provide a name with --name"
+                    );
+                }
+
+                if source_name.starts_with('@') {
+                    bail!(
+                        "Source names starting with '@' are reserved. '@library' is a built-in source."
                     );
                 }
 
@@ -1022,6 +1175,12 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                 if source_name.is_empty() {
                     bail!(
                         "Could not extract source name from URL. Please provide a name with --name"
+                    );
+                }
+
+                if source_name.starts_with('@') {
+                    bail!(
+                        "Source names starting with '@' are reserved. '@library' is a built-in source."
                     );
                 }
 
@@ -1148,6 +1307,31 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
 }
 
 /// Find the root of the current git repository.
+/// Build a conflict strategy from the mutually-exclusive CLI flags.
+const fn conflict_strategy(
+    force: bool,
+    skip_conflicts: bool,
+    interactive: bool,
+) -> ConflictStrategy {
+    if force {
+        ConflictStrategy::Force
+    } else if skip_conflicts {
+        ConflictStrategy::SkipConflicts
+    } else if interactive {
+        ConflictStrategy::Interactive
+    } else {
+        ConflictStrategy::Fail
+    }
+}
+
+/// Canonicalize and validate an optional target path (defaults to current directory).
+fn resolve_target(target: Option<PathBuf>) -> Result<PathBuf> {
+    let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
+    let target = canonicalize_path(&target_dir, "Target")?;
+    validate_git_repo(&target)?;
+    Ok(target)
+}
+
 fn find_repo_root() -> Result<PathBuf> {
     let output = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -2563,6 +2747,14 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
     // Check mutability upfront before any changes (#142, #148, #149)
     {
         use crate::state::SourceResolver;
+        if state.source.is_library() {
+            bail!(
+                "Interactive edit is not supported for library overlays.\n\n\
+                 Library overlays are managed in the repository's overlay library.\n\
+                 Edit the overlay files directly in the library directory,\n\
+                 then re-apply with: repoverlay apply {overlay_name}"
+            );
+        }
         if !state.source.is_mutable() {
             let label = state.source.source_type_label();
             bail!(
@@ -3009,6 +3201,14 @@ fn add_files_to_overlay(
     // Check source mutability upfront before any filesystem changes (#148)
     {
         use crate::state::SourceResolver;
+        if state.source.is_library() {
+            bail!(
+                "Cannot add files to a library overlay.\n\n\
+                 Library overlays are managed in the repository's overlay library.\n\
+                 Add files to the overlay directory in the library,\n\
+                 then re-apply with: repoverlay apply {normalized_name}"
+            );
+        }
         if !state.source.is_mutable() {
             let label = state.source.source_type_label();
             bail!(

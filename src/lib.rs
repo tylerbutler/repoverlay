@@ -10,6 +10,7 @@ mod fuzzy;
 pub(crate) mod git;
 mod github;
 mod json_merge;
+mod library;
 mod overlay_name;
 mod overlay_repo;
 mod reference;
@@ -387,6 +388,25 @@ pub(crate) fn resolve_source(
     debug!(
         "resolve_source: {source_str} (ref_override={ref_override:?}, update={update}, source_filter={source_filter:?})"
     );
+
+    // Check library first for bare names or explicit @library source filter
+    let is_bare_name = !source_str.contains('/') && !source_str.starts_with('.');
+    let is_library_filter = source_filter == Some(library::LIBRARY_SOURCE_NAME);
+    if (is_bare_name || is_library_filter)
+        && let Some(target) = target_path
+        && let Ok(library_path) = library::get_library_path(target)
+        && let overlay_path = library_path.join(source_str)
+        && overlay_path.is_dir()
+    {
+        debug!(
+            "resolved '{source_str}' from library at {}",
+            overlay_path.display()
+        );
+        return Ok(ResolvedSources::Single(ResolvedSource {
+            path: overlay_path,
+            source_info: state::OverlaySource::library(source_str.to_string()),
+        }));
+    }
 
     // Parse input into structured reference
     let reference = SourceReference::parse(source_str);
@@ -2475,6 +2495,9 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
                 println!("    From:    {}", source.cyan());
             }
         }
+        OverlaySource::Library { name } => {
+            println!("    Source:  {} {}", name, "(library)".dimmed());
+        }
     }
 
     println!(
@@ -2572,6 +2595,9 @@ pub(crate) fn restore_overlays(
             } => {
                 println!("    Source: {org}/{repo}/{overlay_name} (overlay repo)");
             }
+            OverlaySource::Library { name } => {
+                println!("    Source: {name} (library)");
+            }
         }
     }
 
@@ -2595,11 +2621,14 @@ pub(crate) fn restore_overlays(
             } => {
                 format!("{org}/{repo}/{overlay_name}")
             }
+            OverlaySource::Library { name } => name.clone(),
         };
 
         let ref_override = match &state.source {
             OverlaySource::GitHub { git_ref, .. } => Some(git_ref.as_str()),
-            OverlaySource::Local { .. } | OverlaySource::OverlayRepo { .. } => None,
+            OverlaySource::Local { .. }
+            | OverlaySource::Library { .. }
+            | OverlaySource::OverlayRepo { .. } => None,
         };
 
         // Re-apply the overlay. Always use Force since restore's purpose is to
@@ -2730,6 +2759,13 @@ pub(crate) fn update_overlays(
                     );
                 }
             }
+        } else if state.source.is_library() {
+            // Library overlays are managed in-repo — update via git
+            println!(
+                "  {} {} (library overlay — update via git)",
+                "-".dimmed(),
+                state.name,
+            );
         } else if state.source.is_updatable() {
             // OverlayRepo sources: update by re-applying from the overlay repo
             println!(

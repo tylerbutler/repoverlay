@@ -1,0 +1,7 @@
+kind: Changed
+body: |-
+    Reserve `@` prefix for built-in source names
+
+    Source names starting with `@` are now rejected during `source add`. The `@library` name is reserved for the in-repo overlay library.
+time: 2026-03-16T17:28:09Z
+component: source

@@ -80,12 +80,6 @@ impl<Id: Clone + Eq + Hash> MultiSelectTreeState<Id> {
         self.selected.insert(id);
     }
 
-    /// Deselect a single item.
-    #[allow(dead_code)]
-    pub(crate) fn deselect(&mut self, id: &Id) {
-        self.selected.remove(id);
-    }
-
     /// Select multiple items.
     #[allow(dead_code)]
     pub(crate) fn select_many(&mut self, ids: impl IntoIterator<Item = Id>) {

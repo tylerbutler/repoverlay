@@ -2508,3 +2508,227 @@ fn edit_remove_exclusions_persist_across_remove_reapply() {
     assert!(exclude.contains(".envrc"));
     assert!(!exclude.contains("extra.txt"));
 }
+
+// ==================== Library subcommand tests ====================
+
+#[test]
+fn library_list_empty() {
+    let ctx = TestContext::new();
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No overlays"));
+}
+
+#[test]
+fn library_list_shows_overlays() {
+    let ctx = TestContext::new();
+    let library_path = ctx.repo_path().join(".repoverlay").join("library");
+    fs::create_dir_all(library_path.join("overlay-a")).unwrap();
+    fs::create_dir_all(library_path.join("overlay-b")).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("overlay-a"))
+        .stdout(predicate::str::contains("overlay-b"));
+}
+
+#[test]
+fn library_import_from_local_path() {
+    let ctx =
+        TestContext::new().with_overlay(&[(".envrc", "use flake"), ("CLAUDE.md", "# Config")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            ctx.overlay_path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Imported"));
+
+    // Verify overlay is in library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match("tmp|overlay").unwrap());
+}
+
+#[test]
+fn library_import_with_name() {
+    let ctx = TestContext::new().with_overlay(&[(".envrc", "use flake")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            ctx.overlay_path().to_str().unwrap(),
+            "--name",
+            "my-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+}
+
+#[test]
+fn library_remove_overlay() {
+    let ctx = TestContext::new();
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join("file.txt"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "remove",
+            "my-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    assert!(!library_path.exists());
+}
+
+#[test]
+fn library_export_to_path() {
+    let ctx = TestContext::new();
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join("file.txt"), "content").unwrap();
+
+    let dest = ctx.repo_path().join("exported");
+    fs::create_dir_all(&dest).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "export",
+            "my-overlay",
+            "--to",
+            dest.to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported"));
+
+    assert!(dest.join("my-overlay").join("file.txt").exists());
+}
+
+#[test]
+fn apply_resolves_from_library() {
+    let ctx = TestContext::new();
+
+    // Create a library overlay
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("test-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join("test-file.txt"), "from library").unwrap();
+
+    // Apply by bare name — should resolve from library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "test-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Verify file was applied
+    assert!(ctx.file_exists("test-file.txt"));
+
+    // Verify status shows library source
+    cargo_bin_cmd!("repoverlay")
+        .args(["status", "--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("library"));
+}
+
+#[test]
+fn status_shows_library_source_json() {
+    let ctx = TestContext::new();
+
+    // Create and apply library overlay
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("test-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join("file.txt"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "test-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Check JSON status
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "status",
+            "--json",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Library"));
+}
