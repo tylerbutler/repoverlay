@@ -520,6 +520,25 @@ pub(crate) fn resolve_source(
         ),
 
         SourceReference::OnePart { username } => {
+            // Before treating as a GitHub username, check if this is an applied
+            // overlay name that could be resolved from its source. This catches
+            // cases like `switch ff-oce` where the user means an overlay name,
+            // not a GitHub user.
+            if let Some(target) = target_path {
+                use state::SourceResolver;
+
+                let applied = state::list_applied_overlays(target).unwrap_or_default();
+                if applied.iter().any(|n| n.as_str() == username) {
+                    // Already applied — resolve from its existing source
+                    let overlay_state = state::load_overlay_state(target, &username)?;
+                    let path = overlay_state.source.resolve_local_path()?;
+                    return Ok(ResolvedSources::Single(ResolvedSource {
+                        path,
+                        source_info: overlay_state.source,
+                    }));
+                }
+            }
+
             // Phase C: Expand username to username/{default_repo}
             let default_repo = config::default_overlay_repo_name();
             debug!("expanding one-part reference: {username} -> {username}/{default_repo}",);
