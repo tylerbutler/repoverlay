@@ -1464,4 +1464,20 @@ sources =
             Some(Path::new("my-overlays"))
         );
     }
+
+    #[test]
+    fn snapshot_source_url_input_display() {
+        let inputs: Vec<SourceUrlInput> = [
+            "https://github.com/owner/repo",
+            "git@github.com:owner/repo.git",
+            "owner/repo",
+            "myuser",
+        ]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+
+        let output: Vec<String> = inputs.iter().map(|i| format!("{i}")).collect();
+        insta::assert_snapshot!(output.join("\n"));
+    }
 }

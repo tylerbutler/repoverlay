@@ -43,8 +43,6 @@ pub(crate) struct DetectedFile {
     pub(crate) category: FileCategory,
     /// Whether this file should be pre-selected by default
     pub(crate) preselected: bool,
-    /// Depth in the tree (0 = top-level, 1+ = children of a directory)
-    pub(crate) depth: u8,
     /// Parent directory path (None for top-level entries)
     pub(crate) parent_dir: Option<PathBuf>,
 }
@@ -95,8 +93,7 @@ pub(crate) fn is_ai_config(path: &Path) -> bool {
         }
         // Check if path is inside a pattern directory (e.g., ".claude/file" matches ".claude")
         // Must use separator to avoid false matches like ".claude-backup" matching ".claude"
-        let pattern_with_sep = format!("{pattern}/");
-        if path_str.starts_with(&pattern_with_sep) {
+        if path_str.starts_with(pattern) && path_str.as_bytes().get(pattern.len()) == Some(&b'/') {
             return true;
         }
     }
@@ -117,7 +114,6 @@ pub(crate) fn detect_ai_configs(repo_path: &Path) -> Vec<DetectedFile> {
                 path: PathBuf::from(pattern),
                 category: FileCategory::AiConfig,
                 preselected: true, // AI configs are pre-selected by default
-                depth: 0,
                 parent_dir: None,
             });
         }
@@ -139,7 +135,6 @@ pub(crate) fn detect_ai_config_directories(repo_path: &Path) -> Vec<DetectedFile
                 path: PathBuf::from(dir_name),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true, // AI config directories are pre-selected by default
-                depth: 0,
                 parent_dir: None,
             });
         }
@@ -191,7 +186,6 @@ pub(crate) fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Ve
                 .path()
                 .strip_prefix(repo_path)
                 .unwrap_or_else(|_| entry.path());
-            let depth = relative.components().count().saturating_sub(1);
             let is_dir = entry.file_type().is_dir();
             // Use the immediate parent, not the top-level directory,
             // so the tree expand/collapse logic works at every level.
@@ -204,8 +198,6 @@ pub(crate) fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Ve
                     FileCategory::AiConfig
                 },
                 preselected: true,
-                #[allow(clippy::cast_possible_truncation)]
-                depth: depth as u8,
                 parent_dir: parent,
             }
         })
@@ -240,7 +232,6 @@ fn git_ls_to_detected(
                     path: PathBuf::from(line),
                     category,
                     preselected: false,
-                    depth: 0,
                     parent_dir: None,
                 })
                 .collect()
@@ -478,15 +469,7 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
-    fn create_test_repo() -> TempDir {
-        let dir = TempDir::new().unwrap();
-        Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .expect("Failed to init git repo");
-        dir
-    }
+    use crate::testutil::create_test_repo;
 
     #[test]
     fn test_is_ai_config_exact_match() {
@@ -626,21 +609,18 @@ mod tests {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("notes.txt"),
                 category: FileCategory::Untracked,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
         ];
@@ -667,14 +647,12 @@ mod tests {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
         ];
@@ -800,14 +778,12 @@ mod tests {
             path: PathBuf::from("test.txt"),
             category: FileCategory::AiConfig,
             preselected: true,
-            depth: 0,
             parent_dir: None,
         };
         let cloned = file.clone();
         assert_eq!(cloned.path, file.path);
         assert_eq!(cloned.category, file.category);
         assert_eq!(cloned.preselected, file.preselected);
-        assert_eq!(cloned.depth, file.depth);
         assert_eq!(cloned.parent_dir, file.parent_dir);
     }
 
@@ -868,21 +844,18 @@ mod tests {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
         ];
@@ -942,7 +915,6 @@ mod tests {
         assert!(subdir.is_some(), "should include subdirectory entry");
         let subdir = subdir.unwrap();
         assert_eq!(subdir.category, FileCategory::AiConfigDirectory);
-        assert_eq!(subdir.depth, 1);
         assert_eq!(subdir.parent_dir, Some(PathBuf::from(".claude")));
 
         // Should include files with correct immediate parents
@@ -960,7 +932,6 @@ mod tests {
             test_md.unwrap().parent_dir,
             Some(PathBuf::from(".claude/commands"))
         );
-        assert_eq!(test_md.unwrap().depth, 2);
     }
 
     #[test]

@@ -1,0 +1,6 @@
+---
+source: src/overlay_repo.rs
+expression: "output.join(\"\\n\")"
+---
+microsoft/FluidFramework/claude-config
+owner/repo/my-overlay

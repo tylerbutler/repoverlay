@@ -1889,6 +1889,47 @@ directories =
     }
 
     #[test]
+    fn snapshot_overlay_source_display() {
+        let sources = [
+            OverlaySource::local(PathBuf::from("/home/user/overlays/my-overlay")),
+            OverlaySource::github(
+                "https://github.com/owner/repo".to_string(),
+                "owner".to_string(),
+                "repo".to_string(),
+                "main".to_string(),
+                "abc123def456789012345678901234567890abcd".to_string(),
+                None,
+            ),
+            OverlaySource::github(
+                "https://github.com/owner/repo".to_string(),
+                "owner".to_string(),
+                "repo".to_string(),
+                "main".to_string(),
+                "abc123def456".to_string(),
+                Some("overlays/config".to_string()),
+            ),
+            OverlaySource::OverlayRepo {
+                org: "microsoft".to_string(),
+                repo: "FluidFramework".to_string(),
+                name: "claude-config".to_string(),
+                commit: "abc123def456".to_string(),
+                resolved_via: Some(ResolvedVia::Upstream),
+                source_name: None,
+            },
+            OverlaySource::OverlayRepo {
+                org: "microsoft".to_string(),
+                repo: "FluidFramework".to_string(),
+                name: "claude-config".to_string(),
+                commit: "abc123def456".to_string(),
+                resolved_via: None,
+                source_name: Some("my-source".to_string()),
+            },
+        ];
+        let output: Vec<String> = sources.iter().map(OverlaySource::display).collect();
+        insta::assert_snapshot!(output.join("\n"));
+    }
+
+    #[test]
     fn exclusion_add_remove_and_check() {
         let mut state = OverlayState::new(
             "test".to_string(),

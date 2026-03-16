@@ -4,18 +4,20 @@
 //! in an overlay, with support for category filtering, search, and bulk selection.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
-use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
-    style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal::{self, ClearType},
-};
+use ratatui::Frame;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::detection::{DetectedFile, FileCategory};
+#[cfg(test)]
+use crate::widgets::multi_select_tree::CheckState;
+use crate::widgets::multi_select_tree::{MultiSelectTree, MultiSelectTreeState, TreeNode};
 
 /// Conversion trait for types that can be represented as a [`SelectableItem`]
 /// in the interactive selection UI.
@@ -30,9 +32,6 @@ pub(crate) trait ToSelectableItem {
     /// for timestamp information.
     fn to_selectable_item(&self, target: &Path) -> SelectableItem;
 }
-
-/// Maximum number of items visible in the scrollable viewport.
-const MAX_VISIBLE_ITEMS: usize = 15;
 
 /// Format a number in a human-readable way (e.g., 1.2K, 3.5M).
 #[allow(clippy::cast_precision_loss)]
@@ -90,7 +89,6 @@ struct FlatSelectionState {
     search_query: String,
     mode: Mode,
     cursor: usize,
-    scroll_offset: usize,
 }
 
 impl FlatSelectionState {
@@ -106,7 +104,6 @@ impl FlatSelectionState {
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
-            scroll_offset: 0,
         }
     }
 
@@ -202,17 +199,6 @@ enum Mode {
     Search,
 }
 
-/// Selection state of a directory's children.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DirSelectionState {
-    /// No children selected.
-    None,
-    /// Some children selected.
-    Partial,
-    /// All children selected.
-    All,
-}
-
 /// Internal state for the selection UI.
 struct SelectionState {
     /// All files available for selection.
@@ -225,14 +211,16 @@ struct SelectionState {
     expanded_dirs: HashSet<PathBuf>,
     /// Lookup from path → `parent_dir` for O(1) ancestor traversal.
     parent_map: HashMap<PathBuf, Option<PathBuf>>,
+    /// Lookup from parent path → immediate children for O(1) descendant queries.
+    children_map: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Lookup from path → category for O(1) category checks.
+    category_map: HashMap<PathBuf, FileCategory>,
     /// Current search query.
     search_query: String,
     /// Current input mode.
     mode: Mode,
     /// Current cursor position in the visible file list.
     cursor: usize,
-    /// Scroll offset for the file list.
-    scroll_offset: usize,
 }
 
 impl SelectionState {
@@ -265,16 +253,32 @@ impl SelectionState {
             .map(|f| (f.path.clone(), f.parent_dir.clone()))
             .collect();
 
+        // Build children lookup map for O(1) descendant queries
+        let mut children_map: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        for f in &files {
+            if let Some(parent) = &f.parent_dir {
+                children_map
+                    .entry(parent.clone())
+                    .or_default()
+                    .push(f.path.clone());
+            }
+        }
+
+        // Build category lookup map for O(1) category checks
+        let category_map: HashMap<PathBuf, FileCategory> =
+            files.iter().map(|f| (f.path.clone(), f.category)).collect();
+
         Self {
             all_files: files,
             selections,
             visible_categories: visible,
             expanded_dirs,
             parent_map,
+            children_map,
+            category_map,
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
-            scroll_offset: 0,
         }
     }
 
@@ -412,26 +416,23 @@ impl SelectionState {
 
     /// Get selection counts per category: (selected, total).
     fn selection_counts(&self) -> HashMap<FileCategory, (usize, usize)> {
-        let mut counts = HashMap::new();
+        let mut counts: HashMap<FileCategory, (usize, usize)> = HashMap::new();
 
-        for cat in FileCategory::ALL {
-            let total = self.all_files.iter().filter(|f| f.category == *cat).count();
-            let selected = self
-                .all_files
-                .iter()
-                .filter(|f| f.category == *cat && self.selections.contains(&f.path))
-                .count();
-            counts.insert(*cat, (selected, total));
+        for f in &self.all_files {
+            let entry = counts.entry(f.category).or_insert((0, 0));
+            entry.1 += 1;
+            if self.selections.contains(&f.path) {
+                entry.0 += 1;
+            }
         }
 
         counts
     }
 
     /// Move cursor up.
-    fn cursor_up(&mut self) {
+    const fn cursor_up(&mut self) {
         if self.cursor > 0 {
             self.cursor -= 1;
-            self.adjust_scroll();
         }
     }
 
@@ -440,7 +441,6 @@ impl SelectionState {
         let visible_count = self.visible_files().len();
         if self.cursor + 1 < visible_count {
             self.cursor += 1;
-            self.adjust_scroll();
         }
     }
 
@@ -451,18 +451,6 @@ impl SelectionState {
             self.cursor = 0;
         } else if self.cursor >= visible_count {
             self.cursor = visible_count - 1;
-        }
-        self.adjust_scroll();
-    }
-
-    /// Adjust scroll offset to keep cursor visible.
-    #[allow(clippy::missing_const_for_fn)]
-    fn adjust_scroll(&mut self) {
-        let max_visible = MAX_VISIBLE_ITEMS;
-        if self.cursor < self.scroll_offset {
-            self.scroll_offset = self.cursor;
-        } else if self.cursor >= self.scroll_offset + max_visible {
-            self.scroll_offset = self.cursor - max_visible + 1;
         }
     }
 
@@ -483,10 +471,21 @@ impl SelectionState {
     /// Get immediate child paths belonging to a directory.
     #[cfg(test)]
     fn children_of(&self, dir_path: &Path) -> Vec<PathBuf> {
-        self.all_files
-            .iter()
-            .filter(|f| f.parent_dir.as_deref() == Some(dir_path))
-            .map(|f| f.path.clone())
+        self.children_map.get(dir_path).cloned().unwrap_or_default()
+    }
+
+    /// Get all descendant paths of a directory that belong to currently visible categories.
+    ///
+    /// This ensures checkbox tri-state only reflects files the user can actually see,
+    /// not files hidden by category toggles.
+    fn visible_descendants_of(&self, dir_path: &Path) -> Vec<PathBuf> {
+        self.descendants_of(dir_path)
+            .into_iter()
+            .filter(|path| {
+                self.category_map
+                    .get(path)
+                    .is_some_and(|cat| self.visible_categories.contains(cat))
+            })
             .collect()
     }
 
@@ -496,11 +495,12 @@ impl SelectionState {
         let mut dirs_to_check = vec![dir_path.to_path_buf()];
 
         while let Some(dir) = dirs_to_check.pop() {
-            for f in &self.all_files {
-                if f.parent_dir.as_deref() == Some(&dir) {
-                    result.push(f.path.clone());
-                    if f.category == FileCategory::AiConfigDirectory {
-                        dirs_to_check.push(f.path.clone());
+            if let Some(children) = self.children_map.get(&dir) {
+                for child in children {
+                    result.push(child.clone());
+                    // If this child is itself a directory, recurse into it
+                    if self.children_map.contains_key(child) {
+                        dirs_to_check.push(child.clone());
                     }
                 }
             }
@@ -510,21 +510,22 @@ impl SelectionState {
     }
 
     /// Get the selection state of a directory based on all descendants.
-    fn dir_selection_state(&self, dir_path: &Path) -> DirSelectionState {
+    #[cfg(test)]
+    fn dir_selection_state(&self, dir_path: &Path) -> CheckState {
         let descendants = self.descendants_of(dir_path);
         if descendants.is_empty() {
-            return DirSelectionState::None;
+            return CheckState::Unchecked;
         }
         let selected_count = descendants
             .iter()
             .filter(|c| self.selections.contains(*c))
             .count();
         if selected_count == 0 {
-            DirSelectionState::None
+            CheckState::Unchecked
         } else if selected_count == descendants.len() {
-            DirSelectionState::All
+            CheckState::Checked
         } else {
-            DirSelectionState::Partial
+            CheckState::Partial
         }
     }
 
@@ -567,7 +568,6 @@ impl SelectionState {
                 let visible_after = self.visible_files();
                 if let Some(pos) = visible_after.iter().position(|f| f.path == parent) {
                     self.cursor = pos;
-                    self.adjust_scroll();
                 }
             }
         }
@@ -608,9 +608,9 @@ impl SelectionState {
             if !covered.contains(path) {
                 // Skip directory entries when children are emitted individually
                 let is_dir = self
-                    .all_files
-                    .iter()
-                    .any(|f| f.path == *path && f.category == FileCategory::AiConfigDirectory);
+                    .category_map
+                    .get(path)
+                    .is_some_and(|cat| *cat == FileCategory::AiConfigDirectory);
                 if !is_dir {
                     result.push(path.clone());
                 }
@@ -619,23 +619,6 @@ impl SelectionState {
 
         result
     }
-}
-
-/// Restore terminal state after raw mode UI.
-///
-/// Shows the cursor, clears the screen, and flushes stdout.
-fn restore_terminal() -> anyhow::Result<()> {
-    let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        cursor::Show,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::All),
-    )?;
-    // Print newline to ensure clean state for subsequent prompts
-    println!();
-    stdout.flush()?;
-    Ok(())
 }
 
 /// Run the interactive file selection UI.
@@ -672,13 +655,8 @@ pub(crate) fn select_files(
     }
 
     let mut state = SelectionState::new(files.to_vec(), config.default_hidden_categories.clone());
-
-    terminal::enable_raw_mode()?;
-    let result = run_selection_loop(&mut state, &config.prompt);
-    terminal::disable_raw_mode()?;
-    restore_terminal()?;
-
-    result
+    // ratatui::init() handles raw mode and alternate screen
+    run_selection_loop(&mut state, &config.prompt)
 }
 
 /// Run the interactive flat list selection UI.
@@ -712,317 +690,207 @@ pub(crate) fn select_flat(
     }
 
     let mut state = FlatSelectionState::new(items.to_vec());
-
-    terminal::enable_raw_mode()?;
-    let result = run_flat_loop(&mut state, &config.prompt);
-    terminal::disable_raw_mode()?;
-    restore_terminal()?;
-
-    result
+    run_flat_loop(&mut state, &config.prompt)
 }
 
 fn run_flat_loop(
     state: &mut FlatSelectionState,
     prompt: &str,
 ) -> anyhow::Result<FlatSelectionResult> {
-    let mut stdout = io::stdout();
-    execute!(stdout, cursor::Hide, terminal::Clear(ClearType::All))?;
+    let mut terminal = ratatui::init();
 
-    loop {
-        render_flat_ui(&mut stdout, state, prompt)?;
+    let result = (|| -> anyhow::Result<FlatSelectionResult> {
+        loop {
+            terminal.draw(|frame| {
+                render_flat_frame(frame, state, prompt);
+            })?;
 
-        if let Event::Key(key) = event::read()? {
-            match state.mode {
-                Mode::Search => {
-                    if handle_flat_search_key(key, state) {
-                        state.mode = Mode::Selection;
+            if let Event::Key(key) = event::read()? {
+                match state.mode {
+                    Mode::Search => {
+                        if handle_flat_search_key(key, state) {
+                            state.mode = Mode::Selection;
+                        }
                     }
+                    Mode::Selection => match key.code {
+                        KeyCode::Esc => {
+                            return Ok(FlatSelectionResult {
+                                selected_ids: Vec::new(),
+                                cancelled: true,
+                            });
+                        }
+                        KeyCode::Enter => {
+                            let selected: Vec<String> = state
+                                .items
+                                .iter()
+                                .filter(|i| state.selections.contains(&i.id))
+                                .map(|i| i.id.clone())
+                                .collect();
+                            return Ok(FlatSelectionResult {
+                                selected_ids: selected,
+                                cancelled: false,
+                            });
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(FlatSelectionResult {
+                                selected_ids: Vec::new(),
+                                cancelled: true,
+                            });
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if state.cursor > 0 {
+                                state.cursor -= 1;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            let len = state.visible_items().len();
+                            if state.cursor + 1 < len {
+                                state.cursor += 1;
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            state.toggle_selection(state.cursor);
+                        }
+                        KeyCode::Char('a') => {
+                            state.select_all_visible();
+                        }
+                        KeyCode::Char('/') => {
+                            state.mode = Mode::Search;
+                        }
+                        _ => {}
+                    },
                 }
-                Mode::Selection => match key.code {
-                    KeyCode::Esc => {
-                        return Ok(FlatSelectionResult {
-                            selected_ids: Vec::new(),
-                            cancelled: true,
-                        });
-                    }
-                    KeyCode::Enter => {
-                        let selected: Vec<String> = state
-                            .items
-                            .iter()
-                            .filter(|i| state.selections.contains(&i.id))
-                            .map(|i| i.id.clone())
-                            .collect();
-                        return Ok(FlatSelectionResult {
-                            selected_ids: selected,
-                            cancelled: false,
-                        });
-                    }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(FlatSelectionResult {
-                            selected_ids: Vec::new(),
-                            cancelled: true,
-                        });
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if state.cursor > 0 {
-                            state.cursor -= 1;
-                        }
-                        adjust_flat_scroll(state);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        let len = state.visible_items().len();
-                        if state.cursor + 1 < len {
-                            state.cursor += 1;
-                        }
-                        adjust_flat_scroll(state);
-                    }
-                    KeyCode::Char(' ') => {
-                        state.toggle_selection(state.cursor);
-                    }
-                    KeyCode::Char('a') => {
-                        state.select_all_visible();
-                    }
-                    KeyCode::Char('/') => {
-                        state.mode = Mode::Search;
-                    }
-                    _ => {}
-                },
             }
         }
-    }
+    })();
+
+    ratatui::restore();
+    result
 }
 
-const fn adjust_flat_scroll(state: &mut FlatSelectionState) {
-    let max_visible = MAX_VISIBLE_ITEMS;
-    if state.cursor < state.scroll_offset {
-        state.scroll_offset = state.cursor;
-    } else if state.cursor >= state.scroll_offset + max_visible {
-        state.scroll_offset = state.cursor - max_visible + 1;
-    }
-}
+/// Render the flat selection UI using ratatui.
+fn render_flat_frame(frame: &mut Frame, state: &FlatSelectionState, prompt: &str) {
+    let area = frame.area();
 
-fn handle_flat_search_key(key: KeyEvent, state: &mut FlatSelectionState) -> bool {
-    match key.code {
-        KeyCode::Esc | KeyCode::Enter => {
-            state.clamp_cursor();
-            true
-        }
-        KeyCode::Backspace => {
-            state.search_query.pop();
-            state.clamp_cursor();
-            false
-        }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.search_query.push(c);
-            state.clamp_cursor();
-            false
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.search_query.clear();
-            state.clamp_cursor();
-            true
-        }
-        _ => false,
-    }
-}
-
-fn render_flat_ui(
-    stdout: &mut io::Stdout,
-    state: &FlatSelectionState,
-    prompt: &str,
-) -> io::Result<()> {
-    execute!(
-        stdout,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::FromCursorDown)
-    )?;
+    let chunks = Layout::vertical([
+        Constraint::Length(2), // prompt + blank
+        Constraint::Length(1), // search
+        Constraint::Length(1), // count summary
+        Constraint::Length(1), // blank
+        Constraint::Min(3),    // item list
+        Constraint::Length(2), // help
+    ])
+    .split(area);
 
     // Prompt
-    execute!(
-        stdout,
-        SetForegroundColor(Color::Cyan),
-        Print(prompt),
-        ResetColor,
-        Print("\r\n\r\n")
-    )?;
+    let prompt_line = Line::from(Span::styled(prompt, Style::default().fg(Color::Cyan)));
+    frame.render_widget(Paragraph::new(prompt_line), chunks[0]);
 
-    // Search line
-    render_search_line_flat(stdout, state)?;
+    // Search
+    render_search_line(frame, chunks[1], state.mode, &state.search_query);
 
     // Count summary
     let enabled_count = state.items.iter().filter(|i| !i.disabled).count();
     let selected_count = state.selections.len();
-    execute!(
-        stdout,
-        Print("Selected: "),
-        Print(format!("{selected_count}/{enabled_count}")),
-        Print("\r\n\r\n")
-    )?;
+    frame.render_widget(
+        Paragraph::new(format!("Selected: {selected_count}/{enabled_count}")),
+        chunks[2],
+    );
 
     // Item list
-    render_flat_items(stdout, state)?;
-
-    // Help
-    render_flat_help(stdout, state)?;
-
-    stdout.flush()
-}
-
-fn render_search_line_flat(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
-    execute!(stdout, Print("Search: "))?;
-    if state.mode == Mode::Search {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::Yellow),
-            Print(&state.search_query),
-            Print("_"),
-            ResetColor
-        )?;
-    } else if state.search_query.is_empty() {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("(press / to search)"),
-            ResetColor
-        )?;
-    } else {
-        execute!(
-            stdout,
-            Print(&state.search_query),
-            SetForegroundColor(Color::DarkGrey),
-            Print(" (Esc to clear)"),
-            ResetColor
-        )?;
-    }
-    execute!(stdout, Print("\r\n"))
-}
-
-fn render_flat_items(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
     let visible = state.visible_items();
-    let max_visible = MAX_VISIBLE_ITEMS;
+    let mut lines: Vec<Line> = Vec::new();
 
     if visible.is_empty() {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("  No items match the current search\r\n"),
-            ResetColor
-        )?;
-        return Ok(());
+        lines.push(Line::styled(
+            "  No items match the current search",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        for (i, item) in visible.iter().enumerate() {
+            let is_cursor = i == state.cursor;
+            let is_selected = state.selections.contains(&item.id);
+
+            let mut spans = Vec::new();
+
+            // Cursor
+            if is_cursor {
+                spans.push(Span::styled("> ", Style::default().fg(Color::Cyan)));
+            } else {
+                spans.push(Span::raw("  "));
+            }
+
+            // Checkbox
+            if item.disabled {
+                spans.push(Span::styled("[✓] ", Style::default().fg(Color::DarkGray)));
+            } else if is_selected {
+                spans.push(Span::styled("[✓] ", Style::default().fg(Color::Green)));
+            } else {
+                spans.push(Span::raw("[ ] "));
+            }
+
+            // Label — render with the last `/`-separated segment in bold when not
+            // overridden by disabled/cursor styling.
+            if item.disabled {
+                spans.push(Span::styled(
+                    &item.label,
+                    Style::default().fg(Color::DarkGray),
+                ));
+            } else if is_cursor {
+                spans.push(Span::styled(&item.label, Style::default().fg(Color::Cyan)));
+            } else if let Some(pos) = item.label.rfind('/') {
+                spans.push(Span::raw(&item.label[..=pos]));
+                spans.push(Span::styled(
+                    &item.label[pos + 1..],
+                    Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::raw(&item.label));
+            }
+
+            // Description
+            if let Some(desc) = &item.description {
+                spans.push(Span::styled(
+                    format!("  ({desc})"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            lines.push(Line::from(spans));
+        }
     }
 
-    if state.scroll_offset > 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!(
-                "  ↑ {} more above\r\n",
-                humanize_count(state.scroll_offset)
-            )),
-            ResetColor
-        )?;
-    }
+    frame.render_widget(Paragraph::new(lines), chunks[4]);
 
-    for (i, item) in visible
-        .iter()
-        .enumerate()
-        .skip(state.scroll_offset)
-        .take(max_visible)
-    {
-        let is_cursor = i == state.cursor;
-        let is_selected = state.selections.contains(&item.id);
-
-        // Cursor
-        if is_cursor {
-            execute!(stdout, SetForegroundColor(Color::Cyan), Print("> "))?;
-        } else {
-            execute!(stdout, Print("  "))?;
-        }
-
-        // Checkbox
-        if item.disabled {
-            execute!(
-                stdout,
-                SetForegroundColor(Color::DarkGrey),
-                Print("[✓] "),
-                ResetColor
-            )?;
-        } else if is_selected {
-            execute!(
-                stdout,
-                SetForegroundColor(Color::Green),
-                Print("[✓] "),
-                ResetColor
-            )?;
-        } else {
-            execute!(stdout, Print("[ ] "))?;
-        }
-
-        // Label
-        if item.disabled {
-            execute!(
-                stdout,
-                SetForegroundColor(Color::DarkGrey),
-                Print(&item.label),
-            )?;
-        } else if is_cursor {
-            execute!(stdout, SetForegroundColor(Color::Cyan), Print(&item.label),)?;
-        } else {
-            execute!(stdout, Print(&item.label))?;
-        }
-
-        // Description
-        if let Some(desc) = &item.description {
-            execute!(
-                stdout,
-                SetForegroundColor(Color::DarkGrey),
-                Print(format!("  ({desc})")),
-            )?;
-        }
-
-        execute!(stdout, ResetColor, Print("\r\n"))?;
-    }
-
-    let remaining = visible
-        .len()
-        .saturating_sub(state.scroll_offset + max_visible);
-    if remaining > 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!("  ↓ {} more below\r\n", humanize_count(remaining))),
-            ResetColor
-        )?;
-    }
-
-    Ok(())
+    // Help
+    let hint_style = Style::default().fg(Color::DarkGray);
+    let key_style = Style::default().fg(Color::Cyan);
+    let help_spans = if state.mode == Mode::Search {
+        search_help_spans(hint_style, key_style)
+    } else {
+        vec![
+            Span::styled("↑↓", key_style),
+            Span::styled(" move ", hint_style),
+            Span::styled("Space", key_style),
+            Span::styled(" toggle ", hint_style),
+            Span::styled("Enter", key_style),
+            Span::styled(" confirm ", hint_style),
+            Span::styled("a", key_style),
+            Span::styled(" all ", hint_style),
+            Span::styled("/", key_style),
+            Span::styled(" search ", hint_style),
+            Span::styled("Esc", key_style),
+            Span::styled(" cancel", hint_style),
+        ]
+    };
+    let help_lines = vec![Line::from(vec![]), Line::from(help_spans)];
+    frame.render_widget(Paragraph::new(help_lines), chunks[5]);
 }
 
-fn render_flat_help(stdout: &mut io::Stdout, state: &FlatSelectionState) -> io::Result<()> {
-    execute!(stdout, Print("\r\n"))?;
-    if state.mode == Mode::Search {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("Type to search | "),
-            ResetColor
-        )?;
-        render_key_hint(stdout, "Enter/Esc", "done")?;
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("| "),
-            ResetColor
-        )?;
-        render_key_hint(stdout, "Ctrl+C", "clear")
-    } else {
-        render_key_hint(stdout, "↑↓", "move")?;
-        render_key_hint(stdout, "Space", "toggle")?;
-        render_key_hint(stdout, "Enter", "confirm")?;
-        render_key_hint(stdout, "a", "all")?;
-        render_key_hint(stdout, "/", "search")?;
-        render_key_hint(stdout, "Esc", "cancel")
-    }
+fn handle_flat_search_key(key: KeyEvent, state: &mut FlatSelectionState) -> bool {
+    let exit = handle_search_key_common(key, &mut state.search_query);
+    state.clamp_cursor();
+    exit
 }
 
 /// Check if the terminal is interactive.
@@ -1063,41 +931,50 @@ pub(crate) fn is_interactive() -> bool {
 
 /// Main selection loop.
 fn run_selection_loop(state: &mut SelectionState, prompt: &str) -> anyhow::Result<SelectionResult> {
-    let mut stdout = io::stdout();
+    let mut terminal = ratatui::init();
+    let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
 
-    loop {
-        // Render the UI
-        render_ui(&mut stdout, state, prompt)?;
+    let result = (|| -> anyhow::Result<SelectionResult> {
+        loop {
+            // Sync tree state from selection state
+            sync_tree_state(state, &mut tree_state);
 
-        // Wait for input
-        if let Event::Key(key) = event::read()? {
-            match state.mode {
-                Mode::Selection => match handle_selection_key(state, key) {
-                    SelectionAction::Continue => {}
-                    SelectionAction::Confirm => {
-                        return Ok(SelectionResult {
-                            selected_files: state.resolve_selected_paths(),
-                            cancelled: false,
-                        });
-                    }
-                    SelectionAction::Cancel => {
-                        return Ok(SelectionResult {
-                            selected_files: Vec::new(),
-                            cancelled: true,
-                        });
-                    }
-                    SelectionAction::EnterSearch => {
-                        state.mode = Mode::Search;
-                    }
-                },
-                Mode::Search => {
-                    if handle_search_key(state, key) {
-                        state.mode = Mode::Selection;
+            terminal.draw(|frame| {
+                render_selection_frame(frame, state, &mut tree_state, prompt);
+            })?;
+
+            if let Event::Key(key) = event::read()? {
+                match state.mode {
+                    Mode::Selection => match handle_selection_key(state, key) {
+                        SelectionAction::Continue => {}
+                        SelectionAction::Confirm => {
+                            return Ok(SelectionResult {
+                                selected_files: state.resolve_selected_paths(),
+                                cancelled: false,
+                            });
+                        }
+                        SelectionAction::Cancel => {
+                            return Ok(SelectionResult {
+                                selected_files: Vec::new(),
+                                cancelled: true,
+                            });
+                        }
+                        SelectionAction::EnterSearch => {
+                            state.mode = Mode::Search;
+                        }
+                    },
+                    Mode::Search => {
+                        if handle_search_key(state, key) {
+                            state.mode = Mode::Selection;
+                        }
                     }
                 }
             }
         }
-    }
+    })();
+
+    ratatui::restore();
+    result
 }
 
 /// Actions that can result from key handling.
@@ -1165,248 +1042,296 @@ fn handle_selection_key(state: &mut SelectionState, key: KeyEvent) -> SelectionA
 
 /// Handle a key press in search mode. Returns true if should exit search mode.
 fn handle_search_key(state: &mut SelectionState, key: KeyEvent) -> bool {
+    let exit = handle_search_key_common(key, &mut state.search_query);
+    state.clamp_cursor();
+    exit
+}
+
+/// Shared search key handler. Mutates the query string and returns true if
+/// the caller should exit search mode.
+fn handle_search_key_common(key: KeyEvent, query: &mut String) -> bool {
     match key.code {
-        KeyCode::Enter | KeyCode::Esc => {
-            // Exit search mode (keep the query)
+        KeyCode::Enter | KeyCode::Esc => true,
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            query.clear();
             true
         }
         KeyCode::Backspace => {
-            state.search_query.pop();
-            state.clamp_cursor();
+            query.pop();
             false
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.search_query.push(c);
-            state.clamp_cursor();
+            query.push(c);
             false
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // Clear search on Ctrl+C in search mode
-            state.search_query.clear();
-            state.clamp_cursor();
-            true
         }
         _ => false,
     }
 }
 
-/// Render the selection UI.
-fn render_ui(stdout: &mut io::Stdout, state: &SelectionState, prompt: &str) -> io::Result<()> {
-    // Move to top and clear
-    execute!(
-        stdout,
-        cursor::MoveTo(0, 0),
-        terminal::Clear(ClearType::FromCursorDown)
-    )?;
+/// Build the full tree identifier path from root to a given node.
+///
+/// `tui-tree-widget` expects paths like `[grandparent, parent, child]` for
+/// navigation and expand/collapse operations. This walks up the `parent_map`
+/// to reconstruct the full ancestor chain.
+fn tree_path_for(path: &Path, parent_map: &HashMap<PathBuf, Option<PathBuf>>) -> Vec<PathBuf> {
+    let mut chain = vec![path.to_path_buf()];
+    let mut current = parent_map.get(path).and_then(|opt| opt.as_deref());
+    while let Some(parent) = current {
+        chain.push(parent.to_path_buf());
+        current = parent_map.get(parent).and_then(|opt| opt.as_deref());
+    }
+    chain.reverse();
+    chain
+}
+
+/// Sync `MultiSelectTreeState` from `SelectionState`.
+///
+/// Copies the checked set and the cursor highlight into the tree state
+/// so the widget can render correctly.
+fn sync_tree_state(state: &SelectionState, tree_state: &mut MultiSelectTreeState<PathBuf>) {
+    // Sync selections
+    tree_state.clear_selection();
+    for path in &state.selections {
+        tree_state.select(path.clone());
+    }
+
+    // Sync expanded dirs — use full tree paths so nested dirs are found
+    for file in &state.all_files {
+        if file.category == FileCategory::AiConfigDirectory {
+            let tree_path = tree_path_for(&file.path, &state.parent_map);
+            if state.expanded_dirs.contains(&file.path) {
+                tree_state.tree.open(tree_path);
+            } else {
+                tree_state.tree.close(&tree_path);
+            }
+        }
+    }
+
+    // Sync cursor position: map flat cursor to tree identifier path
+    let visible = state.visible_files();
+    if let Some(file) = visible.get(state.cursor) {
+        let tree_path = tree_path_for(&file.path, &state.parent_map);
+        tree_state.tree.select(tree_path);
+    }
+}
+
+/// Build `TreeNode` descriptors from the current selection state.
+///
+/// When a search is active, ancestor directories of matching files are included
+/// in the visible set even if they don't match the query themselves. Without this,
+/// nested files whose parents don't match the search would be unreachable in the tree.
+fn build_tree_nodes(state: &SelectionState) -> Vec<TreeNode<'_, PathBuf>> {
+    let mut visible = state.visible_files();
+
+    if !state.search_query.is_empty() {
+        // Collect paths of files already visible so we can check membership
+        let visible_paths: HashSet<&Path> = visible.iter().map(|f| f.path.as_path()).collect();
+
+        // Find ancestor directories that need to be included
+        let mut ancestors_needed: HashSet<&Path> = HashSet::new();
+        for f in &visible {
+            let mut current = f.parent_dir.as_deref();
+            while let Some(parent) = current {
+                if visible_paths.contains(parent) {
+                    break; // Already visible, and so are its ancestors
+                }
+                ancestors_needed.insert(parent);
+                current = state.parent_map.get(parent).and_then(|p| p.as_deref());
+            }
+        }
+
+        if !ancestors_needed.is_empty() {
+            // Add ancestor directories from all_files (respecting category visibility)
+            for f in &state.all_files {
+                if ancestors_needed.contains(f.path.as_path())
+                    && state.visible_categories.contains(&f.category)
+                {
+                    visible.push(f);
+                }
+            }
+        }
+    }
+
+    build_children_for(&visible, None)
+}
+
+/// Recursively build tree nodes for files whose parent matches `parent`.
+/// Display label for a file node: short name if nested under a parent, full path otherwise.
+fn node_label(path: &Path, has_parent: bool) -> String {
+    if has_parent {
+        path.file_name().map_or_else(
+            || path.to_string_lossy().to_string(),
+            |n| n.to_string_lossy().to_string(),
+        )
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
+
+fn build_children_for<'a>(
+    visible: &[&'a DetectedFile],
+    parent: Option<&Path>,
+) -> Vec<TreeNode<'a, PathBuf>> {
+    visible
+        .iter()
+        .filter(|f| f.parent_dir.as_deref() == parent)
+        .map(|f| {
+            let has_parent = parent.is_some();
+            if f.category == FileCategory::AiConfigDirectory {
+                let label = format!("{}/", node_label(&f.path, has_parent));
+                let children = build_children_for(visible, Some(&f.path));
+                TreeNode {
+                    id: f.path.clone(),
+                    text: Line::from(label),
+                    children,
+                }
+            } else {
+                TreeNode {
+                    id: f.path.clone(),
+                    text: Line::from(node_label(&f.path, has_parent)),
+                    children: vec![],
+                }
+            }
+        })
+        .collect()
+}
+
+/// Render the full selection frame using ratatui.
+fn render_selection_frame(
+    frame: &mut Frame,
+    state: &SelectionState,
+    tree_state: &mut MultiSelectTreeState<PathBuf>,
+    prompt: &str,
+) {
+    let area = frame.area();
+
+    let chunks = Layout::vertical([
+        Constraint::Length(2), // prompt + blank line
+        Constraint::Length(1), // category toggles
+        Constraint::Length(1), // search
+        Constraint::Length(1), // selection summary
+        Constraint::Length(1), // separator
+        Constraint::Min(3),    // file tree
+        Constraint::Length(2), // help line
+    ])
+    .split(area);
 
     // Prompt
-    execute!(
-        stdout,
-        SetForegroundColor(Color::Cyan),
-        Print(prompt),
-        ResetColor,
-        Print("\r\n\r\n")
-    )?;
+    let prompt_line = Line::from(Span::styled(prompt, Style::default().fg(Color::Cyan)));
+    frame.render_widget(Paragraph::new(prompt_line), chunks[0]);
 
-    // Category toggles with counts
-    render_category_line(stdout, state)?;
+    // Compute counts once for both category line and summary
+    let counts = state.selection_counts();
 
-    // Search line
-    render_search_line(stdout, state)?;
+    // Category toggles
+    render_category_line_ratatui(frame, chunks[1], state, &counts);
+
+    // Search
+    render_search_line(frame, chunks[2], state.mode, &state.search_query);
 
     // Selection summary
-    render_selection_summary(stdout, state)?;
+    render_summary_ratatui(frame, chunks[3], &counts);
 
-    // Separator
-    execute!(stdout, Print("\r\n"))?;
+    // File tree using MultiSelectTree widget
+    let nodes = build_tree_nodes(state);
+    let descendants_state = state;
+    let widget = MultiSelectTree::new(&nodes).descendants_fn(Box::new(|id: &PathBuf| {
+        descendants_state.visible_descendants_of(id)
+    }));
+    frame.render_stateful_widget(widget, chunks[5], tree_state);
 
-    // File list
-    render_file_list(stdout, state)?;
-
-    // Help line
-    render_help_line(stdout, state)?;
-
-    stdout.flush()
+    // Help
+    render_help_ratatui(frame, chunks[6], state);
 }
 
-/// Render the category toggle line.
-fn render_category_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
-    let counts = state.selection_counts();
+/// Render category toggle line.
+fn render_category_line_ratatui(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    state: &SelectionState,
+    counts: &HashMap<FileCategory, (usize, usize)>,
+) {
+    let categories = [
+        (FileCategory::AiConfig, "1", "AI", Color::Green),
+        (FileCategory::AiConfigDirectory, "2", "DIR", Color::Magenta),
+        (FileCategory::TrackedConfig, "3", "TC", Color::Cyan),
+        (FileCategory::Gitignored, "4", "GI", Color::Yellow),
+        (FileCategory::Untracked, "5", "UT", Color::Blue),
+    ];
 
-    execute!(stdout, Print("Categories: "))?;
+    let mut spans = vec![Span::raw("Categories: ")];
+    for (i, (cat, key, label, color)) in categories.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let visible = state.visible_categories.contains(cat);
+        let (sel, total) = counts.get(cat).unwrap_or(&(0, 0));
+        let count_str = format!("({}/{})", humanize_count(*sel), humanize_count(*total));
 
-    // AI Config
-    let ai_visible = state.visible_categories.contains(&FileCategory::AiConfig);
-    let (ai_sel, ai_total) = counts.get(&FileCategory::AiConfig).unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "1",
-        "AI",
-        *ai_sel,
-        *ai_total,
-        ai_visible,
-        Color::Green,
-    )?;
-
-    execute!(stdout, Print(" "))?;
-
-    // AI Config Directories
-    let aid_visible = state
-        .visible_categories
-        .contains(&FileCategory::AiConfigDirectory);
-    let (aid_sel, aid_total) = counts
-        .get(&FileCategory::AiConfigDirectory)
-        .unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "2",
-        "DIR",
-        *aid_sel,
-        *aid_total,
-        aid_visible,
-        Color::Magenta,
-    )?;
-
-    execute!(stdout, Print(" "))?;
-
-    // Tracked Config
-    let tc_visible = state
-        .visible_categories
-        .contains(&FileCategory::TrackedConfig);
-    let (tc_sel, tc_total) = counts.get(&FileCategory::TrackedConfig).unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "3",
-        "TC",
-        *tc_sel,
-        *tc_total,
-        tc_visible,
-        Color::Cyan,
-    )?;
-
-    execute!(stdout, Print(" "))?;
-
-    // Gitignored
-    let gi_visible = state.visible_categories.contains(&FileCategory::Gitignored);
-    let (gi_sel, gi_total) = counts.get(&FileCategory::Gitignored).unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "4",
-        "GI",
-        *gi_sel,
-        *gi_total,
-        gi_visible,
-        Color::Yellow,
-    )?;
-
-    execute!(stdout, Print(" "))?;
-
-    // Untracked
-    let ut_visible = state.visible_categories.contains(&FileCategory::Untracked);
-    let (ut_sel, ut_total) = counts.get(&FileCategory::Untracked).unwrap_or(&(0, 0));
-    render_category_toggle(
-        stdout,
-        "5",
-        "UT",
-        *ut_sel,
-        *ut_total,
-        ut_visible,
-        Color::Blue,
-    )?;
-
-    execute!(stdout, Print("\r\n"))
-}
-
-/// Render a single category toggle button.
-fn render_category_toggle(
-    stdout: &mut io::Stdout,
-    key: &str,
-    label: &str,
-    selected: usize,
-    total: usize,
-    visible: bool,
-    color: Color,
-) -> io::Result<()> {
-    let count_str = format!("({}/{})", humanize_count(selected), humanize_count(total));
-    if visible {
-        execute!(
-            stdout,
-            Print("["),
-            SetForegroundColor(color),
-            Print(key),
-            ResetColor,
-            Print("] "),
-            SetForegroundColor(color),
-            Print(label),
-            ResetColor,
-            Print(format!(" {count_str}"))
-        )
-    } else {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!("[{key}] {label} {count_str}")),
-            ResetColor
-        )
-    }
-}
-
-/// Render the search line.
-fn render_search_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
-    execute!(stdout, Print("Search: "))?;
-
-    if state.mode == Mode::Search {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::Yellow),
-            Print(&state.search_query),
-            Print("_"),
-            ResetColor
-        )?;
-    } else if state.search_query.is_empty() {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("(press / to search)"),
-            ResetColor
-        )?;
-    } else {
-        execute!(
-            stdout,
-            Print(&state.search_query),
-            SetForegroundColor(Color::DarkGrey),
-            Print(" (Esc to clear)"),
-            ResetColor
-        )?;
+        if visible {
+            spans.push(Span::raw("["));
+            spans.push(Span::styled(*key, Style::default().fg(*color)));
+            spans.push(Span::raw("] "));
+            spans.push(Span::styled(*label, Style::default().fg(*color)));
+            spans.push(Span::raw(format!(" {count_str}")));
+        } else {
+            spans.push(Span::styled(
+                format!("[{key}] {label} {count_str}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
     }
 
-    execute!(stdout, Print("\r\n"))
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Render the selection summary line.
-fn render_selection_summary(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
-    let counts = state.selection_counts();
+/// Render search line.
+fn render_search_line(frame: &mut Frame, area: ratatui::layout::Rect, mode: Mode, query: &str) {
+    let mut spans = vec![Span::raw("Search: ")];
+
+    if mode == Mode::Search {
+        spans.push(Span::styled(
+            format!("{query}_"),
+            Style::default().fg(Color::Yellow),
+        ));
+    } else if query.is_empty() {
+        spans.push(Span::styled(
+            "(press / to search)",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        spans.push(Span::raw(query));
+        spans.push(Span::styled(
+            " (Esc to clear)",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Render selection summary.
+fn render_summary_ratatui(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    counts: &HashMap<FileCategory, (usize, usize)>,
+) {
     let total_selected: usize = counts.values().map(|(s, _)| s).sum();
 
-    execute!(stdout, Print("Selected: "))?;
+    let mut spans = vec![Span::raw("Selected: ")];
 
     if total_selected == 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("none"),
-            ResetColor
-        )?;
+        spans.push(Span::styled("none", Style::default().fg(Color::DarkGray)));
     } else {
         let parts: Vec<String> = [
-            (FileCategory::AiConfig, "AI", Color::Green),
-            (FileCategory::AiConfigDirectory, "DIR", Color::Magenta),
-            (FileCategory::TrackedConfig, "TC", Color::Cyan),
-            (FileCategory::Gitignored, "GI", Color::Yellow),
-            (FileCategory::Untracked, "UT", Color::Blue),
+            (FileCategory::AiConfig, "AI"),
+            (FileCategory::AiConfigDirectory, "DIR"),
+            (FileCategory::TrackedConfig, "TC"),
+            (FileCategory::Gitignored, "GI"),
+            (FileCategory::Untracked, "UT"),
         ]
         .iter()
-        .filter_map(|(cat, label, _color)| {
+        .filter_map(|(cat, label)| {
             let (selected, _) = counts.get(cat).unwrap_or(&(0, 0));
             if *selected > 0 {
                 Some(format!("{selected} {label}"))
@@ -1415,212 +1340,62 @@ fn render_selection_summary(stdout: &mut io::Stdout, state: &SelectionState) -> 
             }
         })
         .collect();
-
-        execute!(stdout, Print(parts.join(", ")))?;
+        spans.push(Span::raw(parts.join(", ")));
     }
 
-    execute!(stdout, Print("\r\n"))
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Render the file list.
-fn render_file_list(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
-    let visible = state.visible_files();
-    let max_visible = MAX_VISIBLE_ITEMS;
-
-    if visible.is_empty() {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("  No files match the current filters\r\n"),
-            ResetColor
-        )?;
-        return Ok(());
-    }
-
-    // Show scroll indicator if needed
-    if state.scroll_offset > 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!(
-                "  ↑ {} more above\r\n",
-                humanize_count(state.scroll_offset)
-            )),
-            ResetColor
-        )?;
-    }
-
-    for (i, file) in visible
-        .iter()
-        .enumerate()
-        .skip(state.scroll_offset)
-        .take(max_visible)
-    {
-        let is_cursor = i == state.cursor;
-        let is_selected = state.selections.contains(&file.path);
-
-        // Cursor indicator
-        if is_cursor {
-            execute!(stdout, SetForegroundColor(Color::Cyan), Print("> "))?;
-        } else {
-            execute!(stdout, Print("  "))?;
-        }
-
-        // Indentation for tree children
-        let indent = "  ".repeat(file.depth as usize);
-        if !indent.is_empty() {
-            execute!(stdout, Print(&indent))?;
-        }
-
-        // Checkbox (tri-state for directories)
-        if file.category == FileCategory::AiConfigDirectory {
-            let dir_state = state.dir_selection_state(&file.path);
-            match dir_state {
-                DirSelectionState::All => {
-                    execute!(
-                        stdout,
-                        SetForegroundColor(Color::Green),
-                        Print("[✓] "),
-                        ResetColor
-                    )?;
-                }
-                DirSelectionState::Partial => {
-                    execute!(
-                        stdout,
-                        SetForegroundColor(Color::Yellow),
-                        Print("[-] "),
-                        ResetColor
-                    )?;
-                }
-                DirSelectionState::None => {
-                    execute!(stdout, Print("[ ] "))?;
-                }
-            }
-        } else if is_selected {
-            execute!(
-                stdout,
-                SetForegroundColor(Color::Green),
-                Print("[✓] "),
-                ResetColor
-            )?;
-        } else {
-            execute!(stdout, Print("[ ] "))?;
-        }
-
-        // Category indicator
-        let cat_color = match file.category {
-            FileCategory::AiConfig => Color::Green,
-            FileCategory::AiConfigDirectory => Color::Magenta,
-            FileCategory::TrackedConfig => Color::Cyan,
-            FileCategory::Gitignored => Color::Yellow,
-            FileCategory::Untracked => Color::Blue,
-        };
-
-        // Expand/collapse indicator for directories
-        if file.category == FileCategory::AiConfigDirectory {
-            let indicator = if state.expanded_dirs.contains(&file.path) {
-                "▾ "
-            } else {
-                "▸ "
-            };
-            execute!(
-                stdout,
-                SetForegroundColor(Color::DarkGrey),
-                Print(indicator),
-                ResetColor
-            )?;
-        }
-
-        // File path display
-        // For children, show just the filename (parent path implied by tree)
-        let path_str = if file.parent_dir.is_some() {
-            file.path.file_name().map_or_else(
-                || file.path.to_string_lossy().to_string(),
-                |n| n.to_string_lossy().to_string(),
-            )
-        } else if file.category == FileCategory::AiConfigDirectory {
-            format!("{}/", file.path.to_string_lossy())
-        } else {
-            file.path.to_string_lossy().to_string()
-        };
-        if is_cursor {
-            execute!(
-                stdout,
-                SetForegroundColor(cat_color),
-                Print(&path_str),
-                ResetColor
-            )?;
-        } else {
-            execute!(stdout, Print(&path_str))?;
-        }
-
-        execute!(stdout, ResetColor, Print("\r\n"))?;
-    }
-
-    // Show scroll indicator if more below
-    let remaining = visible
-        .len()
-        .saturating_sub(state.scroll_offset + max_visible);
-    if remaining > 0 {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!("  ↓ {} more below\r\n", humanize_count(remaining))),
-            ResetColor
-        )?;
-    }
-
-    Ok(())
+/// Build the search-mode help spans (shared between flat and tree UIs).
+fn search_help_spans<'a>(hint_style: Style, key_style: Style) -> Vec<Span<'a>> {
+    vec![
+        Span::styled("Type to search | ", hint_style),
+        Span::styled("Enter/Esc", key_style),
+        Span::styled(" done ", hint_style),
+        Span::styled("| ", hint_style),
+        Span::styled("Ctrl+C", key_style),
+        Span::styled(" clear", hint_style),
+    ]
 }
 
-/// Render a key hint with highlighted key.
-fn render_key_hint(stdout: &mut io::Stdout, key: &str, action: &str) -> io::Result<()> {
-    execute!(
-        stdout,
-        SetForegroundColor(Color::Cyan),
-        Print(key),
-        SetForegroundColor(Color::DarkGrey),
-        Print(format!(" {action} ")),
-        ResetColor
-    )
-}
+/// Render help line.
+fn render_help_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &SelectionState) {
+    let hint_style = Style::default().fg(Color::DarkGray);
+    let key_style = Style::default().fg(Color::Cyan);
 
-/// Render the help line.
-fn render_help_line(stdout: &mut io::Stdout, state: &SelectionState) -> io::Result<()> {
-    execute!(stdout, Print("\r\n"))?;
-
-    if state.mode == Mode::Search {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("Type to search | "),
-            ResetColor
-        )?;
-        render_key_hint(stdout, "Enter/Esc", "done")?;
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("| "),
-            ResetColor
-        )?;
-        render_key_hint(stdout, "Ctrl+C", "clear")?;
-        Ok(())
+    let spans = if state.mode == Mode::Search {
+        search_help_spans(hint_style, key_style)
     } else {
-        render_key_hint(stdout, "↑↓", "move")?;
-        render_key_hint(stdout, "←→", "expand")?;
-        render_key_hint(stdout, "Space", "toggle")?;
-        render_key_hint(stdout, "Enter", "confirm")?;
-        render_key_hint(stdout, "a", "all")?;
-        render_key_hint(stdout, "1-4", "filter")?;
-        render_key_hint(stdout, "/", "search")?;
-        render_key_hint(stdout, "Esc", "cancel")?;
-        Ok(())
-    }
+        vec![
+            Span::styled("↑↓", key_style),
+            Span::styled(" move ", hint_style),
+            Span::styled("←→", key_style),
+            Span::styled(" expand ", hint_style),
+            Span::styled("Space", key_style),
+            Span::styled(" toggle ", hint_style),
+            Span::styled("Enter", key_style),
+            Span::styled(" confirm ", hint_style),
+            Span::styled("a", key_style),
+            Span::styled(" all ", hint_style),
+            Span::styled("1-5", key_style),
+            Span::styled(" filter ", hint_style),
+            Span::styled("/", key_style),
+            Span::styled(" search ", hint_style),
+            Span::styled("Esc", key_style),
+            Span::styled(" cancel", hint_style),
+        ]
+    };
+
+    // Render on second line of the 2-row area (first is blank separator)
+    let lines = vec![Line::from(vec![]), Line::from(spans)];
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::buffer_to_string;
+    use crate::widgets::multi_select_tree::CheckState;
 
     fn make_test_files() -> Vec<DetectedFile> {
         vec![
@@ -1628,35 +1403,30 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude/settings.json"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".env.local"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("scratch.txt"),
                 category: FileCategory::Untracked,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
         ]
@@ -2013,71 +1783,6 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll_offset_adjustment_down() {
-        // Create more files to trigger scrolling
-        let mut files = Vec::new();
-        for i in 0..20 {
-            files.push(DetectedFile {
-                path: PathBuf::from(format!("file{i}.txt")),
-                category: FileCategory::Untracked,
-                preselected: false,
-                depth: 0,
-                parent_dir: None,
-            });
-        }
-
-        let mut state = SelectionState::new(files, HashSet::new());
-
-        // Initially at top
-        assert_eq!(state.cursor, 0);
-        assert_eq!(state.scroll_offset, 0);
-
-        // Move down past visible area (MAX_VISIBLE_ITEMS = 15)
-        for _ in 0..16 {
-            state.cursor_down();
-        }
-
-        // Cursor should be at 16, scroll_offset should have adjusted
-        assert_eq!(state.cursor, 16);
-        assert!(state.scroll_offset > 0);
-    }
-
-    #[test]
-    fn test_scroll_offset_adjustment_up() {
-        // Create more files to trigger scrolling
-        let mut files = Vec::new();
-        for i in 0..20 {
-            files.push(DetectedFile {
-                path: PathBuf::from(format!("file{i}.txt")),
-                category: FileCategory::Untracked,
-                preselected: false,
-                depth: 0,
-                parent_dir: None,
-            });
-        }
-
-        let mut state = SelectionState::new(files, HashSet::new());
-
-        // Move to bottom
-        for _ in 0..19 {
-            state.cursor_down();
-        }
-
-        // Scroll offset should be > 0
-        let scroll_after_down = state.scroll_offset;
-        assert!(scroll_after_down > 0);
-
-        // Move back up
-        for _ in 0..19 {
-            state.cursor_up();
-        }
-
-        // Should be back at top
-        assert_eq!(state.cursor, 0);
-        assert_eq!(state.scroll_offset, 0);
-    }
-
-    #[test]
     fn test_clamp_cursor_when_filter_reduces_list() {
         let files = make_test_files();
         let mut state = SelectionState::new(files, HashSet::new());
@@ -2186,35 +1891,30 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".cursor"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from("notes.txt"),
                 category: FileCategory::Untracked,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
         ]
@@ -2349,42 +2049,36 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".claude/settings.json"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 1,
                 parent_dir: Some(PathBuf::from(".claude")),
             },
             DetectedFile {
                 path: PathBuf::from(".claude/commands"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 1,
                 parent_dir: Some(PathBuf::from(".claude")),
             },
             DetectedFile {
                 path: PathBuf::from(".claude/commands/test.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 2,
                 parent_dir: Some(PathBuf::from(".claude/commands")),
             },
             DetectedFile {
                 path: PathBuf::from(".envrc"),
                 category: FileCategory::Gitignored,
                 preselected: false,
-                depth: 0,
                 parent_dir: None,
             },
         ]
@@ -2538,7 +2232,7 @@ mod tests {
 
         assert_eq!(
             state.dir_selection_state(Path::new(".claude")),
-            DirSelectionState::None
+            CheckState::Unchecked
         );
     }
 
@@ -2555,7 +2249,7 @@ mod tests {
 
         assert_eq!(
             state.dir_selection_state(Path::new(".claude")),
-            DirSelectionState::Partial
+            CheckState::Partial
         );
     }
 
@@ -2567,7 +2261,7 @@ mod tests {
         // All children are preselected
         assert_eq!(
             state.dir_selection_state(Path::new(".claude")),
-            DirSelectionState::All
+            CheckState::Checked
         );
     }
 
@@ -2695,6 +2389,24 @@ mod tests {
     }
 
     #[test]
+    fn test_visible_descendants_excludes_hidden_categories() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // All descendants visible initially
+        let all_desc = state.visible_descendants_of(Path::new(".claude"));
+        assert_eq!(all_desc.len(), 3);
+
+        // Hide AiConfig category — .claude/settings.json and .claude/commands/test.md
+        // are AiConfig, .claude/commands is AiConfigDirectory
+        state.visible_categories.remove(&FileCategory::AiConfig);
+        let visible_desc = state.visible_descendants_of(Path::new(".claude"));
+        // Only the AiConfigDirectory (.claude/commands) should remain
+        assert_eq!(visible_desc.len(), 1);
+        assert!(visible_desc.contains(&PathBuf::from(".claude/commands")));
+    }
+
+    #[test]
     fn test_is_expandable() {
         let files = make_test_files_with_children();
         let state = SelectionState::new(files, HashSet::new());
@@ -2703,15 +2415,6 @@ mod tests {
         assert!(SelectionState::is_expandable(&state.all_files[3])); // .claude/commands directory
         assert!(!SelectionState::is_expandable(&state.all_files[0])); // CLAUDE.md file
         assert!(!SelectionState::is_expandable(&state.all_files[2])); // .claude/settings.json file
-    }
-
-    #[test]
-    fn test_dir_selection_state_enum_equality() {
-        assert_eq!(DirSelectionState::None, DirSelectionState::None);
-        assert_eq!(DirSelectionState::Partial, DirSelectionState::Partial);
-        assert_eq!(DirSelectionState::All, DirSelectionState::All);
-        assert_ne!(DirSelectionState::None, DirSelectionState::Partial);
-        assert_ne!(DirSelectionState::Partial, DirSelectionState::All);
     }
 
     #[test]
@@ -2978,14 +2681,12 @@ mod tests {
                 path: PathBuf::from("CLAUDE.md"),
                 category: FileCategory::AiConfig,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
             DetectedFile {
                 path: PathBuf::from(".empty-dir"),
                 category: FileCategory::AiConfigDirectory,
                 preselected: true,
-                depth: 0,
                 parent_dir: None,
             },
         ];
@@ -2994,7 +2695,7 @@ mod tests {
         // Directory with no children returns None
         assert_eq!(
             state.dir_selection_state(Path::new(".empty-dir")),
-            DirSelectionState::None
+            CheckState::Unchecked
         );
     }
 
@@ -3203,43 +2904,6 @@ mod tests {
     }
 
     #[test]
-    fn test_adjust_flat_scroll_cursor_above_viewport() {
-        let items: Vec<_> = (0..20)
-            .map(|i| SelectableItem {
-                id: format!("item{i}"),
-                label: format!("Item {i}"),
-                description: None,
-                preselected: false,
-                disabled: false,
-            })
-            .collect();
-        let mut state = FlatSelectionState::new(items);
-        state.scroll_offset = 10;
-        state.cursor = 5;
-        adjust_flat_scroll(&mut state);
-        assert_eq!(state.scroll_offset, 5);
-    }
-
-    #[test]
-    fn test_adjust_flat_scroll_cursor_below_viewport() {
-        let items: Vec<_> = (0..20)
-            .map(|i| SelectableItem {
-                id: format!("item{i}"),
-                label: format!("Item {i}"),
-                description: None,
-                preselected: false,
-                disabled: false,
-            })
-            .collect();
-        let mut state = FlatSelectionState::new(items);
-        state.scroll_offset = 0;
-        state.cursor = 18;
-        adjust_flat_scroll(&mut state);
-        // MAX_VISIBLE_ITEMS = 15, so scroll_offset = 18 - 15 + 1 = 4
-        assert_eq!(state.scroll_offset, 4);
-    }
-
-    #[test]
     fn test_handle_flat_search_key_esc_returns_true() {
         let items = vec![SelectableItem {
             id: "a".into(),
@@ -3356,5 +3020,1010 @@ mod tests {
             prompt: "Choose overlays".into(),
         };
         assert_eq!(config.prompt, "Choose overlays");
+    }
+
+    #[test]
+    fn snapshot_selection_ui_initial() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let state = SelectionState::new(files, HashSet::new());
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_with_selections() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        // Simulate selecting preselected files
+        for f in &state.all_files.clone() {
+            if f.preselected {
+                state.selections.insert(f.path.clone());
+            }
+        }
+        // Move cursor to third item
+        state.cursor = 2;
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_category_hidden() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.toggle_category(FileCategory::Gitignored);
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_nested() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        // Select preselected files
+        for f in &state.all_files.clone() {
+            if f.preselected {
+                state.selections.insert(f.path.clone());
+            }
+        }
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    /// Realistic test data matching a real repo with deeply nested .claude directory:
+    /// .claude/rules/*.md, .claude/scripts/*.sh, .claude/skills/*/SKILL.md
+    fn make_test_files_deep_nesting() -> Vec<DetectedFile> {
+        vec![
+            // .claude directory
+            DetectedFile {
+                path: PathBuf::from(".claude"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: None,
+            },
+            // .claude/rules/ directory and files
+            DetectedFile {
+                path: PathBuf::from(".claude/rules"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/rules/api-exports.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/rules")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/rules/testing.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/rules")),
+            },
+            // .claude/scripts/ directory and files
+            DetectedFile {
+                path: PathBuf::from(".claude/scripts"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/scripts/gh-prereqs.sh"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/scripts")),
+            },
+            // .claude/skills/ directory with subdirectories
+            DetectedFile {
+                path: PathBuf::from(".claude/skills"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/skills/create-pr"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/skills")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/skills/create-pr/SKILL.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/skills/create-pr")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/skills/fix-flaky-test"),
+                category: FileCategory::AiConfigDirectory,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/skills")),
+            },
+            DetectedFile {
+                path: PathBuf::from(".claude/skills/fix-flaky-test/SKILL.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude/skills/fix-flaky-test")),
+            },
+            // .claude/settings.json
+            DetectedFile {
+                path: PathBuf::from(".claude/settings.json"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: Some(PathBuf::from(".claude")),
+            },
+            // Root-level files
+            DetectedFile {
+                path: PathBuf::from("CLAUDE.md"),
+                category: FileCategory::AiConfig,
+                preselected: true,
+                parent_dir: None,
+            },
+            DetectedFile {
+                path: PathBuf::from(".DS_Store"),
+                category: FileCategory::Gitignored,
+                preselected: false,
+                parent_dir: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn snapshot_selection_ui_deep_nesting() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_deep_nesting();
+        let mut state = SelectionState::new(files, HashSet::new());
+        for f in &state.all_files.clone() {
+            if f.preselected {
+                state.selections.insert(f.path.clone());
+            }
+        }
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    /// Verify that every cursor position in a deeply nested tree has a unique
+    /// highlight row and that cursor-down advances the highlight each time.
+    #[test]
+    fn cursor_down_moves_highlight_deep_nesting() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_deep_nesting();
+        let mut state = SelectionState::new(files, HashSet::new());
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+
+        let visible: Vec<_> = state
+            .visible_files()
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+
+        let mut rows = Vec::new();
+        for (i, path) in visible.iter().enumerate() {
+            state.cursor = i;
+            let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+            let row = highlighted_row(&buf)
+                .unwrap_or_else(|| panic!("no highlight at cursor {i} ({path:?})"));
+            rows.push(row);
+        }
+
+        for i in 1..rows.len() {
+            assert!(
+                rows[i] > rows[i - 1],
+                "cursor {i} ({:?}) at row {} should be below cursor {} ({:?}) at row {}",
+                visible[i],
+                rows[i],
+                i - 1,
+                visible[i - 1],
+                rows[i - 1],
+            );
+        }
+    }
+
+    /// Verify that no file with a `parent_dir` ends up as a root-level tree node.
+    ///
+    /// This catches the bug where child files "leak" to the root of the tree
+    /// and render with full paths instead of being nested under their parent.
+    #[test]
+    fn no_child_files_at_root_level() {
+        let files = make_test_files_deep_nesting();
+        let state = SelectionState::new(files, HashSet::new());
+        let nodes = build_tree_nodes(&state);
+
+        // Collect root-level node IDs
+        let root_ids: Vec<_> = nodes.iter().map(|n| &n.id).collect();
+
+        // Every visible file with a parent_dir should NOT be at root level
+        for f in state.visible_files() {
+            if f.parent_dir.is_some() {
+                assert!(
+                    !root_ids.contains(&&f.path),
+                    "{:?} has parent_dir {:?} but appears at root level in tree",
+                    f.path,
+                    f.parent_dir,
+                );
+            }
+        }
+    }
+
+    /// Recursively collect all node IDs in a tree.
+    fn collect_ids(nodes: &[TreeNode<'_, PathBuf>]) -> HashSet<PathBuf> {
+        let mut ids = HashSet::new();
+        for node in nodes {
+            ids.insert(node.id.clone());
+            ids.extend(collect_ids(&node.children));
+        }
+        ids
+    }
+
+    /// Recursively check that each child's ID has the expected `parent_dir`.
+    fn verify_children(
+        nodes: &[TreeNode<'_, PathBuf>],
+        expected_parent: Option<&Path>,
+        file_map: &HashMap<PathBuf, Option<PathBuf>>,
+    ) {
+        for node in nodes {
+            let actual_parent = file_map.get(&node.id);
+            assert_eq!(
+                actual_parent.map(|p| p.as_deref()),
+                Some(expected_parent),
+                "node {:?} has parent_dir {:?} but is placed under {:?} in tree",
+                node.id,
+                actual_parent,
+                expected_parent,
+            );
+            verify_children(&node.children, Some(&node.id), file_map);
+        }
+    }
+
+    /// Verify that every directory node's children match the files with that
+    /// directory as `parent_dir` — no children should be missing.
+    #[test]
+    fn all_children_nested_under_parent() {
+        let files = make_test_files_deep_nesting();
+        let state = SelectionState::new(files, HashSet::new());
+        let nodes = build_tree_nodes(&state);
+        let all_tree_ids = collect_ids(&nodes);
+
+        // Every visible file should appear somewhere in the tree
+        for f in state.visible_files() {
+            assert!(
+                all_tree_ids.contains(&f.path),
+                "{:?} is visible but missing from tree entirely",
+                f.path,
+            );
+        }
+    }
+
+    /// Verify that searching for a nested file produces a non-empty tree
+    /// by including ancestor directories even when they don't match the query.
+    #[test]
+    fn search_for_nested_file_includes_ancestors_in_tree() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Search for "settings" — only .claude/settings.json matches,
+        // but .claude/ must be included as ancestor for the tree to render.
+        state.set_search("settings");
+        let nodes = build_tree_nodes(&state);
+
+        assert!(
+            !nodes.is_empty(),
+            "tree should not be empty when search matches a nested file"
+        );
+
+        // The root should contain .claude/ directory
+        assert!(
+            nodes.iter().any(|n| n.id.as_path() == Path::new(".claude")),
+            "ancestor directory .claude/ should appear as root node"
+        );
+
+        // .claude/ should contain settings.json as a child
+        let claude_node = nodes
+            .iter()
+            .find(|n| n.id.as_path() == Path::new(".claude"))
+            .unwrap();
+        assert!(
+            claude_node
+                .children
+                .iter()
+                .any(|n| n.id.as_path() == Path::new(".claude/settings.json")),
+            "settings.json should be nested under .claude/"
+        );
+    }
+
+    /// Verify that deeply nested directories have their files as tree children,
+    /// not as siblings — i.e., the tree depth matches the `parent_dir` hierarchy.
+    #[test]
+    fn tree_depth_matches_parent_hierarchy() {
+        let files = make_test_files_deep_nesting();
+        let state = SelectionState::new(files, HashSet::new());
+        let nodes = build_tree_nodes(&state);
+
+        // Build a map of path → parent_dir for quick lookup
+        let file_map: HashMap<PathBuf, Option<PathBuf>> = state
+            .visible_files()
+            .iter()
+            .map(|f| (f.path.clone(), f.parent_dir.clone()))
+            .collect();
+
+        verify_children(&nodes, None, &file_map);
+    }
+
+    /// Integration test: use real `detect_directory_children` on a temp dir
+    /// and verify the resulting tree structure is correct.
+    #[test]
+    fn real_detection_produces_correct_tree_nesting() {
+        use crate::detection::{detect_ai_config_directories, detect_directory_children};
+        use crate::testutil::create_test_repo;
+        use std::fs;
+
+        let repo = create_test_repo();
+
+        // Create a realistic .claude directory structure
+        fs::create_dir_all(repo.path().join(".claude/rules")).unwrap();
+        fs::create_dir_all(repo.path().join(".claude/scripts")).unwrap();
+        fs::create_dir_all(repo.path().join(".claude/skills/create-pr")).unwrap();
+        fs::create_dir_all(repo.path().join(".claude/skills/fix-flaky-test")).unwrap();
+        fs::write(repo.path().join(".claude/settings.json"), "{}").unwrap();
+        fs::write(repo.path().join(".claude/rules/api-exports.md"), "# Rules").unwrap();
+        fs::write(repo.path().join(".claude/rules/testing.md"), "# Testing").unwrap();
+        fs::write(
+            repo.path().join(".claude/scripts/gh-prereqs.sh"),
+            "#!/bin/bash",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join(".claude/skills/create-pr/SKILL.md"),
+            "# Skill",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join(".claude/skills/fix-flaky-test/SKILL.md"),
+            "# Skill",
+        )
+        .unwrap();
+
+        // Detect files exactly as discover_files would
+        let dirs = detect_ai_config_directories(repo.path());
+        let mut all_files = Vec::new();
+        for dir in dirs {
+            let dir_path = dir.path.clone();
+            all_files.push(dir);
+            all_files.extend(detect_directory_children(repo.path(), &dir_path));
+        }
+
+        let state = SelectionState::new(all_files, HashSet::new());
+        let nodes = build_tree_nodes(&state);
+
+        // Root should have exactly one node: .claude/
+        assert_eq!(nodes.len(), 1, "expected one root node (.claude/)");
+        assert_eq!(nodes[0].id, PathBuf::from(".claude"));
+
+        // .claude/ should have children: rules/, scripts/, skills/, settings.json
+        let claude_children: Vec<_> = nodes[0].children.iter().map(|n| &n.id).collect();
+        assert!(
+            claude_children.contains(&&PathBuf::from(".claude/rules")),
+            "missing rules/ under .claude/"
+        );
+        assert!(
+            claude_children.contains(&&PathBuf::from(".claude/scripts")),
+            "missing scripts/ under .claude/"
+        );
+        assert!(
+            claude_children.contains(&&PathBuf::from(".claude/skills")),
+            "missing skills/ under .claude/"
+        );
+        assert!(
+            claude_children.contains(&&PathBuf::from(".claude/settings.json")),
+            "missing settings.json under .claude/"
+        );
+
+        // rules/ should have children (not be a leaf!)
+        let rules_node = nodes[0]
+            .children
+            .iter()
+            .find(|n| n.id.as_path() == Path::new(".claude/rules"))
+            .expect("rules/ node not found");
+        assert!(
+            !rules_node.children.is_empty(),
+            "rules/ should have children but is a leaf — files leaked to wrong level"
+        );
+        let rules_children: Vec<_> = rules_node.children.iter().map(|n| &n.id).collect();
+        assert!(
+            rules_children.contains(&&PathBuf::from(".claude/rules/api-exports.md")),
+            "api-exports.md not nested under rules/"
+        );
+        assert!(
+            rules_children.contains(&&PathBuf::from(".claude/rules/testing.md")),
+            "testing.md not nested under rules/"
+        );
+
+        // skills/ should have subdirectory children
+        let skills_node = nodes[0]
+            .children
+            .iter()
+            .find(|n| n.id.as_path() == Path::new(".claude/skills"))
+            .expect("skills/ node not found");
+        assert!(
+            !skills_node.children.is_empty(),
+            "skills/ should have children"
+        );
+
+        // skills/create-pr/ should have SKILL.md
+        let create_pr_node = skills_node
+            .children
+            .iter()
+            .find(|n| n.id.as_path() == Path::new(".claude/skills/create-pr"))
+            .expect("create-pr/ node not found");
+        assert!(
+            !create_pr_node.children.is_empty(),
+            "create-pr/ should have SKILL.md as child"
+        );
+    }
+
+    /// Find the row index (0-based) that has the highlight background color (Cyan).
+    /// Searches only in the tree area (rows 6+, after the header).
+    fn highlighted_row(buffer: &ratatui::buffer::Buffer) -> Option<u16> {
+        for y in 6..buffer.area.height {
+            for x in 0..buffer.area.width {
+                let cell = &buffer[(x, y)];
+                if cell.bg == Color::Cyan {
+                    return Some(y);
+                }
+            }
+        }
+        None
+    }
+
+    /// Render the selection frame and return the buffer.
+    fn render_to_buffer(
+        terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+        state: &SelectionState,
+        tree_state: &mut MultiSelectTreeState<PathBuf>,
+    ) -> ratatui::buffer::Buffer {
+        sync_tree_state(state, tree_state);
+        terminal
+            .draw(|frame| {
+                render_selection_frame(frame, state, tree_state, "Select files");
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn cursor_down_moves_highlight_each_press_flat() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+
+        // Initial render — cursor at 0
+        let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+        let row0 = highlighted_row(&buf).expect("should have a highlight");
+
+        // Press Down — cursor should move to next item
+        state.cursor_down();
+        let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+        let row1 = highlighted_row(&buf).expect("should have a highlight");
+        assert_eq!(row1, row0 + 1, "highlight should move down by one row");
+
+        // Press Down again
+        state.cursor_down();
+        let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+        let row2 = highlighted_row(&buf).expect("should have a highlight");
+        assert_eq!(row2, row1 + 1, "highlight should move down by one row");
+    }
+
+    #[test]
+    fn cursor_down_moves_highlight_each_press_nested() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+
+        // Collect all visible files for reference
+        let visible: Vec<_> = state
+            .visible_files()
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+
+        // Render at each cursor position and collect highlighted rows
+        let mut rows = Vec::new();
+        for (i, path) in visible.iter().enumerate() {
+            state.cursor = i;
+            let buf = render_to_buffer(&mut terminal, &state, &mut tree_state);
+            let row = highlighted_row(&buf)
+                .unwrap_or_else(|| panic!("no highlight at cursor {i} ({path:?})"));
+            rows.push(row);
+        }
+
+        // Each cursor position should highlight a different, increasing row
+        for i in 1..rows.len() {
+            assert!(
+                rows[i] > rows[i - 1],
+                "cursor {i} ({:?}) at row {} should be below cursor {} ({:?}) at row {}",
+                visible[i],
+                rows[i],
+                i - 1,
+                visible[i - 1],
+                rows[i - 1],
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_selection_ui_search_mode() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.mode = Mode::Search;
+        state.search_query = "env".to_string();
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_collapsed_dir() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_deep_nesting();
+        let mut state = SelectionState::new(files, HashSet::new());
+        for f in &state.all_files.clone() {
+            if f.preselected {
+                state.selections.insert(f.path.clone());
+            }
+        }
+        state.expanded_dirs.remove(&PathBuf::from(".claude/rules"));
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_cursor_mid_list() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.cursor = 3;
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_select_all() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.select_all();
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_no_matches() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.set_search("zzzzz_no_match");
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_selection_ui_partial_checkbox() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let files = make_test_files_deep_nesting();
+        let mut state = SelectionState::new(files, HashSet::new());
+        state.selections.clear();
+        state
+            .selections
+            .insert(PathBuf::from(".claude/rules/api-exports.md"));
+        let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
+        sync_tree_state(&state, &mut tree_state);
+
+        terminal
+            .draw(|frame| {
+                render_selection_frame(
+                    frame,
+                    &state,
+                    &mut tree_state,
+                    "Select files to include in overlay",
+                );
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_initial() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![
+            SelectableItem {
+                id: "overlay-a".into(),
+                label: "my-overlay".into(),
+                description: Some("~/overlays/my-overlay".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-b".into(),
+                label: "work-config".into(),
+                description: Some("~/overlays/work".into()),
+                preselected: true,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-c".into(),
+                label: "shared".into(),
+                description: None,
+                preselected: false,
+                disabled: true,
+            },
+        ];
+        let state = FlatSelectionState::new(items);
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays to apply:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_with_toggled_selections() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![
+            SelectableItem {
+                id: "overlay-a".into(),
+                label: "my-overlay".into(),
+                description: Some("~/overlays/my-overlay".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-b".into(),
+                label: "work-config".into(),
+                description: Some("~/overlays/work".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-c".into(),
+                label: "shared".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.selections.insert("overlay-a".into());
+        state.selections.insert("overlay-c".into());
+        state.cursor = 1;
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays to apply:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_search_mode() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![
+            SelectableItem {
+                id: "overlay-a".into(),
+                label: "my-overlay".into(),
+                description: Some("~/overlays/my-overlay".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-b".into(),
+                label: "work-config".into(),
+                description: Some("~/overlays/work".into()),
+                preselected: true,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-c".into(),
+                label: "shared".into(),
+                description: None,
+                preselected: false,
+                disabled: false,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.mode = Mode::Search;
+        state.search_query = "work".to_string();
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays to apply:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_disabled_highlighted() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![
+            SelectableItem {
+                id: "overlay-a".into(),
+                label: "my-overlay".into(),
+                description: Some("~/overlays/my-overlay".into()),
+                preselected: false,
+                disabled: false,
+            },
+            SelectableItem {
+                id: "overlay-b".into(),
+                label: "shared".into(),
+                description: Some("already applied".into()),
+                preselected: false,
+                disabled: true,
+            },
+        ];
+        let mut state = FlatSelectionState::new(items);
+        state.cursor = 1;
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays to apply:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
+    }
+
+    #[test]
+    fn snapshot_flat_ui_no_matches() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let items = vec![SelectableItem {
+            id: "a".into(),
+            label: "my-overlay".into(),
+            description: None,
+            preselected: false,
+            disabled: false,
+        }];
+        let mut state = FlatSelectionState::new(items);
+        state.search_query = "zzzzz".to_string();
+
+        terminal
+            .draw(|frame| {
+                render_flat_frame(frame, &state, "Choose overlays:");
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        insta::assert_snapshot!(buffer_to_string(&buffer));
     }
 }

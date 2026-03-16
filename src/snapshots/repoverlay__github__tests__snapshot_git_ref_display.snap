@@ -1,0 +1,10 @@
+---
+source: src/github.rs
+expression: "output.join(\"\\n\")"
+---
+(default branch)
+branch:main
+branch:feature/long-branch-name
+tag:v1.2.3
+commit:abc123def456
+commit:abc123

@@ -19,6 +19,7 @@ mod state;
 #[cfg(test)]
 mod testutil;
 mod upstream;
+mod widgets;
 
 /// Run the CLI application.
 ///
@@ -900,7 +901,7 @@ fn select_overlays_interactive(
 
             SelectableItem {
                 id: o.to_string(),
-                label: o.display_bold(),
+                label: o.to_string(),
                 description,
                 preselected: false,
                 disabled: already_applied,

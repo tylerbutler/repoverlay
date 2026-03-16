@@ -1,0 +1,6 @@
+---
+source: src/widgets/multi_select_tree.rs
+expression: buffer_to_string(&buffer)
+---
+▶ [ ] root/
+  [ ] lone.txt
