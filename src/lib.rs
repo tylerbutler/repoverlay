@@ -2474,6 +2474,9 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
                 println!("    From:    {}", source.cyan());
             }
         }
+        OverlaySource::Library { name } => {
+            println!("    Source:  {} {}", name, "(library)".dimmed());
+        }
     }
 
     println!(
@@ -2571,6 +2574,9 @@ pub(crate) fn restore_overlays(
             } => {
                 println!("    Source: {org}/{repo}/{overlay_name} (overlay repo)");
             }
+            OverlaySource::Library { name } => {
+                println!("    Source: {name} (library)");
+            }
         }
     }
 
@@ -2594,11 +2600,14 @@ pub(crate) fn restore_overlays(
             } => {
                 format!("{org}/{repo}/{overlay_name}")
             }
+            OverlaySource::Library { name } => name.clone(),
         };
 
         let ref_override = match &state.source {
             OverlaySource::GitHub { git_ref, .. } => Some(git_ref.as_str()),
-            OverlaySource::Local { .. } | OverlaySource::OverlayRepo { .. } => None,
+            OverlaySource::Local { .. }
+            | OverlaySource::Library { .. }
+            | OverlaySource::OverlayRepo { .. } => None,
         };
 
         // Re-apply the overlay. Always use Force since restore's purpose is to
