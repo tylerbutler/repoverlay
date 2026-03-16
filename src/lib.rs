@@ -2185,8 +2185,8 @@ pub(crate) fn remove_overlay(
             remove_single_overlay(&target, &overlays_dir, overlay_name.as_str())?;
         }
 
-        // Clean up .repoverlay directory entirely
-        fs::remove_dir_all(target.join(STATE_DIR))?;
+        // Clean up state files but preserve library and config
+        cleanup_state_dir(&target)?;
 
         println!("\n{} Removed all overlays", "✓".green().bold());
     } else if let Some(name) = name {
@@ -2196,12 +2196,45 @@ pub(crate) fn remove_overlay(
         // Check if any overlays remain
         let remaining = list_applied_overlays(&target)?;
         if remaining.is_empty() {
-            // No overlays left, clean up .repoverlay directory
-            fs::remove_dir_all(target.join(STATE_DIR))?;
+            // No overlays left, clean up state files but preserve library
+            cleanup_state_dir(&target)?;
         }
     } else {
         // This path should not be reached from non-interactive contexts
         bail!("No overlay name specified. Use --all to remove all overlays, or specify a name.");
+    }
+
+    Ok(())
+}
+
+/// Remove overlay state files while preserving the library and config.
+///
+/// Removes `overlays/` dir and `meta.ccl` but leaves `library/`, `config.ccl`,
+/// and any other non-state contents of `.repoverlay/` intact. If the state
+/// directory is empty after cleanup, removes it too.
+fn cleanup_state_dir(target: &Path) -> Result<()> {
+    let state_dir = target.join(STATE_DIR);
+
+    // Remove overlays/ subdirectory
+    let overlays_dir = state_dir.join(OVERLAYS_DIR);
+    if overlays_dir.exists() {
+        fs::remove_dir_all(&overlays_dir)?;
+    }
+
+    // Remove meta.ccl
+    let meta_file = state_dir.join(META_FILE);
+    if meta_file.exists() {
+        fs::remove_file(&meta_file)?;
+    }
+
+    // If state dir is now empty (no library, no config), remove it
+    if state_dir.exists()
+        && state_dir
+            .read_dir()
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(false)
+    {
+        fs::remove_dir(&state_dir)?;
     }
 
     Ok(())
