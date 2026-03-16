@@ -230,6 +230,10 @@ pub(crate) fn validate_git_repo(path: &Path) -> Result<()> {
 /// In a regular git repository, `.git` is a directory containing the git database.
 /// In a git worktree, `.git` is a file containing `gitdir: /path/to/git/dir`.
 /// This function handles both cases and returns the path to the actual git directory.
+///
+/// Note: For `info/exclude` paths, use [`resolve_git_exclude_path`] instead,
+/// which correctly resolves to the common git directory for worktrees.
+#[cfg(test)]
 pub(crate) fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf> {
     let git_path = repo_path.join(".git");
 
@@ -269,6 +273,33 @@ pub(crate) fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf> {
     }
 
     bail!("Not a git repository: {}", repo_path.display());
+}
+
+/// Resolve the path to `.git/info/exclude` for a repository.
+///
+/// Uses `git rev-parse --git-path` which correctly resolves to the common git
+/// directory for worktrees (git reads `info/exclude` from the shared `.git/`,
+/// not from the worktree-specific `$GIT_DIR`).
+pub(crate) fn resolve_git_exclude_path(repo_path: &Path) -> Result<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", "info/exclude"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to run git rev-parse --git-path")?;
+
+    if !output.status.success() {
+        bail!("Not a git repository: {}", repo_path.display());
+    }
+
+    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let path = PathBuf::from(&path_str);
+
+    // Handle relative paths (relative to repo_path)
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(repo_path.join(path))
+    }
 }
 
 /// Resolved source information for applying an overlay.
@@ -3303,9 +3334,8 @@ pub(crate) fn update_git_exclude(
         entries.len()
     );
 
-    // Resolve the actual git directory (handles worktrees where .git is a file)
-    let git_dir = resolve_git_dir(target)?;
-    let exclude_path = git_dir.join("info").join("exclude");
+    // Resolve the correct exclude path (uses git common dir for worktrees)
+    let exclude_path = resolve_git_exclude_path(target)?;
 
     // Ensure the info directory exists
     if let Some(parent) = exclude_path.parent() {
@@ -3363,8 +3393,7 @@ pub(crate) fn update_git_exclude(
 /// so the state directory doesn't show up as untracked even before
 /// any overlay is applied.
 pub(crate) fn ensure_repoverlay_excluded(repo_root: &Path) -> Result<()> {
-    let git_dir = resolve_git_dir(repo_root)?;
-    let exclude_path = git_dir.join("info").join("exclude");
+    let exclude_path = resolve_git_exclude_path(repo_root)?;
 
     if let Some(parent) = exclude_path.parent() {
         fs::create_dir_all(parent)?;
@@ -3450,8 +3479,7 @@ pub(crate) fn repair_git_exclude(target: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    let git_dir = resolve_git_dir(target)?;
-    let exclude_path = git_dir.join("info").join("exclude");
+    let exclude_path = resolve_git_exclude_path(target)?;
     let before = fs::read_to_string(&exclude_path).unwrap_or_default();
 
     for name in &applied {
@@ -3774,36 +3802,50 @@ mod tests {
 
         #[test]
         fn writes_to_correct_location_in_worktree() {
+            use std::process::Command;
+
+            // Create a real git repo with a worktree
             let temp = TempDir::new().unwrap();
-            let worktree_path = temp.path();
+            let main_path = temp.path().join("main");
+            fs::create_dir_all(&main_path).unwrap();
+            Command::new("git")
+                .args(["init"])
+                .current_dir(&main_path)
+                .output()
+                .unwrap();
+            // Need at least one commit for worktrees
+            Command::new("git")
+                .args(["commit", "--allow-empty", "-m", "init"])
+                .current_dir(&main_path)
+                .output()
+                .unwrap();
 
-            // Simulate a worktree: .git is a file pointing to the actual git dir
-            let actual_git_dir = temp.path().join("actual-git-dir");
-            fs::create_dir_all(&actual_git_dir).unwrap();
-
-            let git_file_content = format!("gitdir: {}\n", actual_git_dir.display());
-            fs::write(worktree_path.join(".git"), git_file_content).unwrap();
+            let worktree_path = temp.path().join("worktree");
+            Command::new("git")
+                .args([
+                    "worktree",
+                    "add",
+                    worktree_path.to_str().unwrap(),
+                    "-b",
+                    "wt-branch",
+                ])
+                .current_dir(&main_path)
+                .output()
+                .unwrap();
 
             let entries = vec![".envrc".to_string()];
-            update_git_exclude(worktree_path, "test-overlay", &entries, true).unwrap();
+            update_git_exclude(&worktree_path, "test-overlay", &entries, true).unwrap();
 
-            // Exclude file should be in the actual git dir, not worktree_path/.git/info/exclude
-            let exclude_path = actual_git_dir.join("info").join("exclude");
+            // Exclude file should be in the common git dir (main repo's .git/)
+            let common_exclude = main_path.join(".git").join("info").join("exclude");
             assert!(
-                exclude_path.exists(),
-                "exclude file should exist in actual git dir"
+                common_exclude.exists(),
+                "exclude file should exist in common git dir"
             );
 
-            let content = fs::read_to_string(&exclude_path).unwrap();
+            let content = fs::read_to_string(&common_exclude).unwrap();
             assert!(content.contains("# repoverlay:test-overlay start"));
             assert!(content.contains(".envrc"));
-
-            // Verify it was NOT written to the worktree's .git path
-            let wrong_path = worktree_path.join(".git").join("info").join("exclude");
-            assert!(
-                !wrong_path.exists(),
-                "exclude file should not be at worktree .git path"
-            );
         }
     }
 
