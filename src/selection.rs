@@ -213,6 +213,8 @@ struct SelectionState {
     parent_map: HashMap<PathBuf, Option<PathBuf>>,
     /// Lookup from parent path → immediate children for O(1) descendant queries.
     children_map: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Lookup from path → category for O(1) category checks.
+    category_map: HashMap<PathBuf, FileCategory>,
     /// Current search query.
     search_query: String,
     /// Current input mode.
@@ -262,6 +264,10 @@ impl SelectionState {
             }
         }
 
+        // Build category lookup map for O(1) category checks
+        let category_map: HashMap<PathBuf, FileCategory> =
+            files.iter().map(|f| (f.path.clone(), f.category)).collect();
+
         Self {
             all_files: files,
             selections,
@@ -269,6 +275,7 @@ impl SelectionState {
             expanded_dirs,
             parent_map,
             children_map,
+            category_map,
             search_query: String::new(),
             mode: Mode::Selection,
             cursor: 0,
@@ -409,16 +416,14 @@ impl SelectionState {
 
     /// Get selection counts per category: (selected, total).
     fn selection_counts(&self) -> HashMap<FileCategory, (usize, usize)> {
-        let mut counts = HashMap::new();
+        let mut counts: HashMap<FileCategory, (usize, usize)> = HashMap::new();
 
-        for cat in FileCategory::ALL {
-            let total = self.all_files.iter().filter(|f| f.category == *cat).count();
-            let selected = self
-                .all_files
-                .iter()
-                .filter(|f| f.category == *cat && self.selections.contains(&f.path))
-                .count();
-            counts.insert(*cat, (selected, total));
+        for f in &self.all_files {
+            let entry = counts.entry(f.category).or_insert((0, 0));
+            entry.1 += 1;
+            if self.selections.contains(&f.path) {
+                entry.0 += 1;
+            }
         }
 
         counts
@@ -477,9 +482,9 @@ impl SelectionState {
         self.descendants_of(dir_path)
             .into_iter()
             .filter(|path| {
-                self.all_files
-                    .iter()
-                    .any(|f| f.path == *path && self.visible_categories.contains(&f.category))
+                self.category_map
+                    .get(path)
+                    .is_some_and(|cat| self.visible_categories.contains(cat))
             })
             .collect()
     }
@@ -603,9 +608,9 @@ impl SelectionState {
             if !covered.contains(path) {
                 // Skip directory entries when children are emitted individually
                 let is_dir = self
-                    .all_files
-                    .iter()
-                    .any(|f| f.path == *path && f.category == FileCategory::AiConfigDirectory);
+                    .category_map
+                    .get(path)
+                    .is_some_and(|cat| *cat == FileCategory::AiConfigDirectory);
                 if !is_dir {
                     result.push(path.clone());
                 }
@@ -861,14 +866,7 @@ fn render_flat_frame(frame: &mut Frame, state: &FlatSelectionState, prompt: &str
     let hint_style = Style::default().fg(Color::DarkGray);
     let key_style = Style::default().fg(Color::Cyan);
     let help_spans = if state.mode == Mode::Search {
-        vec![
-            Span::styled("Type to search | ", hint_style),
-            Span::styled("Enter/Esc", key_style),
-            Span::styled(" done ", hint_style),
-            Span::styled("| ", hint_style),
-            Span::styled("Ctrl+C", key_style),
-            Span::styled(" clear", hint_style),
-        ]
+        search_help_spans(hint_style, key_style)
     } else {
         vec![
             Span::styled("↑↓", key_style),
@@ -1077,12 +1075,10 @@ fn handle_search_key_common(key: KeyEvent, query: &mut String) -> bool {
 /// to reconstruct the full ancestor chain.
 fn tree_path_for(path: &Path, parent_map: &HashMap<PathBuf, Option<PathBuf>>) -> Vec<PathBuf> {
     let mut chain = vec![path.to_path_buf()];
-    let mut current = parent_map.get(path).and_then(|opt| opt.as_ref());
+    let mut current = parent_map.get(path).and_then(|opt| opt.as_deref());
     while let Some(parent) = current {
-        chain.push(parent.clone());
-        current = parent_map
-            .get(parent.as_path())
-            .and_then(|opt| opt.as_ref());
+        chain.push(parent.to_path_buf());
+        current = parent_map.get(parent).and_then(|opt| opt.as_deref());
     }
     chain.reverse();
     chain
@@ -1160,6 +1156,18 @@ fn build_tree_nodes(state: &SelectionState) -> Vec<TreeNode<'_, PathBuf>> {
 }
 
 /// Recursively build tree nodes for files whose parent matches `parent`.
+/// Display label for a file node: short name if nested under a parent, full path otherwise.
+fn node_label(path: &Path, has_parent: bool) -> String {
+    if has_parent {
+        path.file_name().map_or_else(
+            || path.to_string_lossy().to_string(),
+            |n| n.to_string_lossy().to_string(),
+        )
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
+
 fn build_children_for<'a>(
     visible: &[&'a DetectedFile],
     parent: Option<&Path>,
@@ -1168,16 +1176,9 @@ fn build_children_for<'a>(
         .iter()
         .filter(|f| f.parent_dir.as_deref() == parent)
         .map(|f| {
+            let has_parent = parent.is_some();
             if f.category == FileCategory::AiConfigDirectory {
-                let label = if parent.is_some() {
-                    // Nested directory: show just the directory name
-                    f.path.file_name().map_or_else(
-                        || f.path.to_string_lossy().to_string(),
-                        |n| n.to_string_lossy().to_string(),
-                    ) + "/"
-                } else {
-                    format!("{}/", f.path.display())
-                };
+                let label = format!("{}/", node_label(&f.path, has_parent));
                 let children = build_children_for(visible, Some(&f.path));
                 TreeNode {
                     id: f.path.clone(),
@@ -1185,17 +1186,9 @@ fn build_children_for<'a>(
                     children,
                 }
             } else {
-                let name = if parent.is_some() {
-                    f.path.file_name().map_or_else(
-                        || f.path.to_string_lossy().to_string(),
-                        |n| n.to_string_lossy().to_string(),
-                    )
-                } else {
-                    f.path.to_string_lossy().to_string()
-                };
                 TreeNode {
                     id: f.path.clone(),
-                    text: Line::from(name),
+                    text: Line::from(node_label(&f.path, has_parent)),
                     children: vec![],
                 }
             }
@@ -1353,20 +1346,25 @@ fn render_summary_ratatui(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// Build the search-mode help spans (shared between flat and tree UIs).
+fn search_help_spans<'a>(hint_style: Style, key_style: Style) -> Vec<Span<'a>> {
+    vec![
+        Span::styled("Type to search | ", hint_style),
+        Span::styled("Enter/Esc", key_style),
+        Span::styled(" done ", hint_style),
+        Span::styled("| ", hint_style),
+        Span::styled("Ctrl+C", key_style),
+        Span::styled(" clear", hint_style),
+    ]
+}
+
 /// Render help line.
 fn render_help_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &SelectionState) {
     let hint_style = Style::default().fg(Color::DarkGray);
     let key_style = Style::default().fg(Color::Cyan);
 
     let spans = if state.mode == Mode::Search {
-        vec![
-            Span::styled("Type to search | ", hint_style),
-            Span::styled("Enter/Esc", key_style),
-            Span::styled(" done ", hint_style),
-            Span::styled("| ", hint_style),
-            Span::styled("Ctrl+C", key_style),
-            Span::styled(" clear", hint_style),
-        ]
+        search_help_spans(hint_style, key_style)
     } else {
         vec![
             Span::styled("↑↓", key_style),
@@ -1379,7 +1377,7 @@ fn render_help_ratatui(frame: &mut Frame, area: ratatui::layout::Rect, state: &S
             Span::styled(" confirm ", hint_style),
             Span::styled("a", key_style),
             Span::styled(" all ", hint_style),
-            Span::styled("1-4", key_style),
+            Span::styled("1-5", key_style),
             Span::styled(" filter ", hint_style),
             Span::styled("/", key_style),
             Span::styled(" search ", hint_style),

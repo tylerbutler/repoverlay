@@ -1,6 +1,5 @@
 ---
 source: src/selection.rs
-assertion_line: 3208
 expression: buffer_to_string(&buffer)
 ---
 Select files to include in overlay
@@ -32,4 +31,4 @@ Selected: 7 AI, 6 DIR
 
 
 
-↑↓ move ←→ expand Space toggle Enter confirm a all 1-4 filter / search Esc cance
+↑↓ move ←→ expand Space toggle Enter confirm a all 1-5 filter / search Esc cance
