@@ -469,6 +469,21 @@ impl SelectionState {
         self.children_map.get(dir_path).cloned().unwrap_or_default()
     }
 
+    /// Get all descendant paths of a directory that belong to currently visible categories.
+    ///
+    /// This ensures checkbox tri-state only reflects files the user can actually see,
+    /// not files hidden by category toggles.
+    fn visible_descendants_of(&self, dir_path: &Path) -> Vec<PathBuf> {
+        self.descendants_of(dir_path)
+            .into_iter()
+            .filter(|path| {
+                self.all_files
+                    .iter()
+                    .any(|f| f.path == *path && self.visible_categories.contains(&f.category))
+            })
+            .collect()
+    }
+
     /// Get all descendant paths of a directory (recursive).
     fn descendants_of(&self, dir_path: &Path) -> Vec<PathBuf> {
         let mut result = Vec::new();
@@ -679,68 +694,70 @@ fn run_flat_loop(
 ) -> anyhow::Result<FlatSelectionResult> {
     let mut terminal = ratatui::init();
 
-    let result = loop {
-        terminal.draw(|frame| {
-            render_flat_frame(frame, state, prompt);
-        })?;
+    let result = (|| -> anyhow::Result<FlatSelectionResult> {
+        loop {
+            terminal.draw(|frame| {
+                render_flat_frame(frame, state, prompt);
+            })?;
 
-        if let Event::Key(key) = event::read()? {
-            match state.mode {
-                Mode::Search => {
-                    if handle_flat_search_key(key, state) {
-                        state.mode = Mode::Selection;
+            if let Event::Key(key) = event::read()? {
+                match state.mode {
+                    Mode::Search => {
+                        if handle_flat_search_key(key, state) {
+                            state.mode = Mode::Selection;
+                        }
                     }
+                    Mode::Selection => match key.code {
+                        KeyCode::Esc => {
+                            return Ok(FlatSelectionResult {
+                                selected_ids: Vec::new(),
+                                cancelled: true,
+                            });
+                        }
+                        KeyCode::Enter => {
+                            let selected: Vec<String> = state
+                                .items
+                                .iter()
+                                .filter(|i| state.selections.contains(&i.id))
+                                .map(|i| i.id.clone())
+                                .collect();
+                            return Ok(FlatSelectionResult {
+                                selected_ids: selected,
+                                cancelled: false,
+                            });
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(FlatSelectionResult {
+                                selected_ids: Vec::new(),
+                                cancelled: true,
+                            });
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if state.cursor > 0 {
+                                state.cursor -= 1;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            let len = state.visible_items().len();
+                            if state.cursor + 1 < len {
+                                state.cursor += 1;
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            state.toggle_selection(state.cursor);
+                        }
+                        KeyCode::Char('a') => {
+                            state.select_all_visible();
+                        }
+                        KeyCode::Char('/') => {
+                            state.mode = Mode::Search;
+                        }
+                        _ => {}
+                    },
                 }
-                Mode::Selection => match key.code {
-                    KeyCode::Esc => {
-                        break Ok(FlatSelectionResult {
-                            selected_ids: Vec::new(),
-                            cancelled: true,
-                        });
-                    }
-                    KeyCode::Enter => {
-                        let selected: Vec<String> = state
-                            .items
-                            .iter()
-                            .filter(|i| state.selections.contains(&i.id))
-                            .map(|i| i.id.clone())
-                            .collect();
-                        break Ok(FlatSelectionResult {
-                            selected_ids: selected,
-                            cancelled: false,
-                        });
-                    }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        break Ok(FlatSelectionResult {
-                            selected_ids: Vec::new(),
-                            cancelled: true,
-                        });
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if state.cursor > 0 {
-                            state.cursor -= 1;
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        let len = state.visible_items().len();
-                        if state.cursor + 1 < len {
-                            state.cursor += 1;
-                        }
-                    }
-                    KeyCode::Char(' ') => {
-                        state.toggle_selection(state.cursor);
-                    }
-                    KeyCode::Char('a') => {
-                        state.select_all_visible();
-                    }
-                    KeyCode::Char('/') => {
-                        state.mode = Mode::Search;
-                    }
-                    _ => {}
-                },
             }
         }
-    };
+    })();
 
     ratatui::restore();
     result
@@ -919,42 +936,44 @@ fn run_selection_loop(state: &mut SelectionState, prompt: &str) -> anyhow::Resul
     let mut terminal = ratatui::init();
     let mut tree_state = MultiSelectTreeState::<PathBuf>::default();
 
-    let result = loop {
-        // Sync tree state from selection state
-        sync_tree_state(state, &mut tree_state);
+    let result = (|| -> anyhow::Result<SelectionResult> {
+        loop {
+            // Sync tree state from selection state
+            sync_tree_state(state, &mut tree_state);
 
-        terminal.draw(|frame| {
-            render_selection_frame(frame, state, &mut tree_state, prompt);
-        })?;
+            terminal.draw(|frame| {
+                render_selection_frame(frame, state, &mut tree_state, prompt);
+            })?;
 
-        if let Event::Key(key) = event::read()? {
-            match state.mode {
-                Mode::Selection => match handle_selection_key(state, key) {
-                    SelectionAction::Continue => {}
-                    SelectionAction::Confirm => {
-                        break Ok(SelectionResult {
-                            selected_files: state.resolve_selected_paths(),
-                            cancelled: false,
-                        });
-                    }
-                    SelectionAction::Cancel => {
-                        break Ok(SelectionResult {
-                            selected_files: Vec::new(),
-                            cancelled: true,
-                        });
-                    }
-                    SelectionAction::EnterSearch => {
-                        state.mode = Mode::Search;
-                    }
-                },
-                Mode::Search => {
-                    if handle_search_key(state, key) {
-                        state.mode = Mode::Selection;
+            if let Event::Key(key) = event::read()? {
+                match state.mode {
+                    Mode::Selection => match handle_selection_key(state, key) {
+                        SelectionAction::Continue => {}
+                        SelectionAction::Confirm => {
+                            return Ok(SelectionResult {
+                                selected_files: state.resolve_selected_paths(),
+                                cancelled: false,
+                            });
+                        }
+                        SelectionAction::Cancel => {
+                            return Ok(SelectionResult {
+                                selected_files: Vec::new(),
+                                cancelled: true,
+                            });
+                        }
+                        SelectionAction::EnterSearch => {
+                            state.mode = Mode::Search;
+                        }
+                    },
+                    Mode::Search => {
+                        if handle_search_key(state, key) {
+                            state.mode = Mode::Selection;
+                        }
                     }
                 }
             }
         }
-    };
+    })();
 
     ratatui::restore();
     result
@@ -1101,8 +1120,42 @@ fn sync_tree_state(state: &SelectionState, tree_state: &mut MultiSelectTreeState
 }
 
 /// Build `TreeNode` descriptors from the current selection state.
+///
+/// When a search is active, ancestor directories of matching files are included
+/// in the visible set even if they don't match the query themselves. Without this,
+/// nested files whose parents don't match the search would be unreachable in the tree.
 fn build_tree_nodes(state: &SelectionState) -> Vec<TreeNode<'_, PathBuf>> {
-    let visible = state.visible_files();
+    let mut visible = state.visible_files();
+
+    if !state.search_query.is_empty() {
+        // Collect paths of files already visible so we can check membership
+        let visible_paths: HashSet<&Path> = visible.iter().map(|f| f.path.as_path()).collect();
+
+        // Find ancestor directories that need to be included
+        let mut ancestors_needed: HashSet<&Path> = HashSet::new();
+        for f in &visible {
+            let mut current = f.parent_dir.as_deref();
+            while let Some(parent) = current {
+                if visible_paths.contains(parent) {
+                    break; // Already visible, and so are its ancestors
+                }
+                ancestors_needed.insert(parent);
+                current = state.parent_map.get(parent).and_then(|p| p.as_deref());
+            }
+        }
+
+        if !ancestors_needed.is_empty() {
+            // Add ancestor directories from all_files (respecting category visibility)
+            for f in &state.all_files {
+                if ancestors_needed.contains(f.path.as_path())
+                    && state.visible_categories.contains(&f.category)
+                {
+                    visible.push(f);
+                }
+            }
+        }
+    }
+
     build_children_for(&visible, None)
 }
 
@@ -1190,10 +1243,7 @@ fn render_selection_frame(
     let nodes = build_tree_nodes(state);
     let descendants_state = state;
     let widget = MultiSelectTree::new(&nodes).descendants_fn(Box::new(|id: &PathBuf| {
-        descendants_state
-            .descendants_of(id)
-            .into_iter()
-            .collect::<Vec<_>>()
+        descendants_state.visible_descendants_of(id)
     }));
     frame.render_stateful_widget(widget, chunks[5], tree_state);
 
@@ -2341,6 +2391,24 @@ mod tests {
     }
 
     #[test]
+    fn test_visible_descendants_excludes_hidden_categories() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // All descendants visible initially
+        let all_desc = state.visible_descendants_of(Path::new(".claude"));
+        assert_eq!(all_desc.len(), 3);
+
+        // Hide AiConfig category — .claude/settings.json and .claude/commands/test.md
+        // are AiConfig, .claude/commands is AiConfigDirectory
+        state.visible_categories.remove(&FileCategory::AiConfig);
+        let visible_desc = state.visible_descendants_of(Path::new(".claude"));
+        // Only the AiConfigDirectory (.claude/commands) should remain
+        assert_eq!(visible_desc.len(), 1);
+        assert!(visible_desc.contains(&PathBuf::from(".claude/commands")));
+    }
+
+    #[test]
     fn test_is_expandable() {
         let files = make_test_files_with_children();
         let state = SelectionState::new(files, HashSet::new());
@@ -3322,6 +3390,43 @@ mod tests {
                 f.path,
             );
         }
+    }
+
+    /// Verify that searching for a nested file produces a non-empty tree
+    /// by including ancestor directories even when they don't match the query.
+    #[test]
+    fn search_for_nested_file_includes_ancestors_in_tree() {
+        let files = make_test_files_with_children();
+        let mut state = SelectionState::new(files, HashSet::new());
+
+        // Search for "settings" — only .claude/settings.json matches,
+        // but .claude/ must be included as ancestor for the tree to render.
+        state.set_search("settings");
+        let nodes = build_tree_nodes(&state);
+
+        assert!(
+            !nodes.is_empty(),
+            "tree should not be empty when search matches a nested file"
+        );
+
+        // The root should contain .claude/ directory
+        assert!(
+            nodes.iter().any(|n| n.id.as_path() == Path::new(".claude")),
+            "ancestor directory .claude/ should appear as root node"
+        );
+
+        // .claude/ should contain settings.json as a child
+        let claude_node = nodes
+            .iter()
+            .find(|n| n.id.as_path() == Path::new(".claude"))
+            .unwrap();
+        assert!(
+            claude_node
+                .children
+                .iter()
+                .any(|n| n.id.as_path() == Path::new(".claude/settings.json")),
+            "settings.json should be nested under .claude/"
+        );
     }
 
     /// Verify that deeply nested directories have their files as tree children,
