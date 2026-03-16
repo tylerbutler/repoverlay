@@ -2762,6 +2762,13 @@ pub(crate) fn update_overlays(
                     );
                 }
             }
+        } else if state.source.is_library() {
+            // Library overlays are managed in-repo — update via git
+            println!(
+                "  {} {} (library overlay — update via git)",
+                "-".dimmed(),
+                state.name,
+            );
         } else if state.source.is_updatable() {
             // OverlayRepo sources: update by re-applying from the overlay repo
             println!(
