@@ -2732,3 +2732,223 @@ fn status_shows_library_source_json() {
         .success()
         .stdout(predicate::str::contains("Library"));
 }
+
+// --- create --into library (#217) ---
+
+#[test]
+fn create_into_library_with_include() {
+    let ctx = TestContext::new();
+    ctx.create_repo_file(".envrc", "use flake");
+    ctx.create_repo_file("CLAUDE.md", "# Config");
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "--into",
+            "library",
+            "--include",
+            ".envrc",
+            "--include",
+            "CLAUDE.md",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "--no-apply",
+            "-y",
+        ])
+        .assert()
+        .success();
+
+    // Verify overlay is in library
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("overlay");
+    assert!(library_path.join(".envrc").exists());
+    assert!(library_path.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn create_into_library_with_name() {
+    let ctx = TestContext::new();
+    ctx.create_repo_file(".envrc", "use flake");
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "my-overlay",
+            "--into",
+            "library",
+            "--include",
+            ".envrc",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "--no-apply",
+            "-y",
+        ])
+        .assert()
+        .success();
+
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    assert!(library_path.join(".envrc").exists());
+}
+
+#[test]
+fn create_into_library_applies_by_default_with_yes() {
+    let ctx = TestContext::new();
+    ctx.create_repo_file(".envrc", "use flake");
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "my-overlay",
+            "--into",
+            "library",
+            "--include",
+            ".envrc",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "-y",
+        ])
+        .assert()
+        .success();
+
+    // Verify it was applied
+    cargo_bin_cmd!("repoverlay")
+        .args(["status", "--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+}
+
+#[test]
+fn create_into_library_rejects_unknown_destination() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "--into",
+            "unknown",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "-y",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unknown --into destination"));
+}
+
+#[test]
+fn create_into_library_conflicts_with_output() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["create", "--into", "library", "--output", "./out", "-y"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn create_into_library_no_apply_requires_into() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["create", "--no-apply", "-y"])
+        .assert()
+        .failure();
+}
+
+// --- library import by name (#220) ---
+
+#[test]
+fn library_import_resolves_applied_overlay_by_name() {
+    let ctx =
+        TestContext::new().with_overlay(&[(".envrc", "use flake"), ("CLAUDE.md", "# Config")]);
+
+    // Apply the overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "my-overlay",
+        ])
+        .assert()
+        .success();
+
+    // Import by name (not path)
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            "my-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Imported"));
+
+    // Verify overlay is in library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+}
+
+#[test]
+fn library_import_unknown_name_fails() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            "nonexistent-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not an applied overlay"));
+}
+
+// --- gitignore auto-fix ---
+
+#[test]
+fn library_import_fixes_gitignore_when_library_ignored() {
+    let ctx = TestContext::new().with_overlay(&[(".envrc", "use flake")]);
+
+    // Set up .gitignore that excludes .repoverlay/
+    fs::write(ctx.repo_path().join(".gitignore"), ".repoverlay/\n").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            ctx.overlay_path().to_str().unwrap(),
+            "--name",
+            "my-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Updated .gitignore"));
+
+    // Verify .gitignore was updated
+    let gitignore = fs::read_to_string(ctx.repo_path().join(".gitignore")).unwrap();
+    assert!(gitignore.contains(".repoverlay/*"));
+    assert!(gitignore.contains("!.repoverlay/library/"));
+    // Original `dir/` pattern should be converted to `dir/*`
+    assert!(!gitignore.contains(".repoverlay/\n"));
+}

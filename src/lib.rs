@@ -3435,6 +3435,51 @@ pub(crate) fn any_overlay_sections_remain(content: &str) -> bool {
     false
 }
 
+/// Rebuild `.git/info/exclude` from overlay state files.
+///
+/// Reads all applied overlays from the state directory and reconstructs the
+/// git exclude entries. This repairs cases where the exclude file gets out of
+/// sync (e.g. after a `git clean`, manual edits, or interrupted operations).
+///
+/// Returns `true` if the exclude file was modified.
+pub(crate) fn repair_git_exclude(target: &Path) -> Result<bool> {
+    use state::{EntryType, list_applied_overlays, load_overlay_state};
+
+    let applied = list_applied_overlays(target)?;
+    if applied.is_empty() {
+        return Ok(false);
+    }
+
+    let git_dir = resolve_git_dir(target)?;
+    let exclude_path = git_dir.join("info").join("exclude");
+    let before = fs::read_to_string(&exclude_path).unwrap_or_default();
+
+    for name in &applied {
+        let name_str = name.as_str();
+        let Ok(overlay_state) = load_overlay_state(target, name_str) else {
+            continue;
+        };
+
+        let exclude_entries: Vec<String> = overlay_state
+            .files
+            .iter()
+            .map(|f| {
+                let path = f.target.to_string_lossy().replace('\\', "/");
+                if f.entry_type == EntryType::Directory {
+                    format!("{path}/")
+                } else {
+                    path
+                }
+            })
+            .collect();
+
+        update_git_exclude(target, name_str, &exclude_entries, true)?;
+    }
+
+    let after = fs::read_to_string(&exclude_path).unwrap_or_default();
+    Ok(before != after)
+}
+
 /// Parse owner/repo from a GitHub URL (HTTPS or SSH format).
 pub(crate) fn parse_github_owner_repo(url: &str) -> Result<(String, String)> {
     github::parse_remote_url(url).ok_or_else(|| {

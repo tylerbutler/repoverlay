@@ -15,9 +15,9 @@ use crate::{
     CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource, STATE_DIR,
     apply_multiple_overlays, apply_overlay, canonicalize_path, config, get_cached_repo_commit,
     library, list_applied_overlays, list_overlays_from_cached_repo, parse_github_owner_repo,
-    remove_overlay, remove_single_overlay, restore_overlays, selection::is_interactive,
-    show_status, show_status_json, state, status_has_overlays, switch_overlay, update_overlays,
-    validate_git_repo,
+    remove_overlay, remove_single_overlay, repair_git_exclude, restore_overlays,
+    selection::is_interactive, show_status, show_status_json, state, status_has_overlays,
+    switch_overlay, update_overlays, validate_git_repo,
 };
 
 /// Build version string with git info for local builds
@@ -275,8 +275,16 @@ enum Commands {
         source: Option<PathBuf>,
 
         /// Output directory for local overlay creation (no overlay repo required)
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "into")]
         output: Option<PathBuf>,
+
+        /// Create the overlay directly into a destination ("library")
+        #[arg(long, value_name = "DEST", conflicts_with = "output")]
+        into: Option<String>,
+
+        /// Skip applying the overlay after creating into the library
+        #[arg(long, requires = "into")]
+        no_apply: bool,
 
         /// Show what would be created without creating files
         #[arg(long)]
@@ -768,6 +776,14 @@ pub(crate) fn run() -> Result<()> {
             } else {
                 show_status(&target, name)?;
             }
+
+            // Auto-repair git exclude entries if they're out of sync
+            if matches!(repair_git_exclude(&target), Ok(true)) {
+                eprintln!(
+                    "{} Repaired .git/info/exclude entries.",
+                    "Maintenance:".cyan().bold()
+                );
+            }
         }
         Commands::Restore {
             target,
@@ -799,12 +815,20 @@ pub(crate) fn run() -> Result<()> {
             include,
             source,
             output,
+            into,
+            no_apply,
             dry_run,
             yes,
             force,
         } => {
             let source = source.unwrap_or_else(|| PathBuf::from("."));
-            create_overlay_command(&source, name, output, &include, dry_run, yes, force)?;
+            if into.as_deref() == Some("library") {
+                create_into_library(&source, name, &include, dry_run, yes, no_apply, force)?;
+            } else if let Some(dest) = &into {
+                bail!("Unknown --into destination: {dest}. Valid values: library");
+            } else {
+                create_overlay_command(&source, name, output, &include, dry_run, yes, force)?;
+            }
         }
         Commands::Switch {
             source,
@@ -986,31 +1010,45 @@ fn handle_library_command(command: LibraryCommand) -> Result<()> {
         } => {
             let target = resolve_target(target)?;
 
-            // Resolve source path
-            let source_path = PathBuf::from(&source);
-            let source_path = source_path
-                .canonicalize()
-                .with_context(|| format!("Source path not found: {source}"))?;
+            // Resolve source: try as a filesystem path first, then as an applied overlay name
+            let (source_path, resolved_from_name) = {
+                let candidate = PathBuf::from(&source);
+                if let Ok(canonical) = candidate.canonicalize() {
+                    (canonical, false)
+                } else {
+                    // Not a valid path — try resolving as an applied overlay name
+                    let path = resolve_applied_overlay_source(&target, &source)?;
+                    (path, true)
+                }
+            };
 
             if !source_path.is_dir() {
                 bail!("Source is not a directory: {}", source_path.display());
             }
 
             let overlay_name = name.unwrap_or_else(|| {
-                source_path.file_name().map_or_else(
-                    || "overlay".to_string(),
-                    |n| n.to_string_lossy().to_string(),
-                )
+                if resolved_from_name {
+                    // Use the applied overlay name when resolved by name
+                    source.clone()
+                } else {
+                    source_path.file_name().map_or_else(
+                        || "overlay".to_string(),
+                        |n| n.to_string_lossy().to_string(),
+                    )
+                }
             });
 
             let library_path = library::get_library_path(&target)?;
 
-            // Warn if library path is gitignored
-            if library::check_library_gitignored(&target, &library_path) {
+            // Auto-fix gitignore if library path is ignored
+            if library::ensure_library_not_gitignored(&target, &library_path)? {
                 eprintln!(
-                    "{} Library path {} is gitignored. Overlays won't be tracked by git.",
-                    "Warning:".yellow().bold(),
-                    library_path.display()
+                    "{} Updated .gitignore to track library path {}",
+                    "Note:".cyan().bold(),
+                    library_path
+                        .strip_prefix(&target)
+                        .unwrap_or(&library_path)
+                        .display()
                 );
             }
 
@@ -1330,6 +1368,29 @@ fn resolve_target(target: Option<PathBuf>) -> Result<PathBuf> {
     let target = canonicalize_path(&target_dir, "Target")?;
     validate_git_repo(&target)?;
     Ok(target)
+}
+
+/// Resolve an applied overlay name to its source path on disk.
+///
+/// Looks up the overlay in the applied state and resolves its source to a local path.
+/// For library sources, resolves via the library path. For other sources, uses the
+/// source resolver.
+fn resolve_applied_overlay_source(target: &Path, name: &str) -> Result<PathBuf> {
+    use crate::state::{OverlaySource, SourceResolver};
+
+    let applied = state::list_applied_overlays(target)?;
+    if !applied.iter().any(|n| n.as_str() == name) {
+        bail!("Source path not found and '{name}' is not an applied overlay");
+    }
+
+    let overlay_state = state::load_overlay_state(target, name)?;
+    match &overlay_state.source {
+        OverlaySource::Library { name: lib_name } => {
+            let library_path = library::get_library_path(target)?;
+            Ok(library_path.join(lib_name))
+        }
+        source => source.resolve_local_path(),
+    }
 }
 
 fn find_repo_root() -> Result<PathBuf> {
@@ -2063,6 +2124,114 @@ fn parse_overlay_name_arg(
             );
         }
     }
+}
+
+/// Create an overlay directly into the in-repo library.
+///
+/// After creation, prompts to apply the overlay (unless `--yes` or `--no-apply`).
+#[allow(clippy::fn_params_excessive_bools)]
+fn create_into_library(
+    source: &Path,
+    name: Option<String>,
+    include: &[PathBuf],
+    dry_run: bool,
+    yes: bool,
+    no_apply: bool,
+    force: bool,
+) -> Result<()> {
+    use colored::Colorize;
+
+    // Validate source is a git repo
+    if !source.join(".git").exists() {
+        bail!(
+            "Source directory is not a git repository: {}",
+            source.display()
+        );
+    }
+
+    let source = canonicalize_path(source, "Source")?;
+    let library_path = library::get_library_path(&source)?;
+
+    // Determine overlay name
+    let overlay_name = name.unwrap_or_else(|| "overlay".to_string());
+    let output_path = library_path.join(&overlay_name);
+
+    // Check if overlay already exists
+    if output_path.exists() && !force {
+        bail!("Overlay '{overlay_name}' already exists in the library. Use --force to overwrite.");
+    }
+
+    // Auto-fix gitignore if library path is ignored
+    if library::ensure_library_not_gitignored(&source, &library_path)? {
+        eprintln!(
+            "{} Updated .gitignore to track library path {}",
+            "Note:".cyan().bold(),
+            library_path
+                .strip_prefix(&source)
+                .unwrap_or(&library_path)
+                .display()
+        );
+    }
+
+    if dry_run {
+        println!(
+            "{} Would create overlay '{}' in library at {}",
+            "Dry run:".yellow().bold(),
+            overlay_name,
+            output_path.display()
+        );
+        return Ok(());
+    }
+
+    // If force and exists, remove existing first
+    if output_path.exists() && force {
+        fs::remove_dir_all(&output_path)?;
+    }
+
+    // Create the overlay into the library path
+    crate::create_overlay(
+        &source,
+        Some(output_path.clone()),
+        include,
+        Some(overlay_name.clone()),
+        dry_run,
+        yes,
+    )?;
+
+    // Prompt to apply (unless --no-apply)
+    if !no_apply {
+        let should_apply = if yes {
+            true
+        } else if is_interactive() {
+            print!("Apply it now? [Y/n] ");
+            io::stdout().flush()?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            let trimmed = input.trim();
+            trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y")
+        } else {
+            // Non-interactive, default to applying
+            true
+        };
+
+        if should_apply {
+            let overlay_source = output_path.to_string_lossy().to_string();
+            crate::apply_overlay(
+                &overlay_source,
+                &source,
+                false,
+                Some(overlay_name),
+                None,
+                false,
+                crate::ConflictStrategy::Force,
+                false,
+                None,
+                false,
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Handle the create command with the new argument structure.

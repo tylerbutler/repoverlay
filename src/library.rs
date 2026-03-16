@@ -152,6 +152,70 @@ pub(crate) fn check_library_gitignored(repo_root: &Path, library_path: &Path) ->
         .unwrap_or(false)
 }
 
+/// Ensure the library path is not gitignored.
+///
+/// If the library path is currently gitignored, appends a negation pattern
+/// (e.g. `!.repoverlay/library/`) to the repo's `.gitignore` file so that
+/// library overlays are tracked by git. Returns `true` if the `.gitignore`
+/// was modified.
+pub(crate) fn ensure_library_not_gitignored(repo_root: &Path, library_path: &Path) -> Result<bool> {
+    if !check_library_gitignored(repo_root, library_path) {
+        return Ok(false);
+    }
+
+    let relative_library = library_path.strip_prefix(repo_root).unwrap_or(library_path);
+    let mut lib_pattern = relative_library.to_string_lossy().to_string();
+    if !lib_pattern.ends_with('/') {
+        lib_pattern.push('/');
+    }
+    let negation = format!("!{lib_pattern}");
+
+    let gitignore_path = repo_root.join(".gitignore");
+    let existing = if gitignore_path.exists() {
+        fs::read_to_string(&gitignore_path)?
+    } else {
+        String::new()
+    };
+
+    // Git ignores an entire directory with `dir/`, which prevents `!dir/child/` from
+    // un-ignoring. We need to convert `dir/` to `dir/*` (ignore contents, not the
+    // directory itself) so the negation pattern can take effect.
+    let parent_dir = relative_library
+        .parent()
+        .map(|p| p.to_string_lossy().to_string());
+
+    let mut lines: Vec<String> = existing.lines().map(String::from).collect();
+    let mut modified = false;
+
+    if let Some(ref parent) = parent_dir {
+        let dir_pattern = format!("{parent}/");
+        let star_pattern = format!("{parent}/*");
+
+        for line in &mut lines {
+            if line.trim() == dir_pattern {
+                line.clone_from(&star_pattern);
+                modified = true;
+            }
+        }
+    }
+
+    // Append negation if not already present
+    if !lines.iter().any(|l| l.trim() == negation) {
+        lines.push(negation);
+        modified = true;
+    }
+
+    if modified {
+        let mut content = lines.join("\n");
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        fs::write(&gitignore_path, content)?;
+    }
+
+    Ok(modified)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,5 +414,70 @@ mod tests {
         fs::create_dir_all(&library_path).unwrap();
 
         assert!(!check_library_gitignored(tmp.path(), &library_path));
+    }
+
+    fn init_git_repo(path: &Path) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .status()
+            .unwrap();
+    }
+
+    #[test]
+    fn ensure_not_gitignored_adds_negation() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+
+        let library_path = tmp.path().join(".repoverlay").join("library");
+        fs::create_dir_all(&library_path).unwrap();
+        fs::write(tmp.path().join(".gitignore"), ".repoverlay/\n").unwrap();
+
+        assert!(check_library_gitignored(tmp.path(), &library_path));
+
+        let modified = ensure_library_not_gitignored(tmp.path(), &library_path).unwrap();
+        assert!(modified);
+
+        // Library should no longer be gitignored
+        assert!(!check_library_gitignored(tmp.path(), &library_path));
+
+        // .gitignore should contain the negation
+        let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+        assert!(content.contains("!.repoverlay/library/"));
+    }
+
+    #[test]
+    fn ensure_not_gitignored_noop_when_not_ignored() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+
+        let library_path = tmp.path().join(".repoverlay").join("library");
+        fs::create_dir_all(&library_path).unwrap();
+
+        let modified = ensure_library_not_gitignored(tmp.path(), &library_path).unwrap();
+        assert!(!modified);
+    }
+
+    #[test]
+    fn ensure_not_gitignored_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+
+        let library_path = tmp.path().join(".repoverlay").join("library");
+        fs::create_dir_all(&library_path).unwrap();
+        fs::write(tmp.path().join(".gitignore"), ".repoverlay/\n").unwrap();
+
+        ensure_library_not_gitignored(tmp.path(), &library_path).unwrap();
+        // Second call should be a noop since library is no longer ignored
+        let modified = ensure_library_not_gitignored(tmp.path(), &library_path).unwrap();
+        assert!(!modified);
+
+        // Should only have one negation line
+        let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+        let count = content
+            .lines()
+            .filter(|l| l.contains("!.repoverlay/library/"))
+            .count();
+        assert_eq!(count, 1);
     }
 }
