@@ -10,6 +10,8 @@ mod fuzzy;
 pub(crate) mod git;
 mod github;
 mod json_merge;
+#[allow(dead_code)]
+mod library;
 mod overlay_name;
 mod overlay_repo;
 mod reference;
