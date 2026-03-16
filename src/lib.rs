@@ -429,6 +429,8 @@ pub(crate) fn resolve_source(
         && let overlay_path = library_path.join(source_str)
         && overlay_path.is_dir()
     {
+        // Canonicalize so symlinks are created with absolute paths
+        let overlay_path = overlay_path.canonicalize().unwrap_or(overlay_path);
         debug!(
             "resolved '{source_str}' from library at {}",
             overlay_path.display()
