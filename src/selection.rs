@@ -224,11 +224,7 @@ struct SelectionState {
 impl SelectionState {
     fn new(files: Vec<DetectedFile>, hidden_categories: HashSet<FileCategory>) -> Self {
         // Start with all categories visible except those explicitly hidden
-        let mut visible = HashSet::new();
-        visible.insert(FileCategory::AiConfig);
-        visible.insert(FileCategory::AiConfigDirectory);
-        visible.insert(FileCategory::Gitignored);
-        visible.insert(FileCategory::Untracked);
+        let mut visible: HashSet<FileCategory> = FileCategory::ALL.iter().copied().collect();
 
         for cat in hidden_categories {
             visible.remove(&cat);
@@ -314,12 +310,9 @@ impl SelectionState {
         true
     }
 
-    /// Total number of file categories in the system.
-    const CATEGORY_COUNT: usize = 4;
-
     /// Check if any filters are active.
     fn has_active_filters(&self) -> bool {
-        !self.search_query.is_empty() || self.visible_categories.len() < Self::CATEGORY_COUNT
+        !self.search_query.is_empty() || self.visible_categories.len() < FileCategory::ALL.len()
     }
 
     /// Toggle visibility of a category.
@@ -418,12 +411,7 @@ impl SelectionState {
     fn selection_counts(&self) -> HashMap<FileCategory, (usize, usize)> {
         let mut counts = HashMap::new();
 
-        for cat in &[
-            FileCategory::AiConfig,
-            FileCategory::AiConfigDirectory,
-            FileCategory::Gitignored,
-            FileCategory::Untracked,
-        ] {
+        for cat in FileCategory::ALL {
             let total = self.all_files.iter().filter(|f| f.category == *cat).count();
             let selected = self
                 .all_files
@@ -895,7 +883,7 @@ fn handle_flat_search_key(key: KeyEvent, state: &mut FlatSelectionState) -> bool
 /// Returns false in these cases:
 /// - stdin or stdout is not a TTY
 /// - Running in a CI environment (CI env var is set)
-/// - Running as a cargo test binary (executable in target/*/deps/)
+/// - Running as a cargo test binary (compiled with cfg(test))
 /// - TERM is unset or "dumb"
 /// - `REPOVERLAY_NON_INTERACTIVE` env var is set
 pub(crate) fn is_interactive() -> bool {
@@ -911,13 +899,9 @@ pub(crate) fn is_interactive() -> bool {
         return false;
     }
 
-    // Detect cargo test environment by checking executable path
-    // Test binaries live in target/debug/deps/ or target/release/deps/
-    if let Ok(exe) = std::env::current_exe() {
-        let exe_str = exe.to_string_lossy();
-        if exe_str.contains("target") && exe_str.contains("deps") {
-            return false;
-        }
+    // When compiled with cfg(test), we're running inside a test binary
+    if cfg!(test) {
+        return false;
     }
 
     // Check TERM - if not set or "dumb", assume non-interactive
@@ -1008,8 +992,9 @@ fn handle_selection_key(state: &mut SelectionState, key: KeyEvent) -> SelectionA
         // Category toggles
         KeyCode::Char('1') => state.toggle_category(FileCategory::AiConfig),
         KeyCode::Char('2') => state.toggle_category(FileCategory::AiConfigDirectory),
-        KeyCode::Char('3') => state.toggle_category(FileCategory::Gitignored),
-        KeyCode::Char('4') => state.toggle_category(FileCategory::Untracked),
+        KeyCode::Char('3') => state.toggle_category(FileCategory::TrackedConfig),
+        KeyCode::Char('4') => state.toggle_category(FileCategory::Gitignored),
+        KeyCode::Char('5') => state.toggle_category(FileCategory::Untracked),
 
         // Search
         KeyCode::Char('/') => return SelectionAction::EnterSearch,
@@ -1226,8 +1211,9 @@ fn render_category_line_ratatui(
     let categories = [
         (FileCategory::AiConfig, "1", "AI", Color::Green),
         (FileCategory::AiConfigDirectory, "2", "DIR", Color::Magenta),
-        (FileCategory::Gitignored, "3", "GI", Color::Yellow),
-        (FileCategory::Untracked, "4", "UT", Color::Blue),
+        (FileCategory::TrackedConfig, "3", "TC", Color::Cyan),
+        (FileCategory::Gitignored, "4", "GI", Color::Yellow),
+        (FileCategory::Untracked, "5", "UT", Color::Blue),
     ];
 
     let mut spans = vec![Span::raw("Categories: ")];
@@ -1297,6 +1283,7 @@ fn render_summary_ratatui(
         let parts: Vec<String> = [
             (FileCategory::AiConfig, "AI"),
             (FileCategory::AiConfigDirectory, "DIR"),
+            (FileCategory::TrackedConfig, "TC"),
             (FileCategory::Gitignored, "GI"),
             (FileCategory::Untracked, "UT"),
         ]
@@ -1982,13 +1969,18 @@ mod tests {
         );
         assert!(state.visible_categories.contains(&FileCategory::Gitignored));
         assert!(state.visible_categories.contains(&FileCategory::Untracked));
-        assert_eq!(state.visible_categories.len(), 4);
+        assert!(
+            state
+                .visible_categories
+                .contains(&FileCategory::TrackedConfig)
+        );
+        assert_eq!(state.visible_categories.len(), FileCategory::ALL.len());
     }
 
     #[test]
     fn is_interactive_returns_false_in_tests() {
         // In test context, is_interactive should return false
-        // because the executable is in target/*/deps/
+        // because cfg!(test) is true
         assert!(!is_interactive());
     }
 

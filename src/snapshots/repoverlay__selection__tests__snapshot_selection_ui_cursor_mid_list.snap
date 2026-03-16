@@ -1,10 +1,11 @@
 ---
 source: src/selection.rs
+assertion_line: 3643
 expression: buffer_to_string(&buffer)
 ---
 Select files to include in overlay
 
-Categories: [1] AI (2/2) [2] DIR (0/0) [3] GI (0/2) [4] UT (0/1)
+Categories: [1] AI (2/2) [2] DIR (0/0) [3] TC (0/0) [4] GI (0/2) [5] UT (0/1)
 Search: (press / to search)
 Selected: 2 AI
 

@@ -3,6 +3,7 @@
 //! This module provides functionality to detect files that are good candidates
 //! for overlays, including AI configuration files and gitignored/untracked files.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
@@ -14,10 +15,23 @@ pub(crate) enum FileCategory {
     AiConfig,
     /// AI agent configuration directories (like .claude/)
     AiConfigDirectory,
+    /// Tracked (committed) config files — dotfiles, editor configs, etc.
+    TrackedConfig,
     /// Files that are gitignored but exist on disk
     Gitignored,
     /// Files that are untracked (not in git, not ignored)
     Untracked,
+}
+
+impl FileCategory {
+    /// All category variants, used to avoid hardcoded counts elsewhere.
+    pub(crate) const ALL: &[Self] = &[
+        Self::AiConfig,
+        Self::AiConfigDirectory,
+        Self::TrackedConfig,
+        Self::Gitignored,
+        Self::Untracked,
+    ];
 }
 
 /// A detected file with its category and path.
@@ -190,13 +204,19 @@ pub(crate) fn detect_directory_children(repo_path: &Path, dir_path: &Path) -> Ve
         .collect()
 }
 
-/// Detect gitignored files that exist on disk.
+/// Run a git command and convert matching output lines to [`DetectedFile`]s.
 ///
-/// Uses `git ls-files --others --ignored --exclude-standard` to find files
-/// that are ignored by git but still exist in the repository.
-pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
+/// Runs `git <args>` in `repo_path`, splits stdout by lines, excludes AI
+/// config paths, applies an optional extra filter, and maps each remaining
+/// line to a `DetectedFile` with the given `category`.
+fn git_ls_to_detected(
+    repo_path: &Path,
+    args: &[&str],
+    category: FileCategory,
+    extra_filter: Option<fn(&Path) -> bool>,
+) -> Vec<DetectedFile> {
     let output = Command::new("git")
-        .args(["ls-files", "--others", "--ignored", "--exclude-standard"])
+        .args(args)
         .current_dir(repo_path)
         .output();
 
@@ -206,10 +226,11 @@ pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
             stdout
                 .lines()
                 .filter(|line| !line.is_empty())
-                .filter(|line| !is_ai_config(Path::new(line))) // Don't duplicate AI configs
+                .filter(|line| !is_ai_config(Path::new(line)))
+                .filter(|line| extra_filter.is_none_or(|f| f(Path::new(line))))
                 .map(|line| DetectedFile {
                     path: PathBuf::from(line),
-                    category: FileCategory::Gitignored,
+                    category,
                     preselected: false,
                     parent_dir: None,
                 })
@@ -217,6 +238,19 @@ pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
         }
         _ => Vec::new(),
     }
+}
+
+/// Detect gitignored files that exist on disk.
+///
+/// Uses `git ls-files --others --ignored --exclude-standard` to find files
+/// that are ignored by git but still exist in the repository.
+pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
+    git_ls_to_detected(
+        repo_path,
+        &["ls-files", "--others", "--ignored", "--exclude-standard"],
+        FileCategory::Gitignored,
+        None,
+    )
 }
 
 /// Detect untracked files (not in git, not ignored).
@@ -224,28 +258,127 @@ pub(crate) fn detect_gitignored_files(repo_path: &Path) -> Vec<DetectedFile> {
 /// Uses `git ls-files --others --exclude-standard` without --ignored
 /// to find files that are neither tracked nor ignored.
 pub(crate) fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
-    let output = Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(repo_path)
-        .output();
+    git_ls_to_detected(
+        repo_path,
+        &["ls-files", "--others", "--exclude-standard"],
+        FileCategory::Untracked,
+        None,
+    )
+}
 
-    match output {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout
-                .lines()
-                .filter(|line| !line.is_empty())
-                .filter(|line| !is_ai_config(Path::new(line))) // Don't duplicate AI configs
-                .map(|line| DetectedFile {
-                    path: PathBuf::from(line),
-                    category: FileCategory::Untracked,
-                    preselected: false,
-                    parent_dir: None,
-                })
-                .collect()
-        }
-        _ => Vec::new(),
+/// Detect tracked (committed) config files in a repository.
+///
+/// Uses `git ls-files` to find committed files, then filters for
+/// overlay-relevant patterns: dotfiles and files in dotfile directories.
+/// Source code and non-config files are excluded.
+pub(crate) fn detect_tracked_config_files(repo_path: &Path) -> Vec<DetectedFile> {
+    git_ls_to_detected(
+        repo_path,
+        &["ls-files"],
+        FileCategory::TrackedConfig,
+        Some(is_tracked_config),
+    )
+}
+
+/// Source code and content file extensions that are not overlay candidates.
+const EXCLUDED_EXTENSIONS: &[&str] = &[
+    // Source code
+    "rs", "go", "py", "js", "ts", "tsx", "jsx", "c", "cpp", "h", "hpp", "java", "kt", "swift", "rb",
+    "php", "cs", "fs", "ex", "exs", "erl", "hrl", "gleam", "zig", "nim", "ml", "mli", "hs", "elm",
+    "clj", "cljs", "scala", "groovy", "lua", "r", "jl", "dart", "v", "d", "mjs", "cjs", "mts",
+    "cts", // Compiled / binary
+    "o", "a", "so", "dylib", "dll", "exe", "class", "pyc", "pyo", "wasm",
+    // Documentation / content
+    "md", "rst", "txt", "adoc", "org",
+    // Data / serialization (not config-like when committed)
+    "csv", "tsv", "sql", "parquet", // Media
+    "png", "jpg", "jpeg", "gif", "svg", "ico", "webp", "bmp", "mp3", "mp4", "wav", "ogg", "webm",
+    "mov", "avi", "ttf", "otf", "woff", "woff2", "eot", // Archives
+    "zip", "tar", "gz", "bz2", "xz", "7z", "rar", // Web assets
+    "css", "scss", "sass", "less", "html", "htm",
+];
+
+/// Directories whose contents are not overlay candidates.
+const EXCLUDED_DIRECTORIES: &[&str] = &[
+    "src",
+    "lib",
+    "bin",
+    "test",
+    "tests",
+    "spec",
+    "docs",
+    "doc",
+    "examples",
+    "benches",
+    "benchmarks",
+    "vendor",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    "pkg",
+    "assets",
+    "static",
+    "public",
+    "resources",
+    "migrations",
+    "scripts",
+    "cmd",
+    "internal",
+    "pkg",
+    "api",
+    "proto",
+    "fixtures",
+];
+
+/// Specific filenames that are not overlay candidates.
+const EXCLUDED_FILES: &[&str] = &[
+    ".gitmodules",
+    "package.json",
+    "LICENSE",
+    "LICENSE.md",
+    "LICENSE.txt",
+    "LICENCE",
+    "LICENCE.md",
+    "LICENCE.txt",
+    "CHANGELOG.md",
+    "CHANGELOG",
+    "CHANGES.md",
+    "HISTORY.md",
+];
+
+/// Check if a tracked file is suitable for overlays using an exclusion-based heuristic.
+///
+/// Rather than trying to allowlist config files (which is inherently incomplete),
+/// this excludes known source code, content, and non-config patterns. Anything
+/// not excluded is considered a potential overlay candidate.
+fn is_tracked_config(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+
+    // Exclude specific filenames
+    if EXCLUDED_FILES.contains(&file_name) {
+        return false;
     }
+
+    // Exclude by extension
+    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+        && EXCLUDED_EXTENSIONS.contains(&ext)
+    {
+        return false;
+    }
+
+    // Exclude files inside known non-config directories
+    if let Some(first) = path
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        && EXCLUDED_DIRECTORIES.contains(&first)
+    {
+        return false;
+    }
+
+    true
 }
 
 /// Discover all overlay candidate files in a repository.
@@ -253,8 +386,9 @@ pub(crate) fn detect_untracked_files(repo_path: &Path) -> Vec<DetectedFile> {
 /// Returns files organized by category:
 /// 1. AI configuration directories with their children (pre-selected)
 /// 2. AI configuration files that aren't inside directories (pre-selected)
-/// 3. Gitignored files
-/// 4. Untracked files
+/// 3. Tracked config files — committed dotfiles, editor configs (not pre-selected)
+/// 4. Gitignored files
+/// 5. Untracked files
 pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
     let mut all_files = Vec::new();
 
@@ -281,14 +415,27 @@ pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
         }
     }
 
+    // Build a set of already-seen paths for O(1) dedup lookups
+    let mut seen: HashSet<PathBuf> = all_files.iter().map(|f| f.path.clone()).collect();
+
+    // Then add tracked config files (committed dotfiles, etc.)
+    let tracked = detect_tracked_config_files(repo_path);
+    for file in tracked {
+        if seen.insert(file.path.clone()) {
+            all_files.push(file);
+        }
+    }
+
     // Then add gitignored files
-    all_files.extend(detect_gitignored_files(repo_path));
+    for file in detect_gitignored_files(repo_path) {
+        if seen.insert(file.path.clone()) {
+            all_files.push(file);
+        }
+    }
 
     // Finally add untracked files (excluding those already found as gitignored)
-    let untracked = detect_untracked_files(repo_path);
-    for file in untracked {
-        // Only add if not already in the list (gitignored files might overlap)
-        if !all_files.iter().any(|f| f.path == file.path) {
+    for file in detect_untracked_files(repo_path) {
+        if seen.insert(file.path.clone()) {
             all_files.push(file);
         }
     }
@@ -297,36 +444,22 @@ pub(crate) fn discover_files(repo_path: &Path) -> Vec<DetectedFile> {
 }
 
 /// Group detected files by category for display.
+///
+/// Returns groups in the order defined by [`FileCategory::ALL`], skipping
+/// categories that have no files.
 pub(crate) fn group_by_category(files: &[DetectedFile]) -> Vec<(FileCategory, Vec<&DetectedFile>)> {
-    let mut ai_configs: Vec<&DetectedFile> = Vec::new();
-    let mut ai_config_dirs: Vec<&DetectedFile> = Vec::new();
-    let mut gitignored: Vec<&DetectedFile> = Vec::new();
-    let mut untracked: Vec<&DetectedFile> = Vec::new();
+    use std::collections::HashMap;
 
+    let mut by_category: HashMap<FileCategory, Vec<&DetectedFile>> = HashMap::new();
     for file in files {
-        match file.category {
-            FileCategory::AiConfig => ai_configs.push(file),
-            FileCategory::AiConfigDirectory => ai_config_dirs.push(file),
-            FileCategory::Gitignored => gitignored.push(file),
-            FileCategory::Untracked => untracked.push(file),
-        }
+        by_category.entry(file.category).or_default().push(file);
     }
 
-    let mut groups = Vec::new();
-    if !ai_configs.is_empty() {
-        groups.push((FileCategory::AiConfig, ai_configs));
-    }
-    if !ai_config_dirs.is_empty() {
-        groups.push((FileCategory::AiConfigDirectory, ai_config_dirs));
-    }
-    if !gitignored.is_empty() {
-        groups.push((FileCategory::Gitignored, gitignored));
-    }
-    if !untracked.is_empty() {
-        groups.push((FileCategory::Untracked, untracked));
-    }
-
-    groups
+    FileCategory::ALL
+        .iter()
+        .copied()
+        .filter_map(|cat| by_category.remove(&cat).map(|files| (cat, files)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -833,5 +966,192 @@ mod tests {
             file_c.unwrap().parent_dir,
             Some(PathBuf::from(".claude/a/b"))
         );
+    }
+
+    #[test]
+    fn test_is_tracked_config_includes_dotfiles() {
+        assert!(is_tracked_config(Path::new(".envrc")));
+        assert!(is_tracked_config(Path::new(".editorconfig")));
+        assert!(is_tracked_config(Path::new(".gitignore")));
+        assert!(is_tracked_config(Path::new(".gitattributes")));
+        assert!(is_tracked_config(Path::new(".prettierrc")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_includes_dotfile_directories() {
+        assert!(is_tracked_config(Path::new(".vscode/settings.json")));
+        assert!(is_tracked_config(Path::new(
+            ".devcontainer/devcontainer.json"
+        )));
+        assert!(is_tracked_config(Path::new(".github/workflows/ci.yml")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_includes_root_config_files() {
+        // Config files without extensions that aren't in the exclusion list
+        assert!(is_tracked_config(Path::new("justfile")));
+        assert!(is_tracked_config(Path::new("Makefile")));
+        assert!(is_tracked_config(Path::new("Dockerfile")));
+        assert!(is_tracked_config(Path::new("Cargo.toml")));
+        assert!(is_tracked_config(Path::new("Cargo.lock")));
+        assert!(is_tracked_config(Path::new("flake.nix")));
+        assert!(is_tracked_config(Path::new("biome.json")));
+        assert!(is_tracked_config(Path::new("tsconfig.json")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_excludes_source_code() {
+        assert!(!is_tracked_config(Path::new("src/main.rs")));
+        assert!(!is_tracked_config(Path::new("lib/utils.py")));
+        assert!(!is_tracked_config(Path::new("bin/cli.js")));
+        assert!(!is_tracked_config(Path::new("test/foo_test.go")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_excludes_source_by_extension() {
+        assert!(!is_tracked_config(Path::new("main.rs")));
+        assert!(!is_tracked_config(Path::new("app.py")));
+        assert!(!is_tracked_config(Path::new("index.ts")));
+        assert!(!is_tracked_config(Path::new("README.md")));
+    }
+
+    #[test]
+    fn test_is_tracked_config_excludes_specific_files() {
+        assert!(!is_tracked_config(Path::new(".gitmodules")));
+        assert!(!is_tracked_config(Path::new("package.json")));
+        assert!(!is_tracked_config(Path::new("LICENSE")));
+        assert!(!is_tracked_config(Path::new("LICENSE.md")));
+        assert!(!is_tracked_config(Path::new("CHANGELOG.md")));
+    }
+
+    #[test]
+    fn test_detect_tracked_config_files() {
+        let repo = create_test_repo();
+
+        // Commit config files (dotfiles and root configs)
+        fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
+        fs::write(repo.path().join(".editorconfig"), "root = true").unwrap();
+        fs::create_dir_all(repo.path().join(".vscode")).unwrap();
+        fs::write(
+            repo.path().join(".vscode/settings.json"),
+            r#"{"editor.tabSize": 2}"#,
+        )
+        .unwrap();
+        fs::write(repo.path().join("justfile"), "test:\n\tcargo test").unwrap();
+        fs::write(repo.path().join("Cargo.toml"), "[package]").unwrap();
+
+        // Also add files that should be excluded
+        fs::write(repo.path().join("main.rs"), "fn main() {}").unwrap();
+        fs::write(repo.path().join("README.md"), "# Hello").unwrap();
+        fs::write(repo.path().join("package.json"), "{}").unwrap();
+        fs::create_dir_all(repo.path().join("src")).unwrap();
+        fs::write(repo.path().join("src/lib.rs"), "pub fn foo() {}").unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add files"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let tracked = detect_tracked_config_files(repo.path());
+
+        // Should find dotfiles and root config files
+        assert!(tracked.iter().any(|f| f.path == Path::new(".envrc")));
+        assert!(tracked.iter().any(|f| f.path == Path::new(".editorconfig")));
+        assert!(
+            tracked
+                .iter()
+                .any(|f| f.path == Path::new(".vscode/settings.json"))
+        );
+        assert!(tracked.iter().any(|f| f.path == Path::new("justfile")));
+        assert!(tracked.iter().any(|f| f.path == Path::new("Cargo.toml")));
+
+        // Should NOT find excluded files
+        assert!(!tracked.iter().any(|f| f.path == Path::new("main.rs")));
+        assert!(!tracked.iter().any(|f| f.path == Path::new("README.md")));
+        assert!(!tracked.iter().any(|f| f.path == Path::new("package.json")));
+        assert!(!tracked.iter().any(|f| f.path == Path::new("src/lib.rs")));
+
+        // All should be TrackedConfig and not pre-selected
+        assert!(
+            tracked
+                .iter()
+                .all(|f| f.category == FileCategory::TrackedConfig)
+        );
+        assert!(tracked.iter().all(|f| !f.preselected));
+    }
+
+    #[test]
+    fn test_detect_tracked_config_excludes_ai_configs() {
+        let repo = create_test_repo();
+
+        // Commit AI config files
+        fs::write(repo.path().join("CLAUDE.md"), "# Claude").unwrap();
+        fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add files"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let tracked = detect_tracked_config_files(repo.path());
+
+        // CLAUDE.md is an AI config — should NOT appear in tracked config
+        assert!(!tracked.iter().any(|f| f.path == Path::new("CLAUDE.md")));
+        // .envrc should appear (it's a dotfile but not an AI config)
+        assert!(tracked.iter().any(|f| f.path == Path::new(".envrc")));
+    }
+
+    #[test]
+    fn test_discover_files_finds_committed_config() {
+        let repo = create_test_repo();
+
+        // Commit config files (no AI configs, no gitignored, no untracked)
+        fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
+        fs::write(repo.path().join(".gitignore"), "*.log").unwrap();
+        fs::create_dir_all(repo.path().join(".vscode")).unwrap();
+        fs::write(
+            repo.path().join(".vscode/settings.json"),
+            r#"{"editor.tabSize": 2}"#,
+        )
+        .unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add config"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let discovered = discover_files(repo.path());
+
+        // Should discover committed config files
+        assert!(
+            !discovered.is_empty(),
+            "Should discover committed config files"
+        );
+        assert!(
+            discovered
+                .iter()
+                .any(|f| f.category == FileCategory::TrackedConfig),
+            "Should have TrackedConfig category files"
+        );
+        assert!(discovered.iter().any(|f| f.path == Path::new(".envrc")));
+        assert!(discovered.iter().any(|f| f.path == Path::new(".gitignore")));
     }
 }

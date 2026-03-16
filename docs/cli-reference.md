@@ -19,6 +19,8 @@ This document contains the help content for the `repoverlay` command-line progra
 * [`repoverlay browse`↴](#repoverlay-browse)
 * [`repoverlay sync`↴](#repoverlay-sync)
 * [`repoverlay edit`↴](#repoverlay-edit)
+* [`repoverlay edit add`↴](#repoverlay-edit-add)
+* [`repoverlay edit remove`↴](#repoverlay-edit-remove)
 * [`repoverlay source`↴](#repoverlay-source)
 * [`repoverlay source add`↴](#repoverlay-source-add)
 * [`repoverlay source list`↴](#repoverlay-source-list)
@@ -41,9 +43,9 @@ Overlay config files into git repositories without committing them
 * `create` — Create a new overlay from files in a repository
 * `switch` — Switch to a different overlay (removes all existing overlays first)
 * `cache` — Manage the overlay cache
-* `browse` — Browse available overlays from the overlay repository
+* `browse` — Browse and apply overlays interactively (recommended)
 * `sync` — Sync changes from an applied overlay back to the overlay repo
-* `edit` — Edit an existing applied overlay (add files, remove files, or re-select interactively)
+* `edit` — Edit an existing applied overlay
 * `source` — Manage overlay sources (for multi-source configurations)
 * `completions` — Generate shell completions
 
@@ -52,6 +54,8 @@ Overlay config files into git repositories without committing them
 ## `repoverlay apply`
 
 Apply an overlay to a git repository
+
+For interactive use, consider `repoverlay browse` instead.
 
 **Usage:** `repoverlay apply [OPTIONS] <SOURCE>`
 
@@ -67,7 +71,7 @@ Apply an overlay to a git repository
 * `--copy` — Force copy mode instead of symlinks (default on Windows)
 * `-n`, `--name <NAME>` — Override the overlay name (defaults to config name or directory name)
 * `-r`, `--ref <REF>` — Git ref (branch, tag, or commit) to use (GitHub sources only)
-* `--update` — Force update the cached repository before applying (GitHub sources only)
+* `--no-update` — Skip updating cached/overlay repositories before applying
 * `--force` [alias: `overwrite`] — Overwrite existing files and re-apply same-name overlays
 * `--skip-conflicts` — Skip conflicting files silently, continue with non-conflicting files
 * `-i`, `--interactive` — Prompt interactively for each conflict (overwrite, skip, diff, or abort)
@@ -165,7 +169,7 @@ Examples: repoverlay create my-overlay              # Detects org/repo from git 
 
 ###### **Options:**
 
-* `-i`, `--include <INCLUDE>` — Include specific files or directories (can be specified multiple times)
+* `-i`, `--include <INCLUDE>` — Include files/directories or glob patterns (can be specified multiple times)
 * `-s`, `--source <SOURCE>` — Source repository to extract files from (defaults to current directory)
 * `-o`, `--output <OUTPUT>` — Output directory for local overlay creation (no overlay repo required)
 * `--dry-run` — Show what would be created without creating files
@@ -190,10 +194,12 @@ Switch to a different overlay (removes all existing overlays first)
 * `--copy` — Force copy mode instead of symlinks (default on Windows)
 * `-n`, `--name <NAME>` — Override the overlay name
 * `-r`, `--ref <REF>` — Git ref (branch, tag, or commit) to use (GitHub sources only)
+* `--no-update` — Skip updating cached/overlay repositories before switching
 * `--force` [alias: `overwrite`] — Overwrite existing repo files when applying the new overlay
 * `--skip-conflicts` — Skip conflicting repo files silently when applying the new overlay
 * `-i`, `--interactive` — Prompt interactively for each conflict when applying the new overlay
 * `--merge` — Deep merge conflicting JSON files instead of failing
+* `--dry-run` — Show what would be switched without making changes
 
 
 
@@ -246,7 +252,9 @@ Show cache location
 
 ## `repoverlay browse`
 
-Browse available overlays from the overlay repository
+Browse and apply overlays interactively (recommended)
+
+Lists available overlays from configured sources and lets you select which to apply. This is the easiest way to discover and apply overlays. To add sources, run `repoverlay source add <path-or-url>`.
 
 **Usage:** `repoverlay browse [OPTIONS] [SOURCE]`
 
@@ -259,7 +267,7 @@ Browse available overlays from the overlay repository
 ###### **Options:**
 
 * `-f`, `--filter <FILTER>` — Filter by target repository (format: org/repo)
-* `--update` — Update overlay repo before listing
+* `--no-update` — Skip updating overlay repo before listing
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--no-interactive` — Disable interactive selection (just list overlays)
 * `--dry-run` — Show what would be applied without making changes
@@ -291,11 +299,19 @@ Examples: repoverlay sync my-overlay          # Detects org/repo from git remote
 
 ## `repoverlay edit`
 
-Edit an existing applied overlay (add files, remove files, or re-select interactively)
+Edit an existing applied overlay
 
-Examples: repoverlay edit my-overlay --add newfile.txt repoverlay edit my-overlay --remove oldfile.txt repoverlay edit my-overlay --add new.txt --remove old.txt repoverlay edit org/repo/my-overlay --interactive
+With no subcommand, launches interactive file selection. If no overlay name is given, prompts to select from applied overlays.
 
-**Usage:** `repoverlay edit [OPTIONS] <NAME>`
+Examples: repoverlay edit                                     # Pick overlay, then edit repoverlay edit my-overlay                          # Interactive file selection repoverlay edit add my-overlay newfile.txt          # Add files repoverlay edit add my-overlay file1.txt file2.txt  # Add multiple files repoverlay edit remove my-overlay oldfile.txt       # Remove files
+
+**Usage:** `repoverlay edit [OPTIONS] [NAME]
+       edit <COMMAND>`
+
+###### **Subcommands:**
+
+* `add` — Add files to an applied overlay
+* `remove` — Remove files from an applied overlay
 
 ###### **Arguments:**
 
@@ -305,9 +321,50 @@ Examples: repoverlay edit my-overlay --add newfile.txt repoverlay edit my-overla
 
 ###### **Options:**
 
-* `-a`, `--add <FILE>` — Files to add to the overlay
-* `-r`, `--remove <FILE>` — Files to remove from the overlay
-* `-i`, `--interactive` — Re-run interactive file selection with current files pre-selected
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `--dry-run` — Show what would change without making changes
+
+
+
+## `repoverlay edit add`
+
+Add files to an applied overlay
+
+Examples: repoverlay edit add my-overlay newfile.txt repoverlay edit add my-overlay file1.txt file2.txt repoverlay edit add org/repo/my-overlay newfile.txt
+
+**Usage:** `repoverlay edit add [OPTIONS] <NAME> [FILES]...`
+
+###### **Arguments:**
+
+* `<NAME>` — Overlay name or full path (org/repo/name)
+
+   Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit values
+* `<FILES>` — Files to add to the overlay
+
+###### **Options:**
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `--dry-run` — Show what would change without making changes
+
+
+
+## `repoverlay edit remove`
+
+Remove files from an applied overlay
+
+Examples: repoverlay edit remove my-overlay oldfile.txt repoverlay edit remove my-overlay file1.txt file2.txt repoverlay edit remove org/repo/my-overlay oldfile.txt
+
+**Usage:** `repoverlay edit remove [OPTIONS] <NAME> [FILES]...`
+
+###### **Arguments:**
+
+* `<NAME>` — Overlay name or full path (org/repo/name)
+
+   Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit values
+* `<FILES>` — Files to remove from the overlay
+
+###### **Options:**
+
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--dry-run` — Show what would change without making changes
 
@@ -331,15 +388,15 @@ Manage overlay sources (for multi-source configurations)
 
 Add a new overlay source
 
-**Usage:** `repoverlay source add [OPTIONS] <URL>`
+**Usage:** `repoverlay source add [OPTIONS] <SOURCE>`
 
 ###### **Arguments:**
 
-* `<URL>` — Git URL, GitHub shorthand (owner/repo), or GitHub username
+* `<SOURCE>` — Source: Git URL, GitHub shorthand (owner/repo), GitHub username, or local path (./path)
 
 ###### **Options:**
 
-* `--name <NAME>` — Name for this source (defaults to repo name)
+* `--name <NAME>` — Name for this source (defaults to repo/directory name)
 
 
 

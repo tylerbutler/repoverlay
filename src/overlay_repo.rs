@@ -55,11 +55,19 @@ pub(crate) struct AvailableOverlay {
     pub(crate) name: String,
     /// Whether the overlay has a repoverlay.ccl config file
     pub(crate) has_config: bool,
+    /// Whether this overlay comes from a flat (non-nested) source layout.
+    ///
+    /// Flat overlays use a simpler directory structure without org/repo nesting.
+    pub(crate) flat: bool,
 }
 
 impl std::fmt::Display for AvailableOverlay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}/{}", self.org, self.repo, self.name)
+        if self.flat {
+            write!(f, "{}", self.name)
+        } else {
+            write!(f, "{}/{}/{}", self.org, self.repo, self.name)
+        }
     }
 }
 
@@ -67,7 +75,25 @@ impl AvailableOverlay {
     /// Format the overlay path for display with the overlay name in bold.
     pub(crate) fn display_bold(&self) -> String {
         use colored::Colorize;
-        format!("{}/{}/{}", self.org, self.repo, self.name.bold())
+        if self.flat {
+            self.name.bold().to_string()
+        } else {
+            format!("{}/{}/{}", self.org, self.repo, self.name.bold())
+        }
+    }
+
+    /// Returns the relative path from the source base directory to this overlay.
+    ///
+    /// For structured overlays: `org/repo/name`
+    /// For flat overlays: just `name` (or empty if the base dir itself is the overlay)
+    pub(crate) fn relative_path(&self) -> std::path::PathBuf {
+        if self.flat {
+            std::path::PathBuf::from(&self.name)
+        } else {
+            std::path::PathBuf::from(&self.org)
+                .join(&self.repo)
+                .join(&self.name)
+        }
     }
 }
 
@@ -303,6 +329,7 @@ impl OverlayRepoManager {
                         repo: repo_name.clone(),
                         name: overlay_name,
                         has_config,
+                        flat: false,
                     });
                 }
             }
@@ -633,6 +660,7 @@ mod tests {
             repo: "FluidFramework".to_string(),
             name: "claude-config".to_string(),
             has_config: true,
+            flat: false,
         };
 
         let cloned = overlay.clone();
@@ -1583,6 +1611,7 @@ mod tests {
             repo: "FluidFramework".to_string(),
             name: "vscode-setup".to_string(),
             has_config: true,
+            flat: false,
         };
         assert_eq!(o.to_string(), "microsoft/FluidFramework/vscode-setup");
     }
@@ -1594,6 +1623,7 @@ mod tests {
             repo: "FluidFramework".to_string(),
             name: "vscode-setup".to_string(),
             has_config: true,
+            flat: false,
         };
         let bold = o.display_bold();
         assert!(bold.contains("microsoft"));
@@ -1609,12 +1639,14 @@ mod tests {
                 repo: "FluidFramework".to_string(),
                 name: "claude-config".to_string(),
                 has_config: true,
+                flat: false,
             },
             AvailableOverlay {
                 org: "owner".to_string(),
                 repo: "repo".to_string(),
                 name: "my-overlay".to_string(),
                 has_config: false,
+                flat: false,
             },
         ];
         let output: Vec<String> = overlays.iter().map(|o| format!("{o}")).collect();
