@@ -14,9 +14,10 @@ use std::sync::LazyLock;
 use crate::{
     CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource, STATE_DIR,
     apply_multiple_overlays, apply_overlay, canonicalize_path, config, get_cached_repo_commit,
-    list_applied_overlays, list_overlays_from_cached_repo, parse_github_owner_repo, remove_overlay,
-    remove_single_overlay, restore_overlays, selection::is_interactive, show_status,
-    show_status_json, status_has_overlays, switch_overlay, update_overlays, validate_git_repo,
+    library, list_applied_overlays, list_overlays_from_cached_repo, parse_github_owner_repo,
+    remove_overlay, remove_single_overlay, restore_overlays, selection::is_interactive,
+    show_status, show_status_json, state, status_has_overlays, switch_overlay, update_overlays,
+    validate_git_repo,
 };
 
 /// Build version string with git info for local builds
@@ -519,6 +520,12 @@ enum Commands {
         command: SourceCommand,
     },
 
+    /// Manage the in-repo overlay library
+    Library {
+        #[command(subcommand)]
+        command: LibraryCommand,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -630,6 +637,62 @@ enum EditCommand {
         /// Show what would change without making changes
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum LibraryCommand {
+    /// List overlays in the library
+    List {
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Import an overlay into the library
+    Import {
+        /// Overlay source (path, GitHub URL, or org/repo/name)
+        source: String,
+
+        /// Name for the imported overlay (defaults to source name)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Force overwrite if overlay already exists
+        #[arg(short, long)]
+        force: bool,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Export an overlay from the library
+    Export {
+        /// Name of the overlay to export
+        overlay: String,
+
+        /// Destination path
+        #[arg(long = "to")]
+        dest: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Remove an overlay from the library
+    Remove {
+        /// Name of the overlay to remove
+        overlay: String,
+
+        /// Force removal even if overlay is currently applied
+        #[arg(short, long)]
+        force: bool,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
     },
 }
 
@@ -913,6 +976,9 @@ pub(crate) fn run() -> Result<()> {
         Commands::Source { command } => {
             handle_source_command(command)?;
         }
+        Commands::Library { command } => {
+            handle_library_command(command)?;
+        }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "repoverlay", &mut io::stdout());
@@ -923,6 +989,136 @@ pub(crate) fn run() -> Result<()> {
 
     // Check for updates after successful command execution
     check_for_updates();
+
+    Ok(())
+}
+
+/// Handle library subcommands.
+fn handle_library_command(command: LibraryCommand) -> Result<()> {
+    use colored::Colorize;
+
+    match command {
+        LibraryCommand::List { target } => {
+            let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
+            let target = canonicalize_path(&target_dir, "Target")?;
+            validate_git_repo(&target)?;
+            let repo_config = config::load_repo_config(&target)?;
+            let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
+            let library_path = library::resolve_library_path(&target, config_path)?;
+            let overlays = library::list_library_overlays(&library_path)?;
+            if overlays.is_empty() {
+                println!("No overlays in library.");
+            } else {
+                for overlay in &overlays {
+                    println!("  {}", overlay.name);
+                }
+            }
+        }
+        LibraryCommand::Import {
+            source,
+            name,
+            force,
+            target,
+        } => {
+            let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
+            let target = canonicalize_path(&target_dir, "Target")?;
+            validate_git_repo(&target)?;
+
+            // Resolve source path
+            let source_path = PathBuf::from(&source);
+            let source_path = source_path
+                .canonicalize()
+                .with_context(|| format!("Source path not found: {source}"))?;
+
+            if !source_path.is_dir() {
+                bail!("Source is not a directory: {}", source_path.display());
+            }
+
+            let overlay_name = name.unwrap_or_else(|| {
+                source_path.file_name().map_or_else(
+                    || "overlay".to_string(),
+                    |n| n.to_string_lossy().to_string(),
+                )
+            });
+
+            let repo_config = config::load_repo_config(&target)?;
+            let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
+            let library_path = library::resolve_library_path(&target, config_path)?;
+
+            // Warn if library path is gitignored
+            if library::check_library_gitignored(&target, &library_path) {
+                eprintln!(
+                    "{} Library path {} is gitignored. Overlays won't be tracked by git.",
+                    "Warning:".yellow().bold(),
+                    library_path.display()
+                );
+            }
+
+            let dest =
+                library::import_to_library(&source_path, &library_path, &overlay_name, force)?;
+            println!(
+                "{} overlay '{}' to library at {}",
+                "Imported".green().bold(),
+                overlay_name,
+                dest.display()
+            );
+        }
+        LibraryCommand::Export {
+            overlay,
+            dest,
+            target,
+        } => {
+            let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
+            let target = canonicalize_path(&target_dir, "Target")?;
+            validate_git_repo(&target)?;
+
+            let repo_config = config::load_repo_config(&target)?;
+            let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
+            let library_path = library::resolve_library_path(&target, config_path)?;
+
+            let dest_path = PathBuf::from(&dest);
+            let exported = library::export_from_library(&library_path, &overlay, &dest_path)?;
+            println!(
+                "{} overlay '{}' to {}",
+                "Exported".green().bold(),
+                overlay,
+                exported.display()
+            );
+        }
+        LibraryCommand::Remove {
+            overlay,
+            force,
+            target,
+        } => {
+            let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
+            let target = canonicalize_path(&target_dir, "Target")?;
+            validate_git_repo(&target)?;
+
+            // Check if overlay is currently applied
+            if !force {
+                let applied = state::list_applied_overlays(&target)?;
+                if applied.iter().any(|n| n.as_str() == overlay)
+                    && let Ok(state) = state::load_overlay_state(&target, &overlay)
+                    && state.source.is_library()
+                {
+                    bail!(
+                        "Overlay '{overlay}' is currently applied from the library. Use --force to remove anyway, or remove the overlay first with 'repoverlay remove {overlay}'.",
+                    );
+                }
+            }
+
+            let repo_config = config::load_repo_config(&target)?;
+            let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
+            let library_path = library::resolve_library_path(&target, config_path)?;
+
+            library::remove_from_library(&library_path, &overlay)?;
+            println!(
+                "{} overlay '{}' from library",
+                "Removed".green().bold(),
+                overlay
+            );
+        }
+    }
 
     Ok(())
 }
