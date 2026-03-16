@@ -62,17 +62,16 @@ pub(crate) fn library_exists(repo_root: &Path, config_path: Option<&str>) -> boo
 }
 
 /// An overlay found in the library.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct LibraryOverlay {
     /// Overlay name (directory name)
     pub(crate) name: String,
     /// Full path to the overlay directory
+    #[allow(dead_code)]
     pub(crate) path: PathBuf,
 }
 
 /// List all overlays in the library directory.
-#[allow(dead_code)]
 pub(crate) fn list_library_overlays(library_path: &Path) -> Result<Vec<LibraryOverlay>> {
     if !library_path.is_dir() {
         return Ok(Vec::new());
@@ -96,7 +95,6 @@ pub(crate) fn list_library_overlays(library_path: &Path) -> Result<Vec<LibraryOv
 /// Import (copy) an overlay directory into the library.
 ///
 /// Creates the library directory if it doesn't exist.
-#[allow(dead_code)]
 pub(crate) fn import_to_library(
     source_path: &Path,
     library_path: &Path,
@@ -127,7 +125,6 @@ pub(crate) fn import_to_library(
 }
 
 /// Remove an overlay from the library.
-#[allow(dead_code)]
 pub(crate) fn remove_from_library(library_path: &Path, name: &str) -> Result<()> {
     let overlay_path = library_path.join(name);
     if !overlay_path.is_dir() {
@@ -138,7 +135,6 @@ pub(crate) fn remove_from_library(library_path: &Path, name: &str) -> Result<()>
 }
 
 /// Export (copy) an overlay from the library to a destination.
-#[allow(dead_code)]
 pub(crate) fn export_from_library(library_path: &Path, name: &str, dest: &Path) -> Result<PathBuf> {
     let source = library_path.join(name);
     if !source.is_dir() {
@@ -162,7 +158,6 @@ pub(crate) fn export_from_library(library_path: &Path, name: &str, dest: &Path) 
 ///
 /// Returns true if the library path appears to be gitignored, meaning
 /// overlays stored there won't be tracked by git.
-#[allow(dead_code)]
 pub(crate) fn check_library_gitignored(repo_root: &Path, library_path: &Path) -> bool {
     std::process::Command::new("git")
         .args(["check-ignore", "-q"])

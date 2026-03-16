@@ -147,13 +147,11 @@ impl OverlaySource {
     }
 
     /// Create a new library source.
-    #[allow(dead_code)]
     pub(crate) const fn library(name: String) -> Self {
         Self::Library { name }
     }
 
     /// Check if this is a library source.
-    #[allow(dead_code)]
     pub(crate) const fn is_library(&self) -> bool {
         matches!(self, Self::Library { .. })
     }
