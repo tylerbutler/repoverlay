@@ -2643,7 +2643,20 @@ pub(crate) fn restore_overlays(
     for state in external_states {
         let source_str = match &state.source {
             OverlaySource::Local { path } => path.to_string_lossy().to_string(),
-            OverlaySource::GitHub { url, .. } => url.clone(),
+            OverlaySource::GitHub {
+                url,
+                owner,
+                repo,
+                subpath,
+                ..
+            } => {
+                // Reconstruct URL with subpath so resolve_source can find the
+                // specific overlay instead of falling into browse/selection mode.
+                subpath.as_ref().map_or_else(
+                    || url.clone(),
+                    |subpath| format!("https://github.com/{owner}/{repo}/tree/HEAD/{subpath}"),
+                )
+            }
             OverlaySource::OverlayRepo {
                 org,
                 repo,
