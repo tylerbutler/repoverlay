@@ -394,22 +394,18 @@ pub(crate) fn resolve_source(
     let is_library_filter = source_filter == Some(library::LIBRARY_SOURCE_NAME);
     if (is_bare_name || is_library_filter)
         && let Some(target) = target_path
+        && let Ok(library_path) = library::get_library_path(target)
+        && let overlay_path = library_path.join(source_str)
+        && overlay_path.is_dir()
     {
-        let repo_config = config::load_repo_config(target)?;
-        let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
-        if let Ok(overlay_path) =
-            library::resolve_library_overlay_path(target, config_path, source_str)
-            && overlay_path.is_dir()
-        {
-            debug!(
-                "resolved '{source_str}' from library at {}",
-                overlay_path.display()
-            );
-            return Ok(ResolvedSources::Single(ResolvedSource {
-                path: overlay_path,
-                source_info: state::OverlaySource::library(source_str.to_string()),
-            }));
-        }
+        debug!(
+            "resolved '{source_str}' from library at {}",
+            overlay_path.display()
+        );
+        return Ok(ResolvedSources::Single(ResolvedSource {
+            path: overlay_path,
+            source_info: state::OverlaySource::library(source_str.to_string()),
+        }));
     }
 
     // Parse input into structured reference

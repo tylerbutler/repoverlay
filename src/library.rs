@@ -8,6 +8,7 @@ use anyhow::{Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::config;
 use crate::overlay_repo::copy_dir_recursive;
 use crate::state::STATE_DIR;
 
@@ -16,6 +17,13 @@ const DEFAULT_LIBRARY_DIR: &str = "library";
 
 /// Reserved source name for the library.
 pub(crate) const LIBRARY_SOURCE_NAME: &str = "@library";
+
+/// Resolve the library path for a given repository root, loading repo config automatically.
+pub(crate) fn get_library_path(repo_root: &Path) -> Result<PathBuf> {
+    let repo_config = config::load_repo_config(repo_root)?;
+    let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
+    resolve_library_path(repo_root, config_path)
+}
 
 /// Resolve the library path for a given repository root.
 ///
@@ -43,32 +51,11 @@ pub(crate) fn resolve_library_path(repo_root: &Path, config_path: Option<&str>) 
     Ok(library_path)
 }
 
-/// Resolve the path to a specific overlay within the library.
-pub(crate) fn resolve_library_overlay_path(
-    repo_root: &Path,
-    config_path: Option<&str>,
-    overlay_name: &str,
-) -> Result<PathBuf> {
-    let library_path = resolve_library_path(repo_root, config_path)?;
-    Ok(library_path.join(overlay_name))
-}
-
-/// Check if the library directory exists.
-#[allow(dead_code)]
-pub(crate) fn library_exists(repo_root: &Path, config_path: Option<&str>) -> bool {
-    resolve_library_path(repo_root, config_path)
-        .map(|p| p.is_dir())
-        .unwrap_or(false)
-}
-
 /// An overlay found in the library.
 #[derive(Debug, Clone)]
 pub(crate) struct LibraryOverlay {
     /// Overlay name (directory name)
     pub(crate) name: String,
-    /// Full path to the overlay directory
-    #[allow(dead_code)]
-    pub(crate) path: PathBuf,
 }
 
 /// List all overlays in the library directory.
@@ -82,10 +69,7 @@ pub(crate) fn list_library_overlays(library_path: &Path) -> Result<Vec<LibraryOv
         let entry = entry?;
         if entry.file_type()?.is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
-            overlays.push(LibraryOverlay {
-                name,
-                path: entry.path(),
-            });
+            overlays.push(LibraryOverlay { name });
         }
     }
     overlays.sort_by(|a, b| a.name.cmp(&b.name));
@@ -199,32 +183,6 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let result = resolve_library_path(tmp.path(), Some("../escape"));
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn library_overlay_path_resolution() {
-        let tmp = TempDir::new().unwrap();
-        let path = resolve_library_overlay_path(tmp.path(), None, "claude-config").unwrap();
-        assert_eq!(
-            path,
-            tmp.path()
-                .join(".repoverlay")
-                .join("library")
-                .join("claude-config")
-        );
-    }
-
-    #[test]
-    fn library_exists_false_when_no_dir() {
-        let tmp = TempDir::new().unwrap();
-        assert!(!library_exists(tmp.path(), None));
-    }
-
-    #[test]
-    fn library_exists_true_when_dir_present() {
-        let tmp = TempDir::new().unwrap();
-        fs::create_dir_all(tmp.path().join(".repoverlay").join("library")).unwrap();
-        assert!(library_exists(tmp.path(), None));
     }
 
     #[test]

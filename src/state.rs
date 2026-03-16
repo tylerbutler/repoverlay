@@ -283,9 +283,9 @@ impl SourceResolver for OverlaySource {
             Self::Library { name } => {
                 // Library path resolution requires repo context — this is handled
                 // by the caller passing the resolved library path. Use
-                // library::resolve_library_overlay_path() instead.
+                // library::get_library_path() to resolve it.
                 Err(anyhow::anyhow!(
-                    "Library source '{name}' requires repo context to resolve. Use library::resolve_library_overlay_path() instead."
+                    "Library source '{name}' requires repo context to resolve. Use library::get_library_path() instead."
                 ))
             }
             Self::OverlayRepo {

@@ -727,15 +727,7 @@ pub(crate) fn run() -> Result<()> {
             dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            let conflict_strategy = if force {
-                ConflictStrategy::Force
-            } else if skip_conflicts {
-                ConflictStrategy::SkipConflicts
-            } else if interactive {
-                ConflictStrategy::Interactive
-            } else {
-                ConflictStrategy::Fail
-            };
+            let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
             apply_overlay(
                 &source,
                 &target,
@@ -786,15 +778,7 @@ pub(crate) fn run() -> Result<()> {
             merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            let conflict_strategy = if force {
-                ConflictStrategy::Force
-            } else if skip_conflicts {
-                ConflictStrategy::SkipConflicts
-            } else if interactive {
-                ConflictStrategy::Interactive
-            } else {
-                ConflictStrategy::Fail
-            };
+            let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
             restore_overlays(&target, dry_run, conflict_strategy, merge)?;
         }
         Commands::Update {
@@ -807,15 +791,7 @@ pub(crate) fn run() -> Result<()> {
             merge,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            let conflict_strategy = if force {
-                ConflictStrategy::Force
-            } else if skip_conflicts {
-                ConflictStrategy::SkipConflicts
-            } else if interactive {
-                ConflictStrategy::Interactive
-            } else {
-                ConflictStrategy::Fail
-            };
+            let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
             update_overlays(&target, name, dry_run, conflict_strategy, merge)?;
         }
         Commands::Create {
@@ -844,15 +820,7 @@ pub(crate) fn run() -> Result<()> {
             dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
-            let conflict_strategy = if force {
-                ConflictStrategy::Force
-            } else if skip_conflicts {
-                ConflictStrategy::SkipConflicts
-            } else if interactive {
-                ConflictStrategy::Interactive
-            } else {
-                ConflictStrategy::Fail
-            };
+            let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
             switch_overlay(
                 &source,
                 &target,
@@ -999,12 +967,8 @@ fn handle_library_command(command: LibraryCommand) -> Result<()> {
 
     match command {
         LibraryCommand::List { target } => {
-            let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
-            let target = canonicalize_path(&target_dir, "Target")?;
-            validate_git_repo(&target)?;
-            let repo_config = config::load_repo_config(&target)?;
-            let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
-            let library_path = library::resolve_library_path(&target, config_path)?;
+            let target = resolve_target(target)?;
+            let library_path = library::get_library_path(&target)?;
             let overlays = library::list_library_overlays(&library_path)?;
             if overlays.is_empty() {
                 println!("No overlays in library.");
@@ -1020,9 +984,7 @@ fn handle_library_command(command: LibraryCommand) -> Result<()> {
             force,
             target,
         } => {
-            let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
-            let target = canonicalize_path(&target_dir, "Target")?;
-            validate_git_repo(&target)?;
+            let target = resolve_target(target)?;
 
             // Resolve source path
             let source_path = PathBuf::from(&source);
@@ -1041,9 +1003,7 @@ fn handle_library_command(command: LibraryCommand) -> Result<()> {
                 )
             });
 
-            let repo_config = config::load_repo_config(&target)?;
-            let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
-            let library_path = library::resolve_library_path(&target, config_path)?;
+            let library_path = library::get_library_path(&target)?;
 
             // Warn if library path is gitignored
             if library::check_library_gitignored(&target, &library_path) {
@@ -1068,13 +1028,8 @@ fn handle_library_command(command: LibraryCommand) -> Result<()> {
             dest,
             target,
         } => {
-            let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
-            let target = canonicalize_path(&target_dir, "Target")?;
-            validate_git_repo(&target)?;
-
-            let repo_config = config::load_repo_config(&target)?;
-            let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
-            let library_path = library::resolve_library_path(&target, config_path)?;
+            let target = resolve_target(target)?;
+            let library_path = library::get_library_path(&target)?;
 
             let dest_path = PathBuf::from(&dest);
             let exported = library::export_from_library(&library_path, &overlay, &dest_path)?;
@@ -1090,9 +1045,7 @@ fn handle_library_command(command: LibraryCommand) -> Result<()> {
             force,
             target,
         } => {
-            let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
-            let target = canonicalize_path(&target_dir, "Target")?;
-            validate_git_repo(&target)?;
+            let target = resolve_target(target)?;
 
             // Check if overlay is currently applied
             if !force {
@@ -1107,9 +1060,7 @@ fn handle_library_command(command: LibraryCommand) -> Result<()> {
                 }
             }
 
-            let repo_config = config::load_repo_config(&target)?;
-            let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
-            let library_path = library::resolve_library_path(&target, config_path)?;
+            let library_path = library::get_library_path(&target)?;
 
             library::remove_from_library(&library_path, &overlay)?;
             println!(
@@ -1356,6 +1307,31 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
 }
 
 /// Find the root of the current git repository.
+/// Build a conflict strategy from the mutually-exclusive CLI flags.
+const fn conflict_strategy(
+    force: bool,
+    skip_conflicts: bool,
+    interactive: bool,
+) -> ConflictStrategy {
+    if force {
+        ConflictStrategy::Force
+    } else if skip_conflicts {
+        ConflictStrategy::SkipConflicts
+    } else if interactive {
+        ConflictStrategy::Interactive
+    } else {
+        ConflictStrategy::Fail
+    }
+}
+
+/// Canonicalize and validate an optional target path (defaults to current directory).
+fn resolve_target(target: Option<PathBuf>) -> Result<PathBuf> {
+    let target_dir = target.unwrap_or_else(|| PathBuf::from("."));
+    let target = canonicalize_path(&target_dir, "Target")?;
+    validate_git_repo(&target)?;
+    Ok(target)
+}
+
 fn find_repo_root() -> Result<PathBuf> {
     let output = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
