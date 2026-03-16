@@ -2747,6 +2747,14 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
     // Check mutability upfront before any changes (#142, #148, #149)
     {
         use crate::state::SourceResolver;
+        if state.source.is_library() {
+            bail!(
+                "Interactive edit is not supported for library overlays.\n\n\
+                 Library overlays are managed in the repository's overlay library.\n\
+                 Edit the overlay files directly in the library directory,\n\
+                 then re-apply with: repoverlay apply {overlay_name}"
+            );
+        }
         if !state.source.is_mutable() {
             let label = state.source.source_type_label();
             bail!(
@@ -3193,6 +3201,14 @@ fn add_files_to_overlay(
     // Check source mutability upfront before any filesystem changes (#148)
     {
         use crate::state::SourceResolver;
+        if state.source.is_library() {
+            bail!(
+                "Cannot add files to a library overlay.\n\n\
+                 Library overlays are managed in the repository's overlay library.\n\
+                 Add files to the overlay directory in the library,\n\
+                 then re-apply with: repoverlay apply {normalized_name}"
+            );
+        }
         if !state.source.is_mutable() {
             let label = state.source.source_type_label();
             bail!(
