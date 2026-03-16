@@ -972,6 +972,12 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                     );
                 }
 
+                if source_name.starts_with('@') {
+                    bail!(
+                        "Source names starting with '@' are reserved. '@library' is a built-in source."
+                    );
+                }
+
                 // Check name conflicts in both global and repo configs
                 let global_config = config::load_global_config()?;
                 let repo_config = config::load_repo_config(&repo_root)?;
@@ -1022,6 +1028,12 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
                 if source_name.is_empty() {
                     bail!(
                         "Could not extract source name from URL. Please provide a name with --name"
+                    );
+                }
+
+                if source_name.starts_with('@') {
+                    bail!(
+                        "Source names starting with '@' are reserved. '@library' is a built-in source."
                     );
                 }
 

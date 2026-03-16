@@ -17,6 +17,10 @@ pub(crate) struct RepoverlayConfig {
     /// Configured overlay sources (checked in order for resolution).
     #[serde(default)]
     pub(crate) sources: Vec<Source>,
+    /// Custom library path (per-repo only, relative to repo root).
+    /// When not set, defaults to `.repoverlay/library/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) library_path: Option<String>,
 }
 
 impl RepoverlayConfig {
@@ -767,6 +771,7 @@ sources =
                     path: None,
                 },
             ],
+            library_path: None,
         };
 
         let ccl = sickle::to_string(&config).unwrap();
@@ -917,6 +922,7 @@ sources =
                 url: Some("https://github.com/test/overlays".to_string()),
                 path: None,
             }],
+            library_path: None,
         };
 
         let result = config.get_default_overlay_repo_config();
@@ -927,7 +933,10 @@ sources =
 
     #[test]
     fn test_get_default_overlay_repo_config_no_sources() {
-        let config = RepoverlayConfig { sources: vec![] };
+        let config = RepoverlayConfig {
+            sources: vec![],
+            library_path: None,
+        };
 
         let result = config.get_default_overlay_repo_config();
         assert!(result.is_err());
@@ -943,6 +952,7 @@ sources =
                 url: Some("https://github.com/org/repo".to_string()),
                 path: None,
             }],
+            library_path: None,
         };
 
         let result = config.get_overlay_repo_config_by_name(None);
@@ -965,6 +975,7 @@ sources =
                     path: None,
                 },
             ],
+            library_path: None,
         };
 
         let result = config.get_overlay_repo_config_by_name(Some("secondary"));
@@ -980,6 +991,7 @@ sources =
                 url: Some("https://github.com/org/primary".to_string()),
                 path: None,
             }],
+            library_path: None,
         };
 
         let result = config.get_overlay_repo_config_by_name(Some("nonexistent"));
@@ -1209,6 +1221,7 @@ sources =
                 url: Some("https://github.com/org/overlays".to_string()),
                 path: None,
             }],
+            library_path: None,
         };
 
         save_repo_config(temp.path(), &config).unwrap();
@@ -1298,6 +1311,7 @@ sources =
                 url: None,
                 path: Some(PathBuf::from("my-overlays")),
             }],
+            library_path: None,
         };
 
         let ccl = generate_sources_config_ccl(&config);
@@ -1330,6 +1344,7 @@ sources =
                     path: None,
                 },
             ],
+            library_path: None,
         };
 
         let ccl = generate_sources_config_ccl(&config);
@@ -1426,6 +1441,7 @@ sources =
                 url: None,
                 path: Some(PathBuf::from("my-overlays")),
             }],
+            library_path: None,
         };
 
         save_repo_config(temp.path(), &config).unwrap();

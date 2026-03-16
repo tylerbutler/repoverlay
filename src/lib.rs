@@ -10,7 +10,6 @@ mod fuzzy;
 pub(crate) mod git;
 mod github;
 mod json_merge;
-#[allow(dead_code)]
 mod library;
 mod overlay_name;
 mod overlay_repo;
@@ -388,6 +387,29 @@ pub(crate) fn resolve_source(
     debug!(
         "resolve_source: {source_str} (ref_override={ref_override:?}, update={update}, source_filter={source_filter:?})"
     );
+
+    // Check library first for bare names or explicit @library source filter
+    let is_bare_name = !source_str.contains('/') && !source_str.starts_with('.');
+    let is_library_filter = source_filter == Some(library::LIBRARY_SOURCE_NAME);
+    if (is_bare_name || is_library_filter)
+        && let Some(target) = target_path
+    {
+        let repo_config = config::load_repo_config(target)?;
+        let config_path = repo_config.as_ref().and_then(|c| c.library_path.as_deref());
+        if let Ok(overlay_path) =
+            library::resolve_library_overlay_path(target, config_path, source_str)
+            && overlay_path.is_dir()
+        {
+            debug!(
+                "resolved '{source_str}' from library at {}",
+                overlay_path.display()
+            );
+            return Ok(ResolvedSources::Single(ResolvedSource {
+                path: overlay_path,
+                source_info: state::OverlaySource::library(source_str.to_string()),
+            }));
+        }
+    }
 
     // Parse input into structured reference
     let reference = SourceReference::parse(source_str);
