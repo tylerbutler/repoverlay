@@ -144,6 +144,25 @@ pub fn envrc_overlay() -> Vec<(&'static str, &'static str)> {
     vec![(".envrc", "export FOO=bar")]
 }
 
+/// Convert a ratatui Buffer to a trimmed string for snapshot testing.
+pub fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
+    let mut s = String::new();
+    for y in 0..buffer.area.height {
+        let mut line = String::new();
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            line.push_str(cell.symbol());
+        }
+        s.push_str(line.trim_end());
+        s.push('\n');
+    }
+    // Trim trailing empty lines
+    while s.ends_with("\n\n") {
+        s.pop();
+    }
+    s
+}
+
 /// Common overlay content for nested files.
 pub fn nested_overlay() -> Vec<(&'static str, &'static str)> {
     vec![

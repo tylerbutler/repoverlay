@@ -1,0 +1,24 @@
+---
+source: src/selection.rs
+expression: buffer_to_string(&buffer)
+---
+Choose overlays:
+
+Search: zzzzz (Esc to clear)
+Selected: 0/1
+
+  No items match the current search
+
+
+
+
+
+
+
+
+
+
+
+
+
+↑↓ move Space toggle Enter confirm a all / search Esc cancel

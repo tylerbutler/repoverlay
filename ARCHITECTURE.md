@@ -18,6 +18,9 @@ src/
 ├── upstream.rs     # Upstream repository detection for fork inheritance
 ├── detection.rs    # File discovery for overlay creation
 ├── selection.rs    # Interactive file selection UI
+├── widgets/        # Reusable ratatui UI components
+│   ├── mod.rs
+│   └── multi_select_tree.rs  # Tree widget with tri-state checkboxes
 └── testutil.rs     # Test utilities (create_test_repo, create_test_overlay)
 
 tests/
@@ -34,6 +37,9 @@ tests/
 - **lib.rs** - Core operations: `apply_overlay`, `remove_overlay`, `show_status`, `restore_overlays`, `update_overlays`, `create_overlay`, `switch_overlay`. Also handles git exclude file management.
 
 - **selection.rs** - Interactive file selection UI. Handles checkbox-style multi-select for overlay creation.
+
+- **widgets/** - Reusable ratatui UI components.
+  - **multi_select_tree.rs** - `MultiSelectTree` stateful widget: renders a tree with tri-state checkboxes (checked/unchecked/partial) based on descendant selection state.
 
 - **state.rs** - State persistence layer. Manages overlay state in two locations:
   - In-repo: `.repoverlay/overlays/<name>.ccl` - tracks applied overlays

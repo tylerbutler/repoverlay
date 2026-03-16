@@ -703,4 +703,18 @@ mod tests {
         let result = parse_remote_url("https://github.com/owner/repo/tree/main/subdir");
         assert_eq!(result, Some(("owner".to_string(), "repo".to_string())));
     }
+
+    #[test]
+    fn snapshot_git_ref_display() {
+        let refs = [
+            GitRef::Default,
+            GitRef::Branch("main".to_string()),
+            GitRef::Branch("feature/long-branch-name".to_string()),
+            GitRef::Tag("v1.2.3".to_string()),
+            GitRef::Commit("abc123def456789012345678901234567890abcd".to_string()),
+            GitRef::Commit("abc123".to_string()),
+        ];
+        let output: Vec<String> = refs.iter().map(|r| format!("{r}")).collect();
+        insta::assert_snapshot!(output.join("\n"));
+    }
 }

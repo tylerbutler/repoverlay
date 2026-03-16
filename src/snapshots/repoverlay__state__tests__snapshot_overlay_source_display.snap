@@ -1,0 +1,9 @@
+---
+source: src/state.rs
+expression: "output.join(\"\\n\")"
+---
+/home/user/overlays/my-overlay
+https://github.com/owner/repo (main@abc123def456)
+https://github.com/owner/repo (main@abc123def456)
+microsoft/FluidFramework/claude-config via upstream (@abc123def456)
+microsoft/FluidFramework/claude-config [my-source] (@abc123def456)
