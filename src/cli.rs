@@ -8,7 +8,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use crate::{
@@ -50,11 +50,15 @@ fn version_string() -> &'static str {
 /// Check for updates and print a notification if a new version is available.
 ///
 /// Uses tiny-update-check to query crates.io with caching (24 hours).
+/// Fetches an update message from the website when an update is available.
 fn check_for_updates() {
     let name = env!("CARGO_PKG_NAME");
     let version = env!("CARGO_PKG_VERSION");
 
-    if let Ok(Some(update)) = tiny_update_check::check(name, version) {
+    let checker = tiny_update_check::UpdateChecker::new(name, version)
+        .message_url("https://repoverlay.tylerbutler.com/update-message.txt");
+
+    if let Ok(Some(update)) = checker.check_detailed() {
         eprintln!();
         eprintln!(
             "{} A new version of {} is available: {} → {}",
@@ -63,14 +67,21 @@ fn check_for_updates() {
             update.current,
             update.latest.green().bold()
         );
-        eprintln!(
-            "                  {}",
-            "https://github.com/tylerbutler/repoverlay/releases".cyan()
-        );
+        if let Some(msg) = &update.message {
+            eprintln!();
+            eprintln!("{msg}");
+        } else {
+            eprintln!(
+                "                  {}",
+                "https://github.com/tylerbutler/repoverlay/releases".cyan()
+            );
+        }
     }
 }
 
 /// Overlay config files into git repositories without committing them
+///
+/// Get started: run `repoverlay browse` to interactively discover and apply overlays.
 #[derive(Parser)]
 #[command(name = "repoverlay")]
 #[command(version = version_string(), about, long_about = None)]
@@ -86,6 +97,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Apply an overlay to a git repository
+    ///
+    /// For interactive use, consider `repoverlay browse` instead.
     Apply {
         /// Path to overlay source directory OR GitHub URL
         ///
@@ -252,7 +265,7 @@ enum Commands {
         /// Omit when using --output for local directory output
         name: Option<String>,
 
-        /// Include specific files or directories (can be specified multiple times)
+        /// Include files/directories or glob patterns (can be specified multiple times)
         #[arg(short, long)]
         include: Vec<PathBuf>,
 
@@ -317,6 +330,10 @@ enum Commands {
         /// Deep merge conflicting JSON files instead of failing
         #[arg(long, env = "REPOVERLAY_MERGE")]
         merge: bool,
+
+        /// Show what would be switched without making changes
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Manage the overlay cache
@@ -325,7 +342,11 @@ enum Commands {
         command: CacheCommand,
     },
 
-    /// Browse available overlays from the overlay repository
+    /// Browse and apply overlays interactively (recommended)
+    ///
+    /// Lists available overlays from configured sources and lets you select which to
+    /// apply. This is the easiest way to discover and apply overlays. To add sources,
+    /// run `repoverlay source add <path-or-url>`.
     #[command(name = "browse")]
     Browse {
         /// Overlay source (GitHub username, owner/repo, or URL)
@@ -509,10 +530,10 @@ enum Commands {
 enum SourceCommand {
     /// Add a new overlay source
     Add {
-        /// Git URL, GitHub shorthand (owner/repo), or GitHub username
-        url: config::SourceUrlInput,
+        /// Source: Git URL, GitHub shorthand (owner/repo), GitHub username, or local path (./path)
+        source: config::SourceUrlInput,
 
-        /// Name for this source (defaults to repo name)
+        /// Name for this source (defaults to repo/directory name)
         #[arg(long)]
         name: Option<String>,
     },
@@ -757,6 +778,7 @@ pub(crate) fn run() -> Result<()> {
             skip_conflicts,
             interactive,
             merge,
+            dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = if force {
@@ -777,6 +799,7 @@ pub(crate) fn run() -> Result<()> {
                 !no_update, // default: sync before switching
                 conflict_strategy,
                 merge,
+                dry_run,
             )?;
         }
         Commands::Cache { command } => {
@@ -911,92 +934,230 @@ fn handle_source_command(command: SourceCommand) -> Result<()> {
     let mut config = config::load_config(None)?;
 
     match command {
-        SourceCommand::Add { url, name } => {
-            // URL is already validated and parsed by clap via FromStr
-            let validated_url = url.to_url();
+        SourceCommand::Add { source, name } => {
+            if source.is_local() {
+                // Local path source — save to per-repo config
+                let raw_path = source.local_path().to_path_buf();
+                let repo_root = find_repo_root()?;
 
-            // Extract name from validated URL if not provided
-            let source_name = name.unwrap_or_else(|| {
-                validated_url
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("source")
-                    .trim_end_matches(".git")
-                    .to_string()
-            });
+                // Canonicalize and validate path exists
+                let canonical = raw_path
+                    .canonicalize()
+                    .with_context(|| format!("Path does not exist: {}", raw_path.display()))?;
 
-            // Validate extracted name is not empty
-            if source_name.is_empty() {
-                anyhow::bail!(
-                    "Could not extract source name from URL. Please provide a name with --name"
+                // Validate within repo
+                let repo_root_canonical = repo_root.canonicalize()?;
+                if !canonical.starts_with(&repo_root_canonical) {
+                    bail!(
+                        "Path must be within the repository: {}",
+                        canonical.display()
+                    );
+                }
+
+                // Convert to repo-relative
+                let relative_path = canonical
+                    .strip_prefix(&repo_root_canonical)
+                    .context("Failed to compute repo-relative path")?;
+
+                // Extract name
+                let source_name = name.unwrap_or_else(|| {
+                    relative_path
+                        .file_name()
+                        .map_or_else(|| "local".to_string(), |n| n.to_string_lossy().to_string())
+                });
+
+                if source_name.is_empty() {
+                    bail!(
+                        "Could not extract source name from path. Please provide a name with --name"
+                    );
+                }
+
+                // Check name conflicts in both global and repo configs
+                let global_config = config::load_global_config()?;
+                let repo_config = config::load_repo_config(&repo_root)?;
+
+                if global_config.sources.iter().any(|s| s.name == source_name) {
+                    bail!("Source '{source_name}' already exists");
+                }
+                if let Some(ref rc) = repo_config
+                    && rc.sources.iter().any(|s| s.name == source_name)
+                {
+                    bail!("Source '{source_name}' already exists");
+                }
+
+                let new_source = config::Source {
+                    name: source_name.clone(),
+                    url: None,
+                    path: Some(PathBuf::from(relative_path)),
+                };
+
+                let mut updated_repo_config = repo_config.unwrap_or_default();
+                updated_repo_config.sources.push(new_source);
+                config::save_repo_config(&repo_root, &updated_repo_config)?;
+
+                println!(
+                    "{} local source '{}' at position {}",
+                    "Added".green().bold(),
+                    source_name,
+                    updated_repo_config.sources.len()
                 );
+                println!("       Path: {}", relative_path.display());
+                println!(
+                    "       Config: {}",
+                    config::repo_config_path(&repo_root).display()
+                );
+            } else {
+                // Git URL source — save to global config
+                let validated_url = source.to_url();
+                let source_name = name.unwrap_or_else(|| {
+                    validated_url
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("source")
+                        .trim_end_matches(".git")
+                        .to_string()
+                });
+
+                if source_name.is_empty() {
+                    bail!(
+                        "Could not extract source name from URL. Please provide a name with --name"
+                    );
+                }
+
+                // Check if name already exists
+                if config.sources.iter().any(|s| s.name == source_name) {
+                    bail!("Source '{source_name}' already exists");
+                }
+
+                let new_source = config::Source {
+                    name: source_name.clone(),
+                    url: Some(validated_url.clone()),
+                    path: None,
+                };
+                config.sources.push(new_source);
+                config::save_config(&config)?;
+
+                println!(
+                    "{} source '{}' at position {}",
+                    "Added".green().bold(),
+                    source_name,
+                    config.sources.len()
+                );
+                println!("       {validated_url}");
             }
-
-            // Check if name already exists
-            if config.sources.iter().any(|s| s.name == source_name) {
-                anyhow::bail!("Source '{source_name}' already exists");
-            }
-
-            let new_source = config::Source {
-                name: source_name.clone(),
-                url: validated_url.clone(),
-            };
-
-            // Append to end of sources list
-            config.sources.push(new_source);
-            config::save_config(&config)?;
-
-            println!(
-                "{} source '{}' at position {}",
-                "Added".green().bold(),
-                source_name,
-                config.sources.len()
-            );
-            println!("       URL: {validated_url}");
         }
         SourceCommand::List => {
-            if config.sources.is_empty() {
+            let repo_root = find_repo_root().ok();
+
+            let global_config = config::load_config(None)?;
+            let repo_config = repo_root
+                .as_ref()
+                .map(|r| config::load_repo_config(r))
+                .transpose()?
+                .flatten()
+                .unwrap_or_default();
+
+            let has_sources = !global_config.sources.is_empty() || !repo_config.sources.is_empty();
+
+            if !has_sources {
                 println!("No overlay sources configured.");
-                println!();
-                println!("Add a source with:");
-                println!("  repoverlay source add <url>");
+                println!("Add one with: repoverlay source add <url-or-path>");
                 return Ok(());
             }
 
-            println!("{}", "Configured overlay sources (priority order):".bold());
-            println!();
-
-            for (i, source) in config.sources.iter().enumerate() {
+            // Show repo sources first (higher priority)
+            if !repo_config.sources.is_empty() {
                 println!(
-                    "  {}. {} {}",
-                    i + 1,
-                    source.name.cyan(),
-                    "(highest priority)"
-                        .dimmed()
-                        .to_string()
-                        .chars()
-                        .take(if i == 0 { 18 } else { 0 })
-                        .collect::<String>()
+                    "{} ({})",
+                    "Repository sources".bold(),
+                    repo_root
+                        .as_ref()
+                        .map(|r| config::repo_config_path(r).display().to_string())
+                        .unwrap_or_default()
                 );
-                println!("     URL: {}", source.url);
+                for (i, source) in repo_config.sources.iter().enumerate() {
+                    print!("  {}. {}", i + 1, source.name.bold());
+                    if let Some(path) = &source.path {
+                        println!(" (path: {})", path.display());
+                    } else if let Some(url) = &source.url {
+                        println!(" (url: {url})");
+                    } else {
+                        println!();
+                    }
+                }
             }
+
+            if !global_config.sources.is_empty() {
+                if !repo_config.sources.is_empty() {
+                    println!();
+                }
+                println!(
+                    "{} (~/.config/repoverlay/config.ccl)",
+                    "Global sources".bold()
+                );
+                for (i, source) in global_config.sources.iter().enumerate() {
+                    let position = repo_config.sources.len() + i + 1;
+                    print!("  {}. {}", position, source.name.bold());
+                    if let Some(url) = &source.url {
+                        println!(" (url: {url})");
+                    } else if let Some(path) = &source.path {
+                        println!(" (path: {})", path.display());
+                    } else {
+                        println!();
+                    }
+                }
+            }
+
+            println!("\nSources are checked in priority order (lowest number = highest priority).");
         }
         SourceCommand::Remove { name } => {
-            let original_len = config.sources.len();
-            config.sources.retain(|s| s.name != name);
+            let repo_root = find_repo_root().ok();
 
-            if config.sources.len() == original_len {
-                anyhow::bail!("Source '{name}' not found");
+            // Check repo config first
+            if let Some(ref root) = repo_root
+                && let Some(mut repo_config) = config::load_repo_config(root)?
+                && let Some(pos) = repo_config.sources.iter().position(|s| s.name == name)
+            {
+                repo_config.sources.remove(pos);
+                config::save_repo_config(root, &repo_config)?;
+                println!(
+                    "{} source '{}' from repository config",
+                    "Removed".red().bold(),
+                    name
+                );
+                return Ok(());
             }
 
-            config::save_config(&config)?;
-
-            println!("{} source '{}'", "Removed".red().bold(), name);
+            // Fall back to global config
+            if let Some(pos) = config.sources.iter().position(|s| s.name == name) {
+                config.sources.remove(pos);
+                config::save_config(&config)?;
+                println!(
+                    "{} source '{}' from global config",
+                    "Removed".red().bold(),
+                    name
+                );
+            } else {
+                bail!("Source '{name}' not found in any config");
+            }
         }
     }
 
     Ok(())
+}
+
+/// Find the root of the current git repository.
+fn find_repo_root() -> Result<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .context("Failed to find git repository root")?;
+    if !output.status.success() {
+        bail!("Not inside a git repository");
+    }
+    let root = String::from_utf8(output.stdout)?.trim().to_string();
+    Ok(PathBuf::from(root))
 }
 
 /// Handle remove command with interactive selection support.
@@ -1007,7 +1168,7 @@ fn handle_remove(
     dry_run: bool,
     interactive: bool,
 ) -> Result<()> {
-    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+    use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
 
     // If name or --all is specified, use direct removal
     if remove_all || name.is_some() {
@@ -1041,13 +1202,7 @@ fn handle_remove(
 
     let items: Vec<SelectableItem> = applied_overlays
         .iter()
-        .map(|name| SelectableItem {
-            id: name.to_string(),
-            label: name.to_string(),
-            description: None,
-            preselected: false,
-            disabled: false,
-        })
+        .map(|name| name.to_selectable_item(&target))
         .collect();
 
     let result = select_flat(
@@ -1246,7 +1401,11 @@ fn print_overlay_list(overlays: &[crate::overlay_repo::AvailableOverlay], filter
             if current_group.is_some() {
                 println!();
             }
-            println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
+            if overlay.flat {
+                println!("{}:", "(flat)".dimmed());
+            } else {
+                println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
+            }
             current_group = Some(group);
         }
         let config_marker = if overlay.has_config {
@@ -1289,8 +1448,8 @@ fn browse_overlays(
     show_all: bool,
 ) -> Result<()> {
     use crate::config::load_config;
-    use crate::overlay_repo::OverlayRepoManager;
-    use crate::state::OverlaySource;
+    use crate::sources::SourceManager;
+    use crate::state::{OverlaySource, ResolvedVia};
 
     if let Some(source_str) = source {
         return browse_ephemeral_source(
@@ -1304,37 +1463,85 @@ fn browse_overlays(
         );
     }
 
-    let config = load_config(None)?;
-    let overlay_config = config.get_default_overlay_repo_config()?;
+    let target_path = target.as_deref().unwrap_or_else(|| Path::new("."));
+    let target_canonical = fs::canonicalize(target_path)?;
 
-    let manager = OverlayRepoManager::new(overlay_config)?;
-    manager.ensure_cloned()?;
+    // Load merged config (repo-local + global sources)
+    let config = load_config(Some(&target_canonical))?;
 
-    if update {
-        println!("{} overlay repository...", "Updating".blue().bold());
-        manager.pull()?;
+    if config.sources.is_empty() {
+        eprintln!(
+            "{} No overlay sources configured.\n\n\
+             Add a source to get started:\n\
+             \n  repoverlay source add <path-or-url>\n\n\
+             Examples:\n\
+             \n  repoverlay source add ./my-overlays          # local directory\
+             \n  repoverlay source add owner/repo             # GitHub repo\
+             \n  repoverlay source add https://github.com/owner/repo\n\n\
+             Or browse an ephemeral source directly:\n\
+             \n  repoverlay browse ./my-overlays\
+             \n  repoverlay browse owner/repo\n",
+            "hint:".yellow().bold(),
+        );
+        bail!("No overlay sources configured");
     }
 
-    let overlays = if let Some(filter) = target_filter {
+    // Use SourceManager for multi-source browsing (handles both git and local)
+    let manager = SourceManager::new(config.sources, Some(&target_canonical))?;
+    manager.ensure_all_cloned()?;
+
+    if update {
+        println!("{} overlay sources...", "Updating".blue().bold());
+        manager.pull_all()?;
+    }
+
+    // Get all overlays with their source info
+    let all_with_sources = manager.list_all_overlays()?;
+
+    // Build a lookup map: overlay key -> Source
+    let source_map: std::collections::HashMap<String, config::Source> = all_with_sources
+        .iter()
+        .map(|(src, overlay)| (overlay.to_string(), src.clone()))
+        .collect();
+
+    // Extract just the overlays for browse_and_apply
+    let overlays: Vec<_> = if let Some(filter) = target_filter {
         let parts: Vec<&str> = filter.split('/').collect();
         if parts.len() != 2 {
             bail!("Invalid target filter format. Use: org/repo");
         }
-        manager.list_overlays_for_repo(parts[0], parts[1])?
+        let (filter_org, filter_repo) = (parts[0], parts[1]);
+        all_with_sources
+            .into_iter()
+            .filter(|(_, o)| {
+                o.org.eq_ignore_ascii_case(filter_org) && o.repo.eq_ignore_ascii_case(filter_repo)
+            })
+            .map(|(_, o)| o)
+            .collect()
     } else {
-        manager.list_overlays()?
+        all_with_sources.into_iter().map(|(_, o)| o).collect()
     };
 
-    let commit = manager.get_current_commit()?;
     let build_source_info = |o: &crate::overlay_repo::AvailableOverlay| {
-        let path = manager.get_overlay_path(&o.org, &o.repo, &o.name)?;
+        let overlay_key = o.to_string();
+        let source = source_map.get(&overlay_key).ok_or_else(|| {
+            anyhow::anyhow!("Could not determine source for overlay: {overlay_key}")
+        })?;
+        let base_path = manager
+            .get_source_base_path(&source.name)
+            .ok_or_else(|| anyhow::anyhow!("Source base path not found: {}", source.name))?;
+        let overlay_path = base_path.join(&o.org).join(&o.repo).join(&o.name);
+        let commit = manager.get_source_commit(&source.name)?;
+
         Ok(ResolvedSource {
-            path,
-            source_info: OverlaySource::overlay_repo(
+            path: overlay_path,
+            source_info: OverlaySource::overlay_repo_full(
                 o.org.clone(),
                 o.repo.clone(),
                 o.name.clone(),
-                commit.clone(),
+                commit,
+                ResolvedVia::Direct,
+                source.name.clone(),
             ),
         })
     };
@@ -1370,6 +1577,21 @@ fn browse_ephemeral_source(
 
     let reference = SourceReference::parse(source_str);
 
+    // Handle local paths directly
+    if let SourceReference::LocalPath { path, .. } = &reference {
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("Path does not exist: {}", path.display()))?;
+        return browse_local_source(
+            &canonical,
+            target_filter,
+            target,
+            no_interactive,
+            dry_run,
+            show_all,
+        );
+    }
+
     let (owner, repo) = match reference {
         SourceReference::OnePart { username } => {
             let default_repo = config::default_overlay_repo_name();
@@ -1380,12 +1602,13 @@ fn browse_ephemeral_source(
             let github_source = GitHubSource::parse(&url)?;
             (github_source.owner, github_source.repo)
         }
-        SourceReference::LocalPath { .. } | SourceReference::ThreePart { .. } => {
+        SourceReference::ThreePart { .. } => {
             bail!(
                 "Invalid source for browse: '{source_str}'\n\n\
-                 Use a GitHub username, owner/repo, or GitHub URL."
+                 Use a GitHub username, owner/repo, GitHub URL, or local path."
             );
         }
+        SourceReference::LocalPath { .. } => unreachable!(),
     };
 
     let github_url = format!("https://github.com/{owner}/{repo}");
@@ -1434,6 +1657,69 @@ fn browse_ephemeral_source(
     )
 }
 
+/// Browse overlays from an ephemeral local directory source.
+///
+/// Scans the local directory for overlays, auto-detecting whether the directory
+/// uses structured (org/repo/name) or flat layout.
+#[allow(clippy::fn_params_excessive_bools)]
+fn browse_local_source(
+    local_path: &Path,
+    target_filter: Option<&str>,
+    target: Option<PathBuf>,
+    no_interactive: bool,
+    dry_run: bool,
+    show_all: bool,
+) -> Result<()> {
+    use crate::sources::list_overlays_in_dir;
+    use crate::state::OverlaySource;
+
+    println!(
+        "{} local source: {}",
+        "Scanning".blue().bold(),
+        local_path.display()
+    );
+
+    let all_overlays = list_overlays_in_dir(local_path)?;
+
+    let overlays = if let Some(filter) = target_filter {
+        let parts: Vec<&str> = filter.split('/').collect();
+        if parts.len() != 2 {
+            bail!("Invalid target filter format. Use: org/repo");
+        }
+        let (filter_org, filter_repo) = (parts[0], parts[1]);
+        all_overlays
+            .into_iter()
+            .filter(|o| {
+                o.org.eq_ignore_ascii_case(filter_org) && o.repo.eq_ignore_ascii_case(filter_repo)
+            })
+            .collect()
+    } else {
+        all_overlays
+    };
+
+    let local_base = local_path.to_path_buf();
+    let build_source_info = move |o: &crate::overlay_repo::AvailableOverlay| {
+        let overlay_path = local_base.join(o.relative_path());
+        if !overlay_path.exists() {
+            bail!("Overlay directory not found: {}", overlay_path.display());
+        }
+        Ok(ResolvedSource {
+            path: overlay_path,
+            source_info: OverlaySource::local(local_base.clone()),
+        })
+    };
+
+    browse_and_apply(
+        overlays,
+        target_filter,
+        target,
+        no_interactive,
+        dry_run,
+        show_all,
+        build_source_info,
+    )
+}
+
 /// Shared logic for browse: filter, display, select, and apply overlays.
 #[allow(clippy::fn_params_excessive_bools)]
 fn browse_and_apply<F>(
@@ -1448,8 +1734,8 @@ fn browse_and_apply<F>(
 where
     F: Fn(&crate::overlay_repo::AvailableOverlay) -> Result<ResolvedSource>,
 {
-    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
-    use crate::state::normalize_overlay_name;
+    use crate::overlay_repo::BrowseOverlayItem;
+    use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
 
     // Auto-filter by current repo when no explicit filter and not --show-all
     let (display_overlays, filtered) =
@@ -1483,15 +1769,11 @@ where
     let items: Vec<SelectableItem> = display_overlays
         .iter()
         .map(|o| {
-            let disabled = normalize_overlay_name(&o.name)
-                .is_ok_and(|normalized| applied_overlays.iter().any(|n| n == normalized.as_str()));
-            SelectableItem {
-                id: o.to_string(),
-                label: o.display_bold(),
-                description: disabled.then(|| "already applied".into()),
-                preselected: false,
-                disabled,
+            BrowseOverlayItem {
+                overlay: o,
+                applied_overlays: &applied_overlays,
             }
+            .to_selectable_item(&target)
         })
         .collect();
 
@@ -1630,19 +1912,26 @@ fn create_overlay_command(
 
     // Handle --local mode (write to local directory)
     if let Some(local_path) = local {
+        // When a name is provided, create a subdirectory: output/<name>/
+        let (output_path, overlay_name) = if let Some(ref name) = name_arg {
+            (local_path.join(name), Some(name.clone()))
+        } else {
+            (local_path, None)
+        };
+
         // Use existing create_overlay function for local mode
         crate::create_overlay(
             source,
-            Some(local_path.clone()),
+            Some(output_path.clone()),
             include,
-            None, // name derived from directory
+            overlay_name,
             dry_run,
             yes,
         )?;
 
         // Auto-apply the newly created overlay back to the source repo
         if !dry_run {
-            let overlay_source = local_path.to_string_lossy().to_string();
+            let overlay_source = output_path.to_string_lossy().to_string();
             crate::apply_overlay(
                 &overlay_source,
                 source,
@@ -1743,13 +2032,8 @@ fn create_overlay_command(
         return Ok(());
     }
 
-    // Validate all include paths exist
-    for path in include {
-        let full_path = source.join(path);
-        if !full_path.exists() {
-            bail!("Include path does not exist: {}", path.display());
-        }
-    }
+    // Expand globs and validate include paths
+    let expanded = crate::expand_include_globs(source, include)?;
 
     // If force and exists, remove existing first
     if output_path.exists() && force {
@@ -1757,7 +2041,7 @@ fn create_overlay_command(
     }
 
     // Copy files and create overlay
-    let copied_files = crate::copy_files_to_overlay(source, &output_path, include)?;
+    let copied_files = crate::copy_files_to_overlay(source, &output_path, &expanded)?;
 
     // Generate config
     fs::write(
@@ -1799,36 +2083,43 @@ fn auto_commit_overlay(
     use std::process::Command;
 
     // Fetch latest from remote before committing to avoid divergence
-    println!("{} overlay repo...", "Syncing".blue().bold());
-    let fetch_output = Command::new("git")
-        .args(["fetch", "origin"])
-        .current_dir(manager.path())
-        .output()
-        .context("Failed to fetch from remote")?;
+    let fetch_result = crate::git::run_git_with_spinner(
+        &["fetch", "origin"],
+        Some(manager.path()),
+        "Fetching from remote...",
+        false,
+    );
 
-    if fetch_output.status.success() {
-        // Try to pull/rebase to incorporate remote changes
-        let pull_output = Command::new("git")
-            .args(["pull", "--rebase", "--autostash"])
-            .current_dir(manager.path())
-            .output()
-            .context("Failed to pull from remote")?;
+    match fetch_result {
+        Ok((status, _)) if status.success() => {
+            // Try to pull/rebase to incorporate remote changes
+            let pull_result = crate::git::run_git_with_spinner(
+                &["pull", "--rebase", "--autostash"],
+                Some(manager.path()),
+                "Pulling latest changes...",
+                false,
+            );
 
-        if !pull_output.status.success() {
-            let stderr = String::from_utf8_lossy(&pull_output.stderr);
-            // If pull fails due to conflicts, warn but continue
+            match pull_result {
+                Ok((status, _)) if !status.success() => {
+                    eprintln!(
+                        "{} Could not pull latest changes, continuing...",
+                        "Warning:".yellow(),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("{} Could not pull latest changes: {e}", "Warning:".yellow(),);
+                }
+                _ => {}
+            }
+        }
+        _ => {
+            // Fetch failed, but continue - might be offline
             eprintln!(
-                "{} Could not pull latest changes: {}",
-                "Warning:".yellow(),
-                stderr.trim()
+                "{} Could not fetch from remote (offline?), continuing...",
+                "Warning:".yellow()
             );
         }
-    } else {
-        // Fetch failed, but continue - might be offline
-        eprintln!(
-            "{} Could not fetch from remote (offline?), continuing...",
-            "Warning:".yellow()
-        );
     }
 
     // Check if there are changes to commit
@@ -1860,16 +2151,22 @@ fn auto_commit_overlay(
     manager.commit(&commit_msg)?;
 
     // Auto-push to remote
-    println!("{} to remote...", "Pushing".blue().bold());
-    match manager.push() {
-        Ok(()) => {
+    let push_result = crate::git::run_git_with_spinner(
+        &["push"],
+        Some(manager.path()),
+        "Pushing to remote...",
+        false,
+    );
+
+    match push_result {
+        Ok((status, _)) if status.success() => {
             let check = "✓".green().bold();
             let action_word = if is_new { "created" } else { "updated" };
             println!("\n{check} Overlay {action_word}: {org}/{repo}/{name}");
         }
-        Err(e) => {
+        Ok(_) | Err(_) => {
             let warn = "Warning:".yellow();
-            eprintln!("\n{warn} Committed locally but failed to push: {e}");
+            eprintln!("\n{warn} Committed locally but failed to push.");
             eprintln!("Run 'repoverlay push' to push manually when online.");
         }
     }
@@ -1905,12 +2202,10 @@ fn handle_sync(
             return Ok(());
         }
 
-        // Load overlay repo config and manager once for all overlays
-        let config = load_config(None)?;
-        let overlay_config = config.get_default_overlay_repo_config()?;
-        let manager = OverlayRepoManager::new(overlay_config)?;
-        manager.ensure_cloned()?;
-        manager.pull()?;
+        // Lazily initialized — only created when we encounter a syncable overlay.
+        // This avoids failing when no overlay repo is configured but all applied
+        // overlays are local/GitHub sources (#205).
+        let mut manager: Option<OverlayRepoManager> = None;
 
         let mut synced = 0u32;
         let mut skipped = 0u32;
@@ -1923,7 +2218,7 @@ fn handle_sync(
             if !state.source.is_syncable() {
                 let label = state.source.source_type_label();
                 println!(
-                    "{} Skipping '{}' ({label} source, not syncable to overlay repo)",
+                    "{} Skipping '{}' ({label} source, not syncable)",
                     "Warning:".yellow(),
                     overlay_name
                 );
@@ -1931,14 +2226,27 @@ fn handle_sync(
                 continue;
             }
 
+            // Initialize the manager on first syncable overlay
+            let mgr = if let Some(m) = &manager {
+                m
+            } else {
+                let config = load_config(None)?;
+                let overlay_config = config.get_default_overlay_repo_config()?;
+                let m = OverlayRepoManager::new(overlay_config)?;
+                m.ensure_cloned()?;
+                m.pull()?;
+                manager = Some(m);
+                manager.as_ref().unwrap()
+            };
+
             // OverlayRepo source — sync directly
             match &state.source {
                 OverlaySource::OverlayRepo {
                     org, repo, name, ..
                 } => {
-                    sync_single_overlay(&target, org, name, repo, &state, &manager, dry_run)?;
+                    sync_single_overlay(&target, org, name, repo, &state, mgr, dry_run)?;
                     if !dry_run {
-                        auto_commit_overlay(&manager, org, repo, name, false)?;
+                        auto_commit_overlay(mgr, org, repo, name, false)?;
                     }
                     synced += 1;
                 }
@@ -2116,7 +2424,7 @@ fn sync_single_overlay(
 /// Lists all applied overlays and lets the user pick one. Bails in non-TTY
 /// environments since interactive selection requires a terminal.
 fn select_overlay_interactive(target: &std::path::Path) -> Result<String> {
-    use crate::selection::{FlatSelectionConfig, SelectableItem, select_flat};
+    use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
 
     let target = canonicalize_path(target, "Target directory")?;
     let applied = list_applied_overlays(&target)?;
@@ -2141,13 +2449,7 @@ fn select_overlay_interactive(target: &std::path::Path) -> Result<String> {
 
     let items: Vec<SelectableItem> = applied
         .iter()
-        .map(|name| SelectableItem {
-            id: name.to_string(),
-            label: name.to_string(),
-            description: None,
-            preselected: false,
-            disabled: false,
-        })
+        .map(|name| name.to_selectable_item(&target))
         .collect();
 
     let result = select_flat(
@@ -2292,6 +2594,7 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
     // Only skip .git directory - hidden directories like .claude/, .vscode/, etc.
     // are valid overlay content and must be included.
     let mut detected_files: Vec<DetectedFile> = Vec::new();
+    let mut overlay_source_files: HashSet<PathBuf> = HashSet::new();
     for entry in WalkDir::new(&source_path)
         .min_depth(1)
         .into_iter()
@@ -2318,6 +2621,7 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
             }
 
             let is_currently_applied = current_files.contains(&relative);
+            overlay_source_files.insert(relative.clone());
 
             detected_files.push(DetectedFile {
                 path: relative,
@@ -2329,9 +2633,29 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
         }
     }
 
+    // Discover files in the target repo that could be added to the overlay (#190).
+    // This includes AI configs, gitignored files, and untracked files that aren't
+    // already in the overlay source.
+    let target_repo_candidates = crate::detection::discover_files(&target);
+    for candidate in target_repo_candidates {
+        // Skip files already in the overlay source
+        if overlay_source_files.contains(&candidate.path) {
+            continue;
+        }
+        // Skip files that are symlinks (already managed by an overlay)
+        let full_path = target.join(&candidate.path);
+        if full_path.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+            continue;
+        }
+        detected_files.push(DetectedFile {
+            preselected: false, // Target repo files start unselected
+            ..candidate
+        });
+    }
+
     if detected_files.is_empty() {
         bail!(
-            "No files found in overlay source: {}",
+            "No files found in overlay source or target repository: {}",
             source_path.display()
         );
     }
@@ -2388,18 +2712,20 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
         remove_files_from_overlay(name_arg, &target, &to_remove, false)?;
     }
     if !to_add.is_empty() {
-        // Copy files from overlay source to target, then add to overlay.
-        // The files exist in the overlay source but not in the target repo.
-        // add_files_to_overlay expects them to exist in the target first.
+        // Files from the overlay source need to be copied to the target first,
+        // since add_files_to_overlay expects them to exist in the target.
+        // Files from the target repo already exist there.
         for file in &to_add {
-            let source_file = source_path.join(file);
-            let target_file = target.join(file);
-            if let Some(parent) = target_file.parent() {
-                fs::create_dir_all(parent)?;
+            if overlay_source_files.contains(file) {
+                let source_file = source_path.join(file);
+                let target_file = target.join(file);
+                if let Some(parent) = target_file.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&source_file, &target_file).with_context(|| {
+                    format!("Failed to copy {} from overlay source", file.display())
+                })?;
             }
-            fs::copy(&source_file, &target_file).with_context(|| {
-                format!("Failed to copy {} from overlay source", file.display())
-            })?;
         }
         add_files_to_overlay(name_arg, &target, &to_add, false)?;
     }
@@ -2564,8 +2890,9 @@ fn remove_files_from_overlay(
             }
         }
 
-        // Remove from state
+        // Remove from state and add to exclusions
         state.remove_file(file);
+        state.add_exclusion(file.clone());
         removed_count += 1;
     }
 
@@ -2630,6 +2957,19 @@ fn add_files_to_overlay(
         load_all_overlay_targets, load_overlay_state, normalize_overlay_name, save_external_state,
         save_overlay_state, update_git_exclude,
     };
+
+    /// Tracks completed operations for rollback on failure.
+    enum RollbackEntry {
+        File {
+            target: PathBuf,
+            overlay: PathBuf,
+            original_content: Vec<u8>,
+        },
+        Directory {
+            target: PathBuf,
+            overlay: PathBuf,
+        },
+    }
 
     // Validate target is a git repo
     let target = canonicalize_path(target, "Target directory")?;
@@ -2764,64 +3104,141 @@ fn add_files_to_overlay(
         }
     }
 
-    // Track completed operations for rollback on failure.
-    // Each entry is (target_file, overlay_file, original_content).
-    let mut completed: Vec<(PathBuf, PathBuf, Vec<u8>)> = Vec::new();
+    let mut completed: Vec<RollbackEntry> = Vec::new();
     let mut added_count = 0;
 
     let result: Result<()> = (|| {
         for file in files {
             let target_file = target.join(file);
             let overlay_file = overlay_repo_path.join(file);
+            let is_dir = target_file.is_dir();
 
-            // Read original content before any mutations (for rollback)
-            let original_content = fs::read(&target_file)
-                .with_context(|| format!("Failed to read {} for backup", target_file.display()))?;
-
-            // Copy file to overlay source directory
-            if let Some(parent) = overlay_file.parent() {
+            // Ensure overlay parent directory exists
+            if is_dir {
+                if let Some(parent) = overlay_file.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+            } else if let Some(parent) = overlay_file.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(&target_file, &overlay_file).with_context(|| {
-                format!("Failed to copy {} to overlay source", target_file.display())
-            })?;
 
-            // Remove original file (we'll replace it with symlink)
-            fs::remove_file(&target_file).with_context(|| {
-                format!("Failed to remove {} for linking", target_file.display())
-            })?;
+            if is_dir {
+                // Copy directory tree to overlay source
+                fs::create_dir_all(&overlay_file)?;
+                crate::overlay_repo::copy_dir_recursive(&target_file, &overlay_file).with_context(
+                    || {
+                        format!(
+                            "Failed to copy directory {} to overlay source",
+                            target_file.display()
+                        )
+                    },
+                )?;
 
-            // Create symlink/copy from overlay source to target
-            match link_type {
-                LinkType::Symlink => {
-                    #[cfg(unix)]
-                    std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(|| {
-                        format!("Failed to create symlink: {}", target_file.display())
-                    })?;
-                    #[cfg(windows)]
-                    std::os::windows::fs::symlink_file(&overlay_file, &target_file).with_context(
-                        || format!("Failed to create symlink: {}", target_file.display()),
-                    )?;
+                // Remove original directory
+                fs::remove_dir_all(&target_file).with_context(|| {
+                    format!(
+                        "Failed to remove directory {} for linking",
+                        target_file.display()
+                    )
+                })?;
+
+                // Create symlink/copy from overlay source to target
+                match link_type {
+                    LinkType::Symlink => {
+                        #[cfg(unix)]
+                        std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(
+                            || {
+                                format!(
+                                    "Failed to create directory symlink: {}",
+                                    target_file.display()
+                                )
+                            },
+                        )?;
+                        #[cfg(windows)]
+                        std::os::windows::fs::symlink_dir(&overlay_file, &target_file)
+                            .with_context(|| {
+                                format!(
+                                    "Failed to create directory symlink: {}",
+                                    target_file.display()
+                                )
+                            })?;
+                    }
+                    LinkType::Copy | LinkType::Merged => {
+                        fs::create_dir_all(&target_file).with_context(|| {
+                            format!("Failed to create directory: {}", target_file.display())
+                        })?;
+                        crate::overlay_repo::copy_dir_recursive(&overlay_file, &target_file)
+                            .with_context(|| {
+                                format!("Failed to copy directory: {}", target_file.display())
+                            })?;
+                    }
                 }
-                LinkType::Copy | LinkType::Merged => {
-                    fs::copy(&overlay_file, &target_file).with_context(|| {
-                        format!("Failed to copy file: {}", target_file.display())
-                    })?;
+
+                completed.push(RollbackEntry::Directory {
+                    target: target_file.clone(),
+                    overlay: overlay_file,
+                });
+
+                state.add_file(FileEntry {
+                    source: file.clone(),
+                    target: file.clone(),
+                    link_type,
+                    entry_type: EntryType::Directory,
+                });
+
+                println!("  {} {}/", "+".green(), file.display());
+            } else {
+                // Read original content before any mutations (for rollback)
+                let original_content = fs::read(&target_file).with_context(|| {
+                    format!("Failed to read {} for backup", target_file.display())
+                })?;
+
+                // Copy file to overlay source directory
+                fs::copy(&target_file, &overlay_file).with_context(|| {
+                    format!("Failed to copy {} to overlay source", target_file.display())
+                })?;
+
+                // Remove original file (we'll replace it with symlink)
+                fs::remove_file(&target_file).with_context(|| {
+                    format!("Failed to remove {} for linking", target_file.display())
+                })?;
+
+                // Create symlink/copy from overlay source to target
+                match link_type {
+                    LinkType::Symlink => {
+                        #[cfg(unix)]
+                        std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(
+                            || format!("Failed to create symlink: {}", target_file.display()),
+                        )?;
+                        #[cfg(windows)]
+                        std::os::windows::fs::symlink_file(&overlay_file, &target_file)
+                            .with_context(|| {
+                                format!("Failed to create symlink: {}", target_file.display())
+                            })?;
+                    }
+                    LinkType::Copy | LinkType::Merged => {
+                        fs::copy(&overlay_file, &target_file).with_context(|| {
+                            format!("Failed to copy file: {}", target_file.display())
+                        })?;
+                    }
                 }
+
+                completed.push(RollbackEntry::File {
+                    target: target_file.clone(),
+                    overlay: overlay_file,
+                    original_content,
+                });
+
+                state.add_file(FileEntry {
+                    source: file.clone(),
+                    target: file.clone(),
+                    link_type,
+                    entry_type: EntryType::File,
+                });
+
+                println!("  {} {}", "+".green(), file.display());
             }
 
-            // Track for potential rollback
-            completed.push((target_file.clone(), overlay_file, original_content));
-
-            // Add to state
-            state.add_file(FileEntry {
-                source: file.clone(),
-                target: file.clone(),
-                link_type,
-                entry_type: EntryType::File,
-            });
-
-            println!("  {} {}", "+".green(), file.display());
             added_count += 1;
         }
 
@@ -2836,20 +3253,48 @@ fn add_files_to_overlay(
             completed.len(),
             e
         );
-        for (target_file, overlay_file, original_content) in completed.iter().rev() {
-            // Remove the symlink/copy we created
-            if target_file.exists() || target_file.is_symlink() {
-                let _ = fs::remove_file(target_file);
+        for entry in completed.iter().rev() {
+            match entry {
+                RollbackEntry::File {
+                    target: target_file,
+                    overlay: overlay_file,
+                    original_content,
+                } => {
+                    // Remove the symlink/copy we created
+                    if target_file.exists() || target_file.is_symlink() {
+                        let _ = fs::remove_file(target_file);
+                    }
+                    // Restore original file content
+                    let _ = fs::write(target_file, original_content);
+                    // Remove the copy in overlay source
+                    let _ = fs::remove_file(overlay_file);
+                }
+                RollbackEntry::Directory {
+                    target: target_file,
+                    overlay: overlay_file,
+                } => {
+                    // Remove the symlink/copy we created
+                    if target_file.is_symlink() {
+                        let _ = fs::remove_file(target_file);
+                    } else if target_file.exists() {
+                        let _ = fs::remove_dir_all(target_file);
+                    }
+                    // Restore directory from overlay copy
+                    let _ = fs::create_dir_all(target_file);
+                    let _ = crate::overlay_repo::copy_dir_recursive(overlay_file, target_file);
+                    // Remove the copy in overlay source
+                    let _ = fs::remove_dir_all(overlay_file);
+                }
             }
-            // Restore original file content
-            let _ = fs::write(target_file, original_content);
-            // Remove the copy in overlay source
-            let _ = fs::remove_file(overlay_file);
         }
         return result;
     }
 
     // Rebuild full exclude list from state (which now includes both old and new files)
+    // Also clear any exclusions for files that were just added back
+    for file in files {
+        state.remove_exclusion(file);
+    }
     let all_exclude_entries: Vec<String> = state
         .file_entries()
         .iter()
@@ -4877,217 +5322,6 @@ directories =
         }
     }
 
-    // CLI integration tests using assert_cmd
-    mod cli {
-        use super::*;
-        use assert_cmd::Command;
-        use predicates::prelude::*;
-
-        fn repoverlay_cmd() -> Command {
-            // Using deprecated cargo_bin because tests are in src/main.rs (not tests/ dir).
-            // The cargo_bin! macro requires CARGO_BIN_EXE_* which isn't set during clippy.
-            #[allow(deprecated)]
-            Command::cargo_bin("repoverlay").expect("Failed to find repoverlay binary")
-        }
-
-        #[test]
-        fn help_displays() {
-            repoverlay_cmd()
-                .arg("--help")
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Overlay config files"));
-        }
-
-        #[test]
-        fn version_displays() {
-            repoverlay_cmd()
-                .arg("--version")
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("repoverlay"));
-        }
-
-        #[test]
-        fn apply_help_displays() {
-            repoverlay_cmd()
-                .args(["apply", "--help"])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Apply an overlay"));
-        }
-
-        #[test]
-        fn remove_help_displays() {
-            repoverlay_cmd()
-                .args(["remove", "--help"])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Remove"));
-        }
-
-        #[test]
-        fn status_help_displays() {
-            repoverlay_cmd()
-                .args(["status", "--help"])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("status"));
-        }
-
-        #[test]
-        fn cache_help_displays() {
-            repoverlay_cmd()
-                .args(["cache", "--help"])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("cache"));
-        }
-
-        #[test]
-        fn restore_help_displays() {
-            repoverlay_cmd()
-                .args(["restore", "--help"])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Restore"));
-        }
-
-        #[test]
-        fn update_help_displays() {
-            repoverlay_cmd()
-                .args(["update", "--help"])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Update"));
-        }
-
-        #[test]
-        fn apply_requires_source_argument() {
-            repoverlay_cmd()
-                .arg("apply")
-                .assert()
-                .failure()
-                .stderr(predicate::str::contains("required"));
-        }
-
-        #[test]
-        fn apply_and_remove_workflow() {
-            let repo = create_test_repo();
-            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
-
-            // Apply with explicit name
-            repoverlay_cmd()
-                .args(["apply", overlay.path().to_str().unwrap()])
-                .args(["--target", repo.path().to_str().unwrap()])
-                .args(["--name", "test-overlay"])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Applying"));
-
-            assert!(repo.path().join(".envrc").exists());
-
-            // Status
-            repoverlay_cmd()
-                .args(["status", "--target", repo.path().to_str().unwrap()])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Overlay Status"));
-
-            // Remove by name
-            repoverlay_cmd()
-                .args([
-                    "remove",
-                    "test-overlay",
-                    "--target",
-                    repo.path().to_str().unwrap(),
-                ])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Removing"));
-
-            assert!(!repo.path().join(".envrc").exists());
-        }
-
-        #[test]
-        fn apply_and_remove_all_workflow() {
-            let repo = create_test_repo();
-            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
-
-            // Apply
-            repoverlay_cmd()
-                .args(["apply", overlay.path().to_str().unwrap()])
-                .args(["--target", repo.path().to_str().unwrap()])
-                .assert()
-                .success();
-
-            assert!(repo.path().join(".envrc").exists());
-
-            // Remove with --all
-            repoverlay_cmd()
-                .args(["remove", "--all", "--target", repo.path().to_str().unwrap()])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("Removed all"));
-
-            assert!(!repo.path().join(".envrc").exists());
-        }
-
-        #[test]
-        fn apply_with_copy_flag() {
-            let repo = create_test_repo();
-            let overlay = create_test_overlay(&[(".envrc", "export FOO=bar")]);
-
-            repoverlay_cmd()
-                .args(["apply", overlay.path().to_str().unwrap()])
-                .args(["--target", repo.path().to_str().unwrap()])
-                .arg("--copy")
-                .assert()
-                .success();
-
-            let target_file = repo.path().join(".envrc");
-            assert!(target_file.exists());
-            assert!(!target_file.is_symlink());
-        }
-
-        #[test]
-        fn status_when_no_overlay() {
-            let repo = create_test_repo();
-
-            repoverlay_cmd()
-                .args(["status", "--target", repo.path().to_str().unwrap()])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("No overlay"));
-        }
-
-        #[test]
-        fn remove_when_no_overlay() {
-            let repo = create_test_repo();
-
-            // Use --all to avoid interactive prompt
-            repoverlay_cmd()
-                .args(["remove", "--all", "--target", repo.path().to_str().unwrap()])
-                .assert()
-                .failure()
-                .stderr(predicate::str::contains("No overlay"));
-        }
-
-        #[test]
-        fn cache_list_empty() {
-            repoverlay_cmd().args(["cache", "list"]).assert().success();
-        }
-
-        #[test]
-        fn cache_path_shows_location() {
-            repoverlay_cmd()
-                .args(["cache", "path"])
-                .assert()
-                .success()
-                .stdout(predicate::str::contains("repoverlay"));
-        }
-    }
-
     // Integration tests for create command
     mod create {
         use super::*;
@@ -5343,8 +5577,48 @@ directories =
                 "Overlay directory should not exist in dry run"
             );
         }
-    }
 
+        #[test]
+        fn create_output_with_name_creates_subdirectory() {
+            let source = create_test_repo();
+            let output = TempDir::new().unwrap();
+
+            fs::write(source.path().join(".envrc"), "export FOO=bar").unwrap();
+
+            // Simulate what create_overlay_command does: output/<name>/
+            let overlay_name = "my-overlay";
+            let output_path = output.path().join(overlay_name);
+
+            let result = create_overlay(
+                source.path(),
+                Some(output_path),
+                &[PathBuf::from(".envrc")],
+                Some(overlay_name.to_string()),
+                false,
+                false,
+            );
+            assert!(result.is_ok(), "create_overlay failed: {result:?}");
+
+            // Files should be at output/my-overlay/, not directly in output/
+            let overlay_dir = output.path().join("my-overlay");
+            assert!(overlay_dir.exists(), "output/my-overlay/ should exist");
+            assert!(
+                overlay_dir.join(".envrc").exists(),
+                ".envrc should be in output/my-overlay/"
+            );
+            assert!(
+                overlay_dir.join("repoverlay.ccl").exists(),
+                "repoverlay.ccl should be in output/my-overlay/"
+            );
+
+            // The config should use the correct name
+            let config = fs::read_to_string(overlay_dir.join("repoverlay.ccl")).unwrap();
+            assert!(
+                config.contains("my-overlay"),
+                "Config should contain overlay name"
+            );
+        }
+    }
     // Unit tests for parse_overlay_name_arg
     mod parse_overlay_name_arg_tests {
         use super::*;
@@ -5616,6 +5890,7 @@ directories =
                 false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
+                false,
             );
             assert!(result.is_ok(), "switch_overlay failed: {result:?}");
 
@@ -5646,6 +5921,7 @@ directories =
                 false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
+                false,
             );
             assert!(result.is_ok());
 
@@ -5665,6 +5941,7 @@ directories =
                 None,
                 false, // no update for local paths
                 ConflictStrategy::default(),
+                false,
                 false,
             );
             assert!(result.is_err());
@@ -5725,6 +6002,7 @@ directories =
                 false, // no update for local paths
                 ConflictStrategy::default(),
                 false,
+                false,
             )
             .unwrap();
 
@@ -5752,6 +6030,7 @@ directories =
                 None,
                 false, // no update for local paths
                 ConflictStrategy::Force,
+                false,
                 false,
             );
             assert!(
@@ -5785,6 +6064,7 @@ directories =
                 None,
                 false, // no update for local paths
                 ConflictStrategy::SkipConflicts,
+                false,
                 false,
             );
             assert!(
@@ -5824,6 +6104,7 @@ directories =
                 None,
                 false, // no update for local paths
                 ConflictStrategy::default(),
+                false,
                 false,
             );
             assert!(
@@ -6268,6 +6549,8 @@ directories =
             assert_eq!(fs::read_to_string(overlay_file).unwrap(), "# Config");
         }
 
+        /// Issue #205: `sync --all` must skip local-source overlays without
+        /// trying to load an overlay-repo config (which may not exist).
         #[test]
         fn handle_sync_all_skips_local_sources() {
             let repo = create_test_repo();
@@ -6280,19 +6563,17 @@ directories =
                 vec![(".envrc", ".envrc")],
             );
 
-            // handle_sync --all should succeed (returns Ok) but needs config
-            // for the manager. Since there are no OverlayRepo sources to sync,
-            // we test that the state files with non-OverlayRepo sources are
-            // correctly identified by listing applied overlays.
-            let applied = crate::list_applied_overlays(repo.path()).unwrap();
-            assert_eq!(applied.len(), 1);
-            assert_eq!(applied[0], "local-overlay");
-
-            // Verify the source is Local (which would be skipped by --all)
-            let state = crate::load_overlay_state(repo.path(), "local-overlay").unwrap();
-            assert!(!state.source.is_overlay_repo());
+            // sync --all should succeed: the local overlay is skipped and no
+            // overlay repo manager is needed.
+            let result = handle_sync(repo.path(), None, true, false);
+            assert!(
+                result.is_ok(),
+                "sync --all should succeed when only local overlays are applied: {result:?}"
+            );
         }
 
+        /// Issue #205: `sync --all` must skip GitHub-source overlays without
+        /// trying to load an overlay-repo config.
         #[test]
         fn handle_sync_all_skips_github_sources() {
             let repo = create_test_repo();
@@ -6311,9 +6592,11 @@ directories =
                 vec![(".envrc", ".envrc")],
             );
 
-            let state = crate::load_overlay_state(repo.path(), "github-overlay").unwrap();
-            assert!(state.source.is_github());
-            assert!(!state.source.is_overlay_repo());
+            let result = handle_sync(repo.path(), None, true, false);
+            assert!(
+                result.is_ok(),
+                "sync --all should succeed when only GitHub overlays are applied: {result:?}"
+            );
         }
 
         #[test]
@@ -6388,6 +6671,39 @@ directories =
             }
             assert_eq!(overlay_repo_count, 1);
             assert_eq!(skipped_count, 2);
+        }
+
+        /// Issue #205: `sync --all` with a mix of local and GitHub overlays
+        /// (but no `OverlayRepo` sources) should skip all and succeed.
+        #[test]
+        fn handle_sync_all_skips_all_non_syncable_mixed() {
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "local-one",
+                OverlaySource::local(PathBuf::from("/path")),
+                vec![("a.txt", "a.txt")],
+            );
+            save_test_state(
+                repo.path(),
+                "github-one",
+                OverlaySource::github(
+                    "https://github.com/o/r".to_string(),
+                    "o".to_string(),
+                    "r".to_string(),
+                    "main".to_string(),
+                    "abc123def456".to_string(),
+                    None,
+                ),
+                vec![("b.txt", "b.txt")],
+            );
+
+            let result = handle_sync(repo.path(), None, true, false);
+            assert!(
+                result.is_ok(),
+                "sync --all should succeed when all overlays are non-syncable: {result:?}"
+            );
         }
 
         #[test]
@@ -6601,7 +6917,8 @@ directories =
                 return;
             };
 
-            let Some((owner, gh_repo)) = github::parse_remote_url(&source.url) else {
+            let Some((owner, gh_repo)) = source.url.as_deref().and_then(github::parse_remote_url)
+            else {
                 return;
             };
 
@@ -7348,6 +7665,18 @@ directories =
                 "--interactive",
             ]);
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn switch_parses_dry_run() {
+            let cli =
+                Cli::try_parse_from(["repoverlay", "switch", "./overlay", "--dry-run"]).unwrap();
+            match cli.command {
+                Some(Commands::Switch { dry_run, .. }) => {
+                    assert!(dry_run);
+                }
+                _ => panic!("Expected Switch command"),
+            }
         }
 
         #[test]

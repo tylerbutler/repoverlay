@@ -21,7 +21,7 @@ This repository optionally uses **jj (Jujutsu)** colocated with git. Check for a
 
 ## Project Context
 
-- **Rust 2024 edition**, minimum version 1.90
+- **Rust 2024 edition**, minimum version 1.91
 - **Clippy pedantic + nursery** lints enabled
 - **CCL format** used for configuration and state files (not TOML)
 - Tests use `tempfile::TempDir` for temporary git repos

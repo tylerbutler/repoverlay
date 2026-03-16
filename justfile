@@ -109,7 +109,7 @@ audit:
 
 # Generate CLI reference markdown
 cli-reference:
-    cargo run -- --markdown-help > docs/cli-reference.md
+    cargo build --quiet && cargo run --quiet -- --markdown-help > docs/cli-reference.md
 
 # Build documentation
 docs: cli-reference

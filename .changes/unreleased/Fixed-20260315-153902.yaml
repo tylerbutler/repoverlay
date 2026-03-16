@@ -1,0 +1,12 @@
+kind: Fixed
+body: |-
+    Discover committed config files in source repositories
+
+    `create` now discovers tracked config files (e.g., `.envrc`, `.vscode/`,
+    `justfile`, `Cargo.toml`, `Dockerfile`) in addition to AI configs,
+    gitignored, and untracked files. Detection uses an exclusion-based
+    heuristic that filters out source code, documentation, and media rather
+    than trying to allowlist config patterns. Also fixes output path to
+    create overlay at `output/<name>/` subdirectory.
+time: 2026-03-15T15:39:02-07:00
+component: create

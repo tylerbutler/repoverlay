@@ -30,7 +30,7 @@ repoverlay is a CLI tool that overlays config files into git repositories withou
 
 ## Key Conventions
 
-- **Rust 2024 edition**, minimum version 1.90.
+- **Rust 2024 edition**, minimum version 1.91.
 - **Clippy pedantic + nursery** lints are enabled (see `[lints.clippy]` in `Cargo.toml` for allowed exceptions).
 - **CCL format** (via `sickle` crate) is used for all configuration and state files — not TOML or JSON.
 - **`pub(crate)` visibility**: Used explicitly on all internal APIs for clarity, even in private modules (`redundant_pub_crate` lint is allowed).

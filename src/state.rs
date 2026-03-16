@@ -105,6 +105,7 @@ impl OverlaySource {
     }
 
     /// Create a new overlay repository source.
+    #[allow(dead_code)] // Useful constructor for sources without resolution metadata
     pub(crate) const fn overlay_repo(
         org: String,
         repo: String,
@@ -338,6 +339,11 @@ pub(crate) struct OverlayState {
     pub(crate) source: OverlaySource,
     #[serde(default)]
     pub(crate) files: Vec<FileEntry>,
+    /// Files excluded via `edit remove`. These are files that exist in the overlay
+    /// source but should be skipped when applying. Persisted in external state so
+    /// exclusions survive remove/reapply cycles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) exclusions: Vec<ExcludedFile>,
     /// When the overlay was explicitly removed (if set, overlay should not be restored).
     /// This is only used in external state files to track removal intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -352,6 +358,7 @@ impl OverlayState {
             applied_at: Utc::now(),
             source,
             files: Vec::new(),
+            exclusions: Vec::new(),
             removed_at: None,
         }
     }
@@ -380,6 +387,23 @@ impl OverlayState {
     /// Iterate over file entries.
     pub(crate) fn file_entries(&self) -> &[FileEntry] {
         &self.files
+    }
+
+    /// Add a file to the exclusion list.
+    pub(crate) fn add_exclusion(&mut self, target: PathBuf) {
+        if !self.exclusions.iter().any(|e| e.path == target) {
+            self.exclusions.push(ExcludedFile { path: target });
+        }
+    }
+
+    /// Remove a file from the exclusion list (e.g., when re-adding via `edit add`).
+    pub(crate) fn remove_exclusion(&mut self, target: &Path) {
+        self.exclusions.retain(|e| e.path != target);
+    }
+
+    /// Check if a file is excluded.
+    pub(crate) fn is_excluded(&self, target: &Path) -> bool {
+        self.exclusions.iter().any(|e| e.path == target)
     }
 }
 
@@ -411,6 +435,12 @@ pub(crate) enum EntryType {
     #[default]
     File,
     Directory,
+}
+
+/// A file excluded from an overlay via `edit remove`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct ExcludedFile {
+    pub(crate) path: PathBuf,
 }
 
 /// Configuration file for an overlay source (repoverlay.ccl).
@@ -543,6 +573,26 @@ pub(crate) fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
     Ok(states)
 }
 
+/// Load exclusions for a specific overlay from external state.
+///
+/// Reads the external backup regardless of `removed_at` status, since exclusions
+/// should persist across remove/reapply cycles. Returns an empty vec if no
+/// external state exists or has no exclusions.
+pub(crate) fn load_external_exclusions(target: &Path, overlay_name: &str) -> Result<Vec<PathBuf>> {
+    let dir = external_state_dir_for_target(target)?;
+    let state_file = dir.join(format!("{overlay_name}.ccl"));
+
+    if !state_file.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&state_file)?;
+    match sickle::from_str::<OverlayState>(&content) {
+        Ok(state) => Ok(state.exclusions.into_iter().map(|e| e.path).collect()),
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
 /// Hash a path to create a unique identifier.
 fn hash_path(path: &Path) -> String {
     let mut hasher = DefaultHasher::new();
@@ -655,10 +705,141 @@ pub(crate) fn save_overlay_state(target: &Path, state: &OverlayState) -> Result<
     Ok(())
 }
 
+/// Format a `DateTime<Utc>` as a human-readable relative time string (e.g. "2 days ago").
+pub(crate) fn format_relative_time(dt: &DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let duration = now.signed_duration_since(*dt);
+
+    if duration.num_seconds() < 0 {
+        return "just now".to_string();
+    }
+
+    let seconds = duration.num_seconds();
+    let minutes = duration.num_minutes();
+    let hours = duration.num_hours();
+    let days = duration.num_days();
+    let weeks = days / 7;
+    let months = days / 30;
+    let years = days / 365;
+
+    if seconds < 60 {
+        "just now".to_string()
+    } else if minutes == 1 {
+        "1 minute ago".to_string()
+    } else if minutes < 60 {
+        format!("{minutes} minutes ago")
+    } else if hours == 1 {
+        "1 hour ago".to_string()
+    } else if hours < 24 {
+        format!("{hours} hours ago")
+    } else if days == 1 {
+        "1 day ago".to_string()
+    } else if days < 7 {
+        format!("{days} days ago")
+    } else if weeks == 1 {
+        "1 week ago".to_string()
+    } else if weeks < 5 {
+        format!("{weeks} weeks ago")
+    } else if months == 1 {
+        "1 month ago".to_string()
+    } else if months < 12 {
+        format!("{months} months ago")
+    } else if years == 1 {
+        "1 year ago".to_string()
+    } else {
+        format!("{years} years ago")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_format_relative_time_just_now() {
+        let now = Utc::now();
+        assert_eq!(format_relative_time(&now), "just now");
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::seconds(30))),
+            "just now"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_minutes() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::minutes(1))),
+            "1 minute ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::minutes(45))),
+            "45 minutes ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_hours() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::hours(1))),
+            "1 hour ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::hours(5))),
+            "5 hours ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_days() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(1))),
+            "1 day ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(4))),
+            "4 days ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_weeks() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::weeks(1))),
+            "1 week ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::weeks(3))),
+            "3 weeks ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_months_and_years() {
+        let now = Utc::now();
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(45))),
+            "1 month ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(400))),
+            "1 year ago"
+        );
+        assert_eq!(
+            format_relative_time(&(now - chrono::Duration::days(800))),
+            "2 years ago"
+        );
+    }
+
+    #[test]
+    fn test_format_relative_time_future() {
+        let future = Utc::now() + chrono::Duration::hours(1);
+        assert_eq!(format_relative_time(&future), "just now");
+    }
 
     #[test]
     fn test_normalize_overlay_name() {
@@ -1012,6 +1193,7 @@ mod tests {
                     entry_type: EntryType::File,
                 },
             ],
+            exclusions: vec![],
             removed_at: None,
         };
         let content = sickle::to_string(&state).unwrap();
@@ -1283,6 +1465,7 @@ mappings =
                     entry_type: EntryType::Directory,
                 },
             ],
+            exclusions: vec![],
             removed_at: None,
         };
         let content = sickle::to_string(&state).unwrap();
@@ -1383,6 +1566,7 @@ directories =
             source,
             applied_at: chrono::Utc::now(),
             files: vec![],
+            exclusions: vec![],
             removed_at: None,
         };
 
@@ -1420,6 +1604,7 @@ directories =
             source,
             applied_at: chrono::Utc::now(),
             files: vec![],
+            exclusions: vec![],
             removed_at: None,
         };
 
@@ -1457,6 +1642,7 @@ directories =
             source: OverlaySource::local(PathBuf::from("/source")),
             applied_at: chrono::Utc::now(),
             files: vec![],
+            exclusions: vec![],
             removed_at: None,
         };
         fs::write(
@@ -1700,5 +1886,109 @@ directories =
             result.is_ok() || result.is_err(),
             "save_external_state should handle missing target gracefully"
         );
+    }
+
+    #[test]
+    fn exclusion_add_remove_and_check() {
+        let mut state = OverlayState::new(
+            "test".to_string(),
+            OverlaySource::local(PathBuf::from("/source")),
+        );
+
+        assert!(!state.is_excluded(Path::new("file.txt")));
+        assert!(state.exclusions.is_empty());
+
+        state.add_exclusion(PathBuf::from("file.txt"));
+        assert!(state.is_excluded(Path::new("file.txt")));
+        assert_eq!(state.exclusions.len(), 1);
+
+        // Duplicate add is idempotent
+        state.add_exclusion(PathBuf::from("file.txt"));
+        assert_eq!(state.exclusions.len(), 1);
+
+        state.remove_exclusion(Path::new("file.txt"));
+        assert!(!state.is_excluded(Path::new("file.txt")));
+        assert!(state.exclusions.is_empty());
+    }
+
+    #[test]
+    fn exclusions_roundtrip_through_serialization() {
+        let mut state = OverlayState::new(
+            "test".to_string(),
+            OverlaySource::local(PathBuf::from("/source")),
+        );
+        state.add_exclusion(PathBuf::from("removed.txt"));
+        state.add_exclusion(PathBuf::from("also-removed.txt"));
+
+        let serialized = sickle::to_string(&state).unwrap();
+        let deserialized: OverlayState = sickle::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.exclusions.len(), 2);
+        assert!(deserialized.is_excluded(Path::new("removed.txt")));
+        assert!(deserialized.is_excluded(Path::new("also-removed.txt")));
+    }
+
+    #[test]
+    fn exclusions_omitted_when_empty() {
+        let state = OverlayState::new(
+            "test".to_string(),
+            OverlaySource::local(PathBuf::from("/source")),
+        );
+
+        let serialized = sickle::to_string(&state).unwrap();
+        assert!(
+            !serialized.contains("exclusions"),
+            "empty exclusions should be omitted from serialization"
+        );
+    }
+
+    #[test]
+    fn load_external_exclusions_returns_exclusions_even_when_removed() {
+        let temp = TempDir::new().unwrap();
+
+        // Create a state with exclusions and removed_at set
+        let mut state = OverlayState::new(
+            "test-overlay".to_string(),
+            OverlaySource::local(PathBuf::from("/source")),
+        );
+        state.add_exclusion(PathBuf::from("excluded.txt"));
+        state.removed_at = Some(chrono::Utc::now());
+
+        // Save to external state
+        save_external_state(temp.path(), "test-overlay", &state).unwrap();
+
+        // load_external_states should skip it (removed_at is set)
+        let states = load_external_states(temp.path()).unwrap();
+        assert!(
+            states.is_empty(),
+            "removed overlay should be skipped by load_external_states"
+        );
+
+        // But load_external_exclusions should still return the exclusions
+        let exclusions = load_external_exclusions(temp.path(), "test-overlay").unwrap();
+        assert_eq!(exclusions.len(), 1);
+        assert_eq!(exclusions[0], PathBuf::from("excluded.txt"));
+    }
+
+    #[test]
+    fn load_external_exclusions_returns_empty_when_no_state() {
+        let temp = TempDir::new().unwrap();
+        let exclusions = load_external_exclusions(temp.path(), "nonexistent").unwrap();
+        assert!(exclusions.is_empty());
+    }
+
+    #[test]
+    fn backward_compat_state_without_exclusions_deserializes() {
+        // Simulate a state file written before exclusions were added (CCL format)
+        let ccl = "\
+name = old-overlay
+applied_at = 2024-01-01T00:00:00Z
+source =
+  type = Local
+  path = /old/path
+";
+        let state: OverlayState = sickle::from_str(ccl).unwrap();
+        assert!(state.exclusions.is_empty());
+        assert!(!state.is_excluded(Path::new("anything")));
     }
 }

@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod detection;
 mod fuzzy;
+pub(crate) mod git;
 mod github;
 mod json_merge;
 mod overlay_name;
@@ -23,6 +24,7 @@ mod upstream;
 ///
 /// This is the only public entry point. All other functionality is internal.
 pub fn run() -> anyhow::Result<()> {
+    git::install_ctrlc_handler();
     cli::run()
 }
 
@@ -300,7 +302,10 @@ pub(crate) enum ResolvedSources {
 fn find_matching_source(owner: &str, repo: &str) -> Option<config::Source> {
     let config = config::load_config(None).ok()?;
     config.sources.into_iter().find(|source| {
-        github::parse_remote_url(&source.url)
+        source
+            .url
+            .as_deref()
+            .and_then(github::parse_remote_url)
             .is_some_and(|(src_owner, src_repo)| src_owner == owner && src_repo == repo)
     })
 }
@@ -730,7 +735,7 @@ fn prompt_save_source(owner: &str, repo: &str) -> Result<()> {
     if config
         .sources
         .iter()
-        .any(|s| s.url == url || s.name == source_name)
+        .any(|s| s.url.as_deref() == Some(&url) || s.name == source_name)
     {
         return Ok(());
     }
@@ -747,7 +752,8 @@ fn prompt_save_source(owner: &str, repo: &str) -> Result<()> {
 
     config.sources.push(config::Source {
         name: source_name.clone(),
-        url: url.clone(),
+        url: Some(url.clone()),
+        path: None,
     });
     config::save_config(&config)?;
 
@@ -820,6 +826,7 @@ fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableOverlay>> {
                     repo: repo_name.clone(),
                     name: overlay_name,
                     has_config,
+                    flat: false,
                 });
             }
         }
@@ -955,6 +962,7 @@ fn resolve_three_part(
             upstream.as_ref(),
             source_filter,
             update,
+            target_path,
         );
     }
 
@@ -968,6 +976,7 @@ fn resolve_three_part(
 }
 
 /// Resolve an overlay from configured sources with fuzzy suggestions on failure.
+#[allow(clippy::too_many_arguments)]
 fn resolve_from_sources_with_suggestions(
     sources: &[config::Source],
     org: &str,
@@ -976,8 +985,9 @@ fn resolve_from_sources_with_suggestions(
     upstream: Option<&upstream::UpstreamInfo>,
     source_filter: Option<&str>,
     update: bool,
+    repo_root: Option<&Path>,
 ) -> Result<ResolvedSource> {
-    let manager = sources::SourceManager::new(sources.to_vec())?;
+    let manager = sources::SourceManager::new(sources.to_vec(), repo_root)?;
 
     // Ensure all sources are cloned and up-to-date
     manager.ensure_all_cloned()?;
@@ -1239,10 +1249,29 @@ pub(crate) fn apply_resolved_overlay(
     let mut state = OverlayState::new(overlay_name.clone(), resolved.source_info.clone());
     let mut exclude_entries: Vec<String> = Vec::new();
 
+    // Load exclusions from previous external state (survives remove/reapply cycles)
+    let previous_exclusions =
+        crate::state::load_external_exclusions(target, &normalized_name).unwrap_or_default();
+    if !previous_exclusions.is_empty() {
+        debug!(
+            "loaded {} exclusion(s) from previous state",
+            previous_exclusions.len()
+        );
+        for excl in &previous_exclusions {
+            state.add_exclusion(excl.clone());
+        }
+    }
+
     // Process directories first (symlink as units)
     for dir_name in &config.directories {
         let dir_path = PathBuf::from(dir_name);
         let source_dir = source.join(&dir_path);
+
+        // Skip excluded directories
+        if state.is_excluded(&dir_path) {
+            debug!("skipping excluded directory: {}", dir_path.display());
+            continue;
+        }
 
         // Check if directory exists
         if !source_dir.exists() {
@@ -1420,6 +1449,13 @@ pub(crate) fn apply_resolved_overlay(
     for (rel_path, target_rel_str) in collect_overlay_files(source, &config) {
         let rel_str = rel_path.to_string_lossy().to_string();
         let target_rel = PathBuf::from(&target_rel_str);
+
+        // Skip excluded files
+        if state.is_excluded(&target_rel) {
+            debug!("skipping excluded file: {}", target_rel.display());
+            continue;
+        }
+
         let source_file = source.join(&rel_path);
         let target_file = target.join(&target_rel);
 
@@ -2441,7 +2477,7 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
     }
 
     println!(
-        "    Applied: {}",
+        "    Updated: {}",
         state.applied_at.format("%Y-%m-%d %H:%M:%S UTC")
     );
     println!("    Files:   {}", state.file_count());
@@ -2565,7 +2601,8 @@ pub(crate) fn restore_overlays(
             OverlaySource::Local { .. } | OverlaySource::OverlayRepo { .. } => None,
         };
 
-        // Re-apply the overlay
+        // Re-apply the overlay. Always use Force since restore's purpose is to
+        // re-create missing/broken symlinks from external backup state.
         match apply_overlay(
             &source_str,
             &target,
@@ -2573,7 +2610,7 @@ pub(crate) fn restore_overlays(
             Some(state.name.clone()),
             ref_override,
             true, // Update cache
-            conflict_strategy,
+            ConflictStrategy::Force,
             merge,
             None,  // Use default source resolution for restore
             false, // Not a dry run
@@ -2762,6 +2799,43 @@ pub(crate) fn update_overlays(
     Ok(())
 }
 
+/// Expand glob patterns in include paths relative to the source directory.
+///
+/// Paths that contain glob metacharacters (`*`, `?`, `[`) are expanded using
+/// [`glob::glob`]. Paths without metacharacters are passed through unchanged.
+/// Returns an error if a glob pattern matches no files or if a literal path
+/// does not exist.
+pub(crate) fn expand_include_globs(source: &Path, include: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut expanded = Vec::new();
+    for path in include {
+        let path_str = path.to_string_lossy();
+        if path_str.contains('*') || path_str.contains('?') || path_str.contains('[') {
+            let pattern = source.join(path).to_string_lossy().to_string();
+            let matches: Vec<PathBuf> = glob::glob(&pattern)
+                .with_context(|| format!("Invalid glob pattern: {path_str}"))?
+                .filter_map(Result::ok)
+                .collect();
+            if matches.is_empty() {
+                bail!("Glob pattern matched no files: {path_str}");
+            }
+            for matched in matches {
+                let rel = matched
+                    .strip_prefix(source)
+                    .unwrap_or(&matched)
+                    .to_path_buf();
+                expanded.push(rel);
+            }
+        } else {
+            let full_path = source.join(path);
+            if !full_path.exists() {
+                bail!("Include path does not exist: {}", path.display());
+            }
+            expanded.push(path.clone());
+        }
+    }
+    Ok(expanded)
+}
+
 /// Create a new overlay from files in a repository.
 ///
 /// # Modes
@@ -2833,6 +2907,10 @@ pub(crate) fn create_overlay(
             .iter()
             .filter(|f| f.category == detection::FileCategory::AiConfig)
             .count();
+        let tc_count = discovered
+            .iter()
+            .filter(|f| f.category == detection::FileCategory::TrackedConfig)
+            .count();
         let gi_count = discovered
             .iter()
             .filter(|f| f.category == detection::FileCategory::Gitignored)
@@ -2842,8 +2920,9 @@ pub(crate) fn create_overlay(
             .filter(|f| f.category == detection::FileCategory::Untracked)
             .count();
         println!(
-            " found {} AI, {} gitignored, {} untracked",
+            " found {} AI, {} tracked config, {} gitignored, {} untracked",
             selection::humanize_count(ai_count).green(),
+            selection::humanize_count(tc_count).cyan(),
             selection::humanize_count(gi_count).yellow(),
             selection::humanize_count(ut_count).blue()
         );
@@ -2870,6 +2949,7 @@ pub(crate) fn create_overlay(
                 let category_name = match category {
                     detection::FileCategory::AiConfig => "AI Configurations".green(),
                     detection::FileCategory::AiConfigDirectory => "AI Config Directories".magenta(),
+                    detection::FileCategory::TrackedConfig => "Tracked Config".cyan(),
                     detection::FileCategory::Gitignored => "Gitignored".yellow(),
                     detection::FileCategory::Untracked => "Untracked".blue(),
                 };
@@ -2966,13 +3046,8 @@ pub(crate) fn create_overlay(
         return create_overlay_with_files(source, &output_dir, &preselected, name);
     }
 
-    // Validate all include paths exist
-    for path in include {
-        let full_path = source.join(path);
-        if !full_path.exists() {
-            bail!("Include path does not exist: {}", path.display());
-        }
-    }
+    // Expand globs and validate include paths
+    let expanded = expand_include_globs(source, include)?;
 
     if dry_run {
         println!(
@@ -2982,7 +3057,7 @@ pub(crate) fn create_overlay(
         );
         println!();
         println!("Files to include:");
-        for path in include {
+        for path in &expanded {
             let full_path = source.join(path);
             if full_path.is_dir() {
                 for entry in walkdir::WalkDir::new(&full_path)
@@ -3004,7 +3079,7 @@ pub(crate) fn create_overlay(
     }
 
     // Use shared helper to copy files and generate config
-    create_overlay_with_files(source, &output_dir, include, name)
+    create_overlay_with_files(source, &output_dir, &expanded, name)
 }
 
 /// Copy files from source to output directory.
@@ -3021,6 +3096,20 @@ pub(crate) fn copy_files_to_overlay(
         if src_path.is_dir() {
             for entry in walkdir::WalkDir::new(&src_path)
                 .into_iter()
+                .filter_entry(|e| {
+                    // Skip transient tool state directories that can contain
+                    // thousands of files (matching detection.rs skip logic).
+                    if e.file_type().is_dir() && e.depth() > 0 {
+                        let name = e.file_name().to_string_lossy();
+                        if detection::SKIP_CHILD_DIRS
+                            .iter()
+                            .any(|skip| name.as_ref() == *skip)
+                        {
+                            return false;
+                        }
+                    }
+                    true
+                })
                 .filter_map(std::result::Result::ok)
                 .filter(|e| e.file_type().is_file())
             {
@@ -3121,7 +3210,7 @@ pub(crate) fn create_overlay_with_files(
 ///
 /// 1. Remove all existing overlays (if any)
 /// 2. Apply the new overlay
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(crate) fn switch_overlay(
     source: &str,
     target: &Path,
@@ -3131,6 +3220,7 @@ pub(crate) fn switch_overlay(
     update_cache: bool,
     conflict_strategy: ConflictStrategy,
     merge: bool,
+    dry_run: bool,
 ) -> Result<()> {
     validate_git_repo(target)?;
 
@@ -3141,7 +3231,7 @@ pub(crate) fn switch_overlay(
     if has_overlays {
         println!("{} existing overlays...", "Removing".yellow().bold());
         // Remove all existing overlays
-        remove_overlay(target, None, true, false)?;
+        remove_overlay(target, None, true, dry_run)?;
     }
 
     // Apply the new overlay
@@ -3156,7 +3246,7 @@ pub(crate) fn switch_overlay(
         conflict_strategy,
         merge,
         None,
-        false,
+        dry_run,
     )?;
 
     Ok(())
@@ -3225,6 +3315,39 @@ pub(crate) fn update_git_exclude(
     while content.ends_with("\n\n") {
         content.pop();
     }
+
+    fs::write(&exclude_path, content)?;
+    Ok(())
+}
+
+/// Ensure `.repoverlay` is in `.git/info/exclude`.
+///
+/// Called whenever repoverlay writes to the `.repoverlay/` directory,
+/// so the state directory doesn't show up as untracked even before
+/// any overlay is applied.
+pub(crate) fn ensure_repoverlay_excluded(repo_root: &Path) -> Result<()> {
+    let git_dir = resolve_git_dir(repo_root)?;
+    let exclude_path = git_dir.join("info").join("exclude");
+
+    if let Some(parent) = exclude_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
+
+    if content.contains(&exclude_marker_start(MANAGED_SECTION_NAME)) {
+        return Ok(());
+    }
+
+    if !content.ends_with('\n') && !content.is_empty() {
+        content.push('\n');
+    }
+    content.push_str(&exclude_marker_start(MANAGED_SECTION_NAME));
+    content.push('\n');
+    content.push_str(STATE_DIR);
+    content.push('\n');
+    content.push_str(&exclude_marker_end(MANAGED_SECTION_NAME));
+    content.push('\n');
 
     fs::write(&exclude_path, content)?;
     Ok(())
@@ -8175,6 +8298,78 @@ mod tests {
             let canonical = repo.path().canonicalize().unwrap();
             assert!(canonical.join(".vscode").exists());
             assert!(canonical.join(".vscode/settings.json").exists());
+        }
+    }
+
+    mod expand_include_globs_tests {
+        use super::*;
+
+        #[test]
+        fn literal_path_passes_through() {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("file.txt"), "content").unwrap();
+
+            let result = expand_include_globs(dir.path(), &[PathBuf::from("file.txt")]).unwrap();
+            assert_eq!(result, vec![PathBuf::from("file.txt")]);
+        }
+
+        #[test]
+        fn literal_path_missing_errors() {
+            let dir = TempDir::new().unwrap();
+            let result = expand_include_globs(dir.path(), &[PathBuf::from("missing.txt")]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn glob_star_matches_files() {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("a.md"), "").unwrap();
+            fs::write(dir.path().join("b.md"), "").unwrap();
+            fs::write(dir.path().join("c.txt"), "").unwrap();
+
+            let mut result = expand_include_globs(dir.path(), &[PathBuf::from("*.md")]).unwrap();
+            result.sort();
+            assert_eq!(result, vec![PathBuf::from("a.md"), PathBuf::from("b.md")]);
+        }
+
+        #[test]
+        fn glob_no_match_errors() {
+            let dir = TempDir::new().unwrap();
+            let result = expand_include_globs(dir.path(), &[PathBuf::from("*.xyz")]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn glob_double_star_matches_nested() {
+            let dir = TempDir::new().unwrap();
+            let sub = dir.path().join("sub");
+            fs::create_dir_all(&sub).unwrap();
+            fs::write(dir.path().join("top.md"), "").unwrap();
+            fs::write(sub.join("nested.md"), "").unwrap();
+
+            let mut result = expand_include_globs(dir.path(), &[PathBuf::from("**/*.md")]).unwrap();
+            result.sort();
+            assert_eq!(
+                result,
+                vec![PathBuf::from("sub/nested.md"), PathBuf::from("top.md")]
+            );
+        }
+
+        #[test]
+        fn mixed_literal_and_glob() {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join("keep.txt"), "").unwrap();
+            fs::write(dir.path().join("a.md"), "").unwrap();
+
+            let result = expand_include_globs(
+                dir.path(),
+                &[PathBuf::from("keep.txt"), PathBuf::from("*.md")],
+            )
+            .unwrap();
+            assert_eq!(
+                result,
+                vec![PathBuf::from("keep.txt"), PathBuf::from("a.md")]
+            );
         }
     }
 }
