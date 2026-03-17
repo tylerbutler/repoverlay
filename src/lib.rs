@@ -230,6 +230,10 @@ pub(crate) fn validate_git_repo(path: &Path) -> Result<()> {
 /// In a regular git repository, `.git` is a directory containing the git database.
 /// In a git worktree, `.git` is a file containing `gitdir: /path/to/git/dir`.
 /// This function handles both cases and returns the path to the actual git directory.
+///
+/// Note: For `info/exclude` paths, use [`resolve_git_exclude_path`] instead,
+/// which correctly resolves to the common git directory for worktrees.
+#[cfg(test)]
 pub(crate) fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf> {
     let git_path = repo_path.join(".git");
 
@@ -269,6 +273,33 @@ pub(crate) fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf> {
     }
 
     bail!("Not a git repository: {}", repo_path.display());
+}
+
+/// Resolve the path to `.git/info/exclude` for a repository.
+///
+/// Uses `git rev-parse --git-path` which correctly resolves to the common git
+/// directory for worktrees (git reads `info/exclude` from the shared `.git/`,
+/// not from the worktree-specific `$GIT_DIR`).
+pub(crate) fn resolve_git_exclude_path(repo_path: &Path) -> Result<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", "info/exclude"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to run git rev-parse --git-path")?;
+
+    if !output.status.success() {
+        bail!("Not a git repository: {}", repo_path.display());
+    }
+
+    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let path = PathBuf::from(&path_str);
+
+    // Handle relative paths (relative to repo_path)
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(repo_path.join(path))
+    }
 }
 
 /// Resolved source information for applying an overlay.
@@ -398,6 +429,8 @@ pub(crate) fn resolve_source(
         && let overlay_path = library_path.join(source_str)
         && overlay_path.is_dir()
     {
+        // Canonicalize so symlinks are created with absolute paths
+        let overlay_path = overlay_path.canonicalize().unwrap_or(overlay_path);
         debug!(
             "resolved '{source_str}' from library at {}",
             overlay_path.display()
@@ -489,6 +522,33 @@ pub(crate) fn resolve_source(
         ),
 
         SourceReference::OnePart { username } => {
+            // Before treating as a GitHub username, check if this is an applied
+            // overlay name that could be resolved from its source. This catches
+            // cases like `switch ff-oce` where the user means an overlay name,
+            // not a GitHub user.
+            if let Some(target) = target_path {
+                let applied = state::list_applied_overlays(target).unwrap_or_default();
+                if applied.iter().any(|n| n.as_str() == username) {
+                    // Already applied — resolve from its existing source
+                    let overlay_state = state::load_overlay_state(target, &username)?;
+                    let path = match &overlay_state.source {
+                        state::OverlaySource::Library { name } => {
+                            // Library sources need repo context to resolve
+                            let lib_path = library::get_library_path(target)?;
+                            lib_path.join(name).canonicalize()?
+                        }
+                        source => {
+                            use state::SourceResolver;
+                            source.resolve_local_path()?
+                        }
+                    };
+                    return Ok(ResolvedSources::Single(ResolvedSource {
+                        path,
+                        source_info: overlay_state.source,
+                    }));
+                }
+            }
+
             // Phase C: Expand username to username/{default_repo}
             let default_repo = config::default_overlay_repo_name();
             debug!("expanding one-part reference: {username} -> {username}/{default_repo}",);
@@ -2133,8 +2193,8 @@ pub(crate) fn remove_overlay(
             remove_single_overlay(&target, &overlays_dir, overlay_name.as_str())?;
         }
 
-        // Clean up .repoverlay directory entirely
-        fs::remove_dir_all(target.join(STATE_DIR))?;
+        // Clean up state files but preserve library and config
+        cleanup_state_dir(&target)?;
 
         println!("\n{} Removed all overlays", "✓".green().bold());
     } else if let Some(name) = name {
@@ -2144,13 +2204,39 @@ pub(crate) fn remove_overlay(
         // Check if any overlays remain
         let remaining = list_applied_overlays(&target)?;
         if remaining.is_empty() {
-            // No overlays left, clean up .repoverlay directory
-            fs::remove_dir_all(target.join(STATE_DIR))?;
+            // No overlays left, clean up state files but preserve library
+            cleanup_state_dir(&target)?;
         }
     } else {
         // This path should not be reached from non-interactive contexts
         bail!("No overlay name specified. Use --all to remove all overlays, or specify a name.");
     }
+
+    Ok(())
+}
+
+/// Remove overlay state files while preserving the library and config.
+///
+/// Removes `overlays/` dir and `meta.ccl` but leaves `library/`, `config.ccl`,
+/// and any other non-state contents of `.repoverlay/` intact. If the state
+/// directory is empty after cleanup, removes it too.
+fn cleanup_state_dir(target: &Path) -> Result<()> {
+    let state_dir = target.join(STATE_DIR);
+
+    // Remove overlays/ subdirectory
+    let overlays_dir = state_dir.join(OVERLAYS_DIR);
+    if overlays_dir.exists() {
+        fs::remove_dir_all(&overlays_dir)?;
+    }
+
+    // Remove meta.ccl
+    let meta_file = state_dir.join(META_FILE);
+    if meta_file.exists() {
+        fs::remove_file(&meta_file)?;
+    }
+
+    // Remove state dir if now empty (fails silently if library/config remain)
+    let _ = fs::remove_dir(&state_dir);
 
     Ok(())
 }
@@ -2612,7 +2698,20 @@ pub(crate) fn restore_overlays(
     for state in external_states {
         let source_str = match &state.source {
             OverlaySource::Local { path } => path.to_string_lossy().to_string(),
-            OverlaySource::GitHub { url, .. } => url.clone(),
+            OverlaySource::GitHub {
+                url,
+                owner,
+                repo,
+                subpath,
+                ..
+            } => {
+                // Reconstruct URL with subpath so resolve_source can find the
+                // specific overlay instead of falling into browse/selection mode.
+                subpath.as_ref().map_or_else(
+                    || url.clone(),
+                    |subpath| format!("https://github.com/{owner}/{repo}/tree/HEAD/{subpath}"),
+                )
+            }
             OverlaySource::OverlayRepo {
                 org,
                 repo,
@@ -3303,9 +3402,8 @@ pub(crate) fn update_git_exclude(
         entries.len()
     );
 
-    // Resolve the actual git directory (handles worktrees where .git is a file)
-    let git_dir = resolve_git_dir(target)?;
-    let exclude_path = git_dir.join("info").join("exclude");
+    // Resolve the correct exclude path (uses git common dir for worktrees)
+    let exclude_path = resolve_git_exclude_path(target)?;
 
     // Ensure the info directory exists
     if let Some(parent) = exclude_path.parent() {
@@ -3363,8 +3461,7 @@ pub(crate) fn update_git_exclude(
 /// so the state directory doesn't show up as untracked even before
 /// any overlay is applied.
 pub(crate) fn ensure_repoverlay_excluded(repo_root: &Path) -> Result<()> {
-    let git_dir = resolve_git_dir(repo_root)?;
-    let exclude_path = git_dir.join("info").join("exclude");
+    let exclude_path = resolve_git_exclude_path(repo_root)?;
 
     if let Some(parent) = exclude_path.parent() {
         fs::create_dir_all(parent)?;
@@ -3433,6 +3530,50 @@ pub(crate) fn any_overlay_sections_remain(content: &str) -> bool {
         }
     }
     false
+}
+
+/// Rebuild `.git/info/exclude` from overlay state files.
+///
+/// Reads all applied overlays from the state directory and reconstructs the
+/// git exclude entries. This repairs cases where the exclude file gets out of
+/// sync (e.g. after a `git clean`, manual edits, or interrupted operations).
+///
+/// Returns `true` if the exclude file was modified.
+pub(crate) fn repair_git_exclude(target: &Path) -> Result<bool> {
+    use state::{EntryType, list_applied_overlays, load_overlay_state};
+
+    let applied = list_applied_overlays(target)?;
+    if applied.is_empty() {
+        return Ok(false);
+    }
+
+    let exclude_path = resolve_git_exclude_path(target)?;
+    let before = fs::read_to_string(&exclude_path).unwrap_or_default();
+
+    for name in &applied {
+        let name_str = name.as_str();
+        let Ok(overlay_state) = load_overlay_state(target, name_str) else {
+            continue;
+        };
+
+        let exclude_entries: Vec<String> = overlay_state
+            .files
+            .iter()
+            .map(|f| {
+                let path = f.target.to_string_lossy().replace('\\', "/");
+                if f.entry_type == EntryType::Directory {
+                    format!("{path}/")
+                } else {
+                    path
+                }
+            })
+            .collect();
+
+        update_git_exclude(target, name_str, &exclude_entries, true)?;
+    }
+
+    let after = fs::read_to_string(&exclude_path).unwrap_or_default();
+    Ok(before != after)
 }
 
 /// Parse owner/repo from a GitHub URL (HTTPS or SSH format).
@@ -3729,36 +3870,50 @@ mod tests {
 
         #[test]
         fn writes_to_correct_location_in_worktree() {
+            use std::process::Command;
+
+            // Create a real git repo with a worktree
             let temp = TempDir::new().unwrap();
-            let worktree_path = temp.path();
+            let main_path = temp.path().join("main");
+            fs::create_dir_all(&main_path).unwrap();
+            Command::new("git")
+                .args(["init"])
+                .current_dir(&main_path)
+                .output()
+                .unwrap();
+            // Need at least one commit for worktrees
+            Command::new("git")
+                .args(["commit", "--allow-empty", "-m", "init"])
+                .current_dir(&main_path)
+                .output()
+                .unwrap();
 
-            // Simulate a worktree: .git is a file pointing to the actual git dir
-            let actual_git_dir = temp.path().join("actual-git-dir");
-            fs::create_dir_all(&actual_git_dir).unwrap();
-
-            let git_file_content = format!("gitdir: {}\n", actual_git_dir.display());
-            fs::write(worktree_path.join(".git"), git_file_content).unwrap();
+            let worktree_path = temp.path().join("worktree");
+            Command::new("git")
+                .args([
+                    "worktree",
+                    "add",
+                    worktree_path.to_str().unwrap(),
+                    "-b",
+                    "wt-branch",
+                ])
+                .current_dir(&main_path)
+                .output()
+                .unwrap();
 
             let entries = vec![".envrc".to_string()];
-            update_git_exclude(worktree_path, "test-overlay", &entries, true).unwrap();
+            update_git_exclude(&worktree_path, "test-overlay", &entries, true).unwrap();
 
-            // Exclude file should be in the actual git dir, not worktree_path/.git/info/exclude
-            let exclude_path = actual_git_dir.join("info").join("exclude");
+            // Exclude file should be in the common git dir (main repo's .git/)
+            let common_exclude = main_path.join(".git").join("info").join("exclude");
             assert!(
-                exclude_path.exists(),
-                "exclude file should exist in actual git dir"
+                common_exclude.exists(),
+                "exclude file should exist in common git dir"
             );
 
-            let content = fs::read_to_string(&exclude_path).unwrap();
+            let content = fs::read_to_string(&common_exclude).unwrap();
             assert!(content.contains("# repoverlay:test-overlay start"));
             assert!(content.contains(".envrc"));
-
-            // Verify it was NOT written to the worktree's .git path
-            let wrong_path = worktree_path.join(".git").join("info").join("exclude");
-            assert!(
-                !wrong_path.exists(),
-                "exclude file should not be at worktree .git path"
-            );
         }
     }
 
@@ -7696,6 +7851,80 @@ mod tests {
             let result = resolve_local_path(temp.path(), "test-dir", false).unwrap();
             // The returned path should be canonical (absolute, no symlinks)
             assert!(result.path.is_absolute());
+        }
+    }
+
+    // Tests for cleanup_state_dir
+    mod cleanup_state_dir_tests {
+        use super::*;
+        use crate::testutil::create_test_repo;
+
+        #[test]
+        fn preserves_library_directory() {
+            let repo = create_test_repo();
+            let state_dir = repo.path().join(STATE_DIR);
+            let library_dir = state_dir.join("library").join("my-overlay");
+            let overlays_dir = state_dir.join(OVERLAYS_DIR);
+
+            // Set up: state files + library
+            fs::create_dir_all(&library_dir).unwrap();
+            fs::write(library_dir.join("file.txt"), "content").unwrap();
+            fs::create_dir_all(&overlays_dir).unwrap();
+            fs::write(overlays_dir.join("test.ccl"), "state").unwrap();
+            fs::write(state_dir.join(META_FILE), "version = 1").unwrap();
+
+            cleanup_state_dir(repo.path()).unwrap();
+
+            // Library should survive
+            assert!(library_dir.join("file.txt").exists());
+            // State files should be gone
+            assert!(!overlays_dir.exists());
+            assert!(!state_dir.join(META_FILE).exists());
+            // State dir itself should still exist (library is inside)
+            assert!(state_dir.exists());
+        }
+
+        #[test]
+        fn removes_empty_state_dir() {
+            let repo = create_test_repo();
+            let state_dir = repo.path().join(STATE_DIR);
+            let overlays_dir = state_dir.join(OVERLAYS_DIR);
+
+            // Set up: only state files, no library
+            fs::create_dir_all(&overlays_dir).unwrap();
+            fs::write(overlays_dir.join("test.ccl"), "state").unwrap();
+            fs::write(state_dir.join(META_FILE), "version = 1").unwrap();
+
+            cleanup_state_dir(repo.path()).unwrap();
+
+            // Everything should be gone
+            assert!(!state_dir.exists());
+        }
+
+        #[test]
+        fn idempotent_when_already_clean() {
+            let repo = create_test_repo();
+
+            // No state dir at all — should not error
+            cleanup_state_dir(repo.path()).unwrap();
+            cleanup_state_dir(repo.path()).unwrap();
+        }
+
+        #[test]
+        fn preserves_config_file() {
+            let repo = create_test_repo();
+            let state_dir = repo.path().join(STATE_DIR);
+            let overlays_dir = state_dir.join(OVERLAYS_DIR);
+
+            fs::create_dir_all(&overlays_dir).unwrap();
+            fs::write(overlays_dir.join("test.ccl"), "state").unwrap();
+            fs::write(state_dir.join("config.ccl"), "library_path = custom").unwrap();
+
+            cleanup_state_dir(repo.path()).unwrap();
+
+            // Config should survive
+            assert!(state_dir.join("config.ccl").exists());
+            assert!(!overlays_dir.exists());
         }
     }
 

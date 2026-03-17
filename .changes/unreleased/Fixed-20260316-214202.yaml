@@ -1,0 +1,9 @@
+kind: Fixed
+body: |-
+    Auto-repair `.git/info/exclude` when entries are out of sync
+
+    `repoverlay status` now rebuilds git exclude entries from overlay state if
+    they've gotten out of sync (e.g. after `git clean`, manual edits, or
+    interrupted operations). Prints a maintenance note when repairs are made.
+time: 2026-03-16T21:42:02Z
+component: status

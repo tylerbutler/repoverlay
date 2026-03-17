@@ -50,6 +50,10 @@
           {
             "type": "command",
             "command": "cargo fmt --quiet 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'if [[ \"$CLAUDE_FILE\" == *.rs ]]; then cargo clippy --all-targets --all-features --quiet 2>&1 | head -20; fi'"
           }
         ]
       }
