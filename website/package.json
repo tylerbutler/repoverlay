@@ -21,20 +21,20 @@
 		"start": "astro dev"
 	},
 	"dependencies": {
-		"@astrojs/check": "^0.9.6",
-		"@astrojs/starlight": "^0.37.0",
-		"@catppuccin/starlight": "^1.1.1",
+		"@astrojs/check": "^0.9.8",
+		"@astrojs/starlight": "^0.38.1",
+		"@catppuccin/starlight": "^2.0.1",
 		"@fontsource/metropolis": "^5.2.5",
-		"astro": "^5.17.1",
+		"astro": "^6.0.5",
 		"sharp": "^0.34.5",
-		"starlight-links-validator": "^0.19.1",
-		"starlight-llms-txt": "^0.7.0",
+		"starlight-links-validator": "^0.20.1",
+		"starlight-llms-txt": "^0.8.0",
 		"typescript": "~5.9.3"
 	},
 	"devDependencies": {
 		"@fec/remark-a11y-emoji": "^4.0.2",
 		"@hashicorp/platform-remark-plugins": "^0.2.1",
 		"remark-shift-headings": "^0.1.1",
-		"rimraf": "^6.0.0"
+		"rimraf": "^6.1.3"
 	}
 }

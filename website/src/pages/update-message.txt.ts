@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 function getVersion(): string {
 	const cargoToml = readFileSync(
-		resolve(import.meta.dirname, "../../../Cargo.toml"),
+		resolve(process.cwd(), "../Cargo.toml"),
 		"utf-8",
 	);
 	const match = cargoToml.match(/^version\s*=\s*"(.+?)"/m);
