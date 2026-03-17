@@ -288,7 +288,12 @@ pub(crate) fn resolve_git_exclude_path(repo_path: &Path) -> Result<PathBuf> {
         .context("Failed to run git rev-parse --git-path")?;
 
     if !output.status.success() {
-        bail!("Not a git repository: {}", repo_path.display());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "Failed to resolve git exclude path in {}: {}",
+            repo_path.display(),
+            stderr.trim()
+        );
     }
 
     let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1784,7 +1789,14 @@ pub(crate) fn apply_resolved_overlay(
     }
 
     // Update .git/info/exclude with this overlay's entries
-    update_git_exclude(target, &normalized_name, &exclude_entries, true)?;
+    // Best-effort: overlay files may show as untracked if this fails
+    if let Err(e) = update_git_exclude(target, &normalized_name, &exclude_entries, true) {
+        eprintln!(
+            "  {} Could not update git exclude (overlay files may show as untracked): {}",
+            "Warning:".yellow(),
+            e
+        );
+    }
 
     // Ensure state directories exist
     fs::create_dir_all(&overlays_dir)?;
@@ -2358,7 +2370,15 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
             }
         })
         .collect();
-    update_git_exclude(target, name, &exclude_entries, false)?;
+    // Best-effort: don't fail the entire remove if exclude cleanup fails
+    // (e.g. git not available, worktree issues, non-standard git setup)
+    if let Err(e) = update_git_exclude(target, name, &exclude_entries, false) {
+        eprintln!(
+            "  {} Could not update git exclude: {}",
+            "Warning:".yellow(),
+            e
+        );
+    }
 
     // Remove state file
     fs::remove_file(&state_file)?;
