@@ -2952,3 +2952,107 @@ fn library_import_fixes_gitignore_when_library_ignored() {
     // Original `dir/` pattern should be converted to `dir/*`
     assert!(!gitignore.contains(".repoverlay/\n"));
 }
+
+// --- apply --from @library (#219) ---
+
+#[test]
+fn apply_from_library_explicit() {
+    let ctx = TestContext::new();
+
+    // Set up library overlay
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join(".envrc"), "use flake").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "my-overlay",
+            "--from",
+            "@library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Applied"));
+
+    assert!(ctx.repo_path().join(".envrc").exists());
+}
+
+#[test]
+fn apply_from_library_not_found_shows_error() {
+    let ctx = TestContext::new();
+
+    // Library with a different overlay
+    let library_path = ctx.repo_path().join(".repoverlay").join("library");
+    let other = library_path.join("other-overlay");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("file.txt"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "nonexistent",
+            "--from",
+            "@library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found in library"));
+}
+
+// --- browse includes library overlays (#218) ---
+
+#[test]
+fn browse_shows_library_overlays_when_no_sources() {
+    let ctx = TestContext::new();
+    let isolated_config = tempfile::TempDir::new().unwrap();
+
+    // Set up library with an overlay
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join(".envrc"), "use flake").unwrap();
+
+    // Browse should not fail with "no sources configured" when library exists
+    // Use --no-interactive to avoid TUI, isolate config to avoid user's sources
+    cargo_bin_cmd!("repoverlay")
+        .env("XDG_CONFIG_HOME", isolated_config.path())
+        .args([
+            "browse",
+            "--no-interactive",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+}
+
+#[test]
+fn browse_fails_when_no_sources_and_no_library() {
+    let ctx = TestContext::new();
+    let isolated_config = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .env("XDG_CONFIG_HOME", isolated_config.path())
+        .args([
+            "browse",
+            "--no-interactive",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No overlay sources configured"));
+}

@@ -1,0 +1,10 @@
+kind: Changed
+body: |-
+    Library as implicit source for `browse` when no sources configured
+
+    `browse` no longer fails with "no sources configured" when the library
+    contains overlays. The library acts as a fallback source, making it
+    possible to use repoverlay with only an in-repo library and no
+    configured external sources.
+time: 2026-03-17T02:25:07Z
+component: browse
