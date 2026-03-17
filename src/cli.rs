@@ -775,14 +775,15 @@ pub(crate) fn run() -> Result<()> {
                 show_status_json(&target, name.as_deref())?;
             } else {
                 show_status(&target, name)?;
-            }
 
-            // Auto-repair git exclude entries if they're out of sync
-            if matches!(repair_git_exclude(&target), Ok(true)) {
-                eprintln!(
-                    "{} Repaired .git/info/exclude entries.",
-                    "Maintenance:".cyan().bold()
-                );
+                // Auto-repair git exclude entries if they're out of sync
+                // Only run in interactive (non-quiet, non-json) mode
+                if matches!(repair_git_exclude(&target), Ok(true)) {
+                    eprintln!(
+                        "{} Repaired .git/info/exclude entries.",
+                        "Maintenance:".cyan().bold()
+                    );
+                }
             }
         }
         Commands::Restore {

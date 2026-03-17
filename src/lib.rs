@@ -527,13 +527,21 @@ pub(crate) fn resolve_source(
             // cases like `switch ff-oce` where the user means an overlay name,
             // not a GitHub user.
             if let Some(target) = target_path {
-                use state::SourceResolver;
-
                 let applied = state::list_applied_overlays(target).unwrap_or_default();
                 if applied.iter().any(|n| n.as_str() == username) {
                     // Already applied — resolve from its existing source
                     let overlay_state = state::load_overlay_state(target, &username)?;
-                    let path = overlay_state.source.resolve_local_path()?;
+                    let path = match &overlay_state.source {
+                        state::OverlaySource::Library { name } => {
+                            // Library sources need repo context to resolve
+                            let lib_path = library::get_library_path(target)?;
+                            lib_path.join(name).canonicalize()?
+                        }
+                        source => {
+                            use state::SourceResolver;
+                            source.resolve_local_path()?
+                        }
+                    };
                     return Ok(ResolvedSources::Single(ResolvedSource {
                         path,
                         source_info: overlay_state.source,
@@ -2227,15 +2235,8 @@ fn cleanup_state_dir(target: &Path) -> Result<()> {
         fs::remove_file(&meta_file)?;
     }
 
-    // If state dir is now empty (no library, no config), remove it
-    if state_dir.exists()
-        && state_dir
-            .read_dir()
-            .map(|mut d| d.next().is_none())
-            .unwrap_or(false)
-    {
-        fs::remove_dir(&state_dir)?;
-    }
+    // Remove state dir if now empty (fails silently if library/config remain)
+    let _ = fs::remove_dir(&state_dir);
 
     Ok(())
 }
