@@ -1,0 +1,8 @@
+kind: Fixed
+body: |-
+    Fix library overlay symlinks using incorrect relative paths
+
+    Library overlays resolved to relative paths (e.g. `./.repoverlay/library/...`)
+    causing broken symlinks in subdirectories. Paths are now canonicalized to
+    absolute paths before symlink creation.
+time: 2026-03-17T02:12:33Z

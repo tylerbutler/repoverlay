@@ -1,0 +1,8 @@
+kind: Fixed
+body: |-
+    Preserve library directory when removing overlays
+
+    Removing the last overlay (or `remove --all`) deleted the entire
+    `.repoverlay/` directory, destroying the in-repo library. Now only
+    state files are removed while the library and config are preserved.
+time: 2026-03-17T02:12:32Z

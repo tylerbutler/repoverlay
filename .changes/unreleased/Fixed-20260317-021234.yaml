@@ -1,0 +1,9 @@
+kind: Fixed
+body: |-
+    Resolve bare overlay names from applied state before GitHub fallback
+
+    Commands like `switch my-overlay` treated bare names as GitHub usernames
+    when the overlay wasn't in the library, producing confusing "repository
+    not found" errors. Now checks applied overlay state first and resolves
+    from the stored source.
+time: 2026-03-17T02:12:34Z
