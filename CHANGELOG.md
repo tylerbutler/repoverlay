@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.11.1 - 2026-03-17
+
+
+### Fixes
+
+
+#### Fixed
+
+##### Allow overlay operations when git exclude updates fail
+
+Apply, remove, and switch no longer abort when `.git/info/exclude` cannot be updated (e.g. in codespace worktrees with non-portable absolute paths). A warning is shown and the operation continues — overlay files may appear as untracked in git status.
+
+
 ## v0.11.0 - 2026-03-17
 
 
