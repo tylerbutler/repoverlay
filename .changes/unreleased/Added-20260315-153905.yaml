@@ -1,9 +1,0 @@
-kind: Added
-body: |-
-    Add --dry-run support to switch command
-
-    The `switch` command now supports `--dry-run` to preview what would change
-    without making modifications, consistent with `apply`, `remove`, `restore`,
-    and `update`.
-time: 2026-03-15T15:39:05-07:00
-component: switch

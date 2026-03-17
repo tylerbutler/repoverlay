@@ -1,9 +1,0 @@
-kind: Fixed
-body: |-
-    Fix `edit add` failing on directories with "Is a directory" error
-
-    The `edit add` command now correctly handles directories (e.g., `.claude/commands`) by using
-    recursive directory copy, directory symlinks, and `EntryType::Directory` in overlay state.
-    Rollback logic also properly restores directories on failure.
-time: 2026-03-12T00:30:25+00:00
-component: edit

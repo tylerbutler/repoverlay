@@ -1,9 +1,0 @@
-kind: Fixed
-body: |-
-    Restore broken symlinks without requiring --force
-
-    `restore` no longer errors when an overlay's state exists but its symlinked
-    files have been deleted. Since restore's purpose is to re-create missing
-    files, it now always forces past the "already applied" check.
-time: 2026-03-15T15:39:03-07:00
-component: restore
