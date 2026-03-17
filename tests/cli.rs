@@ -1572,6 +1572,60 @@ fn source_add_local_extracts_name_from_dir() {
 }
 
 // ============================================================================
+// Source Add file:// URL Tests
+// ============================================================================
+
+#[test]
+fn source_add_file_url_succeeds() {
+    let ctx = SourceTestContext::new();
+
+    // Create an external directory to use as source
+    let external_dir = tempfile::TempDir::new().unwrap();
+
+    let file_url = format!("file://{}", external_dir.path().display());
+    ctx.cmd()
+        .args(["source", "add", &file_url, "--name", "file-source"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added"));
+}
+
+#[test]
+fn source_add_file_url_shows_in_list() {
+    let ctx = SourceTestContext::new();
+
+    let external_dir = tempfile::TempDir::new().unwrap();
+    let file_url = format!("file://{}", external_dir.path().display());
+
+    ctx.cmd()
+        .args(["source", "add", &file_url, "--name", "file-listed"])
+        .assert()
+        .success();
+
+    ctx.cmd()
+        .args(["source", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("file-listed"));
+}
+
+#[test]
+fn source_add_file_url_extracts_name_from_path() {
+    let ctx = SourceTestContext::new();
+
+    let external_dir = tempfile::TempDir::new().unwrap();
+    let named_dir = external_dir.path().join("my-overlays");
+    fs::create_dir_all(&named_dir).unwrap();
+
+    let file_url = format!("file://{}", named_dir.display());
+    ctx.cmd()
+        .args(["source", "add", &file_url])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlays"));
+}
+
+// ============================================================================
 // JSON Deep Merge Tests
 // ============================================================================
 
