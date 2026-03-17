@@ -7853,6 +7853,80 @@ mod tests {
         }
     }
 
+    // Tests for cleanup_state_dir
+    mod cleanup_state_dir_tests {
+        use super::*;
+        use crate::testutil::create_test_repo;
+
+        #[test]
+        fn preserves_library_directory() {
+            let repo = create_test_repo();
+            let state_dir = repo.path().join(STATE_DIR);
+            let library_dir = state_dir.join("library").join("my-overlay");
+            let overlays_dir = state_dir.join(OVERLAYS_DIR);
+
+            // Set up: state files + library
+            fs::create_dir_all(&library_dir).unwrap();
+            fs::write(library_dir.join("file.txt"), "content").unwrap();
+            fs::create_dir_all(&overlays_dir).unwrap();
+            fs::write(overlays_dir.join("test.ccl"), "state").unwrap();
+            fs::write(state_dir.join(META_FILE), "version = 1").unwrap();
+
+            cleanup_state_dir(repo.path()).unwrap();
+
+            // Library should survive
+            assert!(library_dir.join("file.txt").exists());
+            // State files should be gone
+            assert!(!overlays_dir.exists());
+            assert!(!state_dir.join(META_FILE).exists());
+            // State dir itself should still exist (library is inside)
+            assert!(state_dir.exists());
+        }
+
+        #[test]
+        fn removes_empty_state_dir() {
+            let repo = create_test_repo();
+            let state_dir = repo.path().join(STATE_DIR);
+            let overlays_dir = state_dir.join(OVERLAYS_DIR);
+
+            // Set up: only state files, no library
+            fs::create_dir_all(&overlays_dir).unwrap();
+            fs::write(overlays_dir.join("test.ccl"), "state").unwrap();
+            fs::write(state_dir.join(META_FILE), "version = 1").unwrap();
+
+            cleanup_state_dir(repo.path()).unwrap();
+
+            // Everything should be gone
+            assert!(!state_dir.exists());
+        }
+
+        #[test]
+        fn idempotent_when_already_clean() {
+            let repo = create_test_repo();
+
+            // No state dir at all — should not error
+            cleanup_state_dir(repo.path()).unwrap();
+            cleanup_state_dir(repo.path()).unwrap();
+        }
+
+        #[test]
+        fn preserves_config_file() {
+            let repo = create_test_repo();
+            let state_dir = repo.path().join(STATE_DIR);
+            let overlays_dir = state_dir.join(OVERLAYS_DIR);
+
+            fs::create_dir_all(&overlays_dir).unwrap();
+            fs::write(overlays_dir.join("test.ccl"), "state").unwrap();
+            fs::write(state_dir.join("config.ccl"), "library_path = custom").unwrap();
+
+            cleanup_state_dir(repo.path()).unwrap();
+
+            // Config should survive
+            assert!(state_dir.join("config.ccl").exists());
+            assert!(!overlays_dir.exists());
+        }
+    }
+
     // Tests for remove_overlay
     mod remove_overlay_tests {
         use super::*;
