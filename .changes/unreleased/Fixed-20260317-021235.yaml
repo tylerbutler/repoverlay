@@ -1,9 +1,0 @@
-kind: Fixed
-body: |-
-    Fix restore entering browse mode for GitHub overlays with subpaths
-
-    Restoring a GitHub-sourced overlay with a subpath reconstructed the source
-    URL without the subpath, causing the selection UI to appear instead of
-    directly resolving the specific overlay.
-time: 2026-03-17T02:12:35Z
-component: restore

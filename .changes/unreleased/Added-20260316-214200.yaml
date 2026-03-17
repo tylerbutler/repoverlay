@@ -4,5 +4,5 @@ body: |-
 
     `repoverlay library import my-overlay` now resolves bare names from applied
     overlay state when the name isn't a filesystem path, making it easy to promote
-    an applied overlay into the library. Closes #220.
+    an applied overlay into the library.
 time: 2026-03-16T21:42:00Z
