@@ -2,5 +2,11 @@ kind: Added
 body: |-
     Add in-repo overlay library (`repoverlay library`)
 
-    Store shareable overlays in `.repoverlay/library/` within the repository. New `library` subcommand group with `list`, `import`, `export`, and `remove` operations. Library overlays are auto-discovered and resolved with highest priority when applying by bare name. The library path is configurable via per-repo `repoverlay.ccl` config (`library_path` field). Import warns if the library directory is gitignored. Remove checks for currently applied overlays.
+    Store shareable overlays in `.repoverlay/library/` within the repository.
+    New `library` subcommand group with `list`, `import`, `export`, and
+    `remove` operations. Library overlays are auto-discovered and resolved
+    with highest priority when applying by bare name. The library path is
+    configurable via per-repo `repoverlay.ccl` config (`library_path` field).
+    `.gitignore` is automatically updated to track the library directory.
+    `status` auto-repairs `.git/info/exclude` entries when out of sync.
 time: 2026-03-16T17:28:08Z

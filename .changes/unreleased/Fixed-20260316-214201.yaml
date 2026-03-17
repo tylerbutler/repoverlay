@@ -1,9 +1,0 @@
-kind: Fixed
-body: |-
-    Auto-fix `.gitignore` when library path is gitignored
-
-    Library commands (`library import`, `create --into library`) now automatically
-    update `.gitignore` to track the library directory instead of just warning.
-    Converts `dir/` patterns to `dir/*` and adds a negation pattern so library
-    overlays are committed to git.
-time: 2026-03-16T21:42:01Z
