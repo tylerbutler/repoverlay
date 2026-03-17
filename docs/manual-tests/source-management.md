@@ -41,7 +41,7 @@ cd "$TEST_DIR"
 ```bash
 cd "$TEST_DIR"
 
-repoverlay source add "$TEST_DIR/local-source" --name local
+repoverlay source add "file://$TEST_DIR/local-source" --name local
 ```
 
 **Expected Output:**
@@ -106,10 +106,10 @@ repoverlay source list
 cd "$TEST_DIR"
 
 # Add the source back
-repoverlay source add "$TEST_DIR/local-source" --name local
+repoverlay source add "file://$TEST_DIR/local-source" --name local
 
 # Try adding the same source again
-repoverlay source add "$TEST_DIR/local-source" --name local
+repoverlay source add "file://$TEST_DIR/local-source" --name local
 echo "Exit code: $?"
 ```
 
