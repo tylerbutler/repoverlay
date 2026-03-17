@@ -1,9 +1,0 @@
-kind: Fixed
-body: |-
-    Remove git remote requirement for locally-applied overlays
-
-    `edit add` no longer requires a git remote origin when working with
-    overlays applied from local paths. Remote detection is deferred to
-    only when needed for overlay repo auto-commit.
-time: 2026-03-15T15:39:01-07:00
-component: edit
