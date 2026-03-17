@@ -1,9 +1,0 @@
-kind: Added
-body: |-
-    Add `--into library` flag to create overlays directly in the library
-
-    `repoverlay create --into library` creates an overlay in `.repoverlay/library/`
-    and prompts to apply it. Use `--no-apply` to skip applying, or `-y` to
-    auto-confirm. Closes #217.
-time: 2026-03-16T21:41:59Z
-component: create

@@ -10,3 +10,4 @@ body: |-
     filesystem. Use `source list` and `source remove` to manage both global git
     sources and repo-local sources.
 time: 2026-03-10T03:19:17Z
+component: source

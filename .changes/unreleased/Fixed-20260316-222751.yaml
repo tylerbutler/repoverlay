@@ -7,3 +7,4 @@ body: |-
     would show as untracked because exclude entries were written to the wrong
     location. Now uses `git rev-parse --git-path` to resolve the correct path.
 time: 2026-03-16T22:27:51Z
+component: fixes
