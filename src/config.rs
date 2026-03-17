@@ -192,6 +192,13 @@ pub(crate) enum SourceUrlInput {
     BareOwner(String),
     /// A local directory path for overlay sources within the repo.
     LocalPath(PathBuf),
+    /// A `file://` URL pointing to a local directory (possibly external to the repo).
+    FileUrl {
+        /// The local filesystem path (stripped of `file://` prefix).
+        path: PathBuf,
+        /// The original `file://` URL string for display and storage.
+        original: String,
+    },
 }
 
 impl SourceUrlInput {
@@ -214,21 +221,29 @@ impl SourceUrlInput {
                 expand_github_shorthand(&format!("{owner}/{repo}"))
             }
             Self::BareOwner(owner) => expand_github_shorthand(&format!("{owner}/{default_repo}")),
+            Self::FileUrl { original, .. } => original.clone(),
             Self::LocalPath(_) => panic!("to_url() called on LocalPath variant"),
         }
     }
 
-    /// Returns `true` if this is a local path source.
+    /// Returns `true` if this is a local path source (not a `file://` URL).
     #[must_use]
     pub(crate) const fn is_local(&self) -> bool {
         matches!(self, Self::LocalPath(_))
+    }
+
+    /// Returns `true` if this is a `file://` URL source.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) const fn is_file_url(&self) -> bool {
+        matches!(self, Self::FileUrl { .. })
     }
 
     /// Returns the local path. Panics if called on a git variant.
     #[must_use]
     pub(crate) fn local_path(&self) -> &Path {
         match self {
-            Self::LocalPath(p) => p,
+            Self::LocalPath(p) | Self::FileUrl { path: p, .. } => p,
             _ => panic!("local_path() called on non-LocalPath variant"),
         }
     }
@@ -244,6 +259,20 @@ impl FromStr for SourceUrlInput {
                  GitHub shorthand (owner/repo), or a GitHub username (owner)."
                     .to_string(),
             );
+        }
+
+        // Check for file:// URLs — local path via URL syntax.
+        if let Some(path) = s.strip_prefix("file://") {
+            if path.is_empty() {
+                return Err(
+                    "Invalid file:// URL: path cannot be empty. Use file:///path/to/directory."
+                        .to_string(),
+                );
+            }
+            return Ok(Self::FileUrl {
+                path: PathBuf::from(path),
+                original: s.to_string(),
+            });
         }
 
         // Check for local path indicators before git URL checks.
@@ -283,6 +312,7 @@ impl std::fmt::Display for SourceUrlInput {
             Self::GitHubShorthand { owner, repo } => write!(f, "{owner}/{repo}"),
             Self::BareOwner(owner) => write!(f, "{owner}"),
             Self::LocalPath(path) => write!(f, "{}", path.display()),
+            Self::FileUrl { original, .. } => write!(f, "{original}"),
         }
     }
 }
@@ -1427,6 +1457,48 @@ sources =
         let input: SourceUrlInput = "owner/repo".parse().unwrap();
         assert!(!input.is_local());
         assert!(matches!(input, SourceUrlInput::GitHubShorthand { .. }));
+    }
+
+    // ==================== SourceUrlInput file:// URL parsing tests ====================
+
+    #[test]
+    fn test_source_url_input_file_url_is_file_url() {
+        let input: SourceUrlInput = "file:///tmp/my-overlays".parse().unwrap();
+        assert!(input.is_file_url());
+        assert!(!input.is_local());
+        assert_eq!(input.local_path(), Path::new("/tmp/my-overlays"));
+    }
+
+    #[test]
+    fn test_source_url_input_file_url_two_slashes() {
+        let input: SourceUrlInput = "file:///home/user/overlays".parse().unwrap();
+        assert!(input.is_file_url());
+        assert_eq!(input.local_path(), Path::new("/home/user/overlays"));
+    }
+
+    #[test]
+    fn test_source_url_input_file_url_not_git_url() {
+        let input: SourceUrlInput = "file:///some/path".parse().unwrap();
+        assert!(!matches!(input, SourceUrlInput::GitUrl(_)));
+    }
+
+    #[test]
+    fn test_source_url_input_file_url_empty_path_rejected() {
+        let result: std::result::Result<SourceUrlInput, _> = "file://".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_source_url_input_file_url_display() {
+        let input: SourceUrlInput = "file:///tmp/overlays".parse().unwrap();
+        assert_eq!(format!("{input}"), "file:///tmp/overlays");
+    }
+
+    #[test]
+    fn test_source_url_input_file_url_preserves_original() {
+        // file:// URLs should preserve the original string for roundtripping
+        let input: SourceUrlInput = "file:///tmp/overlays".parse().unwrap();
+        assert!(input.is_file_url());
     }
 
     // ==================== Save/load roundtrip for path-based repo config ====================

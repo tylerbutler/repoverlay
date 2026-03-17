@@ -34,14 +34,14 @@ cd "$TEST_DIR"
 
 ## Test Cases
 
-### TC-01: source add with a local path
+### TC-01: source add with a file:// URL
 
 **Steps:**
 
 ```bash
 cd "$TEST_DIR"
 
-repoverlay source add "$TEST_DIR/local-source" --name local
+repoverlay source add "file://$TEST_DIR/local-source" --name local
 ```
 
 **Expected Output:**
@@ -53,7 +53,7 @@ repoverlay source add "$TEST_DIR/local-source" --name local
 
 ```bash
 repoverlay source list
-# Should show "local" source pointing to the local-source path
+# Should show "local" source pointing to the file:// URL
 ```
 
 ### TC-02: source list
@@ -98,18 +98,18 @@ repoverlay source list
 # Should NOT show "local" source anymore (empty list or other sources only)
 ```
 
-### TC-04: source add duplicate
+### TC-04: source add duplicate (file:// URL)
 
 **Steps:**
 
 ```bash
 cd "$TEST_DIR"
 
-# Add the source back
-repoverlay source add "$TEST_DIR/local-source" --name local
+# Add the source back using file:// URL
+repoverlay source add "file://$TEST_DIR/local-source" --name local
 
 # Try adding the same source again
-repoverlay source add "$TEST_DIR/local-source" --name local
+repoverlay source add "file://$TEST_DIR/local-source" --name local
 echo "Exit code: $?"
 ```
 
