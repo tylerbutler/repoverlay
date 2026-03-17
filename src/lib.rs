@@ -441,6 +441,26 @@ pub(crate) fn resolve_source(
         }));
     }
 
+    // If --from @library was explicitly requested but overlay wasn't found, error immediately
+    if is_library_filter {
+        let library_overlays = target_path
+            .and_then(|t| library::get_library_path(t).ok())
+            .and_then(|lp| library::list_library_overlays(&lp).ok())
+            .unwrap_or_default();
+
+        if library_overlays.is_empty() {
+            bail!(
+                "No overlays found in library. Import one with: repoverlay library import <source>"
+            );
+        }
+        let names: Vec<&str> = library_overlays.iter().map(|o| o.name.as_str()).collect();
+        bail!(
+            "Overlay '{}' not found in library. Available: {}",
+            source_str,
+            names.join(", ")
+        );
+    }
+
     // Parse input into structured reference
     let reference = SourceReference::parse(source_str);
     debug!("parsed reference: {reference:?}");

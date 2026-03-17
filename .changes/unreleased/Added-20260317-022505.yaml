@@ -1,0 +1,10 @@
+kind: Added
+body: |-
+    Include library overlays in `browse` command
+
+    Library overlays now appear alongside source overlays in the browse
+    listing with an `@library` source indicator. Library overlays always
+    pass through the auto-filter so they're visible regardless of the
+    current repo context.
+time: 2026-03-17T02:25:05Z
+component: browse

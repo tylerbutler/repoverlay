@@ -1622,7 +1622,10 @@ fn auto_filter_overlays(
 
     let matching: Vec<_> = overlays
         .iter()
-        .filter(|o| identity.matches(&o.org, &o.repo))
+        .filter(|o| {
+            // Library overlays always pass through the auto-filter
+            o.org == library::LIBRARY_SOURCE_NAME || identity.matches(&o.org, &o.repo)
+        })
         .cloned()
         .collect();
 
@@ -1715,7 +1718,13 @@ fn browse_overlays(
     // Load merged config (repo-local + global sources)
     let config = load_config(Some(&target_canonical))?;
 
-    if config.sources.is_empty() {
+    // Collect library overlays (available regardless of configured sources)
+    let library_overlays = library::get_library_path(&target_canonical)
+        .and_then(|lp| library::list_library_overlays(&lp))
+        .unwrap_or_default();
+    let has_library = !library_overlays.is_empty();
+
+    if config.sources.is_empty() && !has_library {
         eprintln!(
             "{} No overlay sources configured.\n\n\
              Add a source to get started:\n\
@@ -1732,26 +1741,33 @@ fn browse_overlays(
         bail!("No overlay sources configured");
     }
 
-    // Use SourceManager for multi-source browsing (handles both git and local)
-    let manager = SourceManager::new(config.sources, Some(&target_canonical))?;
-    manager.ensure_all_cloned()?;
+    // Set up source manager (if configured sources exist)
+    let manager = if config.sources.is_empty() {
+        None
+    } else {
+        let mgr = SourceManager::new(config.sources, Some(&target_canonical))?;
+        mgr.ensure_all_cloned()?;
+        if update {
+            println!("{} overlay sources...", "Updating".blue().bold());
+            mgr.pull_all()?;
+        }
+        Some(mgr)
+    };
 
-    if update {
-        println!("{} overlay sources...", "Updating".blue().bold());
-        manager.pull_all()?;
-    }
+    let all_with_sources = manager
+        .as_ref()
+        .map(SourceManager::list_all_overlays)
+        .transpose()?
+        .unwrap_or_default();
 
-    // Get all overlays with their source info
-    let all_with_sources = manager.list_all_overlays()?;
-
-    // Build a lookup map: overlay key -> Source
+    // Build a lookup map: overlay key -> Source (for configured source overlays)
     let source_map: std::collections::HashMap<String, config::Source> = all_with_sources
         .iter()
         .map(|(src, overlay)| (overlay.to_string(), src.clone()))
         .collect();
 
-    // Extract just the overlays for browse_and_apply
-    let overlays: Vec<_> = if let Some(filter) = target_filter {
+    // Extract overlays for browse_and_apply
+    let mut overlays: Vec<_> = if let Some(filter) = target_filter {
         let parts: Vec<&str> = filter.split('/').collect();
         if parts.len() != 2 {
             bail!("Invalid target filter format. Use: org/repo");
@@ -1768,16 +1784,45 @@ fn browse_overlays(
         all_with_sources.into_iter().map(|(_, o)| o).collect()
     };
 
+    // Add library overlays to the browse list (#218)
+    if has_library && target_filter.is_none() {
+        for lib_overlay in &library_overlays {
+            overlays.push(crate::overlay_repo::AvailableOverlay {
+                org: library::LIBRARY_SOURCE_NAME.to_string(),
+                repo: String::new(),
+                name: lib_overlay.name.clone(),
+                has_config: true,
+                flat: true,
+            });
+        }
+    }
+
+    let library_path = library::get_library_path(&target_canonical).ok();
     let build_source_info = |o: &crate::overlay_repo::AvailableOverlay| {
+        // Library overlays resolve differently from source overlays
+        if o.org == library::LIBRARY_SOURCE_NAME {
+            let lp = library_path
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Library path not found"))?;
+            let overlay_path = lp.join(&o.name).canonicalize()?;
+            return Ok(ResolvedSource {
+                path: overlay_path,
+                source_info: OverlaySource::library(o.name.clone()),
+            });
+        }
+
         let overlay_key = o.to_string();
         let source = source_map.get(&overlay_key).ok_or_else(|| {
             anyhow::anyhow!("Could not determine source for overlay: {overlay_key}")
         })?;
-        let base_path = manager
+        let mgr = manager
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No source manager available"))?;
+        let base_path = mgr
             .get_source_base_path(&source.name)
             .ok_or_else(|| anyhow::anyhow!("Source base path not found: {}", source.name))?;
         let overlay_path = base_path.join(&o.org).join(&o.repo).join(&o.name);
-        let commit = manager.get_source_commit(&source.name)?;
+        let commit = mgr.get_source_commit(&source.name)?;
 
         Ok(ResolvedSource {
             path: overlay_path,
