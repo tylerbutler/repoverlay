@@ -3148,6 +3148,16 @@ fn create_yes_falls_back_to_tracked_config() {
         .current_dir(source)
         .output()
         .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(source)
+        .output()
+        .unwrap();
     fs::write(source.join(".envrc"), "export FOO=bar").unwrap();
     fs::write(source.join(".gitignore"), "node_modules/").unwrap();
     std::process::Command::new("git")
@@ -3184,7 +3194,7 @@ fn create_yes_falls_back_to_tracked_config() {
     let has_envrc = overlay_dir.join(".envrc").exists();
     let has_gitignore = overlay_dir.join(".gitignore").exists();
     assert!(
-        has_envrc || has_gitignore,
-        "At least one tracked config file should be in the output"
+        has_envrc && has_gitignore,
+        "Both tracked config files should be in the output"
     );
 }
