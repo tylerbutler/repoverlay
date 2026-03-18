@@ -1,0 +1,10 @@
+kind: Fixed
+body: |-
+    Fall back to tracked config files when using `create --yes`
+
+    When `--yes` is used and no AI config files are found, `create` now falls
+    back to tracked config files (`.envrc`, `.gitignore`, `.vscode/settings.json`,
+    etc.) instead of bailing. The auto-select priority is: AI configs first,
+    tracked configs second, then error with a helpful message.
+time: 2026-03-18T18:22:18Z
+component: create
