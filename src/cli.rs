@@ -3392,8 +3392,22 @@ fn add_files_to_overlay(
         );
     }
 
-    // Parse the name argument to get org/repo/name
-    let (org, repo, overlay_name) = parse_overlay_name_arg(name_arg, &target)?;
+    // Extract overlay name (matches remove_files_from_overlay and interactive_edit_overlay patterns)
+    let overlay_name = if name_arg.contains('/') {
+        let parts: Vec<&str> = name_arg.split('/').collect();
+        if parts.len() == 3 {
+            parts[2].to_string()
+        } else {
+            bail!(
+                "Invalid overlay path format: {name_arg}\n\n\
+                 Use one of:\n  \
+                 - my-overlay (overlay name)\n  \
+                 - org/repo/my-overlay (explicit)"
+            );
+        }
+    } else {
+        name_arg.to_string()
+    };
 
     // Verify the overlay is currently applied
     let normalized_name = normalize_overlay_name(&overlay_name)?;
@@ -3403,9 +3417,18 @@ fn add_files_to_overlay(
         .iter()
         .any(|n| n == normalized_name.as_str())
     {
+        let names: Vec<_> = applied_overlays
+            .iter()
+            .map(|n| format!("  - {n}"))
+            .collect();
         bail!(
             "Overlay '{overlay_name}' is not currently applied.\n\n\
-             To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
+             Applied overlays:\n{}",
+            if applied_overlays.is_empty() {
+                "  (none)".to_string()
+            } else {
+                names.join("\n")
+            }
         );
     }
 
@@ -3742,14 +3765,20 @@ fn add_files_to_overlay(
     );
 
     // Auto-commit to overlay repo (only for OverlayRepo sources)
-    if let crate::state::OverlaySource::OverlayRepo { source_name, .. } = &state.source {
+    if let crate::state::OverlaySource::OverlayRepo {
+        org,
+        repo,
+        source_name,
+        ..
+    } = &state.source
+    {
         use crate::config::load_config;
         use crate::overlay_repo::OverlayRepoManager;
 
         let config = load_config(None)?;
         let overlay_config = config.get_overlay_repo_config_by_name(source_name.as_deref())?;
         let manager = OverlayRepoManager::new(overlay_config)?;
-        auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
+        auto_commit_overlay(&manager, org, repo, &overlay_name, false)?;
     }
 
     Ok(())
