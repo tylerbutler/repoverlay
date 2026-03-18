@@ -3110,3 +3110,54 @@ fn browse_fails_when_no_sources_and_no_library() {
         .failure()
         .stderr(predicate::str::contains("No overlay sources configured"));
 }
+
+#[test]
+fn create_yes_falls_back_to_tracked_config() {
+    // Create a source repo with only tracked config files (no AI configs)
+    let source_dir = tempfile::tempdir().unwrap();
+    let source = source_dir.path();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    fs::write(source.join(".envrc"), "export FOO=bar").unwrap();
+    fs::write(source.join(".gitignore"), "node_modules/").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "add config files"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+
+    let output_dir = tempfile::tempdir().unwrap();
+
+    // create --yes should succeed using tracked config files as fallback
+    // Note: when name + --output are both provided, files go into output/<name>/
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "my-overlay",
+            "--source",
+            source.to_str().unwrap(),
+            "--output",
+            output_dir.path().to_str().unwrap(),
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tracked config file"));
+
+    // Files are placed in output/<name>/ when both name and --output are provided
+    let overlay_dir = output_dir.path().join("my-overlay");
+    let has_envrc = overlay_dir.join(".envrc").exists();
+    let has_gitignore = overlay_dir.join(".gitignore").exists();
+    assert!(
+        has_envrc || has_gitignore,
+        "At least one tracked config file should be in the output"
+    );
+}

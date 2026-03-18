@@ -3199,27 +3199,44 @@ pub(crate) fn create_overlay(
             return create_overlay_with_files(source, &final_output, &result.selected_files, name);
         }
 
-        // With --yes flag but no includes, use pre-selected files (AI configs)
+        // With --yes flag but no includes, auto-select files:
+        // 1. Prefer AI configs (preselected)
+        // 2. Fall back to tracked config files
         let preselected: Vec<PathBuf> = discovered
             .iter()
             .filter(|f| f.preselected)
             .map(|f| f.path.clone())
             .collect();
 
-        if preselected.is_empty() {
-            bail!(
-                "No files specified and no AI configs found to auto-select.\n\n\
-                 Use --include to specify files:\n  repoverlay create my-overlay --include .envrc"
+        if !preselected.is_empty() {
+            println!(
+                "{} Using {} pre-selected AI config file(s)",
+                "Auto-select:".cyan().bold(),
+                preselected.len()
             );
+            return create_overlay_with_files(source, &output_dir, &preselected, name);
         }
 
-        println!(
-            "{} Using {} pre-selected AI config file(s)",
-            "Auto-select:".cyan().bold(),
-            preselected.len()
-        );
+        // No AI configs — fall back to tracked config files
+        let tracked_configs: Vec<PathBuf> = discovered
+            .iter()
+            .filter(|f| f.category == detection::FileCategory::TrackedConfig)
+            .map(|f| f.path.clone())
+            .collect();
 
-        return create_overlay_with_files(source, &output_dir, &preselected, name);
+        if !tracked_configs.is_empty() {
+            println!(
+                "{} No AI configs found. Using {} tracked config file(s)",
+                "Auto-select:".cyan().bold(),
+                tracked_configs.len()
+            );
+            return create_overlay_with_files(source, &output_dir, &tracked_configs, name);
+        }
+
+        bail!(
+            "No AI configs or tracked config files found to auto-select.\n\n\
+             Use --include to specify files:\n  repoverlay create my-overlay --include .envrc"
+        );
     }
 
     // Expand globs and validate include paths
