@@ -2126,6 +2126,39 @@ fn detect_target_repo(path: &std::path::Path) -> Result<(String, String)> {
     parse_github_owner_repo(&url)
 }
 
+/// Extract just the overlay name from a name argument.
+///
+/// Handles both short form (`my-overlay`) and full form (`org/repo/my-overlay`),
+/// returning only the overlay name portion. Unlike [`parse_overlay_name_arg`],
+/// this does not require a git remote to resolve org/repo.
+fn extract_overlay_name(name_arg: &str) -> Result<String> {
+    let slash_count = name_arg.chars().filter(|c| *c == '/').count();
+
+    match slash_count {
+        0 => Ok(name_arg.to_string()),
+        2 => {
+            let parts: Vec<&str> = name_arg.split('/').collect();
+            if parts.iter().any(|p| p.is_empty()) {
+                bail!(
+                    "Invalid overlay path format: {name_arg}\n\n\
+                     Use one of:\n  \
+                     - my-overlay (overlay name)\n  \
+                     - org/repo/my-overlay (explicit)"
+                );
+            }
+            Ok(parts[2].to_string())
+        }
+        _ => {
+            bail!(
+                "Invalid overlay path format: {name_arg}\n\n\
+                 Use one of:\n  \
+                 - my-overlay (overlay name)\n  \
+                 - org/repo/my-overlay (explicit)"
+            );
+        }
+    }
+}
+
 /// Parse an overlay name argument.
 ///
 /// Returns (org, repo, name) tuple.
@@ -2136,39 +2169,21 @@ fn parse_overlay_name_arg(
     name_arg: &str,
     source_path: &std::path::Path,
 ) -> Result<(String, String, String)> {
-    let slash_count = name_arg.chars().filter(|c| *c == '/').count();
+    let overlay_name = extract_overlay_name(name_arg)?;
 
+    let slash_count = name_arg.chars().filter(|c| *c == '/').count();
     match slash_count {
         0 => {
-            // Short form: just the overlay name
+            // Short form: detect org/repo from git remote
             let (org, repo) = detect_target_repo(source_path)?;
-            Ok((org, repo, name_arg.to_string()))
+            Ok((org, repo, overlay_name))
         }
         2 => {
-            // Full form: org/repo/name
+            // Full form: org/repo/name — extract org and repo
             let parts: Vec<&str> = name_arg.split('/').collect();
-            if parts.iter().any(|p| p.is_empty()) {
-                bail!(
-                    "Invalid overlay path format: {name_arg}\n\n\
-                     Use one of:\n  \
-                     - my-overlay (detects org/repo from git remote)\n  \
-                     - org/repo/my-overlay (explicit)"
-                );
-            }
-            Ok((
-                parts[0].to_string(),
-                parts[1].to_string(),
-                parts[2].to_string(),
-            ))
+            Ok((parts[0].to_string(), parts[1].to_string(), overlay_name))
         }
-        _ => {
-            bail!(
-                "Invalid overlay path format: {name_arg}\n\n\
-                 Use one of:\n  \
-                 - my-overlay (detects org/repo from git remote)\n  \
-                 - org/repo/my-overlay (explicit)"
-            );
-        }
+        _ => unreachable!("extract_overlay_name already validates slash count"),
     }
 }
 
@@ -2936,16 +2951,7 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
     }
 
     // Parse overlay name and verify it's applied
-    let overlay_name = if name_arg.contains('/') {
-        let parts: Vec<&str> = name_arg.split('/').collect();
-        if parts.len() == 3 {
-            parts[2].to_string()
-        } else {
-            bail!("Invalid overlay path: {name_arg}");
-        }
-    } else {
-        name_arg.to_string()
-    };
+    let overlay_name = extract_overlay_name(name_arg)?;
 
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
@@ -3160,21 +3166,7 @@ fn remove_files_from_overlay(
     }
 
     // Extract overlay name from the argument (handles both short and full forms)
-    let overlay_name = if name_arg.contains('/') {
-        let parts: Vec<&str> = name_arg.split('/').collect();
-        if parts.len() == 3 {
-            parts[2].to_string()
-        } else {
-            bail!(
-                "Invalid overlay path format: {name_arg}\n\n\
-                 Use one of:\n  \
-                 - my-overlay (detects org/repo from git remote)\n  \
-                 - org/repo/my-overlay (explicit)"
-            );
-        }
-    } else {
-        name_arg.to_string()
-    };
+    let overlay_name = extract_overlay_name(name_arg)?;
 
     let normalized_name = normalize_overlay_name(&overlay_name)?;
     let applied_overlays = list_applied_overlays(&target)?;
@@ -3392,8 +3384,8 @@ fn add_files_to_overlay(
         );
     }
 
-    // Parse the name argument to get org/repo/name
-    let (org, repo, overlay_name) = parse_overlay_name_arg(name_arg, &target)?;
+    // Extract overlay name from the argument (handles both short and full forms)
+    let overlay_name = extract_overlay_name(name_arg)?;
 
     // Verify the overlay is currently applied
     let normalized_name = normalize_overlay_name(&overlay_name)?;
@@ -3403,9 +3395,18 @@ fn add_files_to_overlay(
         .iter()
         .any(|n| n == normalized_name.as_str())
     {
+        let names: Vec<_> = applied_overlays
+            .iter()
+            .map(|n| format!("  - {n}"))
+            .collect();
         bail!(
             "Overlay '{overlay_name}' is not currently applied.\n\n\
-             To apply it first: repoverlay apply {org}/{repo}/{overlay_name}"
+             Applied overlays:\n{}",
+            if applied_overlays.is_empty() {
+                "  (none)".to_string()
+            } else {
+                names.join("\n")
+            }
         );
     }
 
@@ -3742,14 +3743,20 @@ fn add_files_to_overlay(
     );
 
     // Auto-commit to overlay repo (only for OverlayRepo sources)
-    if let crate::state::OverlaySource::OverlayRepo { source_name, .. } = &state.source {
+    if let crate::state::OverlaySource::OverlayRepo {
+        org,
+        repo,
+        source_name,
+        ..
+    } = &state.source
+    {
         use crate::config::load_config;
         use crate::overlay_repo::OverlayRepoManager;
 
         let config = load_config(None)?;
         let overlay_config = config.get_overlay_repo_config_by_name(source_name.as_deref())?;
         let manager = OverlayRepoManager::new(overlay_config)?;
-        auto_commit_overlay(&manager, &org, &repo, &overlay_name, false)?;
+        auto_commit_overlay(&manager, org, repo, &overlay_name, false)?;
     }
 
     Ok(())
