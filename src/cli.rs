@@ -3198,8 +3198,17 @@ fn remove_files_from_overlay(
 
     let mut state = load_overlay_state(&target, &normalized_name)?;
 
-    // Validate all files are managed by this overlay
-    for file in files {
+    // Normalize trailing slashes and validate all files are managed by this overlay
+    let files: Vec<PathBuf> = files
+        .iter()
+        .map(|f| {
+            let s = f.to_string_lossy();
+            let trimmed = s.trim_end_matches('/');
+            PathBuf::from(trimmed)
+        })
+        .collect();
+
+    for file in &files {
         let file_normalized = file.to_string_lossy().replace('\\', "/");
         if !state
             .file_entries()
@@ -3231,7 +3240,7 @@ fn remove_files_from_overlay(
         println!("  Target: {}", target.display());
         println!("\n{} Dry run - no changes made.", "Note:".yellow());
         println!("\nFiles that would be removed:");
-        for file in files {
+        for file in &files {
             println!("  {} {}", "-".red(), file.display());
         }
         return Ok(());
@@ -3239,7 +3248,7 @@ fn remove_files_from_overlay(
 
     let mut removed_count = 0;
 
-    for file in files {
+    for file in &files {
         let file_path = target.join(file);
 
         if file_path.exists() || file_path.is_symlink() {
@@ -3296,9 +3305,16 @@ fn remove_files_from_overlay(
             }
         }
 
+        // Capture entry type before removing from state
+        let entry_type = state
+            .file_entries()
+            .iter()
+            .find(|e| e.target == *file)
+            .map_or(EntryType::File, |e| e.entry_type);
+
         // Remove from state and add to exclusions
         state.remove_file(file);
-        state.add_exclusion(file.clone());
+        state.add_exclusion(file.clone(), entry_type);
         removed_count += 1;
     }
 
@@ -3321,14 +3337,9 @@ fn remove_files_from_overlay(
     // Save updated state
     save_overlay_state(&target, &state)?;
 
-    // Save external backup
-    if let Err(e) = save_external_state(&target, &normalized_name, &state) {
-        eprintln!(
-            "  {} Could not save external backup: {}",
-            "Warning:".yellow(),
-            e
-        );
-    }
+    // Save external backup — must succeed so exclusions persist across remove/reapply
+    save_external_state(&target, &normalized_name, &state)
+        .context("Failed to save external state backup")?;
 
     println!(
         "\n{} Removed {} file(s) from overlay '{}'",
