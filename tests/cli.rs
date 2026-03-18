@@ -1964,6 +1964,33 @@ fn edit_add_adds_file_to_overlay() {
     );
 }
 
+#[test]
+fn edit_add_works_without_git_remote() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Create a new file in the target repo
+    ctx.create_repo_file(".app-config", "app config");
+
+    // Edit add with SHORT form name (no org/repo prefix) — no git remote needed
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "test-overlay", ".app-config"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"));
+
+    // Verify the file is now managed as a symlink
+    assert!(ctx.is_symlink(".app-config"));
+}
+
 // ──────────────────────────────────────────────
 // Edit --remove tests
 // ──────────────────────────────────────────────
