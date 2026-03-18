@@ -3251,14 +3251,17 @@ fn remove_files_from_overlay(
     for file in &files {
         let file_path = target.join(file);
 
-        if file_path.exists() || file_path.is_symlink() {
-            // Find entry type from state before removing
-            let is_directory = state
-                .file_entries()
-                .iter()
-                .any(|e| e.target == *file && e.entry_type == EntryType::Directory);
+        // Capture entry type before removing from state — validation above
+        // guarantees the entry exists, so expect() is safe here.
+        let entry_type = state
+            .file_entries()
+            .iter()
+            .find(|e| e.target == *file)
+            .expect("validated file must exist in state")
+            .entry_type;
 
-            if is_directory {
+        if file_path.exists() || file_path.is_symlink() {
+            if entry_type == EntryType::Directory {
                 if file_path.is_symlink() {
                     #[cfg(unix)]
                     fs::remove_file(&file_path).with_context(|| {
@@ -3304,13 +3307,6 @@ fn remove_files_from_overlay(
                 }
             }
         }
-
-        // Capture entry type before removing from state
-        let entry_type = state
-            .file_entries()
-            .iter()
-            .find(|e| e.target == *file)
-            .map_or(EntryType::File, |e| e.entry_type);
 
         // Remove from state and add to exclusions
         state.remove_file(file);
