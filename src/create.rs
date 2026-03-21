@@ -14,8 +14,8 @@ use crate::remove_overlay;
 use crate::remove_single_overlay;
 use crate::selection;
 use crate::state::{
-    OVERLAYS_DIR, OverlaySource, STATE_DIR, list_applied_overlays, load_external_states,
-    load_overlay_state, normalize_overlay_name,
+    OVERLAYS_DIR, OverlaySource, SourceResolver, STATE_DIR, list_applied_overlays,
+    load_external_states, load_overlay_state, normalize_overlay_name,
 };
 use crate::validate_git_repo;
 use crate::ConflictStrategy;
