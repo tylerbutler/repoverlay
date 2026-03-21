@@ -1964,6 +1964,33 @@ fn edit_add_adds_file_to_overlay() {
     );
 }
 
+#[test]
+fn edit_add_works_without_git_remote() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Create a new file in the target repo
+    ctx.create_repo_file(".app-config", "app config");
+
+    // Edit add with SHORT form name (no org/repo prefix) — no git remote needed
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "test-overlay", ".app-config"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"));
+
+    // Verify the file is now managed as a symlink
+    assert!(ctx.is_symlink(".app-config"));
+}
+
 // ──────────────────────────────────────────────
 // Edit --remove tests
 // ──────────────────────────────────────────────
@@ -3196,4 +3223,65 @@ fn browse_fails_when_no_sources_and_no_library() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("No overlay sources configured"));
+}
+
+#[test]
+fn create_yes_falls_back_to_tracked_config() {
+    // Create a source repo with only tracked config files (no AI configs)
+    let source_dir = tempfile::tempdir().unwrap();
+    let source = source_dir.path();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    fs::write(source.join(".envrc"), "export FOO=bar").unwrap();
+    fs::write(source.join(".gitignore"), "node_modules/").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "add config files"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+
+    let output_dir = tempfile::tempdir().unwrap();
+
+    // create --yes should succeed using tracked config files as fallback
+    // Note: when name + --output are both provided, files go into output/<name>/
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "my-overlay",
+            "--source",
+            source.to_str().unwrap(),
+            "--output",
+            output_dir.path().to_str().unwrap(),
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tracked config file"));
+
+    // Files are placed in output/<name>/ when both name and --output are provided
+    let overlay_dir = output_dir.path().join("my-overlay");
+    let has_envrc = overlay_dir.join(".envrc").exists();
+    let has_gitignore = overlay_dir.join(".gitignore").exists();
+    assert!(
+        has_envrc && has_gitignore,
+        "Both tracked config files should be in the output"
+    );
 }

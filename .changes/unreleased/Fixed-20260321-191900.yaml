@@ -1,0 +1,12 @@
+kind: Fixed
+body: |-
+    Directory exclusions now persist across remove/reapply cycles
+
+    Directories removed via `edit remove` no longer reappear when the overlay
+    is removed and reapplied. The `ExcludedFile` struct now tracks whether an
+    exclusion is for a file or directory, and directory exclusions match
+    descendant paths. Also fixes trailing-slash handling (`.vscode/` is now
+    treated the same as `.vscode`) and makes external state backup failures
+    a hard error to ensure exclusions are always persisted.
+time: 2026-03-18T18:22:18Z
+component: edit
