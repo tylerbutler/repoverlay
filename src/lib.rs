@@ -9,18 +9,18 @@ mod create;
 mod detection;
 mod fuzzy;
 pub(crate) mod git;
+mod git_exclude;
 mod github;
 mod json_merge;
 mod library;
 mod overlay_name;
 mod overlay_repo;
 mod reference;
-mod git_exclude;
 mod remove;
-mod status;
 mod selection;
 mod sources;
 mod state;
+mod status;
 #[cfg(test)]
 mod testutil;
 mod update;
@@ -28,12 +28,12 @@ mod upstream;
 mod widgets;
 
 pub(crate) use create::{
-    copy_files_to_overlay, create_overlay, expand_include_globs,
-    generate_overlay_config, print_overlay_created, restore_overlays, switch_overlay,
-    update_overlays,
+    copy_files_to_overlay, create_overlay, expand_include_globs, generate_overlay_config,
+    print_overlay_created, restore_overlays, switch_overlay, update_overlays,
 };
 pub(crate) use git_exclude::{
-    ensure_repoverlay_excluded, parse_github_owner_repo, repair_git_exclude, update_git_exclude,
+    any_overlay_sections_remain, ensure_repoverlay_excluded, parse_github_owner_repo,
+    remove_overlay_section, repair_git_exclude, update_git_exclude,
 };
 pub(crate) use remove::{remove_overlay, remove_single_overlay};
 pub(crate) use status::{show_status, show_status_json, status_has_overlays};
@@ -64,11 +64,10 @@ use overlay_repo::{AvailableOverlay, copy_dir_recursive};
 use reference::SourceReference;
 use selection::is_interactive;
 use state::{
-    CONFIG_FILE, EntryType, FileEntry, GlobalMeta, LinkType, META_FILE,
-    OVERLAYS_DIR, OverlayConfig, OverlaySource, OverlayState, ResolvedVia, STATE_DIR,
-    list_applied_overlays,
-    load_all_overlay_targets, load_overlay_state, normalize_overlay_name,
-    save_external_state, save_overlay_state,
+    CONFIG_FILE, EntryType, FileEntry, GlobalMeta, LinkType, META_FILE, OVERLAYS_DIR,
+    OverlayConfig, OverlaySource, OverlayState, ResolvedVia, STATE_DIR, list_applied_overlays,
+    load_all_overlay_targets, load_overlay_state, normalize_overlay_name, save_external_state,
+    save_overlay_state,
 };
 use upstream::detect_upstream;
 
@@ -5268,7 +5267,6 @@ mod tests {
             assert!(result.path.is_absolute());
         }
     }
-
 
     // Tests for apply_overlay with different conflict strategies
     mod apply_overlay_conflict_tests {

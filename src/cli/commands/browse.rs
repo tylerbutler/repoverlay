@@ -3,13 +3,6 @@ use colored::Colorize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{
-    CacheManager, ConflictStrategy, ResolvedSource,
-    apply_multiple_overlays, canonicalize_path, config,
-    get_cached_repo_commit, library, list_applied_overlays,
-    list_overlays_from_cached_repo, validate_git_repo,
-    selection::is_interactive,
-};
 use crate::config::load_config;
 use crate::github::GitHubSource;
 use crate::overlay_repo::{AvailableOverlay, BrowseOverlayItem};
@@ -19,6 +12,11 @@ use crate::sources::SourceManager;
 use crate::sources::list_overlays_in_dir;
 use crate::state::{OverlaySource, ResolvedVia};
 use crate::upstream::detect_repo_identity;
+use crate::{
+    CacheManager, ConflictStrategy, ResolvedSource, apply_multiple_overlays, canonicalize_path,
+    config, get_cached_repo_commit, library, list_applied_overlays, list_overlays_from_cached_repo,
+    selection::is_interactive, validate_git_repo,
+};
 
 /// Filter overlays to those matching the current repository.
 ///

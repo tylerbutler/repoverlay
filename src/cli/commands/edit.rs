@@ -5,18 +5,17 @@ use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-use crate::{
-    canonicalize_path, list_applied_overlays, load_all_overlay_targets,
-    load_overlay_state, normalize_overlay_name, save_external_state,
-    save_overlay_state, update_git_exclude, OverlayName,
-    selection::is_interactive,
-};
+use super::create::{auto_commit_overlay, extract_overlay_name};
 use crate::config::load_config;
 use crate::detection::{DetectedFile, FileCategory};
 use crate::overlay_repo::OverlayRepoManager;
 use crate::selection::{SelectionConfig, select_files};
 use crate::state::{EntryType, FileEntry, LinkType, OverlaySource, SourceResolver};
-use super::create::{auto_commit_overlay, extract_overlay_name};
+use crate::{
+    OverlayName, canonicalize_path, list_applied_overlays, load_all_overlay_targets,
+    load_overlay_state, normalize_overlay_name, save_external_state, save_overlay_state,
+    selection::is_interactive, update_git_exclude,
+};
 
 /// Tracks completed operations for rollback on failure.
 enum RollbackEntry {
@@ -599,9 +598,10 @@ pub(crate) fn add_files_to_overlay(
 
     // Resolve the overlay source to a local path using the SourceResolver trait (#149).
     // This correctly handles Local, OverlayRepo (with source_name), and GitHub sources.
-    let overlay_repo_path = state.source.resolve_local_path().with_context(|| {
-        format!("Failed to resolve source path for overlay '{overlay_name}'")
-    })?;
+    let overlay_repo_path = state
+        .source
+        .resolve_local_path()
+        .with_context(|| format!("Failed to resolve source path for overlay '{overlay_name}'"))?;
 
     if !overlay_repo_path.exists() {
         bail!(

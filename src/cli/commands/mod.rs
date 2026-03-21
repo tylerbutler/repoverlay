@@ -11,14 +11,12 @@ use colored::Colorize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{
-    OVERLAYS_DIR, STATE_DIR, canonicalize_path, library, list_applied_overlays,
-    remove_overlay, remove_single_overlay, validate_git_repo,
-    selection::is_interactive,
-    state,
-};
-use crate::state::{OverlaySource, SourceResolver};
 use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
+use crate::state::{OverlaySource, SourceResolver};
+use crate::{
+    OVERLAYS_DIR, STATE_DIR, canonicalize_path, list_applied_overlays, remove_overlay,
+    remove_single_overlay, selection::is_interactive, state, validate_git_repo,
+};
 
 /// Canonicalize and validate an optional target path (defaults to current directory).
 pub(crate) fn resolve_target(target: Option<PathBuf>) -> Result<PathBuf> {
@@ -42,7 +40,7 @@ pub(crate) fn resolve_applied_overlay_source(target: &Path, name: &str) -> Resul
     let overlay_state = state::load_overlay_state(target, name)?;
     match &overlay_state.source {
         OverlaySource::Library { name: lib_name } => {
-            let library_path = library::get_library_path(target)?;
+            let library_path = crate::library::get_library_path(target)?;
             Ok(library_path.join(lib_name))
         }
         source => source.resolve_local_path(),

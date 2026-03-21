@@ -270,7 +270,7 @@ mod tests {
     // Tests for remove_single_overlay
     mod remove_single_overlay_tests {
         use super::*;
-        use crate::{apply_overlay, ConflictStrategy};
+        use crate::{ConflictStrategy, apply_overlay};
 
         fn create_test_repo_with_overlay() -> (TempDir, String) {
             let repo = create_test_repo();
@@ -485,7 +485,7 @@ mod tests {
     // Tests for remove_overlay
     mod remove_overlay_tests {
         use super::*;
-        use crate::{apply_overlay, ConflictStrategy};
+        use crate::{ConflictStrategy, apply_overlay};
 
         #[test]
         fn remove_all_removes_all_overlays() {

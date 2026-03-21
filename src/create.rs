@@ -4,6 +4,7 @@ use log::debug;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::ConflictStrategy;
 use crate::OverlayName;
 use crate::apply_overlay;
 use crate::cache::CacheManager;
@@ -14,11 +15,10 @@ use crate::remove_overlay;
 use crate::remove_single_overlay;
 use crate::selection;
 use crate::state::{
-    OVERLAYS_DIR, OverlaySource, SourceResolver, STATE_DIR, list_applied_overlays,
+    OVERLAYS_DIR, OverlaySource, STATE_DIR, SourceResolver, list_applied_overlays,
     load_external_states, load_overlay_state, normalize_overlay_name,
 };
 use crate::validate_git_repo;
-use crate::ConflictStrategy;
 
 /// Restore overlays after git clean or other removal.
 ///

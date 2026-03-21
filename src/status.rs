@@ -291,7 +291,7 @@ mod tests {
     // Tests for show_status
     mod show_status_tests {
         use super::*;
-        use crate::{apply_overlay, ConflictStrategy};
+        use crate::{ConflictStrategy, apply_overlay};
 
         #[test]
         fn status_no_overlays_succeeds() {
@@ -380,7 +380,7 @@ mod tests {
 
     mod status_has_overlays_tests {
         use super::*;
-        use crate::{apply_overlay, ConflictStrategy};
+        use crate::{ConflictStrategy, apply_overlay};
 
         #[test]
         fn no_overlays_returns_false() {
@@ -420,7 +420,7 @@ mod tests {
 
     mod show_status_json_tests {
         use super::*;
-        use crate::{apply_overlay, ConflictStrategy};
+        use crate::{ConflictStrategy, apply_overlay};
 
         #[test]
         fn json_no_overlays_outputs_empty_array() {

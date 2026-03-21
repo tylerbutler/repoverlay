@@ -2,9 +2,9 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use std::path::PathBuf;
 
-use crate::config;
-use super::find_repo_root;
 use super::super::SourceCommand;
+use super::find_repo_root;
+use crate::config;
 
 /// Handle source subcommands.
 pub(crate) fn handle_source_command(command: SourceCommand) -> Result<()> {

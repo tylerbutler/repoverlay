@@ -2,9 +2,9 @@ use anyhow::{Result, bail};
 use colored::Colorize;
 use std::path::PathBuf;
 
-use crate::{library, state};
 use super::super::LibraryCommand;
 use super::{resolve_applied_overlay_source, resolve_target};
+use crate::{library, state};
 
 /// Handle library subcommands.
 pub(crate) fn handle_library_command(command: LibraryCommand) -> Result<()> {

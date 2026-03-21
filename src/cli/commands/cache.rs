@@ -2,8 +2,8 @@ use anyhow::{Result, bail};
 use colored::Colorize;
 use std::io::{self, Write};
 
-use crate::CacheManager;
 use super::super::CacheCommand;
+use crate::CacheManager;
 
 pub(crate) fn handle_cache_command(command: CacheCommand) -> Result<()> {
     let cache = CacheManager::new()?;
