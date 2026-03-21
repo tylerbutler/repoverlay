@@ -19,6 +19,7 @@ mod sources;
 mod state;
 #[cfg(test)]
 mod testutil;
+mod update;
 mod upstream;
 mod widgets;
 
@@ -55,6 +56,11 @@ use state::{
     remove_external_state, save_external_state, save_overlay_state,
 };
 use upstream::detect_upstream;
+
+// Re-export git utilities so existing callers (including test modules) continue to work.
+#[cfg(test)]
+pub(crate) use git::resolve_git_dir;
+pub(crate) use git::{resolve_git_exclude_path, validate_git_repo};
 
 /// Strategy for handling conflicts during overlay application.
 ///
@@ -215,96 +221,6 @@ fn show_file_diff(existing_path: &Path, overlay_path: &Path, display_path: &Path
 pub(crate) fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf> {
     path.canonicalize()
         .with_context(|| format!("{} not found: {}", description, path.display()))
-}
-
-/// Validate that a path is a git repository (has a .git directory or file).
-pub(crate) fn validate_git_repo(path: &Path) -> Result<()> {
-    if !path.join(".git").exists() {
-        bail!("Target is not a git repository: {}", path.display());
-    }
-    Ok(())
-}
-
-/// Resolve the actual git directory for a repository.
-///
-/// In a regular git repository, `.git` is a directory containing the git database.
-/// In a git worktree, `.git` is a file containing `gitdir: /path/to/git/dir`.
-/// This function handles both cases and returns the path to the actual git directory.
-///
-/// Note: For `info/exclude` paths, use [`resolve_git_exclude_path`] instead,
-/// which correctly resolves to the common git directory for worktrees.
-#[cfg(test)]
-pub(crate) fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf> {
-    let git_path = repo_path.join(".git");
-
-    if git_path.is_dir() {
-        // Regular git repository
-        return Ok(git_path);
-    }
-
-    if git_path.is_file() {
-        // Git worktree - .git is a file containing "gitdir: /path/to/git/dir"
-        let content = fs::read_to_string(&git_path)
-            .with_context(|| format!("Failed to read .git file: {}", git_path.display()))?;
-
-        for line in content.lines() {
-            let line = line.trim();
-            if let Some(path_str) = line.strip_prefix("gitdir:") {
-                let path_str = path_str.trim();
-                let gitdir = PathBuf::from(path_str);
-
-                // Handle relative paths (relative to repo_path)
-                let gitdir = if gitdir.is_absolute() {
-                    gitdir
-                } else {
-                    repo_path.join(gitdir)
-                };
-
-                return gitdir.canonicalize().with_context(|| {
-                    format!("Failed to resolve gitdir path: {}", gitdir.display())
-                });
-            }
-        }
-
-        bail!(
-            "Invalid .git file (no gitdir found): {}",
-            git_path.display()
-        );
-    }
-
-    bail!("Not a git repository: {}", repo_path.display());
-}
-
-/// Resolve the path to `.git/info/exclude` for a repository.
-///
-/// Uses `git rev-parse --git-path` which correctly resolves to the common git
-/// directory for worktrees (git reads `info/exclude` from the shared `.git/`,
-/// not from the worktree-specific `$GIT_DIR`).
-pub(crate) fn resolve_git_exclude_path(repo_path: &Path) -> Result<PathBuf> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--git-path", "info/exclude"])
-        .current_dir(repo_path)
-        .output()
-        .context("Failed to run git rev-parse --git-path")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "Failed to resolve git exclude path in {}: {}",
-            repo_path.display(),
-            stderr.trim()
-        );
-    }
-
-    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let path = PathBuf::from(&path_str);
-
-    // Handle relative paths (relative to repo_path)
-    if path.is_absolute() {
-        Ok(path)
-    } else {
-        Ok(repo_path.join(path))
-    }
 }
 
 /// Resolved source information for applying an overlay.
@@ -644,12 +560,11 @@ fn resolve_local_path(
 ) -> Result<ResolvedSource> {
     debug!("resolving local path: {}", path.display());
 
-    // Emit deprecation warning for ambiguous paths
-    // TODO: In a future version, require `./` prefix for local paths
+    // Require `./` prefix for local paths to avoid ambiguity with overlay repo references.
+    // Absolute paths (`/...`) and home-relative paths (`~/...`) are unambiguous and allowed.
     if needs_prefix_warning {
-        eprintln!(
-            "{}: Local path '{}' matched. In a future version, use './{original_input}' for local paths.",
-            "Warning".yellow().bold(),
+        bail!(
+            "Ambiguous path '{}': use './{original_input}' to specify a local path explicitly.",
             path.display()
         );
     }
@@ -7890,16 +7805,21 @@ mod tests {
         }
     }
 
-    // Tests for resolve_local_path with deprecation warning
-    mod resolve_local_path_warning_tests {
+    // Tests for resolve_local_path with prefix requirement
+    mod resolve_local_path_prefix_tests {
         use super::*;
 
         #[test]
-        fn warning_path_still_resolves_successfully() {
+        fn ambiguous_path_returns_error() {
             let temp = TempDir::new().unwrap();
-            // With needs_prefix_warning=true, it should still resolve but emit warning
-            let result = resolve_local_path(temp.path(), "test-dir", true).unwrap();
-            assert!(result.path.exists());
+            // With needs_prefix_warning=true, resolution must fail with a clear error
+            let result = resolve_local_path(temp.path(), "test-dir", true);
+            assert!(result.is_err());
+            let err = result.err().unwrap().to_string();
+            assert!(
+                err.contains("./test-dir"),
+                "error should suggest using ./prefix: {err}"
+            );
         }
 
         #[test]
