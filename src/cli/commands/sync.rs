@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use std::fs;
-use std::path::PathBuf;
 
 use super::create::{auto_commit_overlay, parse_overlay_name_arg};
 use crate::config::load_config;
@@ -9,8 +8,8 @@ use crate::overlay_repo::OverlayRepoManager;
 use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
 use crate::state::{OverlaySource, SourceResolver};
 use crate::{
-    canonicalize_path, config, list_applied_overlays, load_overlay_state, normalize_overlay_name,
-    selection::is_interactive, state,
+    canonicalize_path, list_applied_overlays, load_overlay_state, normalize_overlay_name,
+    selection::is_interactive,
 };
 
 /// Handle the sync command, dispatching to single or all-overlay sync.
