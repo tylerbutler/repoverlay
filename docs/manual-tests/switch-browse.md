@@ -33,6 +33,26 @@ overlay =
 CCL
 echo "beta config" > overlay-b/.config-b
 
+# Create a local overlay source for browse tests
+mkdir -p browse-source/acme/widgets/widget-overlay
+cat > browse-source/acme/widgets/widget-overlay/repoverlay.ccl << 'CCL'
+overlay =
+  name = widget-overlay
+CCL
+echo "widget overlay" > browse-source/acme/widgets/widget-overlay/.widget-config
+
+mkdir -p browse-source/other/repo/other-overlay
+cat > browse-source/other/repo/other-overlay/repoverlay.ccl << 'CCL'
+overlay =
+  name = other-overlay
+CCL
+echo "other overlay" > browse-source/other/repo/other-overlay/.other-config
+
+cd browse-source
+git init
+git add . && git commit -m "init browse source"
+cd "$TEST_DIR"
+
 # Apply overlay A initially
 repoverlay apply ./overlay-a --target ./target-repo
 ```
@@ -169,7 +189,60 @@ repoverlay browse ./overlay-a --show-all --no-interactive --target ./target-repo
 
 Visual inspection that the overlay list is displayed.
 
-### TC-06 (Optional, requires network): Browse GitHub source
+### TC-06: Browse with `--filter`
+
+**Steps:**
+
+```bash
+cd "$TEST_DIR"
+
+repoverlay browse ./browse-source --filter acme/widgets --no-interactive --target ./target-repo > "$TEST_DIR/browse-filter.txt"
+cat "$TEST_DIR/browse-filter.txt"
+```
+
+**Expected Output:**
+
+- Lists `widget-overlay`
+- Does not list `other-overlay` because it targets a different repository
+
+**Verify:**
+
+```bash
+grep "widget-overlay" "$TEST_DIR/browse-filter.txt"
+# Should find widget-overlay
+
+grep "other-overlay" "$TEST_DIR/browse-filter.txt" && echo "unexpected overlay listed"
+# Should print nothing after grep because other-overlay should not be listed
+```
+
+### TC-07: Browse interactively and apply the selected overlay
+
+**Steps:**
+
+```bash
+cd "$TEST_DIR"
+
+repoverlay browse ./browse-source --filter acme/widgets --target ./target-repo
+```
+
+When the interactive list appears, select `widget-overlay` and press Enter.
+
+**Expected Output:**
+
+- The interactive selector shows `widget-overlay`
+- After selection, the overlay is applied to the target repo
+
+**Verify:**
+
+```bash
+cat "$TEST_DIR/target-repo/.widget-config"
+# Should contain "widget overlay"
+
+repoverlay status --target "$TEST_DIR/target-repo"
+# Should show "widget-overlay" as applied
+```
+
+### TC-08 (Optional, requires network): Browse GitHub source
 
 **Steps:**
 

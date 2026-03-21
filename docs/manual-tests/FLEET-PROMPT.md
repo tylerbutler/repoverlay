@@ -56,6 +56,8 @@ Here are the test files to dispatch (one agent each):
 | 10 | `docs/manual-tests/source-management.md` | Manage overlay sources |
 | 11 | `docs/manual-tests/cache.md` | Cache management |
 | 12 | `docs/manual-tests/completions.md` | Shell completion generation |
+| 13 | `docs/manual-tests/library.md` | In-repo library import/export/list/remove workflows |
+| 14 | `docs/manual-tests/source-resolution.md` | Source priority, `--from`, and upstream fallback |
 
 ## Step 3: Collect results and file issues
 
