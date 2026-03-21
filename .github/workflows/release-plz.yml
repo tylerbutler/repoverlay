@@ -11,7 +11,7 @@ on:
 jobs:
   release-plz-release:
     name: Release-plz release
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON_RELEASE_PLZ || vars.RUNS_ON || 'ubuntu-latest' }}
     concurrency:
       group: release-plz-release
       cancel-in-progress: false

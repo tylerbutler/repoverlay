@@ -10,7 +10,7 @@ jobs:
   # Semver compatibility check with PR comments
   semver:
     name: Semver Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON_SEMVER || vars.RUNS_ON || 'ubuntu-latest' }}
     if: github.event.pull_request.draft != true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
@@ -68,7 +68,7 @@ jobs:
   # Binary size comparison
   binary-size:
     name: Binary Size
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON_BINARY_SIZE || vars.RUNS_ON || 'ubuntu-latest' }}
     if: github.event.pull_request.draft != true
     steps:
       - name: Checkout PR
@@ -140,7 +140,7 @@ jobs:
   # Changelog entry check
   changelog:
     name: Changelog
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON_CHANGELOG || vars.RUNS_ON || 'ubuntu-latest' }}
     if: github.event.pull_request.draft != true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
