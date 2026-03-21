@@ -409,7 +409,6 @@ impl OverlayState {
     }
 
     /// Remove a file entry by target path. Returns the removed entry, or None if not found.
-    #[allow(dead_code)]
     pub(crate) fn remove_file(&mut self, target: &Path) -> Option<FileEntry> {
         if let Some(pos) = self.files.iter().position(|f| f.target == target) {
             Some(self.files.remove(pos))
@@ -430,9 +429,12 @@ impl OverlayState {
     }
 
     /// Add a file to the exclusion list.
-    pub(crate) fn add_exclusion(&mut self, target: PathBuf) {
+    pub(crate) fn add_exclusion(&mut self, target: PathBuf, entry_type: EntryType) {
         if !self.exclusions.iter().any(|e| e.path == target) {
-            self.exclusions.push(ExcludedFile { path: target });
+            self.exclusions.push(ExcludedFile {
+                path: target,
+                entry_type,
+            });
         }
     }
 
@@ -442,8 +444,14 @@ impl OverlayState {
     }
 
     /// Check if a file is excluded.
+    ///
+    /// File exclusions use exact path matching. Directory exclusions also
+    /// match descendant paths via `starts_with()`.
     pub(crate) fn is_excluded(&self, target: &Path) -> bool {
-        self.exclusions.iter().any(|e| e.path == target)
+        self.exclusions.iter().any(|e| {
+            e.path == target
+                || (e.entry_type == EntryType::Directory && target.starts_with(&e.path))
+        })
     }
 }
 
@@ -481,6 +489,11 @@ pub(crate) enum EntryType {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct ExcludedFile {
     pub(crate) path: PathBuf,
+    /// Whether this exclusion is for a file or directory.
+    /// Directory exclusions also exclude all descendant paths.
+    /// Backwards compatible: missing field defaults to File.
+    #[serde(default)]
+    pub(crate) entry_type: EntryType,
 }
 
 /// Configuration file for an overlay source (repoverlay.ccl).
@@ -618,7 +631,10 @@ pub(crate) fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
 /// Reads the external backup regardless of `removed_at` status, since exclusions
 /// should persist across remove/reapply cycles. Returns an empty vec if no
 /// external state exists or has no exclusions.
-pub(crate) fn load_external_exclusions(target: &Path, overlay_name: &str) -> Result<Vec<PathBuf>> {
+pub(crate) fn load_external_exclusions(
+    target: &Path,
+    overlay_name: &str,
+) -> Result<Vec<ExcludedFile>> {
     let dir = external_state_dir_for_target(target)?;
     let state_file = dir.join(format!("{overlay_name}.ccl"));
 
@@ -628,7 +644,7 @@ pub(crate) fn load_external_exclusions(target: &Path, overlay_name: &str) -> Res
 
     let content = fs::read_to_string(&state_file)?;
     match sickle::from_str::<OverlayState>(&content) {
-        Ok(state) => Ok(state.exclusions.into_iter().map(|e| e.path).collect()),
+        Ok(state) => Ok(state.exclusions),
         Err(_) => Ok(Vec::new()),
     }
 }
@@ -1979,12 +1995,12 @@ directories =
         assert!(!state.is_excluded(Path::new("file.txt")));
         assert!(state.exclusions.is_empty());
 
-        state.add_exclusion(PathBuf::from("file.txt"));
+        state.add_exclusion(PathBuf::from("file.txt"), EntryType::File);
         assert!(state.is_excluded(Path::new("file.txt")));
         assert_eq!(state.exclusions.len(), 1);
 
         // Duplicate add is idempotent
-        state.add_exclusion(PathBuf::from("file.txt"));
+        state.add_exclusion(PathBuf::from("file.txt"), EntryType::File);
         assert_eq!(state.exclusions.len(), 1);
 
         state.remove_exclusion(Path::new("file.txt"));
@@ -1993,13 +2009,33 @@ directories =
     }
 
     #[test]
+    fn is_excluded_matches_descendants_for_directories() {
+        let mut state = OverlayState::new(
+            "test".to_string(),
+            OverlaySource::local(PathBuf::from("/source")),
+        );
+
+        // File exclusion: exact match only
+        state.add_exclusion(PathBuf::from("foo"), EntryType::File);
+        assert!(state.is_excluded(Path::new("foo")));
+        assert!(!state.is_excluded(Path::new("foo/bar.txt")));
+
+        // Directory exclusion: matches descendants too
+        state.add_exclusion(PathBuf::from(".claude/commands"), EntryType::Directory);
+        assert!(state.is_excluded(Path::new(".claude/commands")));
+        assert!(state.is_excluded(Path::new(".claude/commands/build.md")));
+        assert!(state.is_excluded(Path::new(".claude/commands/sub/deep.md")));
+        assert!(!state.is_excluded(Path::new(".claude/other")));
+    }
+
+    #[test]
     fn exclusions_roundtrip_through_serialization() {
         let mut state = OverlayState::new(
             "test".to_string(),
             OverlaySource::local(PathBuf::from("/source")),
         );
-        state.add_exclusion(PathBuf::from("removed.txt"));
-        state.add_exclusion(PathBuf::from("also-removed.txt"));
+        state.add_exclusion(PathBuf::from("removed.txt"), EntryType::File);
+        state.add_exclusion(PathBuf::from("also-removed.txt"), EntryType::File);
 
         let serialized = sickle::to_string(&state).unwrap();
         let deserialized: OverlayState = sickle::from_str(&serialized).unwrap();
@@ -2032,7 +2068,7 @@ directories =
             "test-overlay".to_string(),
             OverlaySource::local(PathBuf::from("/source")),
         );
-        state.add_exclusion(PathBuf::from("excluded.txt"));
+        state.add_exclusion(PathBuf::from("excluded.txt"), EntryType::File);
         state.removed_at = Some(chrono::Utc::now());
 
         // Save to external state
@@ -2048,7 +2084,7 @@ directories =
         // But load_external_exclusions should still return the exclusions
         let exclusions = load_external_exclusions(temp.path(), "test-overlay").unwrap();
         assert_eq!(exclusions.len(), 1);
-        assert_eq!(exclusions[0], PathBuf::from("excluded.txt"));
+        assert_eq!(exclusions[0].path, PathBuf::from("excluded.txt"));
     }
 
     #[test]

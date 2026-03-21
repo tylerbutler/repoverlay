@@ -1363,8 +1363,8 @@ pub(crate) fn apply_resolved_overlay(
             "loaded {} exclusion(s) from previous state",
             previous_exclusions.len()
         );
-        for excl in &previous_exclusions {
-            state.add_exclusion(excl.clone());
+        for excl in previous_exclusions {
+            state.add_exclusion(excl.path, excl.entry_type);
         }
     }
 

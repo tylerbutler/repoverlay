@@ -3120,6 +3120,93 @@ fn browse_shows_library_overlays_when_no_sources() {
         .stdout(predicate::str::contains("my-overlay"));
 }
 
+// ──────────────────────────────────────────────
+// Edit remove — directory exclusion persistence
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_remove_directory_excluded_on_reapply() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file(".claude/commands/build.md", "# Build command");
+    ctx.create_repo_file(".claude/commands/test.md", "# Test command");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", ".claude/commands"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(ctx.is_symlink(".claude/commands"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "test-overlay", ".claude/commands"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(!ctx.file_exists(".claude/commands"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "remove",
+            "test-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(
+        !ctx.file_exists(".claude/commands"),
+        ".claude/commands should not reappear after reapply — directory exclusion should persist"
+    );
+}
+
+#[test]
+fn edit_remove_handles_trailing_slash_on_directory() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file(".vscode/settings.json", r#"{"editor.tabSize": 2}"#);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", ".vscode"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "test-overlay", ".vscode/"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 1 file"));
+
+    assert!(!ctx.file_exists(".vscode"));
+}
+
 #[test]
 fn browse_fails_when_no_sources_and_no_library() {
     let ctx = TestContext::new();
