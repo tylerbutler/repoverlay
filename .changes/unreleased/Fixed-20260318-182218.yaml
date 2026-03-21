@@ -1,11 +1,10 @@
 kind: Fixed
 body: |-
-    Allow `edit add` without git remote origin
+    Fall back to tracked config files when using `create --yes`
 
-    `edit add` with a short-form overlay name (e.g., `my-overlay`) no longer
-    requires a git remote origin. Previously, the command called
-    `detect_target_repo()` to resolve `org/repo` for an error message hint,
-    but this is unnecessary for the actual operation. Now uses the same inline
-    name extraction as `edit remove` and `edit --interactive`.
+    When `--yes` is used and no AI config files are found, `create` now falls
+    back to tracked config files (`.envrc`, `.gitignore`, `.vscode/settings.json`,
+    etc.) instead of bailing. The auto-select priority is: AI configs first,
+    tracked configs second, then error with a helpful message.
 time: 2026-03-18T18:22:18Z
-component: edit
+component: create
