@@ -170,6 +170,41 @@ repoverlay status --target "$TEST_DIR/target-github"
 # Should show the overlay as applied with updated information
 ```
 
+### TC-06: Update reports library overlays as managed via git
+
+**Steps:**
+
+```bash
+cd "$TEST_DIR"
+
+mkdir -p library-overlay
+cat > library-overlay/repoverlay.ccl << 'CCL'
+overlay =
+  name = library-overlay
+CCL
+echo "from library" > library-overlay/.library-config
+
+repoverlay library import ./library-overlay --target ./target-repo
+repoverlay apply library-overlay --target ./target-repo --from @library
+
+repoverlay update --target ./target-repo
+```
+
+**Expected Output:**
+
+- Output includes `library-overlay (library overlay — update via git)`
+- Other non-updatable overlays remain unchanged
+
+**Verify:**
+
+```bash
+cat "$TEST_DIR/target-repo/.library-config"
+# Should contain "from library"
+
+repoverlay status --target "$TEST_DIR/target-repo"
+# Should still show both "my-overlay" and "library-overlay" as applied
+```
+
 ## Cleanup
 
 ```bash

@@ -26,6 +26,12 @@ cd "$TEST_DIR"
 
 # Create output directory for overlays
 mkdir overlay-output
+
+# Create a target repo for library-based create flows
+mkdir target-repo && cd target-repo
+git init
+git commit --allow-empty -m "init"
+cd "$TEST_DIR"
 ```
 
 ## Test Cases
@@ -158,6 +164,60 @@ repoverlay create force-overlay --source ./source-repo --output ./overlay-output
 ```bash
 cat "$TEST_DIR/overlay-output/force-overlay/.envrc"
 # Should contain "updated content" (the overwritten version)
+```
+
+### TC-06: Create directly into the in-repo library without applying
+
+**Steps:**
+
+```bash
+cd "$TEST_DIR/target-repo"
+
+repoverlay create library-only --source ../source-repo --include .envrc --into library --no-apply --yes
+```
+
+**Expected Output:**
+
+- Success message indicating the overlay was created in the library
+- No overlay is applied to the target repo because `--no-apply` was used
+
+**Verify:**
+
+```bash
+ls "$TEST_DIR/target-repo/.repoverlay/library/library-only/.envrc"
+# Should exist in the library
+
+repoverlay status --target "$TEST_DIR/target-repo" --quiet
+echo "Exit code: $?"
+# Should be 1 — no overlays are currently applied
+```
+
+### TC-07: Create into the library and apply by default
+
+**Steps:**
+
+```bash
+cd "$TEST_DIR/target-repo"
+
+repoverlay create applied-library --source ../source-repo --include .envrc --into library --yes
+```
+
+**Expected Output:**
+
+- Success message indicating the overlay was created
+- The newly created library overlay is applied automatically
+
+**Verify:**
+
+```bash
+ls "$TEST_DIR/target-repo/.repoverlay/library/applied-library/.envrc"
+# Should exist in the library
+
+cat "$TEST_DIR/target-repo/.envrc"
+# Should contain "export FOO=bar"
+
+repoverlay status --target "$TEST_DIR/target-repo"
+# Should show "applied-library" as the applied overlay
 ```
 
 ## Cleanup
