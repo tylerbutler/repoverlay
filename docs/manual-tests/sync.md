@@ -163,6 +163,47 @@ echo "Exit code: $?"
 - Error message indicating overlay name is required or --all must be used
 - Non-zero exit code, OR selects the single applied overlay if only one exists
 
+### TC-06: Sync rejects library overlays
+
+**Steps:**
+
+```bash
+cd "$TEST_DIR"
+
+mkdir target-library-repo && cd target-library-repo
+git init
+git commit --allow-empty -m "init"
+cd "$TEST_DIR"
+
+mkdir -p library-source
+cat > library-source/repoverlay.ccl << 'CCL'
+overlay =
+  name = library-sync
+CCL
+echo "library content" > library-source/.library-config
+
+repoverlay library import ./library-source --target ./target-library-repo --name library-sync
+repoverlay apply library-sync --target ./target-library-repo --from @library
+
+repoverlay sync library-sync --target ./target-library-repo
+echo "Exit code: $?"
+```
+
+**Expected Output:**
+
+- Error message indicating the overlay comes from a library source and is not syncable
+- Non-zero exit code
+
+**Verify:**
+
+```bash
+repoverlay status --target "$TEST_DIR/target-library-repo"
+# Should show "library-sync" still applied
+
+cat "$TEST_DIR/target-library-repo/.library-config"
+# Should still contain "library content"
+```
+
 ## Cleanup
 
 ```bash
