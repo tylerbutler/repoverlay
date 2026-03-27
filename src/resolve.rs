@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::cache::CacheManager;
 use crate::config;
 use crate::fuzzy::OverlayMatcher;
+use crate::github;
 use crate::github::GitHubSource;
 use crate::library;
 use crate::overlay_name::OverlayName;
@@ -22,6 +23,7 @@ use crate::state::{
     normalize_overlay_name, save_overlay_state,
 };
 use crate::upstream;
+use crate::upstream::detect_upstream;
 
 /// Canonicalize a path and return an error with a descriptive message if it fails.
 pub(crate) fn canonicalize_path(path: &Path, description: &str) -> Result<PathBuf> {
@@ -356,7 +358,7 @@ fn resolve_github_url(
 }
 
 /// Resolve a local filesystem path.
-fn resolve_local_path(
+pub(crate) fn resolve_local_path(
     path: &Path,
     original_input: &str,
     needs_prefix_warning: bool,
@@ -638,7 +640,7 @@ pub(crate) fn list_overlays_from_cached_repo(
 /// List overlays from a directory with nested org/repo/overlay structure.
 ///
 /// This is the core logic for listing overlays, extracted for testability.
-fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableOverlay>> {
+pub(crate) fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableOverlay>> {
     let mut overlays = Vec::new();
 
     for (org_path, org_name) in visible_subdirs(repo_path)? {
@@ -662,7 +664,7 @@ fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableOverlay>> {
 }
 
 /// Returns visible (non-hidden) subdirectories with their names.
-fn visible_subdirs(path: &Path) -> Result<Vec<(PathBuf, String)>> {
+pub(crate) fn visible_subdirs(path: &Path) -> Result<Vec<(PathBuf, String)>> {
     let mut results = Vec::new();
     for entry in fs::read_dir(path)? {
         let entry = entry?;
@@ -885,7 +887,7 @@ fn get_fuzzy_suggestions_multi_source(
 }
 
 /// Find fuzzy matches for a query in the given candidates.
-fn fuzzy_suggest(query: &str, candidates: &[String]) -> Vec<String> {
+pub(crate) fn fuzzy_suggest(query: &str, candidates: &[String]) -> Vec<String> {
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -894,7 +896,7 @@ fn fuzzy_suggest(query: &str, candidates: &[String]) -> Vec<String> {
 }
 
 /// Format a "not found" error message with optional fuzzy suggestions and source list.
-fn format_not_found_error(
+pub(crate) fn format_not_found_error(
     org: &str,
     repo: &str,
     name: &str,

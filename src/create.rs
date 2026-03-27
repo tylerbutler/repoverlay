@@ -805,19 +805,7 @@ pub(crate) fn switch_overlay(
 mod tests {
     use super::*;
     use std::fs;
-    use std::process::Command;
     use tempfile::TempDir;
-
-    // Helper to create a test git repository
-    fn create_test_repo() -> TempDir {
-        let dir = TempDir::new().unwrap();
-        Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .expect("Failed to init git repo");
-        dir
-    }
 
     // Tests for copy_files_to_overlay
     mod copy_files_to_overlay_tests {

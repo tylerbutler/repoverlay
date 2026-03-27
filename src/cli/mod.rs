@@ -3,39 +3,29 @@
 //! Defines the command structure using clap and dispatches to `lib.rs` functions.
 //! The `run()` function is the internal entry point called from `lib::run()`.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self};
+use std::path::PathBuf;
 
 use crate::{
-    CacheManager, ConflictStrategy, OVERLAYS_DIR, OverlayName, ResolvedSource, STATE_DIR,
-    apply_multiple_overlays, apply_overlay, canonicalize_path, config, get_cached_repo_commit,
-    library, list_applied_overlays, list_overlays_from_cached_repo, parse_github_owner_repo,
-    remove_overlay, remove_single_overlay, repair_git_exclude, restore_overlays,
-    selection::is_interactive,
-    show_status, show_status_json, state, status_has_overlays, switch_overlay,
+    ConflictStrategy, apply_overlay, config, repair_git_exclude, restore_overlays, show_status,
+    show_status_json, status_has_overlays, switch_overlay,
     update::{check_for_updates, version_string},
-    update_overlays, validate_git_repo,
+    update_overlays,
 };
 
 pub(crate) mod commands;
 
 pub(crate) use commands::browse::browse_overlays;
 pub(crate) use commands::cache::handle_cache_command;
-pub(crate) use commands::create::{
-    auto_commit_overlay, create_into_library, create_overlay_command, detect_target_repo,
-    extract_overlay_name, parse_overlay_name_arg,
-};
-pub(crate) use commands::edit::{
-    add_files_to_overlay, edit_overlay, remove_files_from_overlay, resolve_overlay_source_path,
-};
+pub(crate) use commands::create::{create_into_library, create_overlay_command};
+pub(crate) use commands::edit::{add_files_to_overlay, edit_overlay, remove_files_from_overlay};
 pub(crate) use commands::handle_remove;
 pub(crate) use commands::library::handle_library_command;
 pub(crate) use commands::source::handle_source_command;
-pub(crate) use commands::sync::{handle_sync, select_overlay_interactive, sync_single_overlay};
+pub(crate) use commands::sync::{handle_sync, select_overlay_interactive};
 
 /// Overlay config files into git repositories without committing them
 ///
@@ -499,7 +489,7 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum SourceCommand {
+pub(crate) enum SourceCommand {
     /// Add a new overlay source
     Add {
         /// Source: Git URL, GitHub shorthand (owner/repo), GitHub username, or local path (./path)
@@ -521,7 +511,7 @@ enum SourceCommand {
 }
 
 #[derive(Subcommand)]
-enum CacheCommand {
+pub(crate) enum CacheCommand {
     /// List cached repositories
     List,
 
@@ -606,7 +596,7 @@ enum EditCommand {
 }
 
 #[derive(Subcommand)]
-enum LibraryCommand {
+pub(crate) enum LibraryCommand {
     /// List overlays in the library
     List {
         /// Target repository directory (defaults to current directory)
@@ -963,7 +953,11 @@ const fn conflict_strategy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::create_overlay;
+    use crate::cli::commands::create::{detect_target_repo, parse_overlay_name_arg};
+    use crate::cli::commands::edit::resolve_overlay_source_path;
+    use crate::cli::commands::sync::sync_single_overlay;
+    use crate::{create_overlay, remove_overlay};
+    use std::fs;
     use std::process::Command;
     use tempfile::TempDir;
 

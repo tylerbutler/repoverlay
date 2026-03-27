@@ -18,7 +18,6 @@ mod overlay_repo;
 mod reference;
 mod remove;
 mod resolve;
-mod resolve;
 mod selection;
 mod sources;
 mod state;
@@ -34,8 +33,7 @@ pub(crate) use create::{
     print_overlay_created, restore_overlays, switch_overlay, update_overlays,
 };
 pub(crate) use git_exclude::{
-    any_overlay_sections_remain, ensure_repoverlay_excluded, parse_github_owner_repo,
-    remove_overlay_section, repair_git_exclude, update_git_exclude,
+    ensure_repoverlay_excluded, parse_github_owner_repo, repair_git_exclude, update_git_exclude,
 };
 pub(crate) use remove::{remove_overlay, remove_single_overlay};
 pub(crate) use resolve::{
@@ -43,6 +41,15 @@ pub(crate) use resolve::{
     list_overlays_from_cached_repo, resolve_source, try_upgrade_github_source,
 };
 pub(crate) use status::{show_status, show_status_json, status_has_overlays};
+
+// Re-exports used only by test modules
+#[cfg(test)]
+pub(crate) use git_exclude::remove_overlay_section;
+#[cfg(test)]
+pub(crate) use resolve::{
+    format_not_found_error, fuzzy_suggest, list_overlays_from_path, resolve_local_path,
+    visible_subdirs,
+};
 
 /// Run the CLI application.
 ///
@@ -62,25 +69,23 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use cache::CacheManager;
-use fuzzy::OverlayMatcher;
-use github::GitHubSource;
 use json_merge::{is_json_file, merge_json_files};
 pub(crate) use overlay_name::OverlayName;
-use overlay_repo::{AvailableOverlay, copy_dir_recursive};
-use reference::SourceReference;
-use selection::is_interactive;
+use overlay_repo::copy_dir_recursive;
 use state::{
     CONFIG_FILE, EntryType, FileEntry, GlobalMeta, LinkType, META_FILE, OVERLAYS_DIR,
-    OverlayConfig, OverlaySource, OverlayState, ResolvedVia, STATE_DIR, list_applied_overlays,
-    load_all_overlay_targets, load_overlay_state, normalize_overlay_name, save_external_state,
-    save_overlay_state,
+    OverlayConfig, OverlayState, STATE_DIR, list_applied_overlays, load_all_overlay_targets,
+    load_overlay_state, normalize_overlay_name, save_external_state, save_overlay_state,
 };
-use upstream::detect_upstream;
 
 // Re-export git utilities so existing callers (including test modules) continue to work.
 #[cfg(test)]
 pub(crate) use git::resolve_git_dir;
 pub(crate) use git::validate_git_repo;
+
+// Imports used only by test modules
+#[cfg(test)]
+use state::OverlaySource;
 
 /// Strategy for handling conflicts during overlay application.
 ///

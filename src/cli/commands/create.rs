@@ -7,9 +7,7 @@ use std::process::Command;
 
 use crate::config::load_config;
 use crate::overlay_repo::OverlayRepoManager;
-use crate::{
-    canonicalize_path, config, library, parse_github_owner_repo, selection::is_interactive,
-};
+use crate::{canonicalize_path, library, parse_github_owner_repo, selection::is_interactive};
 
 /// Detect org/repo from git remote origin.
 pub(crate) fn detect_target_repo(path: &Path) -> Result<(String, String)> {
