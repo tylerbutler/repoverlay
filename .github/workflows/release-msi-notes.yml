@@ -1,0 +1,33 @@
+name: Add MSI install instructions to release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Append MSI install instructions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          BODY=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body)
+
+          cat > "$RUNNER_TEMP/msi-note.md" <<'EOF'
+
+          ### Install via MSI (Windows)
+
+          ```powershell
+          irm https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-x86_64-pc-windows-msvc.msi -OutFile $env:TEMP\repoverlay.msi; msiexec /i $env:TEMP\repoverlay.msi /quiet
+          ```
+          EOF
+
+          # Combine existing body with MSI note
+          echo "$BODY" > "$RUNNER_TEMP/notes.txt"
+          cat "$RUNNER_TEMP/msi-note.md" >> "$RUNNER_TEMP/notes.txt"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.txt"

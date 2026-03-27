@@ -29,6 +29,12 @@ exclude = [
     "codecov.yml",
 ]
 
+[package.metadata.wix]
+upgrade-guid = "9BDB27FD-C90F-441A-ABFB-53BE959C22D0"
+path-guid = "20B1E41D-A100-4A6D-8ED5-4C343076EF05"
+license = false
+eula = false
+
 [lib]
 name = "repoverlay"
 path = "src/lib.rs"
