@@ -504,7 +504,7 @@ pub(crate) struct OverlayConfig {
     #[serde(default)]
     pub(crate) overlay: OverlayConfigMeta,
     #[serde(default)]
-    pub(crate) mappings: std::collections::HashMap<String, String>,
+    pub(crate) mappings: std::collections::HashMap<String, Vec<String>>,
     /// Directories to symlink as a unit (not walk their contents).
     /// These directories will be symlinked directly instead of having
     /// their individual files symlinked.
@@ -1486,11 +1486,11 @@ mappings =
         assert_eq!(config.mappings.len(), 2);
         assert_eq!(
             config.mappings.get("config/settings.json"),
-            Some(&".vscode/settings.json".to_string())
+            Some(&vec![".vscode/settings.json".to_string()])
         );
         assert_eq!(
             config.mappings.get("src/template.env"),
-            Some(&".env".to_string())
+            Some(&vec![".env".to_string()])
         );
     }
 
