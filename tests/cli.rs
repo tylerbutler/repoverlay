@@ -3426,3 +3426,553 @@ fn multi_target_mapping_remove_cleans_all_targets() {
         "second target should be removed"
     );
 }
+
+// ──────────────────────────────────────────────
+// Overlay composition — extends
+// ──────────────────────────────────────────────
+
+/// Helper: create a library overlay in the test repo.
+fn create_library_overlay(ctx: &TestContext, name: &str, files: &[(&str, &str)]) {
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join(name);
+    fs::create_dir_all(&library_path).unwrap();
+    for (path, content) in files {
+        let file_path = library_path.join(path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(file_path, content).unwrap();
+    }
+}
+#[test]
+fn extends_inherits_parent_files() {
+    let ctx = TestContext::new();
+
+    // Parent overlay with two files
+    create_library_overlay(
+        &ctx,
+        "parent",
+        &[("file-a.txt", "content-a"), ("file-b.txt", "content-b")],
+    );
+
+    // Child overlay extends parent, adds its own file
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-c.txt", "content-c"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists("file-a.txt"),
+        "inherited file-a should exist"
+    );
+    assert!(
+        ctx.file_exists("file-b.txt"),
+        "inherited file-b should exist"
+    );
+    assert!(
+        ctx.file_exists("file-c.txt"),
+        "child's own file-c should exist"
+    );
+    assert_eq!(ctx.read_file("file-a.txt"), "content-a");
+    assert_eq!(ctx.read_file("file-b.txt"), "content-b");
+    assert_eq!(ctx.read_file("file-c.txt"), "content-c");
+}
+
+#[test]
+fn extends_child_wins_on_conflict() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "parent", &[("shared.txt", "parent-content")]);
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("shared.txt", "child-content"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        ctx.read_file("shared.txt"),
+        "child-content",
+        "child should win"
+    );
+}
+
+#[test]
+fn extends_multi_level_inheritance() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "grandparent", &[("file-a.txt", "from-grandparent")]);
+
+    create_library_overlay(
+        &ctx,
+        "parent",
+        &[
+            ("file-b.txt", "from-parent"),
+            ("repoverlay.ccl", "extends =\n  overlay = grandparent\n"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-c.txt", "from-child"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists("file-a.txt"),
+        "grandparent file should exist"
+    );
+    assert!(ctx.file_exists("file-b.txt"), "parent file should exist");
+    assert!(ctx.file_exists("file-c.txt"), "child file should exist");
+    assert_eq!(ctx.read_file("file-a.txt"), "from-grandparent");
+    assert_eq!(ctx.read_file("file-b.txt"), "from-parent");
+    assert_eq!(ctx.read_file("file-c.txt"), "from-child");
+}
+
+#[test]
+fn extends_cycle_detection() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(
+        &ctx,
+        "overlay-a",
+        &[
+            ("file-a.txt", "content-a"),
+            ("repoverlay.ccl", "extends =\n  overlay = overlay-b\n"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "overlay-b",
+        &[
+            ("file-b.txt", "content-b"),
+            ("repoverlay.ccl", "extends =\n  overlay = overlay-a\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "overlay-a",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cycle"));
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — includes
+// ──────────────────────────────────────────────
+
+#[test]
+fn includes_cherry_picks_specific_files() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(
+        &ctx,
+        "tools",
+        &[
+            ("file-a.txt", "content-a"),
+            ("file-b.txt", "content-b"),
+            ("file-c.txt", "content-c"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "mine",
+        &[
+            ("file-d.txt", "content-d"),
+            (
+                "repoverlay.ccl",
+                "includes =\n  =\n    overlay = tools\n    files =\n      = file-b.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "mine",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        !ctx.file_exists("file-a.txt"),
+        "file-a should NOT be included"
+    );
+    assert!(
+        ctx.file_exists("file-b.txt"),
+        "file-b should be cherry-picked"
+    );
+    assert!(
+        !ctx.file_exists("file-c.txt"),
+        "file-c should NOT be included"
+    );
+    assert!(
+        ctx.file_exists("file-d.txt"),
+        "child's own file-d should exist"
+    );
+    assert_eq!(ctx.read_file("file-b.txt"), "content-b");
+}
+
+#[test]
+fn includes_missing_file_errors() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "tools", &[("file-a.txt", "content-a")]);
+
+    create_library_overlay(
+        &ctx,
+        "mine",
+        &[
+            ("own-file.txt", "content"),
+            (
+                "repoverlay.ccl",
+                "includes =\n  =\n    overlay = tools\n    files =\n      = nonexistent.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "mine",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nonexistent.txt"));
+}
+
+#[test]
+fn includes_referenced_overlay_with_extends() {
+    let ctx = TestContext::new();
+
+    // base has file-a
+    create_library_overlay(&ctx, "base", &[("file-a.txt", "from-base")]);
+
+    // tools extends base, adds file-b
+    create_library_overlay(
+        &ctx,
+        "tools",
+        &[
+            ("file-b.txt", "from-tools"),
+            ("repoverlay.ccl", "extends =\n  overlay = base\n"),
+        ],
+    );
+
+    // mine includes file-a from tools (which tools inherited from base)
+    create_library_overlay(
+        &ctx,
+        "mine",
+        &[
+            ("file-c.txt", "from-mine"),
+            (
+                "repoverlay.ccl",
+                "includes =\n  =\n    overlay = tools\n    files =\n      = file-a.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "mine",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists("file-a.txt"),
+        "inherited file from base via tools"
+    );
+    assert!(!ctx.file_exists("file-b.txt"), "file-b not cherry-picked");
+    assert!(ctx.file_exists("file-c.txt"), "child's own file");
+    assert_eq!(ctx.read_file("file-a.txt"), "from-base");
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — precedence
+// ──────────────────────────────────────────────
+
+#[test]
+fn composition_precedence_child_over_extends_over_includes() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "included", &[("shared.txt", "from-included")]);
+
+    create_library_overlay(&ctx, "parent", &[("shared.txt", "from-parent")]);
+
+    // child extends parent AND includes "included", plus has its own shared.txt
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("shared.txt", "from-child"),
+            (
+                "repoverlay.ccl",
+                "extends =\n  overlay = parent\n\nincludes =\n  =\n    overlay = included\n    files =\n      = shared.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        ctx.read_file("shared.txt"),
+        "from-child",
+        "child wins over extends and includes"
+    );
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — extends with mappings
+// ──────────────────────────────────────────────
+
+#[test]
+fn extends_inherits_parent_mappings() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(
+        &ctx,
+        "parent",
+        &[
+            ("template.env", "SECRET=foo"),
+            ("repoverlay.ccl", "mappings =\n  template.env = .env\n"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-c.txt", "content-c"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists(".env"),
+        "parent's mapping should be applied"
+    );
+    assert!(
+        !ctx.file_exists("template.env"),
+        "source file should be mapped, not placed directly"
+    );
+    assert!(ctx.file_exists("file-c.txt"), "child's own file");
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — state and cleanup
+// ──────────────────────────────────────────────
+
+#[test]
+fn composed_overlay_state_records_resolved_files() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "parent", &[("file-a.txt", "content-a")]);
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-b.txt", "content-b"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // State file should exist and contain both files
+    let state_content = fs::read_to_string(ctx.repo_path().join(".repoverlay/overlays/child.ccl"))
+        .expect("state file should exist");
+
+    assert!(
+        state_content.contains("file-a.txt"),
+        "state should include inherited file"
+    );
+    assert!(
+        state_content.contains("file-b.txt"),
+        "state should include child's file"
+    );
+}
+
+#[test]
+fn remove_cleans_up_composed_overlay() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "parent", &[("file-a.txt", "content-a")]);
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-b.txt", "content-b"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists("file-a.txt"));
+    assert!(ctx.file_exists("file-b.txt"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "remove",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        !ctx.file_exists("file-a.txt"),
+        "inherited file should be removed"
+    );
+    assert!(
+        !ctx.file_exists("file-b.txt"),
+        "child file should be removed"
+    );
+}
+
+#[test]
+fn extends_diamond_dependency_is_not_a_cycle() {
+    let ctx = TestContext::new();
+
+    // shared-base is referenced by both branch-x and branch-y
+    create_library_overlay(&ctx, "shared-base", &[("base.txt", "from-base")]);
+
+    create_library_overlay(
+        &ctx,
+        "branch-x",
+        &[
+            ("x.txt", "from-x"),
+            ("repoverlay.ccl", "extends =\n  overlay = shared-base\n"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "branch-y",
+        &[
+            ("y.txt", "from-y"),
+            ("repoverlay.ccl", "extends =\n  overlay = shared-base\n"),
+        ],
+    );
+
+    // child includes files from both branches (diamond through shared-base)
+    create_library_overlay(
+        &ctx,
+        "diamond-child",
+        &[
+            ("child.txt", "from-child"),
+            (
+                "repoverlay.ccl",
+                "includes =\n  =\n    overlay = branch-x\n    files =\n      = base.txt\n  =\n    overlay = branch-y\n    files =\n      = y.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "diamond-child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists("base.txt"), "base file via diamond");
+    assert!(ctx.file_exists("y.txt"), "branch-y file");
+    assert!(ctx.file_exists("child.txt"), "child's own file");
+}
