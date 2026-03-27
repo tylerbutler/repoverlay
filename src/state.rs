@@ -510,6 +510,26 @@ pub(crate) struct OverlayConfig {
     /// their individual files symlinked.
     #[serde(default)]
     pub(crate) directories: Vec<String>,
+    /// Inherit all files from a parent overlay (library overlays only).
+    #[serde(default)]
+    pub(crate) extends: Option<ExtendsConfig>,
+    /// Cherry-pick specific files from other overlays (library overlays only).
+    #[serde(default)]
+    pub(crate) includes: Vec<IncludesConfig>,
+}
+
+/// Configuration for inheriting from a parent overlay.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub(crate) struct ExtendsConfig {
+    pub(crate) overlay: String,
+}
+
+/// Configuration for cherry-picking files from another overlay.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub(crate) struct IncludesConfig {
+    pub(crate) overlay: String,
+    #[serde(default)]
+    pub(crate) files: Vec<String>,
 }
 
 /// Metadata section of overlay config.
