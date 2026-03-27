@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.12.0 - 2026-03-27
+
+
+### Command: `apply`
+
+
+#### Added
+
+##### Add overlay composition via `extends` and `includes`
+
+Overlays can now inherit files from other library overlays using two new `repoverlay.ccl` sections. Multi-level chains are supported with cycle detection.
+
+**`extends`** inherits all files from a parent overlay. The child's own files take precedence on conflict, making this ideal for creating specialized variants of a base overlay:
+
+```
+
+extends =
+
+  overlay = base-config
+
+```
+
+Use case: a `claude-config-strict` overlay that extends `claude-config` and overrides just the `CLAUDE.md` file while inheriting everything else.
+
+**`includes`** cherry-picks specific files from other overlays, useful when you only need a few shared files without full inheritance:
+
+```
+
+includes =
+
+  overlay = shared-dotfiles
+
+  files =
+
+    .editorconfig
+
+    .prettierrc
+
+```
+
+Use case: multiple overlays that each need the same `.editorconfig` from a shared dotfiles overlay, without duplicating the file.
+
+Both features are restricted to library overlays.
+
+
+### Command: `create`
+
+
+#### Fixed
+
+##### Fall back to tracked config files when using `create --yes`
+
+When `--yes` is used and no AI config files are found, `create` now falls back to tracked config files (`.envrc`, `.gitignore`, `.vscode/settings.json`, etc.) instead of bailing. The auto-select priority is: AI configs first, tracked configs second, then error with a helpful message.
+
+
+### Command: `edit`
+
+
+#### Fixed
+
+##### Allow `edit add` without git remote origin
+
+`edit add` with a short-form overlay name (e.g., `my-overlay`) no longer requires a git remote origin. Previously, the command called `detect_target_repo()` to resolve `org/repo` for an error message hint, but this is unnecessary for the actual operation. Now uses the same inline name extraction as `edit remove` and `edit --interactive`.
+
+##### Directory exclusions now persist across remove/reapply cycles
+
+Directories removed via `edit remove` no longer reappear when the overlay is removed and reapplied. The `ExcludedFile` struct now tracks whether an exclusion is for a file or directory, and directory exclusions match descendant paths. Also fixes trailing-slash handling (`.vscode/` is now treated the same as `.vscode`) and makes external state backup failures a hard error to ensure exclusions are always persisted.
+
+
 ## v0.11.1 - 2026-03-17
 
 
