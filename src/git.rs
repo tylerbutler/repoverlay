@@ -1,5 +1,9 @@
-//! Git subprocess helpers with progress indication and Ctrl+C handling.
+//! Git subprocess helpers, repository inspection, and Ctrl+C handling.
 
+#[cfg(test)]
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -141,4 +145,94 @@ pub(crate) fn run_git_with_spinner(
     };
 
     Ok((status, stdout_bytes))
+}
+
+/// Validate that a path is a git repository (has a `.git` directory or file).
+pub(crate) fn validate_git_repo(path: &Path) -> Result<()> {
+    if !path.join(".git").exists() {
+        bail!("Target is not a git repository: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Resolve the path to `.git/info/exclude` for a repository.
+///
+/// Uses `git rev-parse --git-path` which correctly resolves to the common git
+/// directory for worktrees (git reads `info/exclude` from the shared `.git/`,
+/// not from the worktree-specific `$GIT_DIR`).
+pub(crate) fn resolve_git_exclude_path(repo_path: &Path) -> Result<PathBuf> {
+    let output = process::Command::new("git")
+        .args(["rev-parse", "--git-path", "info/exclude"])
+        .current_dir(repo_path)
+        .output()
+        .context("Failed to run git rev-parse --git-path")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "Failed to resolve git exclude path in {}: {}",
+            repo_path.display(),
+            stderr.trim()
+        );
+    }
+
+    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let path = PathBuf::from(&path_str);
+
+    // Handle relative paths (relative to repo_path)
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(repo_path.join(path))
+    }
+}
+
+/// Resolve the actual git directory for a repository.
+///
+/// In a regular git repository, `.git` is a directory containing the git database.
+/// In a git worktree, `.git` is a file containing `gitdir: /path/to/git/dir`.
+/// This function handles both cases and returns the path to the actual git directory.
+///
+/// Note: For `info/exclude` paths, use [`resolve_git_exclude_path`] instead,
+/// which correctly resolves to the common git directory for worktrees.
+#[cfg(test)]
+pub(crate) fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf> {
+    let git_path = repo_path.join(".git");
+
+    if git_path.is_dir() {
+        // Regular git repository
+        return Ok(git_path);
+    }
+
+    if git_path.is_file() {
+        // Git worktree - .git is a file containing "gitdir: /path/to/git/dir"
+        let content = fs::read_to_string(&git_path)
+            .with_context(|| format!("Failed to read .git file: {}", git_path.display()))?;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if let Some(path_str) = line.strip_prefix("gitdir:") {
+                let path_str = path_str.trim();
+                let gitdir = PathBuf::from(path_str);
+
+                // Handle relative paths (relative to repo_path)
+                let gitdir = if gitdir.is_absolute() {
+                    gitdir
+                } else {
+                    repo_path.join(gitdir)
+                };
+
+                return gitdir.canonicalize().with_context(|| {
+                    format!("Failed to resolve gitdir path: {}", gitdir.display())
+                });
+            }
+        }
+
+        bail!(
+            "Invalid .git file (no gitdir found): {}",
+            git_path.display()
+        );
+    }
+
+    bail!("Not a git repository: {}", repo_path.display());
 }
