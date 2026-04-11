@@ -71,7 +71,12 @@ tests/
 ```
 Source string → resolve_source() → local path
     ↓
-Walk files in overlay directory
+Load repoverlay.ccl config
+    ↓
+If extends/includes present:
+    Recursively resolve composition → merged file list
+Else:
+    Walk files in overlay directory → file list
     ↓
 For each file:
     - Check for conflicts with existing overlays
@@ -226,6 +231,48 @@ Overlay: claude-config
   Source:  microsoft/FluidFramework/claude-config (via upstream) (overlay repo)
   Commit:  abc123def456
 ```
+
+## Overlay Composition
+
+Overlays can inherit files from other library overlays via `extends` and `includes` in `repoverlay.ccl`.
+
+### extends
+
+Full inheritance from a single parent overlay. The parent's files, mappings, and directories are inherited. Child files win on conflict.
+
+```
+extends =
+  overlay = parent-name
+```
+
+Multi-level chains are supported (child extends parent extends grandparent). Cycle detection prevents infinite recursion.
+
+### includes
+
+Cherry-pick specific files from other overlays without inheriting everything.
+
+```
+includes =
+  =
+    overlay = tools
+    files =
+      = .editorconfig
+      = scripts/lint.sh
+```
+
+Multiple includes are allowed. Included overlays are recursively resolved (they may themselves use extends/includes).
+
+### Precedence
+
+When the same target path appears in multiple sources, the highest-precedence version wins:
+
+1. **Child's own files** (highest)
+2. **extends** parent files
+3. **includes** files (in listed order, later overrides earlier)
+
+### Scope
+
+Referenced overlays must be library overlays (`.repoverlay/library/`). Other source types (GitHub, local path) are not supported for composition references.
 
 ## Caching Strategy
 

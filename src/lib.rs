@@ -357,6 +357,27 @@ pub(crate) fn apply_resolved_overlay(
     // Load overlay config (optional)
     let config = load_overlay_config(source)?;
 
+    // Resolve composition (extends/includes) if used
+    let composition = if uses_composition(&config) {
+        let library_path = library::get_library_path(target)?;
+        if !source.starts_with(&library_path) {
+            bail!(
+                "Overlay composition (extends/includes) is only supported for library overlays. \
+                 Source '{}' is not in the library.",
+                source.display()
+            );
+        }
+        let mut visited = std::collections::HashSet::new();
+        Some(resolve_composition(
+            source,
+            &config,
+            &library_path,
+            &mut visited,
+        )?)
+    } else {
+        None
+    };
+
     // Determine overlay name (priority: CLI override > config > directory name)
     let overlay_name = resolve_overlay_display_name(&config, source, name_override);
     let normalized_name = normalize_overlay_name(&overlay_name)?;
@@ -404,10 +425,22 @@ pub(crate) fn apply_resolved_overlay(
         }
     }
 
+    // Build the list of directories to process
+    let dir_entries: Vec<(String, PathBuf)> = composition.as_ref().map_or_else(
+        || {
+            config
+                .directories
+                .iter()
+                .map(|d| (d.clone(), source.join(d)))
+                .collect()
+        },
+        |comp| comp.directories.clone(),
+    );
+
     // Process directories first (symlink as units)
-    for dir_name in &config.directories {
+    for (dir_name, source_dir) in &dir_entries {
         let dir_path = PathBuf::from(dir_name);
-        let source_dir = source.join(&dir_path);
+        let source_dir = source_dir.clone();
 
         // Skip excluded directories
         if state.is_excluded(&dir_path) {
@@ -452,7 +485,7 @@ pub(crate) fn apply_resolved_overlay(
                     match prompt_conflict_interactive(
                         &dir_path,
                         &target.join(&dir_path),
-                        &source.join(&dir_path),
+                        &source_dir,
                         &context,
                     )? {
                         InteractiveChoice::Skip => continue,
@@ -588,9 +621,31 @@ pub(crate) fn apply_resolved_overlay(
         exclude_entries.push(exclude_path);
     }
 
-    for (rel_path, target_rel_str) in collect_overlay_files(source, &config) {
+    // Build the file list from composition or direct collection
+    let file_entries: Vec<(PathBuf, PathBuf, String)> = composition.as_ref().map_or_else(
+        || {
+            collect_overlay_files(source, &config)
+                .into_iter()
+                .map(|(rel_path, target_rel)| (source.join(&rel_path), rel_path, target_rel))
+                .collect()
+        },
+        |comp| {
+            comp.files
+                .iter()
+                .map(|f| {
+                    (
+                        f.source_abs.clone(),
+                        f.source_rel.clone(),
+                        f.target_rel.clone(),
+                    )
+                })
+                .collect()
+        },
+    );
+
+    for (source_file, rel_path, target_rel_str) in &file_entries {
         let rel_str = rel_path.to_string_lossy().to_string();
-        let target_rel = PathBuf::from(&target_rel_str);
+        let target_rel = PathBuf::from(target_rel_str);
 
         // Skip excluded files
         if state.is_excluded(&target_rel) {
@@ -598,7 +653,7 @@ pub(crate) fn apply_resolved_overlay(
             continue;
         }
 
-        let source_file = source.join(&rel_path);
+        let source_file = source_file.clone();
         let target_file = target.join(&target_rel);
 
         // Validate that the target file is within the target directory (prevent path traversal)
@@ -646,7 +701,7 @@ pub(crate) fn apply_resolved_overlay(
         }
 
         // Check for conflicts with existing overlays
-        if let Some(conflicting_overlay) = existing_targets.get(&target_rel_str) {
+        if let Some(conflicting_overlay) = existing_targets.get(target_rel_str.as_str()) {
             if is_json_file(&target_rel) && target_file.exists() {
                 eprintln!(
                     "  {} Merging '{}' (managed by overlay '{}')",
@@ -655,7 +710,7 @@ pub(crate) fn apply_resolved_overlay(
                     conflicting_overlay
                 );
                 if let Some((entry, exclude_path)) =
-                    try_merge_json(&target_file, &source_file, &target_rel, &rel_path)
+                    try_merge_json(&target_file, &source_file, &target_rel, rel_path)
                 {
                     state.add_file(entry);
                     exclude_entries.push(exclude_path);
@@ -714,7 +769,7 @@ pub(crate) fn apply_resolved_overlay(
                     target_rel.display()
                 );
                 if let Some((entry, exclude_path)) =
-                    try_merge_json(&target_file, &source_file, &target_rel, &rel_path)
+                    try_merge_json(&target_file, &source_file, &target_rel, rel_path)
                 {
                     state.add_file(entry);
                     exclude_entries.push(exclude_path);
@@ -1052,6 +1107,163 @@ fn collect_overlay_files(source: &Path, config: &OverlayConfig) -> Vec<(PathBuf,
     }
 
     files
+}
+
+/// A resolved file from overlay composition.
+///
+/// Unlike `collect_overlay_files` which returns source-relative paths,
+/// this includes the absolute source directory so files from different
+/// overlay directories can be handled correctly.
+struct ResolvedFile {
+    /// Absolute path to the source file.
+    source_abs: PathBuf,
+    /// Relative path within the source overlay (for state tracking).
+    source_rel: PathBuf,
+    /// Target-relative path in the repo.
+    target_rel: String,
+}
+
+/// Result of resolving overlay composition (extends + includes).
+struct CompositionResult {
+    /// Resolved files (from includes, extends, and the overlay itself).
+    files: Vec<ResolvedFile>,
+    /// Directories to symlink as units (merged from composition chain).
+    directories: Vec<(String, PathBuf)>,
+}
+
+/// Resolve overlay composition by processing `extends` and `includes`.
+///
+/// Recursively resolves the composition chain and returns the merged file list.
+/// Precedence (highest to lowest): child > extends > includes.
+/// Referenced overlays must be library overlays.
+fn resolve_composition(
+    source: &Path,
+    config: &OverlayConfig,
+    library_path: &Path,
+    visited: &mut std::collections::HashSet<String>,
+) -> Result<CompositionResult> {
+    use std::collections::HashMap;
+
+    let overlay_name = source.file_name().map_or_else(
+        || "unnamed".to_string(),
+        |n| n.to_string_lossy().to_string(),
+    );
+
+    if !visited.insert(overlay_name.clone()) {
+        bail!("Circular extends/includes cycle detected: '{overlay_name}' was already visited");
+    }
+
+    // target_rel -> ResolvedFile, preserving insertion order via Vec + HashMap for dedup
+    let mut file_map: HashMap<String, ResolvedFile> = HashMap::new();
+    // dir_name -> source_dir (absolute)
+    let mut dir_map: HashMap<String, PathBuf> = HashMap::new();
+
+    // 1. Process includes (lowest precedence)
+    for include in &config.includes {
+        let include_source = library_path.join(&include.overlay);
+        if !include_source.is_dir() {
+            bail!(
+                "Included overlay '{}' not found in library at {}",
+                include.overlay,
+                library_path.display()
+            );
+        }
+
+        let include_config = load_overlay_config(&include_source)?;
+        let resolved =
+            resolve_composition(&include_source, &include_config, library_path, visited)?;
+
+        // Build lookups by both target_rel and source_rel for matching
+        let mut by_target: HashMap<String, ResolvedFile> = HashMap::new();
+        let mut source_to_target: HashMap<String, String> = HashMap::new();
+        for f in resolved.files {
+            source_to_target.insert(
+                f.source_rel.to_string_lossy().to_string(),
+                f.target_rel.clone(),
+            );
+            by_target.insert(f.target_rel.clone(), f);
+        }
+
+        // Cherry-pick only the listed files
+        for file_name in &include.files {
+            let key = if by_target.contains_key(file_name.as_str()) {
+                Some(file_name.clone())
+            } else {
+                source_to_target.get(file_name.as_str()).cloned()
+            };
+
+            if let Some(key) = key {
+                if let Some(resolved_file) = by_target.remove(&key) {
+                    file_map.insert(resolved_file.target_rel.clone(), resolved_file);
+                }
+            } else {
+                bail!(
+                    "File '{}' not found in overlay '{}' (resolved from includes)",
+                    file_name,
+                    include.overlay
+                );
+            }
+        }
+    }
+
+    // 2. Process extends (overrides includes)
+    if let Some(extends) = &config.extends {
+        let parent_source = library_path.join(&extends.overlay);
+        if !parent_source.is_dir() {
+            bail!(
+                "Extended overlay '{}' not found in library at {}",
+                extends.overlay,
+                library_path.display()
+            );
+        }
+
+        let parent_config = load_overlay_config(&parent_source)?;
+        let resolved = resolve_composition(&parent_source, &parent_config, library_path, visited)?;
+
+        // Parent files override includes
+        for file in resolved.files {
+            file_map.insert(file.target_rel.clone(), file);
+        }
+
+        // Inherit directories from parent
+        for (dir_name, dir_source) in resolved.directories {
+            dir_map.insert(dir_name, dir_source);
+        }
+    }
+
+    // 3. Collect child's own files (highest precedence)
+    for (rel_path, target_rel) in collect_overlay_files(source, config) {
+        file_map.insert(
+            target_rel.clone(),
+            ResolvedFile {
+                source_abs: source.join(&rel_path),
+                source_rel: rel_path,
+                target_rel,
+            },
+        );
+    }
+
+    // Child's own directories override inherited ones
+    for dir_name in &config.directories {
+        dir_map.insert(dir_name.clone(), source.join(dir_name));
+    }
+
+    // Remove from visited to allow diamond dependencies (A->B->D, A->C->D).
+    // True cycles are still caught because the name stays in the set during recursion.
+    visited.remove(&overlay_name);
+
+    let mut files: Vec<_> = file_map.into_values().collect();
+    files.sort_by(|a, b| a.target_rel.cmp(&b.target_rel));
+
+    let mut directories: Vec<_> = dir_map.into_iter().collect();
+    directories.sort_by(|a, b| a.0.cmp(&b.0));
+
+    Ok(CompositionResult { files, directories })
+}
+
+/// Check if an overlay config uses composition (extends or includes).
+const fn uses_composition(config: &OverlayConfig) -> bool {
+    config.extends.is_some() || !config.includes.is_empty()
 }
 
 /// Check for file path conflicts across multiple overlay sources.
