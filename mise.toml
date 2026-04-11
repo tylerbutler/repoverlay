@@ -1,4 +1,5 @@
 [tools]
+"cargo:cargo-audit" = "0.22.1"
 changie = "latest"
 "github:cargo-bins/cargo-binstall" = "1.17.9"
 hk = "latest"
