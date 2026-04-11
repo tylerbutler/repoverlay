@@ -151,4 +151,26 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().as_str(), "my-overlay");
     }
+
+    #[test]
+    fn overlay_name_ordering() {
+        let a = OverlayName::new("alpha");
+        let b = OverlayName::new("beta");
+        let c = OverlayName::new("gamma");
+
+        assert!(a < b);
+        assert!(b < c);
+        assert!(a < c);
+
+        let mut names = vec![c.clone(), a.clone(), b.clone()];
+        names.sort();
+        assert_eq!(names, vec![a, b, c]);
+    }
+
+    #[test]
+    fn overlay_name_as_ref_str() {
+        let name = OverlayName::new("my-overlay");
+        let s: &str = name.as_ref();
+        assert_eq!(s, "my-overlay");
+    }
 }
