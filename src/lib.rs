@@ -1098,12 +1098,13 @@ fn collect_overlay_files(source: &Path, config: &OverlayConfig) -> Vec<(PathBuf,
         }
 
         let rel_string = rel_str.to_string();
-        let target_rel = config
-            .mappings
-            .get(&rel_string)
-            .map_or_else(|| rel_string.clone(), Clone::clone);
-
-        files.push((rel_path.to_path_buf(), target_rel));
+        if let Some(targets) = config.mappings.get(&rel_string) {
+            for target in targets {
+                files.push((rel_path.to_path_buf(), target.clone()));
+            }
+        } else {
+            files.push((rel_path.to_path_buf(), rel_string));
+        }
     }
 
     files
@@ -4349,7 +4350,7 @@ mod tests {
             fs::write(temp.path().join("source.txt"), "content").unwrap();
 
             let mut mappings = std::collections::HashMap::new();
-            mappings.insert("source.txt".to_string(), "target.txt".to_string());
+            mappings.insert("source.txt".to_string(), vec!["target.txt".to_string()]);
             let config = OverlayConfig {
                 mappings,
                 ..Default::default()

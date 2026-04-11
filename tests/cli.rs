@@ -3361,6 +3361,147 @@ fn create_yes_falls_back_to_tracked_config() {
 }
 
 // ──────────────────────────────────────────────
+// Multi-target mappings
+// ──────────────────────────────────────────────
+
+#[test]
+fn multi_target_mapping_creates_multiple_copies() {
+    let ctx = TestContext::new().with_overlay(&[
+        (".editorconfig", "root = true"),
+        (
+            "repoverlay.ccl",
+            "mappings =\n  .editorconfig = .editorconfig\n  .editorconfig = packages/frontend/.editorconfig\n",
+        ),
+    ]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists(".editorconfig"),
+        ".editorconfig should exist at root"
+    );
+    assert!(
+        ctx.file_exists("packages/frontend/.editorconfig"),
+        ".editorconfig should exist in packages/frontend/"
+    );
+    assert_eq!(ctx.read_file(".editorconfig"), "root = true");
+    assert_eq!(
+        ctx.read_file("packages/frontend/.editorconfig"),
+        "root = true"
+    );
+}
+
+#[test]
+fn single_target_mapping_still_works_with_vec_type() {
+    // Backwards compatibility: single-value mappings must still work
+    let ctx = TestContext::new().with_overlay(&[
+        (".envrc", "export FOO=bar"),
+        ("repoverlay.ccl", "mappings =\n  .envrc = .env\n"),
+    ]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists(".env"),
+        ".env should exist (mapped from .envrc)"
+    );
+    assert!(
+        !ctx.file_exists(".envrc"),
+        ".envrc should not exist (was mapped)"
+    );
+}
+
+#[test]
+fn multi_target_mapping_all_targets_in_state() {
+    let ctx = TestContext::new().with_overlay(&[
+        ("config.json", r#"{"key": "value"}"#),
+        (
+            "repoverlay.ccl",
+            "mappings =\n  config.json = .config.json\n  config.json = tools/.config.json\n",
+        ),
+    ]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "multi-map",
+        ])
+        .assert()
+        .success();
+
+    // Both targets should be in the state file
+    let state_content =
+        fs::read_to_string(ctx.repo_path().join(".repoverlay/overlays/multi-map.ccl"))
+            .expect("state file should exist");
+
+    assert!(
+        state_content.contains(".config.json"),
+        "state should include first target"
+    );
+    assert!(
+        state_content.contains("tools/.config.json"),
+        "state should include second target"
+    );
+}
+
+#[test]
+fn multi_target_mapping_remove_cleans_all_targets() {
+    let ctx = TestContext::new().with_overlay(&[
+        (".editorconfig", "root = true"),
+        (
+            "repoverlay.ccl",
+            "mappings =\n  .editorconfig = .editorconfig\n  .editorconfig = sub/.editorconfig\n",
+        ),
+    ]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "multi-map",
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".editorconfig"));
+    assert!(ctx.file_exists("sub/.editorconfig"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "remove",
+            "multi-map",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        !ctx.file_exists(".editorconfig"),
+        "first target should be removed"
+    );
+    assert!(
+        !ctx.file_exists("sub/.editorconfig"),
+        "second target should be removed"
+    );
+}
+
+// ──────────────────────────────────────────────
 // Overlay composition — extends
 // ──────────────────────────────────────────────
 
@@ -3380,7 +3521,6 @@ fn create_library_overlay(ctx: &TestContext, name: &str, files: &[(&str, &str)])
         fs::write(file_path, content).unwrap();
     }
 }
-
 #[test]
 fn extends_inherits_parent_files() {
     let ctx = TestContext::new();
