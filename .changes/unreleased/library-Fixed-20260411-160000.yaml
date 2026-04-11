@@ -1,0 +1,7 @@
+component: library
+kind: Fixed
+body: |-
+    Validate overlay names reject path separators in release builds
+
+    `OverlayName` previously only checked for forward slashes via `debug_assert`, meaning invalid names with path separators (including backslashes) could slip through in release builds. Added `OverlayName::try_new` which returns an error for names containing `/` or `\`, and updated all user-input paths to use it.
+time: 2026-04-11T16:00:00.000000000-07:00
