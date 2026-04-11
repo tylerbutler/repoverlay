@@ -18,8 +18,8 @@ pub(crate) enum SourceReference {
     /// Local filesystem path (e.g., `./overlay` or `/path/to/overlay`)
     LocalPath {
         path: PathBuf,
-        /// True if the path was ambiguous (no `./` prefix) and a deprecation
-        /// warning should be shown.
+        /// True if the path was matched without an explicit `./` prefix.
+        /// Resolution will fail with an error asking the user to use `./`.
         needs_prefix_warning: bool,
     },
 
@@ -54,8 +54,8 @@ impl SourceReference {
     /// # Ambiguous Local Paths
     ///
     /// If input doesn't match any structured format but exists as a local path,
-    /// it's treated as a local path with `needs_prefix_warning = true` to indicate
-    /// that users should use `./` prefix in the future.
+    /// it's treated as a local path with `needs_prefix_warning = true`. Resolution
+    /// will fail with an error directing the user to use `./` prefix explicitly.
     #[must_use]
     pub(crate) fn parse(input: &str) -> Self {
         // 1. Check for GitHub URL
@@ -89,8 +89,8 @@ impl SourceReference {
         }
 
         // 3. Check for local path existence BEFORE structured reference parsing.
-        // This preserves backward compatibility: existing local paths take precedence.
-        // TODO: In a future version, require `./` prefix for local paths to avoid ambiguity.
+        // If found without a `./` prefix, set needs_prefix_warning=true so resolution
+        // fails with a clear error directing the user to use `./` explicitly.
         let path = PathBuf::from(input);
         if path.exists() {
             return Self::LocalPath {
@@ -144,7 +144,7 @@ impl SourceReference {
         }
     }
 
-    /// Check if this reference requires a deprecation warning about local path syntax.
+    /// Check if this reference requires the user to add a `./` prefix.
     #[must_use]
     #[allow(dead_code)] // Available for future use
     pub(crate) const fn needs_local_path_warning(&self) -> bool {
