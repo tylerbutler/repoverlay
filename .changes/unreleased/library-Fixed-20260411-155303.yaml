@@ -1,0 +1,7 @@
+component: library
+kind: Fixed
+body: |-
+    Surface file read errors in show_file_diff instead of silently treating as empty
+
+    Previously, if reading either the existing or overlay file failed in show_file_diff, the error was silently swallowed and the file was treated as empty. Now the function logs a warning and prints a user-visible warning message identifying the problematic file before returning early.
+time: 2026-04-11T15:53:03.584963000-07:00

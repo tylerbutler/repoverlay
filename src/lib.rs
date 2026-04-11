@@ -216,8 +216,34 @@ fn generate_diff(
 
 /// Display a unified diff between two files.
 fn show_file_diff(existing_path: &Path, overlay_path: &Path, display_path: &Path) {
-    let existing_content = fs::read_to_string(existing_path).unwrap_or_else(|_| String::new());
-    let overlay_content = fs::read_to_string(overlay_path).unwrap_or_else(|_| String::new());
+    let existing_content = match fs::read_to_string(existing_path) {
+        Ok(content) => content,
+        Err(e) => {
+            log::warn!(
+                "Failed to read existing file {}: {e}",
+                existing_path.display()
+            );
+            eprintln!(
+                "  {} could not read existing file: {e}",
+                "warning:".yellow().bold()
+            );
+            return;
+        }
+    };
+    let overlay_content = match fs::read_to_string(overlay_path) {
+        Ok(content) => content,
+        Err(e) => {
+            log::warn!(
+                "Failed to read overlay file {}: {e}",
+                overlay_path.display()
+            );
+            eprintln!(
+                "  {} could not read overlay file: {e}",
+                "warning:".yellow().bold()
+            );
+            return;
+        }
+    };
 
     match generate_diff(&existing_content, &overlay_content, display_path) {
         None => {
