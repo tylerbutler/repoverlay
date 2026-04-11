@@ -4990,7 +4990,6 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "tylerbutler/santa#71: forward slashes in map keys cause parsing errors in sickle"]
         fn mapping_supports_nested_paths_in_key_and_value() {
             let repo = create_test_repo();
             let overlay = TempDir::new().unwrap();
