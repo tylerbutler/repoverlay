@@ -84,6 +84,30 @@ The `mappings` section renames files during apply. Each entry maps a source file
 
 The `directories` section lists directories to symlink (or copy) as a unit rather than walking individual files. This is important for directories like `.claude/` where the entire tree should be managed atomically.
 
+### Cross-overlay references
+
+Mappings and directories can reference files from other overlays in the same overlay repository using two prefixes:
+
+- **`../`** — resolve relative to the current overlay directory (for sibling overlays)
+- **`//`** — resolve from the overlay repository root (for cross-org/repo references)
+
+```
+mappings =
+  /= Reference a file from a sibling overlay
+  ../claude-config/CLAUDE.md = .cursor/instructions.md
+
+  /= Reference a file from any overlay in the repo
+  //microsoft/FluidFramework/base/.envrc = .envrc
+
+directories =
+  /= Reference a directory from a sibling overlay
+  = ../claude-config/.claude
+```
+
+This is useful when multiple overlays need the same files at different target paths — for example, when different AI agents expect configuration in different locations.
+
+Cross-overlay references must stay within the overlay repository. Paths that escape the repo root are rejected.
+
 ### Configuration format
 
 repoverlay uses [CCL (Categorical Configuration Language)](https://ccl.tylerbutler.com/) for configuration files. CCL uses `=` for key-value pairs and indentation for nesting. Lines starting with `/=` are comments.
