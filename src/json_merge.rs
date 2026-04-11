@@ -1,4 +1,7 @@
 //! JSON deep merge utilities for overlay application.
+//!
+//! When overlays contain JSON files that already exist in the target repo,
+//! this module merges them recursively instead of overwriting.
 
 use anyhow::Context;
 use serde_json::Value;
@@ -6,24 +9,24 @@ use std::path::Path;
 
 /// Result of merging two JSON values, with statistics for logging.
 #[derive(Debug, Default)]
-pub struct MergeResult {
-    pub merged: Value,
-    pub keys_added: usize,
-    pub keys_overridden: usize,
-    pub type_mismatches: Vec<TypeMismatch>,
+pub(crate) struct MergeResult {
+    pub(crate) merged: Value,
+    pub(crate) keys_added: usize,
+    pub(crate) keys_overridden: usize,
+    pub(crate) type_mismatches: Vec<TypeMismatch>,
 }
 
 /// A type mismatch encountered during merge.
 #[derive(Debug)]
-pub struct TypeMismatch {
-    pub key_path: String,
-    pub base_type: String,
-    pub overlay_type: String,
+pub(crate) struct TypeMismatch {
+    pub(crate) key_path: String,
+    pub(crate) base_type: String,
+    pub(crate) overlay_type: String,
 }
 
 /// Deep merge two JSON values. Overlay wins for scalars, arrays, and type mismatches.
 /// Objects are recursively merged.
-pub fn deep_merge(base: &Value, overlay: &Value) -> MergeResult {
+pub(crate) fn deep_merge(base: &Value, overlay: &Value) -> MergeResult {
     let mut result = MergeResult::default();
     result.merged = merge_values(base, overlay, "", &mut result);
     result
@@ -77,7 +80,7 @@ const fn json_type_name(value: &Value) -> &'static str {
 }
 
 /// Check if a file path has a .json extension.
-pub fn is_json_file(path: &Path) -> bool {
+pub(crate) fn is_json_file(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
 }
@@ -93,7 +96,7 @@ fn read_json_file(path: &Path) -> anyhow::Result<Value> {
 
 /// Merge overlay JSON into base JSON and write the result to the target path.
 /// Returns the `MergeResult` with statistics for logging.
-pub fn merge_json_files(
+pub(crate) fn merge_json_files(
     base_path: &Path,
     overlay_path: &Path,
     target_path: &Path,
@@ -212,5 +215,39 @@ mod tests {
         assert_eq!(result.merged, json!({"a": 1}));
         assert_eq!(result.type_mismatches.len(), 1);
         assert_eq!(result.type_mismatches[0].base_type, "null");
+    }
+
+    #[test]
+    fn merge_bool_to_string_type_mismatch() {
+        let base = json!({"flag": true});
+        let overlay = json!({"flag": "yes"});
+        let result = deep_merge(&base, &overlay);
+        assert_eq!(result.merged, json!({"flag": "yes"}));
+        assert_eq!(result.type_mismatches.len(), 1);
+        assert_eq!(result.type_mismatches[0].base_type, "bool");
+        assert_eq!(result.type_mismatches[0].overlay_type, "string");
+    }
+
+    #[test]
+    fn merge_array_to_object_type_mismatch() {
+        let base = json!({"data": [1, 2, 3]});
+        let overlay = json!({"data": {"nested": true}});
+        let result = deep_merge(&base, &overlay);
+        assert_eq!(result.merged, json!({"data": {"nested": true}}));
+        assert_eq!(result.type_mismatches.len(), 1);
+        assert_eq!(result.type_mismatches[0].base_type, "array");
+        assert_eq!(result.type_mismatches[0].overlay_type, "object");
+    }
+
+    #[test]
+    fn merge_root_level_type_mismatch_uses_root_path() {
+        let base = json!("a string");
+        let overlay = json!(42);
+        let result = deep_merge(&base, &overlay);
+        assert_eq!(result.merged, json!(42));
+        assert_eq!(result.type_mismatches.len(), 1);
+        assert_eq!(result.type_mismatches[0].key_path, "(root)");
+        assert_eq!(result.type_mismatches[0].base_type, "string");
+        assert_eq!(result.type_mismatches[0].overlay_type, "number");
     }
 }

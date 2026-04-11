@@ -5,6 +5,428 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.12.0 - 2026-03-27
+
+
+### Command: `apply`
+
+
+#### Added
+
+##### Add overlay composition via `extends` and `includes`
+
+Overlays can now inherit files from other library overlays using two new `repoverlay.ccl` sections. Multi-level chains are supported with cycle detection.
+
+**`extends`** inherits all files from a parent overlay. The child's own files take precedence on conflict, making this ideal for creating specialized variants of a base overlay:
+
+```
+
+extends =
+
+  overlay = base-config
+
+```
+
+Use case: a `claude-config-strict` overlay that extends `claude-config` and overrides just the `CLAUDE.md` file while inheriting everything else.
+
+**`includes`** cherry-picks specific files from other overlays, useful when you only need a few shared files without full inheritance:
+
+```
+
+includes =
+
+  overlay = shared-dotfiles
+
+  files =
+
+    .editorconfig
+
+    .prettierrc
+
+```
+
+Use case: multiple overlays that each need the same `.editorconfig` from a shared dotfiles overlay, without duplicating the file.
+
+Both features are restricted to library overlays.
+
+
+### Command: `create`
+
+
+#### Fixed
+
+##### Fall back to tracked config files when using `create --yes`
+
+When `--yes` is used and no AI config files are found, `create` now falls back to tracked config files (`.envrc`, `.gitignore`, `.vscode/settings.json`, etc.) instead of bailing. The auto-select priority is: AI configs first, tracked configs second, then error with a helpful message.
+
+
+### Command: `edit`
+
+
+#### Fixed
+
+##### Allow `edit add` without git remote origin
+
+`edit add` with a short-form overlay name (e.g., `my-overlay`) no longer requires a git remote origin. Previously, the command called `detect_target_repo()` to resolve `org/repo` for an error message hint, but this is unnecessary for the actual operation. Now uses the same inline name extraction as `edit remove` and `edit --interactive`.
+
+##### Directory exclusions now persist across remove/reapply cycles
+
+Directories removed via `edit remove` no longer reappear when the overlay is removed and reapplied. The `ExcludedFile` struct now tracks whether an exclusion is for a file or directory, and directory exclusions match descendant paths. Also fixes trailing-slash handling (`.vscode/` is now treated the same as `.vscode`) and makes external state backup failures a hard error to ensure exclusions are always persisted.
+
+
+## v0.11.1 - 2026-03-17
+
+
+### Fixes
+
+
+#### Fixed
+
+##### Allow overlay operations when git exclude updates fail
+
+Apply, remove, and switch no longer abort when `.git/info/exclude` cannot be updated (e.g. in codespace worktrees with non-portable absolute paths). A warning is shown and the operation continues — overlay files may appear as untracked in git status.
+
+
+## v0.11.0 - 2026-03-17
+
+
+### Fixes
+
+
+#### Fixed
+
+##### Write git exclude entries to the common git directory for worktrees
+
+Git reads `info/exclude` from the shared `.git/` directory, not the worktree-specific `$GIT_DIR`. Overlay files applied in worktree checkouts would show as untracked because exclude entries were written to the wrong location. Now uses `git rev-parse --git-path` to resolve the correct path.
+
+
+### Command: `library`
+
+
+#### Added
+
+##### Add in-repo overlay library (`repoverlay library`)
+
+You can now store overlays directly in your repository at `.repoverlay/library/`, making them shareable with your team via version control. The new `library` subcommand group provides full lifecycle management:
+
+- `library list` — see what's in the library
+
+- `library import <path-or-name>` — add an overlay (accepts filesystem paths or applied overlay names)
+
+- `library export <name> <dest>` — copy an overlay out of the library
+
+- `library remove <name>` — delete from the library
+
+Library overlays integrate throughout the tool:
+
+- `apply my-overlay` resolves from the library first (highest priority)
+
+- `apply my-overlay --from @library` targets the library exclusively
+
+- `create --into library` creates overlays directly in the library
+
+- `browse` includes library overlays alongside configured sources
+
+- `browse` works with library-only repos — no external sources required
+
+The library path defaults to `.repoverlay/library/` but is configurable via `library_path` in your repo's `repoverlay.ccl` config. `.gitignore` is automatically updated to ensure library contents are tracked by git.
+
+
+### Command: `browse`
+
+
+#### Added
+
+##### Show last-updated timestamps for applied overlays in browse UI
+
+Applied overlays now display relative timestamps (e.g. '2 days ago') in the browse selection UI instead of a plain 'already applied' label, making it easier to see how recently each overlay was synced.
+
+##### Auto-detect flat folder layout for local sources
+
+Local directory sources no longer require `org/repo/name` nesting. Flat directories are auto-detected: a directory with overlay files is treated as a single overlay, and subdirectories are each treated as separate overlays.
+
+
+#### Changed
+
+##### Promote browse as the primary overlay workflow
+
+Updated help text, README, and CLI reference to recommend `browse` as the primary entry point for interactive use. The `apply` command remains available for scripting and power users. Improved the error message when no sources are configured.
+
+
+### Command: `create`
+
+
+#### Added
+
+##### Support glob patterns in `--include` flag
+
+The `--include` flag on `create` now accepts glob patterns (e.g., `*.md`, `.claude/**`) in addition to exact file paths. Globs are expanded relative to the source repository root using standard glob syntax.
+
+
+#### Fixed
+
+##### Discover committed config files in source repositories
+
+`create` now discovers tracked config files (e.g., `.envrc`, `.vscode/`, `justfile`, `Cargo.toml`, `Dockerfile`) in addition to AI configs, gitignored, and untracked files. Detection uses an exclusion-based heuristic that filters out source code, documentation, and media rather than trying to allowlist config patterns. Also fixes output path to create overlay at `output/<name>/` subdirectory.
+
+
+#### Performance
+
+##### Fix UI hang on large repos during overlay creation
+
+Skip transient tool state directories (worktrees/, todos/) during AI config directory walking, reducing discovered files from ~59K to ~22 on repos with large .claude/ directories. Also fix O(n²) ancestor traversal in the selection UI with a pre-built parent lookup map, and add a progress spinner with Ctrl+C support for git clone/pull operations.
+
+
+### Command: `edit`
+
+
+#### Fixed
+
+##### Fix `edit add` failing on directories with "Is a directory" error
+
+The `edit add` command now correctly handles directories (e.g., `.claude/commands`) by using recursive directory copy, directory symlinks, and `EntryType::Directory` in overlay state. Rollback logic also properly restores directories on failure.
+
+##### Remove git remote requirement for locally-applied overlays
+
+`edit add` no longer requires a git remote origin when working with overlays applied from local paths. Remote detection is deferred to only when needed for overlay repo auto-commit.
+
+##### Persist edit exclusions across remove/reapply cycles
+
+Files removed via `edit remove` now stay removed when an overlay is removed and reapplied. Exclusions are tracked in overlay state and persisted in the external backup so they survive the full lifecycle.
+
+
+### Command: `restore`
+
+
+#### Fixed
+
+##### Restore broken symlinks without requiring --force
+
+`restore` no longer errors when an overlay's state exists but its symlinked files have been deleted. Since restore's purpose is to re-create missing files, it now always forces past the "already applied" check.
+
+
+### Command: `source`
+
+
+#### Added
+
+##### Support local directory sources for overlays
+
+Register directories as overlay sources using `source add ./path`. Local sources are stored in a per-repo config file (`.repoverlay/config.ccl`), which is automatically git-excluded. Paths must start with `/`, `./`, or `~` to be recognized as local (otherwise treated as git URL/shorthand). Local sources skip cloning and caching — overlays are read directly from the filesystem. Use `source list` and `source remove` to manage both global git sources and repo-local sources.
+
+
+### Command: `switch`
+
+
+#### Added
+
+##### Add --dry-run support to switch command
+
+The `switch` command now supports `--dry-run` to preview what would change without making modifications, consistent with `apply`, `remove`, `restore`, and `update`.
+
+
+### Command: `sync`
+
+
+#### Fixed
+
+##### Skip non-syncable overlays gracefully in --all mode
+
+`sync --all` no longer fails when only locally-applied overlays are present. The overlay repo manager is now lazily initialized, only created when a syncable overlay is encountered. Local and GitHub overlays are skipped with a warning message.
+
+
+## v0.10.1 - 2026-03-05
+
+
+### Command: `sync`
+
+
+#### Fixed
+
+##### Fix `sync <name>` using wrong org/repo for overlays applied via upstream fallback
+
+When syncing a single overlay by name in a fork repository, the sync command detected the org/repo from the git remote (e.g., `alexvy86/FluidFramework`) instead of using the org/repo saved in the overlay state (e.g., `microsoft/FluidFramework`). This caused sync to fail with "does not exist in overlay repo" because the fork's org/repo path doesn't exist in the overlay repo. Now uses the org/repo from the saved state, matching the behavior of `sync --all`.
+
+
+## v0.10.0 - 2026-03-05
+
+
+### Command: `apply`
+
+
+#### Added
+
+##### Auto-detect configured source when applying via GitHub URL
+
+When applying an overlay via a GitHub URL that matches a configured source, resolve it as an overlay repo (editable and syncable) instead of a read-only GitHub source. URLs with an org/repo/name subpath redirect to three-part resolution; bare repo URLs use interactive browse mode with the matched source.
+
+
+### Command: `sync`
+
+
+#### Fixed
+
+##### Fix `sync <name>` failing for GitHub-sourced overlays that match a configured source
+
+The single-name sync path was missing the `try_upgrade_github_source()` call that was added to `sync --all`, `edit`, and `edit add` in #171. This caused GitHub-sourced overlays to be rejected as non-syncable instead of being lazily upgraded to editable overlay repo sources.
+
+
+
+
+
+#### Fixed
+
+##### Improve error display and add SIGPIPE handling
+
+Fixed error output formatting to use Display instead of Debug format. Added SIGPIPE signal handling so piped output to commands like `head` exits cleanly without "Broken pipe" errors.
+
+
+## v0.9.2 - 2026-03-04
+
+
+### Command: `edit`
+
+
+#### Changed
+
+##### Split `edit` into `edit add` and `edit remove` subcommands
+
+The `--add` and `--remove` flags used greedy `num_args = 1..` parsing, which consumed trailing arguments and required the overlay name to appear before any flags. This was confusing and the help text couldn't convey the constraint clearly. The `edit` command now uses proper subcommands:
+
+  repoverlay edit add my-overlay file1.txt file2.txt   repoverlay edit remove my-overlay oldfile.txt   repoverlay edit my-overlay  # interactive file selection   repoverlay edit             # select overlay then edit interactively
+
+Running `edit` with no overlay name now presents an interactive overlay picker (auto-selects when only one overlay is applied). The old `--add`/`--remove`/`--interactive` flags still work but are hidden from help and print a deprecation warning.
+
+
+## v0.9.1 - 2026-03-04
+
+
+### Command: `edit`
+
+
+#### Fixed
+
+##### Fix `edit --add` dropping existing git exclude entries
+
+When adding files to an applied overlay, the git exclude section was rewritten with only the newly added files, silently removing entries for previously managed files. This caused those files to reappear in `git status` after the add operation. Rebuilt the full exclude list from overlay state, matching the pattern already used by `edit --remove`.
+
+
+#### Changed
+
+##### Clarify that overlay NAME must precede --add/--remove flags
+
+The --add and --remove flags accept multiple values and greedily consume trailing arguments. Running `edit --add file.txt name` fails because `name` is parsed as a second file. Updated help text to document the required argument order.
+
+
+## v0.9.0 - 2026-03-02
+
+
+#### Added
+
+##### Always sync cache and overlay repos before operations
+
+All commands that read from the overlay repo or GitHub cache now pull the
+latest by default. The `--update` flag is replaced with `--no-update` to
+opt out (e.g., for offline use). Affected commands: `apply`, `browse`,
+`list`, `switch`, `create`, and `sync`.
+
+**BREAKING:** The `--update` flag has been removed. Use `--no-update` to
+skip syncing.
+
+
+## v0.8.0 - 2026-02-28
+
+
+### Command: `apply`
+
+
+#### Added
+
+##### Add interactive conflict resolution mode
+
+Use `--interactive` (`-i`) to be prompted for each file conflict during apply, restore, and update. When a conflict is detected, you can choose to overwrite the file, skip it, view a diff, or abort the operation. The `--force` flag can also be written as `--overwrite`.
+
+##### Prompt to save source on first use
+
+When `apply` resolves a username or owner/repo reference for the first time, it now prompts the user to save it as a configured source for future use. The prompt is skipped if the source is already configured or in non-interactive mode.
+
+
+### Command: `browse`
+
+
+#### Added
+
+##### Allow browsing without a configured source
+
+`browse` now accepts an optional source argument (GitHub username, owner/repo, or URL) to fetch and browse overlays without adding a persistent source. Existing behavior using configured sources is unchanged when no argument is provided.
+
+
+### Command: `create`
+
+
+#### Added
+
+##### Auto-apply overlay after creation (#144)
+
+The `create` command now automatically applies the overlay to the source
+repository after creating it. Files are replaced with symlinks, overlay
+state is saved, and git exclude is updated. Both local and overlay-repo
+modes are supported. Dry-run mode skips the apply step.
+
+
+### Command: `edit`
+
+
+#### Fixed
+
+##### Interactive edit handles non-OverlayRepo sources correctly (#148)
+
+`add_files_to_overlay` is now source-type-aware and includes a rollback
+mechanism. Local overlays copy files to the overlay directory; GitHub
+overlays are rejected with a clear error. If any operation fails mid-way,
+all completed operations are rolled back to prevent partial state.
+
+
+### Command: `update`
+
+
+#### Fixed
+
+##### Fix update showing incorrect source type for overlay repo sources (#145)
+
+Running `update` on overlays from an overlay repo incorrectly displayed
+messages meant for local sources. Each source type now shows the correct
+label and update behavior.
+
+
+
+
+
+#### Fixed
+
+##### Fix apply and sync failing for local overlay sources (#143)
+
+Overlays from local directory sources were incorrectly handled through the
+remote overlay path, causing apply and dry-run to fail. Local sources now
+resolve correctly.
+
+
+#### Changed
+
+##### Remove legacy overlay_repo config support (#79)
+
+The deprecated `overlay_repo` configuration field and automatic migration
+from the old format have been removed. Users must use the `sources`
+configuration format. The `OverlayRepoConfig` struct is retained for use
+by the sources system.
+
+##### Remove deprecated commands: add, publish, list, create-local (#84)
+
+Removed hidden/deprecated command variants that have been replaced:
+`add` (use `edit --add`), `publish` (use `create`), `list` (use `browse`),
+and `create-local` (use `create --local`).
+
+
 ## v0.7.0 - 2026-02-18
 
 

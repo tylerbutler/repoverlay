@@ -16,8 +16,12 @@ src/
 ├── sources.rs      # Multi-source overlay resolution with priority ordering
 ├── overlay_repo.rs # Shared overlay repository integration
 ├── upstream.rs     # Upstream repository detection for fork inheritance
+├── library.rs      # In-repo overlay library management
 ├── detection.rs    # File discovery for overlay creation
 ├── selection.rs    # Interactive file selection UI
+├── widgets/        # Reusable ratatui UI components
+│   ├── mod.rs
+│   └── multi_select_tree.rs  # Tree widget with tri-state checkboxes
 └── testutil.rs     # Test utilities (create_test_repo, create_test_overlay)
 
 tests/
@@ -35,6 +39,9 @@ tests/
 
 - **selection.rs** - Interactive file selection UI. Handles checkbox-style multi-select for overlay creation.
 
+- **widgets/** - Reusable ratatui UI components.
+  - **multi_select_tree.rs** - `MultiSelectTree` stateful widget: renders a tree with tri-state checkboxes (checked/unchecked/partial) based on descendant selection state.
+
 - **state.rs** - State persistence layer. Manages overlay state in two locations:
   - In-repo: `.repoverlay/overlays/<name>.ccl` - tracks applied overlays
   - External: `~/.local/share/repoverlay/applied/` - backup for recovery after `git clean`
@@ -51,6 +58,8 @@ tests/
 
 - **upstream.rs** - Upstream repository detection. Scans git remotes to identify parent repositories (forks), enabling automatic overlay inheritance from upstream.
 
+- **library.rs** - In-repo overlay library management. Handles the `.repoverlay/library/` directory for storing shareable overlays within a repository. Provides path resolution (configurable via per-repo config), overlay listing, import/export/remove operations, and gitignore detection. Library overlays are auto-discovered and resolved with highest priority.
+
 - **detection.rs** - File discovery for the `create` command. Identifies AI configs, gitignored files, and untracked files that might be candidates for overlay creation.
 
 - **testutil.rs** - Test utilities including `create_test_repo()` and `create_test_overlay()` helpers for setting up temporary git repositories in tests.
@@ -62,7 +71,12 @@ tests/
 ```
 Source string → resolve_source() → local path
     ↓
-Walk files in overlay directory
+Load repoverlay.ccl config
+    ↓
+If extends/includes present:
+    Recursively resolve composition → merged file list
+Else:
+    Walk files in overlay directory → file list
     ↓
 For each file:
     - Check for conflicts with existing overlays
@@ -147,6 +161,7 @@ files =
 
 Source types are encoded as pipe-delimited strings:
 - Local: `local|/path/to/overlay`
+- Library: `library|name` (in-repo `.repoverlay/library/` overlay)
 - GitHub: `github|url|owner|repo|ref|commit|subpath|cached_at`
 - Overlay repo: `overlay_repo|org|repo|name|commit`
 
@@ -173,7 +188,8 @@ The `resolve_source()` function determines the overlay source type:
 
 1. **GitHub URL** (`https://github.com/...`) - Downloads to cache, returns cached path
 2. **Local path** (`./path` or `/path`) - Returns path directly after validation
-3. **Overlay repo reference** (`org/repo/name`) - Resolves from configured shared repository
+3. **Library overlay** (bare name) - Checks `.repoverlay/library/` first (highest priority)
+4. **Overlay repo reference** (`org/repo/name`) - Resolves from configured shared repository
 
 ## Fork Inheritance
 
@@ -215,6 +231,48 @@ Overlay: claude-config
   Source:  microsoft/FluidFramework/claude-config (via upstream) (overlay repo)
   Commit:  abc123def456
 ```
+
+## Overlay Composition
+
+Overlays can inherit files from other library overlays via `extends` and `includes` in `repoverlay.ccl`.
+
+### extends
+
+Full inheritance from a single parent overlay. The parent's files, mappings, and directories are inherited. Child files win on conflict.
+
+```
+extends =
+  overlay = parent-name
+```
+
+Multi-level chains are supported (child extends parent extends grandparent). Cycle detection prevents infinite recursion.
+
+### includes
+
+Cherry-pick specific files from other overlays without inheriting everything.
+
+```
+includes =
+  =
+    overlay = tools
+    files =
+      = .editorconfig
+      = scripts/lint.sh
+```
+
+Multiple includes are allowed. Included overlays are recursively resolved (they may themselves use extends/includes).
+
+### Precedence
+
+When the same target path appears in multiple sources, the highest-precedence version wins:
+
+1. **Child's own files** (highest)
+2. **extends** parent files
+3. **includes** files (in listed order, later overrides earlier)
+
+### Scope
+
+Referenced overlays must be library overlays (`.repoverlay/library/`). Other source types (GitHub, local path) are not supported for composition references.
 
 ## Caching Strategy
 

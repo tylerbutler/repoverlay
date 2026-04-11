@@ -1,15 +1,33 @@
 [package]
 name = "repoverlay"
-version = "0.7.0"
+version = "0.12.0"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.91"
 authors = ["Tyler Butler <tyler@tylerbutler.com>"]
 description = "Overlay config files into git repositories without committing them"
 license = "MIT"
 repository = "https://github.com/tylerbutler/repoverlay"
 homepage = "https://github.com/tylerbutler/repoverlay"
-keywords = ["git", "overlay", "config", "symlink"]
+keywords = ["git", "overlay", "config", "symlink", "dotfiles"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    ".claude/",
+    ".github/",
+    ".planning/",
+    ".serena/",
+    ".vscode/",
+    "docs/",
+    "metrics/",
+    "mutants.out/",
+    "mutants.out.old/",
+    "scripts/",
+    "website/",
+    "repopo.config.ts",
+    "package.json",
+    "pnpm-lock.yaml",
+    "hk.pkl",
+    "codecov.yml",
+]
 
 [lib]
 name = "repoverlay"
@@ -20,34 +38,40 @@ name = "repoverlay"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5.58", features = ["derive", "env"] }
-clap_complete = "4.5"
+clap = { version = "4.6.0", features = ["derive", "env"] }
+clap_complete = "4.6.1"
 clap-markdown = "0.1.5"
-env_logger = "0.11"
-log = "0.4"
+env_logger = "0.11.10"
+log = "0.4.29"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0"
+serde_json = "1.0.149"
 walkdir = "2.5.0"
-chrono = { version = "0.4.43", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 thiserror = "2.0.18"
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 colored = "3.1.1"
 url = "2.5.8"
 directories = "6.0.0"
 dialoguer = "0.12.0"
-crossterm = "0.29.0"
-sickle = { version = "0.1.2", features = ["serde"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+tui-tree-widget = "0.24"
+sickle = { version = "0.2.0", features = ["serde"] }
 dirs = "6.0.0"
-fuzzy-matcher = "0.3"
-tiny-update-check = "1.0"
+fuzzy-matcher = "0.3.7"
+libc = "0.2.184"
+tiny-update-check = "1.1.1"
 similar = "2.7.0"
+indicatif = "0.18.4"
+ctrlc = "3.5.2"
+glob = "0.3.3"
 
 [build-dependencies]
 vergen = { version = "9", features = ["build"] }
 
 [dev-dependencies]
 tempfile = "3"
-assert_cmd = "2"
+assert_cmd = "2.2"
+insta = "1"
 predicates = "3"
 
 [profile.release]
@@ -86,3 +110,5 @@ similar_names = "allow"
 too_many_lines = "allow"
 cognitive_complexity = "allow"
 significant_drop_tightening = "allow"
+# We explicitly use pub(crate) for API surface clarity even in private modules
+redundant_pub_crate = "allow"

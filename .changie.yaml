@@ -11,7 +11,7 @@ kindFormat: '#### {{.Kind}}'
 changeFormat: |-
     ##### {{(splitn "\n" 2 .Body)._0}}
     {{with (splitn "\n" 2 .Body)._1 | default "" | trim}}
-    {{.}}
+    {{regexReplaceAll "([^\n])\n([^\n])" . "${1} ${2}"}}
     {{end}}
 body:
     block: true
@@ -31,8 +31,12 @@ kinds:
       auto: patch
     - label: Security
       auto: patch
-componentFormat: '{{if .Component}}### Command: `{{.Component}}`{{end}}'
+componentFormat: '{{if .Component}}{{if eq .Component "features"}}### Features{{else if eq .Component "fixes"}}### Fixes{{else if eq .Component "misc"}}### Miscellaneous{{else}}### Command: `{{.Component}}`{{end}}{{end}}'
 components:
+    - features
+    - fixes
+    - misc
+    - library
     - apply
     - browse
     - cache

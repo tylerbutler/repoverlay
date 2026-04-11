@@ -1,4 +1,6 @@
 //! Newtype wrapper for normalized overlay names.
+//!
+//! Ensures overlay names are consistently formatted for state lookups and display.
 
 use std::fmt;
 
@@ -9,14 +11,14 @@ use std::fmt;
 ///
 /// An `OverlayName` must be a simple name (no path separators).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OverlayName(String);
+pub(crate) struct OverlayName(String);
 
 impl OverlayName {
     /// Create a new `OverlayName` from a string.
     ///
     /// The name must be a simple overlay name (e.g., `"my-overlay"`),
     /// not a path like `"org/repo/name"`.
-    pub fn new(name: impl Into<String>) -> Self {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         debug_assert!(
             !name.contains('/'),
@@ -26,7 +28,7 @@ impl OverlayName {
     }
 
     /// Get the underlying string slice.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -52,6 +54,26 @@ impl PartialEq<str> for OverlayName {
 impl PartialEq<&str> for OverlayName {
     fn eq(&self, other: &&str) -> bool {
         self.0 == *other
+    }
+}
+
+impl crate::selection::ToSelectableItem for OverlayName {
+    fn to_selectable_item(&self, target: &std::path::Path) -> crate::selection::SelectableItem {
+        let description = crate::load_overlay_state(target, self.as_str())
+            .ok()
+            .map(|state| {
+                format!(
+                    "last updated {}",
+                    crate::state::format_relative_time(&state.applied_at)
+                )
+            });
+        crate::selection::SelectableItem {
+            id: self.to_string(),
+            label: self.to_string(),
+            description,
+            preselected: false,
+            disabled: false,
+        }
     }
 }
 

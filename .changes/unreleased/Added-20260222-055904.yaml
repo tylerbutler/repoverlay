@@ -1,7 +1,0 @@
-kind: Added
-body: |-
-    Allow browsing without a configured source
-
-    `browse` now accepts an optional source argument (GitHub username, owner/repo, or URL) to fetch and browse overlays without adding a persistent source. Existing behavior using configured sources is unchanged when no argument is provided.
-time: 2026-02-22T05:59:04Z
-component: browse

@@ -35,44 +35,113 @@ const OVERLAY_REPO_META: &str = ".repoverlay-overlay-repo-meta.ccl";
 
 /// Metadata about the overlay repository clone.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct OverlayRepoMeta {
+pub(crate) struct OverlayRepoMeta {
     /// The clone URL
-    pub clone_url: String,
+    pub(crate) clone_url: String,
     /// When the repo was last fetched
-    pub last_fetched: DateTime<Utc>,
+    pub(crate) last_fetched: DateTime<Utc>,
     /// The current commit SHA
-    pub commit: String,
+    pub(crate) commit: String,
 }
 
 /// Information about an available overlay in the repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AvailableOverlay {
+pub(crate) struct AvailableOverlay {
     /// Target organization (e.g., "microsoft")
-    pub org: String,
+    pub(crate) org: String,
     /// Target repository (e.g., `FluidFramework`)
-    pub repo: String,
+    pub(crate) repo: String,
     /// Overlay name (e.g., "claude-config")
-    pub name: String,
+    pub(crate) name: String,
     /// Whether the overlay has a repoverlay.ccl config file
-    pub has_config: bool,
+    pub(crate) has_config: bool,
+    /// Whether this overlay comes from a flat (non-nested) source layout.
+    ///
+    /// Flat overlays use a simpler directory structure without org/repo nesting.
+    pub(crate) flat: bool,
 }
 
 impl std::fmt::Display for AvailableOverlay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}/{}", self.org, self.repo, self.name)
+        if self.flat {
+            write!(f, "{}", self.name)
+        } else {
+            write!(f, "{}/{}/{}", self.org, self.repo, self.name)
+        }
     }
 }
 
 impl AvailableOverlay {
     /// Format the overlay path for display with the overlay name in bold.
-    pub fn display_bold(&self) -> String {
+    pub(crate) fn display_bold(&self) -> String {
         use colored::Colorize;
-        format!("{}/{}/{}", self.org, self.repo, self.name.bold())
+        if self.flat {
+            self.name.bold().to_string()
+        } else {
+            format!("{}/{}/{}", self.org, self.repo, self.name.bold())
+        }
+    }
+
+    /// Returns the relative path from the source base directory to this overlay.
+    ///
+    /// For structured overlays: `org/repo/name`
+    /// For flat overlays: just `name` (or empty if the base dir itself is the overlay)
+    pub(crate) fn relative_path(&self) -> std::path::PathBuf {
+        if self.flat {
+            std::path::PathBuf::from(&self.name)
+        } else {
+            std::path::PathBuf::from(&self.org)
+                .join(&self.repo)
+                .join(&self.name)
+        }
+    }
+}
+
+/// Wraps an [`AvailableOverlay`] with context about which overlays are already applied,
+/// enabling conversion to a [`SelectableItem`][crate::selection::SelectableItem] for the
+/// browse UI.
+pub(crate) struct BrowseOverlayItem<'a> {
+    /// The available overlay to display.
+    pub(crate) overlay: &'a AvailableOverlay,
+    /// Names of overlays already applied in the target repo.
+    pub(crate) applied_overlays: &'a [crate::OverlayName],
+}
+
+impl crate::selection::ToSelectableItem for BrowseOverlayItem<'_> {
+    fn to_selectable_item(&self, target: &Path) -> crate::selection::SelectableItem {
+        let normalized = crate::state::normalize_overlay_name(&self.overlay.name).ok();
+        let disabled = normalized
+            .as_ref()
+            .is_some_and(|n| self.applied_overlays.iter().any(|name| name == n.as_str()));
+        let description = if disabled {
+            let name = normalized
+                .as_ref()
+                .map_or(self.overlay.name.as_str(), |n| n.as_str());
+            let desc = crate::load_overlay_state(target, name).ok().map_or_else(
+                || "already applied".into(),
+                |state| {
+                    format!(
+                        "last updated {}",
+                        crate::state::format_relative_time(&state.applied_at)
+                    )
+                },
+            );
+            Some(desc)
+        } else {
+            None
+        };
+        crate::selection::SelectableItem {
+            id: self.overlay.to_string(),
+            label: self.overlay.to_string(),
+            description,
+            preselected: false,
+            disabled,
+        }
     }
 }
 
 /// Manager for the overlay repository.
-pub struct OverlayRepoManager {
+pub(crate) struct OverlayRepoManager {
     /// Path to the cloned overlay repository
     repo_path: PathBuf,
     /// Configuration for the overlay repo
@@ -81,7 +150,7 @@ pub struct OverlayRepoManager {
 
 impl OverlayRepoManager {
     /// Create a new overlay repository manager.
-    pub fn new(config: OverlayRepoConfig) -> Result<Self> {
+    pub(crate) fn new(config: OverlayRepoConfig) -> Result<Self> {
         let repo_path = match &config.local_path {
             Some(path) => path.clone(),
             None => default_overlay_repo_path()?,
@@ -91,27 +160,27 @@ impl OverlayRepoManager {
     }
 
     /// Get the path to the overlay repository.
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.repo_path
     }
 
     /// Check if the overlay repository needs to be cloned.
-    pub fn needs_clone(&self) -> bool {
+    pub(crate) fn needs_clone(&self) -> bool {
         !self.repo_path.exists() || !self.repo_path.join(".git").exists()
     }
 
     /// Ensure the overlay repo is cloned.
-    pub fn ensure_cloned(&self) -> Result<()> {
+    pub(crate) fn ensure_cloned(&self) -> Result<()> {
         if self.needs_clone() {
             self.clone_repo()?;
         }
         Ok(())
     }
 
-    /// Clone the overlay repository.
-    fn clone_repo(&self) -> Result<()> {
-        let url = &self.config.url;
-
+    /// Validate that a URL is safe to pass to `git clone`.
+    ///
+    /// Rejects flag-like values and restricts to HTTPS/SSH schemes.
+    fn validate_clone_url(url: &str) -> Result<()> {
         // Validate URL doesn't look like a flag (defense in depth)
         if url.starts_with('-') {
             bail!(
@@ -131,24 +200,27 @@ impl OverlayRepoManager {
             );
         }
 
+        Ok(())
+    }
+
+    /// Clone the overlay repository.
+    fn clone_repo(&self) -> Result<()> {
+        Self::validate_clone_url(&self.config.url)?;
+
         // Create parent directories
         if let Some(parent) = self.repo_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let output = Command::new("git")
-            .args(["clone", "--depth", "1", "--"])
-            .arg(&self.config.url)
-            .arg(&self.repo_path)
-            .output()
-            .context("Failed to execute git clone")?;
+        let url = self.config.url.as_str();
+        let repo_path_str = self.repo_path.to_string_lossy();
+        let args = vec!["clone", "--depth", "1", "--", url, &repo_path_str];
+        let message = format!("Cloning {}...", self.config.url);
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("not found") || stderr.contains("Repository not found") {
-                bail!("Overlay repository not found: {}", self.config.url);
-            }
-            bail!("Failed to clone overlay repository: {}", stderr.trim());
+        let (status, _) = crate::git::run_git_with_spinner(&args, None, &message, false)?;
+
+        if !status.success() {
+            bail!("Failed to clone overlay repository: {}", self.config.url);
         }
 
         self.save_meta()?;
@@ -156,20 +228,20 @@ impl OverlayRepoManager {
     }
 
     /// Pull latest changes from the remote.
-    pub fn pull(&self) -> Result<()> {
+    pub(crate) fn pull(&self) -> Result<()> {
         if !self.repo_path.exists() {
             bail!("Overlay repository not cloned. Run 'repoverlay source add <url>' first.");
         }
 
-        let output = Command::new("git")
-            .args(["pull", "--ff-only"])
-            .current_dir(&self.repo_path)
-            .output()
-            .context("Failed to execute git pull")?;
+        let (status, _) = crate::git::run_git_with_spinner(
+            &["pull", "--ff-only"],
+            Some(&self.repo_path),
+            "Pulling latest changes...",
+            false,
+        )?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to pull overlay repository: {}", stderr.trim());
+        if !status.success() {
+            bail!("Failed to pull overlay repository");
         }
 
         self.save_meta()?;
@@ -177,7 +249,7 @@ impl OverlayRepoManager {
     }
 
     /// Get the current commit SHA.
-    pub fn get_current_commit(&self) -> Result<String> {
+    pub(crate) fn get_current_commit(&self) -> Result<String> {
         let output = Command::new("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(&self.repo_path)
@@ -207,7 +279,7 @@ impl OverlayRepoManager {
     }
 
     /// List all available overlays in the repository.
-    pub fn list_overlays(&self) -> Result<Vec<AvailableOverlay>> {
+    pub(crate) fn list_overlays(&self) -> Result<Vec<AvailableOverlay>> {
         if !self.repo_path.exists() {
             bail!("Overlay repository not cloned. Run 'repoverlay source add <url>' first.");
         }
@@ -257,6 +329,7 @@ impl OverlayRepoManager {
                         repo: repo_name.clone(),
                         name: overlay_name,
                         has_config,
+                        flat: false,
                     });
                 }
             }
@@ -269,7 +342,11 @@ impl OverlayRepoManager {
     }
 
     /// List overlays for a specific target repository.
-    pub fn list_overlays_for_repo(&self, org: &str, repo: &str) -> Result<Vec<AvailableOverlay>> {
+    pub(crate) fn list_overlays_for_repo(
+        &self,
+        org: &str,
+        repo: &str,
+    ) -> Result<Vec<AvailableOverlay>> {
         let all = self.list_overlays()?;
         Ok(all
             .into_iter()
@@ -278,7 +355,7 @@ impl OverlayRepoManager {
     }
 
     /// Get the path to a specific overlay.
-    pub fn get_overlay_path(&self, org: &str, repo: &str, name: &str) -> Result<PathBuf> {
+    pub(crate) fn get_overlay_path(&self, org: &str, repo: &str, name: &str) -> Result<PathBuf> {
         validate_path_component(org, "org")?;
         validate_path_component(repo, "repo")?;
         validate_path_component(name, "overlay name")?;
@@ -298,7 +375,7 @@ impl OverlayRepoManager {
     /// 2. If upstream provided, try: `upstream.org/upstream.repo/name`
     ///
     /// Returns the path and how it was resolved.
-    pub fn get_overlay_path_with_fallback(
+    pub(crate) fn get_overlay_path_with_fallback(
         &self,
         org: &str,
         repo: &str,
@@ -339,7 +416,8 @@ impl OverlayRepoManager {
     ///
     /// Copies files from `source_dir` to the overlay repo at org/repo/name/
     /// Returns the destination path.
-    pub fn stage_overlay(
+    #[cfg(test)]
+    pub(crate) fn stage_overlay(
         &self,
         org: &str,
         repo: &str,
@@ -373,7 +451,7 @@ impl OverlayRepoManager {
     }
 
     /// Check if there are staged changes.
-    pub fn has_staged_changes(&self) -> Result<bool> {
+    pub(crate) fn has_staged_changes(&self) -> Result<bool> {
         let output = Command::new("git")
             .args(["diff", "--cached", "--quiet"])
             .current_dir(&self.repo_path)
@@ -385,7 +463,7 @@ impl OverlayRepoManager {
     }
 
     /// Commit staged changes.
-    pub fn commit(&self, message: &str) -> Result<()> {
+    pub(crate) fn commit(&self, message: &str) -> Result<()> {
         let output = Command::new("git")
             .args(["commit", "-m", message])
             .current_dir(&self.repo_path)
@@ -402,29 +480,13 @@ impl OverlayRepoManager {
 
         Ok(())
     }
-
-    /// Push to remote.
-    pub fn push(&self) -> Result<()> {
-        let output = Command::new("git")
-            .args(["push"])
-            .current_dir(&self.repo_path)
-            .output()
-            .context("Failed to execute git push")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to push: {}", stderr.trim());
-        }
-
-        Ok(())
-    }
 }
 
 /// Get the default path for the overlay repository clone.
 ///
 /// Returns `~/.config/repoverlay/overlay-repo/` - stored alongside config
 /// since it's user-managed content.
-pub fn default_overlay_repo_path() -> Result<PathBuf> {
+pub(crate) fn default_overlay_repo_path() -> Result<PathBuf> {
     Ok(crate::config::config_dir()?.join(OVERLAY_REPO_DIR))
 }
 
@@ -436,7 +498,7 @@ const MAX_COPY_DEPTH: usize = 64;
 ///
 /// Rejects symlinks that point outside the source root to prevent
 /// exfiltration of files from the host filesystem via malicious overlays.
-pub fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     let canonical_root = src
         .canonicalize()
         .with_context(|| format!("Failed to canonicalize source root: {}", src.display()))?;
@@ -503,7 +565,7 @@ fn copy_dir_recursive_inner(
 
 /// Parse an overlay reference in the format "org/repo/name".
 #[allow(dead_code)] // Kept for backward compatibility; new code uses reference::SourceReference
-pub fn parse_overlay_reference(s: &str) -> Option<(String, String, String)> {
+pub(crate) fn parse_overlay_reference(s: &str) -> Option<(String, String, String)> {
     // Must have exactly 3 parts separated by /
     let parts: Vec<_> = s.split('/').collect();
     if parts.len() != 3 {
@@ -598,6 +660,7 @@ mod tests {
             repo: "FluidFramework".to_string(),
             name: "claude-config".to_string(),
             has_config: true,
+            flat: false,
         };
 
         let cloned = overlay.clone();
@@ -1512,29 +1575,15 @@ mod tests {
     }
 
     #[test]
-    fn test_overlay_repo_clone_rejects_flag_url() {
-        let temp = TempDir::new().unwrap();
-        let config = OverlayRepoConfig {
-            url: "--upload-pack=evil".to_string(),
-            local_path: Some(temp.path().join("overlay-repo")),
-        };
-
-        let manager = OverlayRepoManager::new(config).unwrap();
-        let result = manager.clone_repo();
+    fn test_validate_clone_url_rejects_flag() {
+        let result = OverlayRepoManager::validate_clone_url("--upload-pack=evil");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("flag injection"));
     }
 
     #[test]
-    fn test_overlay_repo_clone_rejects_file_url() {
-        let temp = TempDir::new().unwrap();
-        let config = OverlayRepoConfig {
-            url: "file:///etc/shadow".to_string(),
-            local_path: Some(temp.path().join("overlay-repo")),
-        };
-
-        let manager = OverlayRepoManager::new(config).unwrap();
-        let result = manager.clone_repo();
+    fn test_validate_clone_url_rejects_file_scheme() {
+        let result = OverlayRepoManager::validate_clone_url("file:///etc/shadow");
         assert!(result.is_err());
         assert!(
             result
@@ -1545,20 +1594,14 @@ mod tests {
     }
 
     #[test]
-    fn test_overlay_repo_clone_allows_https_url() {
-        let temp = TempDir::new().unwrap();
-        let config = OverlayRepoConfig {
-            url: "https://github.com/org/repo.git".to_string(),
-            local_path: Some(temp.path().join("overlay-repo")),
-        };
+    fn test_validate_clone_url_allows_https() {
+        OverlayRepoManager::validate_clone_url("https://github.com/org/repo.git").unwrap();
+    }
 
-        let manager = OverlayRepoManager::new(config).unwrap();
-        // This will fail because the repo doesn't exist, but it should get past validation
-        let result = manager.clone_repo();
-        // Should fail with a git error, not a validation error
-        let err = result.unwrap_err().to_string();
-        assert!(!err.contains("flag injection"));
-        assert!(!err.contains("Unsupported URL scheme"));
+    #[test]
+    fn test_validate_clone_url_allows_ssh() {
+        OverlayRepoManager::validate_clone_url("git@github.com:org/repo.git").unwrap();
+        OverlayRepoManager::validate_clone_url("ssh://git@github.com/org/repo.git").unwrap();
     }
 
     #[test]
@@ -1568,21 +1611,45 @@ mod tests {
             repo: "FluidFramework".to_string(),
             name: "vscode-setup".to_string(),
             has_config: true,
+            flat: false,
         };
         assert_eq!(o.to_string(), "microsoft/FluidFramework/vscode-setup");
     }
 
     #[test]
-    fn test_overlay_repo_clone_allows_ssh_url() {
-        let temp = TempDir::new().unwrap();
-        let config = OverlayRepoConfig {
-            url: "git@github.com:org/repo.git".to_string(),
-            local_path: Some(temp.path().join("overlay-repo")),
+    fn available_overlay_display_bold_contains_name() {
+        let o = AvailableOverlay {
+            org: "microsoft".to_string(),
+            repo: "FluidFramework".to_string(),
+            name: "vscode-setup".to_string(),
+            has_config: true,
+            flat: false,
         };
+        let bold = o.display_bold();
+        assert!(bold.contains("microsoft"));
+        assert!(bold.contains("FluidFramework"));
+        assert!(bold.contains("vscode-setup"));
+    }
 
-        let manager = OverlayRepoManager::new(config).unwrap();
-        let result = manager.clone_repo();
-        let err = result.unwrap_err().to_string();
-        assert!(!err.contains("Unsupported URL scheme"));
+    #[test]
+    fn snapshot_available_overlay_display() {
+        let overlays = [
+            AvailableOverlay {
+                org: "microsoft".to_string(),
+                repo: "FluidFramework".to_string(),
+                name: "claude-config".to_string(),
+                has_config: true,
+                flat: false,
+            },
+            AvailableOverlay {
+                org: "owner".to_string(),
+                repo: "repo".to_string(),
+                name: "my-overlay".to_string(),
+                has_config: false,
+                flat: false,
+            },
+        ];
+        let output: Vec<String> = overlays.iter().map(|o| format!("{o}")).collect();
+        insta::assert_snapshot!(output.join("\n"));
     }
 }

@@ -7,7 +7,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 
 /// Fuzzy matcher for finding similar overlay names.
-pub struct OverlayMatcher {
+pub(crate) struct OverlayMatcher {
     matcher: SkimMatcherV2,
 }
 
@@ -20,7 +20,7 @@ impl Default for OverlayMatcher {
 impl OverlayMatcher {
     /// Create a new fuzzy matcher with default settings.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             matcher: SkimMatcherV2::default(),
         }
@@ -37,7 +37,7 @@ impl OverlayMatcher {
     /// * `candidates` - The list of valid overlay names to search through
     /// * `max_results` - Maximum number of suggestions to return
     #[must_use]
-    pub fn find_matches(
+    pub(crate) fn find_matches(
         &self,
         query: &str,
         candidates: &[String],
@@ -68,7 +68,12 @@ impl OverlayMatcher {
     /// Returns a formatted string like "claude-config, claude-docs" or
     /// an empty string if no matches found.
     #[must_use]
-    pub fn suggest(&self, query: &str, candidates: &[String], max_results: usize) -> Vec<String> {
+    pub(crate) fn suggest(
+        &self,
+        query: &str,
+        candidates: &[String],
+        max_results: usize,
+    ) -> Vec<String> {
         self.find_matches(query, candidates, max_results)
             .into_iter()
             .map(|m| m.value)
@@ -78,11 +83,11 @@ impl OverlayMatcher {
 
 /// A fuzzy match result with its score.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScoredMatch {
+pub(crate) struct ScoredMatch {
     /// The matched candidate value.
-    pub value: String,
+    pub(crate) value: String,
     /// The fuzzy match score (higher is better).
-    pub score: i64,
+    pub(crate) score: i64,
 }
 
 #[cfg(test)]

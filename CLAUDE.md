@@ -15,9 +15,13 @@ just test       # Run all tests
 just lint       # Run clippy lints
 ```
 
+## Version Control
+
+This repository optionally uses **jj (Jujutsu)** colocated with git. Check for a `.jj/` directory to determine which VCS is active; if present use `jj`, otherwise use `git`.
+
 ## Project Context
 
-- **Rust 2024 edition**, minimum version 1.90
+- **Rust 2024 edition**, minimum version 1.91
 - **Clippy pedantic + nursery** lints enabled
 - **CCL format** used for configuration and state files (not TOML)
 - Tests use `tempfile::TempDir` for temporary git repos

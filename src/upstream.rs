@@ -11,13 +11,13 @@ use crate::github::parse_remote_url;
 
 /// Information about an upstream repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpstreamInfo {
+pub(crate) struct UpstreamInfo {
     /// GitHub organization/owner
-    pub org: String,
+    pub(crate) org: String,
     /// Repository name
-    pub repo: String,
+    pub(crate) repo: String,
     /// Name of the remote (e.g., "upstream" or "origin")
-    pub remote_name: String,
+    pub(crate) remote_name: String,
 }
 
 /// Get the URL for a git remote.
@@ -42,7 +42,7 @@ fn get_remote_url(repo_path: &Path, remote_name: &str) -> Result<Option<String>>
 /// 2. If no "upstream" remote, returns None (origin fallback requires knowing current org)
 ///
 /// Returns `None` if no upstream can be detected.
-pub fn detect_upstream(repo_path: &Path) -> Result<Option<UpstreamInfo>> {
+pub(crate) fn detect_upstream(repo_path: &Path) -> Result<Option<UpstreamInfo>> {
     // First, try the "upstream" remote
     if let Some(url) = get_remote_url(repo_path, "upstream")?
         && let Some((org, repo)) = parse_remote_url(&url)
@@ -63,18 +63,18 @@ pub fn detect_upstream(repo_path: &Path) -> Result<Option<UpstreamInfo>> {
 /// Contains org/repo pairs from git remotes, used to auto-filter overlays
 /// to those targeting the current repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepoIdentity {
+pub(crate) struct RepoIdentity {
     /// org/repo from the "origin" remote
-    pub origin: Option<(String, String)>,
+    pub(crate) origin: Option<(String, String)>,
     /// org/repo from the "upstream" remote (fork parent)
-    pub upstream: Option<(String, String)>,
+    pub(crate) upstream: Option<(String, String)>,
 }
 
 impl RepoIdentity {
     /// Check if an overlay's target org/repo matches this repository.
     ///
     /// Matches against both origin and upstream, case-insensitively.
-    pub fn matches(&self, org: &str, repo: &str) -> bool {
+    pub(crate) fn matches(&self, org: &str, repo: &str) -> bool {
         let matches_pair = |pair: &(String, String)| {
             pair.0.eq_ignore_ascii_case(org) && pair.1.eq_ignore_ascii_case(repo)
         };
@@ -87,7 +87,7 @@ impl RepoIdentity {
 ///
 /// Parses "origin" and "upstream" remote URLs to extract org/repo pairs.
 /// Returns `None` if no GitHub remotes can be parsed.
-pub fn detect_repo_identity(repo_path: &Path) -> Result<Option<RepoIdentity>> {
+pub(crate) fn detect_repo_identity(repo_path: &Path) -> Result<Option<RepoIdentity>> {
     let origin = get_remote_url(repo_path, "origin")?
         .as_deref()
         .and_then(parse_remote_url);

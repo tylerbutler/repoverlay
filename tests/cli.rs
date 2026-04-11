@@ -95,21 +95,21 @@ fn browse_help_shows_source_argument() {
 }
 
 #[test]
-fn browse_rejects_local_path_source() {
+fn browse_rejects_nonexistent_local_path_source() {
     cargo_bin_cmd!("repoverlay")
         .args(["browse", "./my-overlay"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid source for browse"));
+        .stderr(predicate::str::contains("Path does not exist"));
 }
 
 #[test]
-fn browse_rejects_absolute_path_source() {
+fn browse_rejects_nonexistent_absolute_path_source() {
     cargo_bin_cmd!("repoverlay")
         .args(["browse", "/tmp/my-overlay"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid source for browse"));
+        .stderr(predicate::str::contains("Path does not exist"));
 }
 
 #[test]
@@ -821,6 +821,50 @@ fn restore_all_overlays() {
 }
 
 #[test]
+fn restore_with_broken_symlinks_does_not_require_force() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "broken-symlink-test"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+
+    // Verify overlay state file exists in .repoverlay/
+    let state_path = ctx
+        .repo_path()
+        .join(".repoverlay/overlays/broken-symlink-test.ccl");
+    assert!(state_path.exists(), "State file should exist after apply");
+
+    // Delete the symlink (simulating `git clean` removing symlinks)
+    fs::remove_file(ctx.repo_path().join(".envrc")).unwrap();
+    assert!(!ctx.file_exists(".envrc"));
+
+    // State file still exists — this is the "broken symlink" scenario
+    assert!(
+        state_path.exists(),
+        "State file should still exist after deleting symlink"
+    );
+
+    // Restore WITHOUT --force should succeed (issue #202)
+    cargo_bin_cmd!("repoverlay")
+        .args(["restore"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    // The file should be restored
+    assert!(
+        ctx.file_exists(".envrc"),
+        "Symlink should be restored without --force"
+    );
+}
+
+#[test]
 fn restore_when_no_overlays_shows_message() {
     let ctx = TestContext::new();
 
@@ -1032,146 +1076,6 @@ fn workflow_apply_delete_restore() {
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success();
-}
-
-// ============================================================================
-// Add Command Tests
-// ============================================================================
-
-#[test]
-fn add_shows_deprecation_warning() {
-    let ctx = TestContext::new();
-
-    cargo_bin_cmd!("repoverlay")
-        .args(["add", "org/repo/nonexistent-overlay", "some-file.txt"])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("deprecated"));
-}
-
-#[test]
-fn add_help_displays() {
-    cargo_bin_cmd!("repoverlay")
-        .args(["add", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "Add files to an existing applied overlay",
-        ));
-}
-
-#[test]
-fn add_fails_when_overlay_not_applied() {
-    let ctx = TestContext::new();
-
-    // Try to add a file to an overlay that isn't applied
-    // Use full org/repo/name format to bypass git remote detection
-    cargo_bin_cmd!("repoverlay")
-        .args(["add", "org/repo/nonexistent-overlay", "some-file.txt"])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not currently applied"));
-}
-
-#[test]
-fn add_fails_when_no_files_specified() {
-    let ctx = TestContext::new();
-
-    // Try to run add without any files
-    cargo_bin_cmd!("repoverlay")
-        .args(["add", "my-overlay"])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("No files specified"));
-}
-
-#[test]
-fn add_fails_when_target_not_git_repo() {
-    let non_git_dir = tempfile::TempDir::new().unwrap();
-
-    cargo_bin_cmd!("repoverlay")
-        .args(["add", "org/repo/my-overlay", "file.txt"])
-        .args(["--target", non_git_dir.path().to_str().unwrap()])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not a git repository"));
-}
-
-#[test]
-fn add_fails_when_file_does_not_exist() {
-    let ctx = TestContext::new().with_overlay(&envrc_overlay());
-
-    // Apply overlay first
-    cargo_bin_cmd!("repoverlay")
-        .args(["apply", ctx.overlay_source()])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .args(["--name", "test-overlay"])
-        .assert()
-        .success();
-
-    // Try to add a file that doesn't exist
-    cargo_bin_cmd!("repoverlay")
-        .args(["add", "org/repo/test-overlay", "nonexistent-file.txt"])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("File does not exist"));
-}
-
-#[test]
-fn add_dry_run_shows_files_without_changes() {
-    let ctx = TestContext::new().with_overlay(&envrc_overlay());
-
-    // Apply overlay first
-    cargo_bin_cmd!("repoverlay")
-        .args(["apply", ctx.overlay_source()])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .args(["--name", "test-overlay"])
-        .assert()
-        .success();
-
-    // Create a file to add
-    ctx.create_repo_file("newfile.txt", "new content");
-
-    // Run add with --dry-run
-    cargo_bin_cmd!("repoverlay")
-        .args(["add", "org/repo/test-overlay", "newfile.txt", "--dry-run"])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run"))
-        .stdout(predicate::str::contains("newfile.txt"));
-
-    // File should still exist as regular file, not symlink
-    assert!(ctx.file_exists("newfile.txt"));
-    assert!(
-        !ctx.is_symlink("newfile.txt"),
-        "File should not be converted to symlink in dry-run mode"
-    );
-}
-
-#[test]
-fn add_fails_when_file_already_in_overlay() {
-    let ctx = TestContext::new().with_overlay(&envrc_overlay());
-
-    // Apply overlay
-    cargo_bin_cmd!("repoverlay")
-        .args(["apply", ctx.overlay_source()])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .args(["--name", "test-overlay"])
-        .assert()
-        .success();
-
-    // Try to add a file that's already managed by the overlay
-    cargo_bin_cmd!("repoverlay")
-        .args(["add", "org/repo/test-overlay", ".envrc"])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("already managed"));
 }
 
 // ============================================================================
@@ -1510,6 +1414,218 @@ fn source_add_strips_git_suffix_from_name() {
 }
 
 // ============================================================================
+// Local Directory Source Tests
+// ============================================================================
+
+#[test]
+fn source_add_local_path_succeeds() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create a local overlays directory inside the repo
+    let overlays_dir = ctx.repo_path().join("my-overlays");
+    fs::create_dir_all(&overlays_dir).expect("Failed to create overlays dir");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "local-test"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added"));
+
+    // Verify .repoverlay/config.ccl was created with the path
+    let config_path = ctx.repo_path().join(".repoverlay/config.ccl");
+    assert!(config_path.exists(), ".repoverlay/config.ccl should exist");
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(
+        content.contains("local-test"),
+        "config should contain source name"
+    );
+    assert!(
+        content.contains("path = my-overlays"),
+        "config should contain path"
+    );
+}
+
+#[test]
+fn source_add_nonexistent_local_path_fails() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./nonexistent-dir"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("does not exist").or(predicate::str::contains("No such file")),
+        );
+}
+
+#[test]
+fn source_add_path_outside_repo_fails() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create a directory outside the repo
+    let outside_dir = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", outside_dir.path().to_str().unwrap()])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be within the repository"));
+}
+
+#[test]
+fn source_list_shows_local_sources() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create overlay dir and add as local source
+    let overlays_dir = ctx.repo_path().join("my-overlays");
+    fs::create_dir_all(&overlays_dir).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "local-src"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // List should show "Repository sources" and the path
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "list"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Repository sources"))
+        .stdout(predicate::str::contains("local-src"))
+        .stdout(predicate::str::contains("path:"));
+}
+
+#[test]
+fn source_remove_local_source() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create overlay dir and add as local source
+    let overlays_dir = ctx.repo_path().join("my-overlays");
+    fs::create_dir_all(&overlays_dir).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "removable"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Verify it exists
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "list"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removable"));
+
+    // Remove it
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "remove", "removable"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    // Verify it's gone
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "list"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removable").not());
+}
+
+#[test]
+fn source_add_local_extracts_name_from_dir() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create overlay dir — name should be extracted from directory name
+    let overlays_dir = ctx.repo_path().join("team-overlays");
+    fs::create_dir_all(&overlays_dir).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./team-overlays"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("team-overlays"));
+}
+
+// ============================================================================
+// Source Add file:// URL Tests
+// ============================================================================
+
+#[test]
+fn source_add_file_url_succeeds() {
+    let ctx = SourceTestContext::new();
+
+    // Create an external directory to use as source
+    let external_dir = tempfile::TempDir::new().unwrap();
+
+    let file_url = format!("file://{}", external_dir.path().display());
+    ctx.cmd()
+        .args(["source", "add", &file_url, "--name", "file-source"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added"));
+}
+
+#[test]
+fn source_add_file_url_shows_in_list() {
+    let ctx = SourceTestContext::new();
+
+    let external_dir = tempfile::TempDir::new().unwrap();
+    let file_url = format!("file://{}", external_dir.path().display());
+
+    ctx.cmd()
+        .args(["source", "add", &file_url, "--name", "file-listed"])
+        .assert()
+        .success();
+
+    ctx.cmd()
+        .args(["source", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("file-listed"));
+}
+
+#[test]
+fn source_add_file_url_extracts_name_from_path() {
+    let ctx = SourceTestContext::new();
+
+    let external_dir = tempfile::TempDir::new().unwrap();
+    let named_dir = external_dir.path().join("my-overlays");
+    fs::create_dir_all(&named_dir).unwrap();
+
+    let file_url = format!("file://{}", named_dir.display());
+    ctx.cmd()
+        .args(["source", "add", &file_url])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlays"));
+}
+
+// ============================================================================
 // JSON Deep Merge Tests
 // ============================================================================
 
@@ -1714,8 +1830,8 @@ fn edit_add_fails_when_overlay_not_applied() {
     cargo_bin_cmd!("repoverlay")
         .args([
             "edit",
+            "add",
             "org/repo/nonexistent-overlay",
-            "--add",
             "some-file.txt",
         ])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
@@ -1739,8 +1855,8 @@ fn edit_add_fails_when_file_does_not_exist() {
     cargo_bin_cmd!("repoverlay")
         .args([
             "edit",
+            "add",
             "org/repo/test-overlay",
-            "--add",
             "nonexistent-file.txt",
         ])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
@@ -1759,6 +1875,120 @@ fn edit_fails_when_no_operation_specified() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("specify at least one"));
+}
+
+#[test]
+fn edit_no_name_fails_when_no_overlays_applied() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "No overlays are currently applied",
+        ));
+}
+
+#[test]
+fn edit_no_name_auto_selects_single_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // With only one overlay applied, `edit` (no name) should auto-select it
+    // and enter interactive mode. In non-TTY, interactive returns preselected → no changes.
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes"));
+}
+
+// ──────────────────────────────────────────────
+// Edit --add success tests
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_add_adds_file_to_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Verify overlay is applied
+    assert!(ctx.is_symlink(".envrc"));
+
+    // Create a new file in the target repo
+    ctx.create_repo_file("new-file.txt", "new content");
+    assert!(ctx.file_exists("new-file.txt"));
+
+    // Add the new file to the overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", "new-file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"));
+
+    // Verify new-file.txt is now a symlink (managed by overlay)
+    assert!(ctx.is_symlink("new-file.txt"));
+    // Verify content is preserved
+    assert_eq!(ctx.read_file("new-file.txt"), "new content");
+    // Verify original .envrc symlink still works
+    assert!(ctx.is_symlink(".envrc"));
+    assert_eq!(ctx.read_file(".envrc"), "export FOO=bar");
+
+    // Verify git exclude has BOTH files
+    let exclude = ctx.git_exclude_content();
+    assert!(
+        exclude.contains(".envrc"),
+        "git exclude should contain .envrc, got: {exclude}"
+    );
+    assert!(
+        exclude.contains("new-file.txt"),
+        "git exclude should contain new-file.txt, got: {exclude}"
+    );
+}
+
+#[test]
+fn edit_add_works_without_git_remote() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Create a new file in the target repo
+    ctx.create_repo_file(".app-config", "app config");
+
+    // Edit add with SHORT form name (no org/repo prefix) — no git remote needed
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "test-overlay", ".app-config"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"));
+
+    // Verify the file is now managed as a symlink
+    assert!(ctx.is_symlink(".app-config"));
 }
 
 // ──────────────────────────────────────────────
@@ -1783,7 +2013,7 @@ fn edit_remove_removes_file_from_overlay() {
 
     // Remove one file
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "extra.txt"])
+        .args(["edit", "remove", "test-overlay", "extra.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1814,7 +2044,7 @@ fn edit_remove_fails_when_file_not_in_overlay() {
         .success();
 
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "nonexistent.txt"])
+        .args(["edit", "remove", "test-overlay", "nonexistent.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .failure()
@@ -1835,7 +2065,7 @@ fn edit_remove_dry_run_does_not_modify() {
 
     // Dry run remove
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "extra.txt", "--dry-run"])
+        .args(["edit", "remove", "test-overlay", "extra.txt", "--dry-run"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1862,7 +2092,7 @@ fn edit_remove_multiple_files() {
 
     // Remove two files at once
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--remove", "a.txt", "b.txt"])
+        .args(["edit", "remove", "test-overlay", "a.txt", "b.txt"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -1947,6 +2177,218 @@ fn edit_interactive_includes_files_in_hidden_directories() {
         .stdout(predicate::str::contains("No changes"));
 }
 
+// ──────────────────────────────────────────────
+// Edit add — additional coverage
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_add_dry_run_does_not_modify() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file("new-file.txt", "new content");
+
+    // Dry run add
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "edit",
+            "add",
+            "org/repo/test-overlay",
+            "new-file.txt",
+            "--dry-run",
+        ])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"));
+
+    // File should still be a regular file, not a symlink
+    assert!(ctx.file_exists("new-file.txt"));
+    assert!(!ctx.is_symlink("new-file.txt"));
+}
+
+#[test]
+fn edit_add_multiple_files() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file("a.txt", "content a");
+    ctx.create_repo_file("b.txt", "content b");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", "a.txt", "b.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 2 file"));
+
+    assert!(ctx.is_symlink("a.txt"));
+    assert!(ctx.is_symlink("b.txt"));
+    assert_eq!(ctx.read_file("a.txt"), "content a");
+    assert_eq!(ctx.read_file("b.txt"), "content b");
+}
+
+#[test]
+fn edit_add_directory_to_overlay() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Create a directory with files in the target repo
+    ctx.create_repo_file(".claude/commands/build.md", "# Build command");
+    ctx.create_repo_file(".claude/commands/test.md", "# Test command");
+
+    // Add the directory to the overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", ".claude/commands"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"));
+
+    // Verify .claude/commands is now a symlink to the overlay directory
+    assert!(ctx.is_symlink(".claude/commands"));
+    // Verify content is preserved
+    assert_eq!(
+        ctx.read_file(".claude/commands/build.md"),
+        "# Build command"
+    );
+    assert_eq!(ctx.read_file(".claude/commands/test.md"), "# Test command");
+
+    // Verify git exclude has the directory entry with trailing slash
+    let exclude = ctx.git_exclude_content();
+    assert!(
+        exclude.contains(".claude/commands/"),
+        "git exclude should contain .claude/commands/, got: {exclude}"
+    );
+}
+
+// ──────────────────────────────────────────────
+// Edit remove — additional coverage
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_remove_fails_when_overlay_not_applied() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "nonexistent-overlay", "file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not currently applied"));
+}
+
+// ──────────────────────────────────────────────
+// Edit interactive overlay selection
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_no_name_multiple_overlays_fails_in_non_tty() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply first overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "overlay-one"])
+        .assert()
+        .success();
+
+    // Create and apply a second overlay
+    let overlay2 = common::create_overlay_dir(&[("readme.txt", "hello")]);
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay2.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "overlay-two"])
+        .assert()
+        .success();
+
+    // With multiple overlays and no TTY, edit with no name should fail
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("specify which one to edit"));
+}
+
+// ──────────────────────────────────────────────
+// Deprecated flag backward compatibility
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_deprecated_add_flag_works_with_warning() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file("new-file.txt", "new content");
+
+    // Use deprecated --add flag
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "org/repo/test-overlay", "--add", "new-file.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 file"))
+        .stderr(predicate::str::contains("deprecated"));
+
+    assert!(ctx.is_symlink("new-file.txt"));
+}
+
+#[test]
+fn edit_deprecated_remove_flag_works_with_warning() {
+    let ctx = TestContext::new()
+        .with_overlay(&[(".envrc", "export FOO=bar"), ("extra.txt", "extra content")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // Use deprecated --remove flag
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "test-overlay", "--remove", "extra.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 1 file"))
+        .stderr(predicate::str::contains("deprecated"));
+
+    assert!(!ctx.file_exists("extra.txt"));
+    assert!(ctx.file_exists(".envrc"));
+}
+
+// ──────────────────────────────────────────────
+// Edit interactive — existing tests
+// ──────────────────────────────────────────────
+
 #[test]
 fn edit_interactive_excludes_repoverlay_ccl_from_selection() {
     // The repoverlay.ccl config file in the overlay source should not appear
@@ -1981,4 +2423,1416 @@ fn edit_interactive_excludes_repoverlay_ccl_from_selection() {
         .assert()
         .success()
         .stdout(predicate::str::contains("No changes"));
+}
+
+// ==================== 1.0 Stabilization: Phase 2 Regression Tests ====================
+
+#[test]
+fn apply_path_traversal_fails_with_clear_error() {
+    let parent_dir = tempfile::TempDir::new().unwrap();
+    let repo_dir = parent_dir.path().join("repo");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_dir)
+        .output()
+        .unwrap();
+
+    let overlay = tempfile::TempDir::new().unwrap();
+    std::fs::write(overlay.path().join(".envrc"), "export FOO=bar").unwrap();
+    std::fs::write(
+        overlay.path().join("repoverlay.ccl"),
+        "mappings =\n  .envrc = ../escape/malicious\n",
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay.path().to_str().unwrap()])
+        .args(["--target", repo_dir.to_str().unwrap()])
+        .assert()
+        .failure(); // Must fail -- no conditional check
+}
+
+#[test]
+fn error_messages_use_display_not_debug_format() {
+    let temp = tempfile::TempDir::new().unwrap();
+    // Create a simple overlay (no repoverlay.ccl needed -- apply will fail at git check)
+    let overlay = tempfile::TempDir::new().unwrap();
+    std::fs::write(overlay.path().join(".envrc"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay.path().to_str().unwrap()])
+        .args(["--target", temp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        // Debug format markers that must NOT appear:
+        .stderr(predicate::str::contains("Os {").not())
+        .stderr(predicate::str::contains("kind: ").not());
+    // Note: do NOT assert specific message text as it may vary by OS
+}
+
+#[test]
+#[cfg(unix)]
+fn sigpipe_does_not_cause_panic_when_pipe_closes_early() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    // Spawn repoverlay --help (always produces output) piped to a reader
+    // that closes immediately. With SIGPIPE default restored, exit should be
+    // clean (0 or 141), not a Rust panic (exit code 101).
+    let mut child = Command::new(assert_cmd::cargo::cargo_bin!("repoverlay"))
+        .args(["--help"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn repoverlay");
+
+    // Read just one byte then drop stdout to trigger SIGPIPE on next write
+    if let Some(ref mut stdout) = child.stdout {
+        let mut buf = [0u8; 1];
+        let _ = stdout.read(&mut buf);
+    }
+    drop(child.stdout.take());
+
+    let status = child.wait().expect("failed to wait on child");
+
+    // With SIGPIPE default restored, exit should be clean (0 from --help,
+    // or 141/SIGPIPE on platforms that report pipe death -- NOT a panic exit code)
+    let code = status.code().unwrap_or(0);
+    assert_ne!(
+        code, 101,
+        "exit code 101 indicates a Rust panic -- SIGPIPE not handled"
+    );
+}
+
+#[test]
+fn apply_interactive_conflict_abort_on_conflict() {
+    // Set up: repo with existing .envrc, overlay also provides .envrc
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+    // Pre-create conflicting file in the repo
+    ctx.create_repo_file(".envrc", "existing content");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--interactive"])
+        .write_stdin("a\n") // 'a' = abort in interactive prompt
+        .assert()
+        .failure(); // abort should exit non-zero
+
+    // Verify the existing file was not overwritten
+    let content = ctx.read_file(".envrc");
+    assert_eq!(
+        content, "existing content",
+        "abort should not overwrite existing file"
+    );
+}
+
+#[test]
+fn edit_remove_exclusions_persist_across_remove_reapply() {
+    let ctx = TestContext::new()
+        .with_overlay(&[(".envrc", "export FOO=bar"), ("extra.txt", "extra content")]);
+
+    // Apply overlay with both files
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.file_exists("extra.txt"));
+
+    // Edit remove one file
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "test-overlay", "extra.txt"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 1 file"));
+
+    assert!(!ctx.file_exists("extra.txt"));
+    assert!(ctx.file_exists(".envrc"));
+
+    // Remove the overlay entirely
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "remove",
+            "test-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(!ctx.file_exists(".envrc"));
+    assert!(!ctx.file_exists("extra.txt"));
+
+    // Reapply the same overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    // .envrc should be restored, but extra.txt should remain excluded
+    assert!(ctx.file_exists(".envrc"));
+    assert!(
+        !ctx.file_exists("extra.txt"),
+        "extra.txt should not reappear after reapply — edit remove exclusions should persist"
+    );
+
+    // Verify git exclude does not contain the excluded file
+    let exclude = ctx.git_exclude_content();
+    assert!(exclude.contains(".envrc"));
+    assert!(!exclude.contains("extra.txt"));
+}
+
+// ==================== Library subcommand tests ====================
+
+#[test]
+fn library_list_empty() {
+    let ctx = TestContext::new();
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No overlays"));
+}
+
+#[test]
+fn library_list_shows_overlays() {
+    let ctx = TestContext::new();
+    let library_path = ctx.repo_path().join(".repoverlay").join("library");
+    fs::create_dir_all(library_path.join("overlay-a")).unwrap();
+    fs::create_dir_all(library_path.join("overlay-b")).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("overlay-a"))
+        .stdout(predicate::str::contains("overlay-b"));
+}
+
+#[test]
+fn library_import_from_local_path() {
+    let ctx =
+        TestContext::new().with_overlay(&[(".envrc", "use flake"), ("CLAUDE.md", "# Config")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            ctx.overlay_path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Imported"));
+
+    // Verify overlay is in library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match("tmp|overlay").unwrap());
+}
+
+#[test]
+fn library_import_with_name() {
+    let ctx = TestContext::new().with_overlay(&[(".envrc", "use flake")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            ctx.overlay_path().to_str().unwrap(),
+            "--name",
+            "my-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+}
+
+#[test]
+fn library_remove_overlay() {
+    let ctx = TestContext::new();
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join("file.txt"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "remove",
+            "my-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    assert!(!library_path.exists());
+}
+
+#[test]
+fn library_export_to_path() {
+    let ctx = TestContext::new();
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join("file.txt"), "content").unwrap();
+
+    let dest = ctx.repo_path().join("exported");
+    fs::create_dir_all(&dest).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "export",
+            "my-overlay",
+            "--to",
+            dest.to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported"));
+
+    assert!(dest.join("my-overlay").join("file.txt").exists());
+}
+
+#[test]
+fn apply_resolves_from_library() {
+    let ctx = TestContext::new();
+
+    // Create a library overlay
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("test-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join("test-file.txt"), "from library").unwrap();
+
+    // Apply by bare name — should resolve from library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "test-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Verify file was applied
+    assert!(ctx.file_exists("test-file.txt"));
+
+    // Verify status shows library source
+    cargo_bin_cmd!("repoverlay")
+        .args(["status", "--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("library"));
+}
+
+#[test]
+fn status_shows_library_source_json() {
+    let ctx = TestContext::new();
+
+    // Create and apply library overlay
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("test-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join("file.txt"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "test-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Check JSON status
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "status",
+            "--json",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Library"));
+}
+
+// --- create --into library (#217) ---
+
+#[test]
+fn create_into_library_with_include() {
+    let ctx = TestContext::new();
+    ctx.create_repo_file(".envrc", "use flake");
+    ctx.create_repo_file("CLAUDE.md", "# Config");
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "--into",
+            "library",
+            "--include",
+            ".envrc",
+            "--include",
+            "CLAUDE.md",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "--no-apply",
+            "-y",
+        ])
+        .assert()
+        .success();
+
+    // Verify overlay is in library
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("overlay");
+    assert!(library_path.join(".envrc").exists());
+    assert!(library_path.join("CLAUDE.md").exists());
+}
+
+#[test]
+fn create_into_library_with_name() {
+    let ctx = TestContext::new();
+    ctx.create_repo_file(".envrc", "use flake");
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "my-overlay",
+            "--into",
+            "library",
+            "--include",
+            ".envrc",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "--no-apply",
+            "-y",
+        ])
+        .assert()
+        .success();
+
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    assert!(library_path.join(".envrc").exists());
+}
+
+#[test]
+fn create_into_library_applies_by_default_with_yes() {
+    let ctx = TestContext::new();
+    ctx.create_repo_file(".envrc", "use flake");
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "my-overlay",
+            "--into",
+            "library",
+            "--include",
+            ".envrc",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "-y",
+        ])
+        .assert()
+        .success();
+
+    // Verify it was applied
+    cargo_bin_cmd!("repoverlay")
+        .args(["status", "--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+}
+
+#[test]
+fn create_into_library_rejects_unknown_destination() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "--into",
+            "unknown",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "-y",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unknown --into destination"));
+}
+
+#[test]
+fn create_into_library_conflicts_with_output() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["create", "--into", "library", "--output", "./out", "-y"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn create_into_library_no_apply_requires_into() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["create", "--no-apply", "-y"])
+        .assert()
+        .failure();
+}
+
+// --- library import by name (#220) ---
+
+#[test]
+fn library_import_resolves_applied_overlay_by_name() {
+    let ctx =
+        TestContext::new().with_overlay(&[(".envrc", "use flake"), ("CLAUDE.md", "# Config")]);
+
+    // Apply the overlay first
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "my-overlay",
+        ])
+        .assert()
+        .success();
+
+    // Import by name (not path)
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            "my-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Imported"));
+
+    // Verify overlay is in library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+}
+
+#[test]
+fn library_import_unknown_name_fails() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            "nonexistent-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not an applied overlay"));
+}
+
+// --- gitignore auto-fix ---
+
+#[test]
+fn library_import_fixes_gitignore_when_library_ignored() {
+    let ctx = TestContext::new().with_overlay(&[(".envrc", "use flake")]);
+
+    // Set up .gitignore that excludes .repoverlay/
+    fs::write(ctx.repo_path().join(".gitignore"), ".repoverlay/\n").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "library",
+            "import",
+            ctx.overlay_path().to_str().unwrap(),
+            "--name",
+            "my-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Updated .gitignore"));
+
+    // Verify .gitignore was updated
+    let gitignore = fs::read_to_string(ctx.repo_path().join(".gitignore")).unwrap();
+    assert!(gitignore.contains(".repoverlay/*"));
+    assert!(gitignore.contains("!.repoverlay/library/"));
+    // Original `dir/` pattern should be converted to `dir/*`
+    assert!(!gitignore.contains(".repoverlay/\n"));
+}
+
+// --- apply --from @library (#219) ---
+
+#[test]
+fn apply_from_library_explicit() {
+    let ctx = TestContext::new();
+
+    // Set up library overlay
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join(".envrc"), "use flake").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "my-overlay",
+            "--from",
+            "@library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Applied"));
+
+    assert!(ctx.repo_path().join(".envrc").exists());
+}
+
+#[test]
+fn apply_from_library_not_found_shows_error() {
+    let ctx = TestContext::new();
+
+    // Library with a different overlay
+    let library_path = ctx.repo_path().join(".repoverlay").join("library");
+    let other = library_path.join("other-overlay");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("file.txt"), "content").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "nonexistent",
+            "--from",
+            "@library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found in library"));
+}
+
+// --- browse includes library overlays (#218) ---
+
+#[test]
+fn browse_shows_library_overlays_when_no_sources() {
+    let ctx = TestContext::new();
+    let isolated_config = tempfile::TempDir::new().unwrap();
+
+    // Set up library with an overlay
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("my-overlay");
+    fs::create_dir_all(&library_path).unwrap();
+    fs::write(library_path.join(".envrc"), "use flake").unwrap();
+
+    // Browse should not fail with "no sources configured" when library exists
+    // Use --no-interactive to avoid TUI, isolate config to avoid user's sources
+    cargo_bin_cmd!("repoverlay")
+        .env("XDG_CONFIG_HOME", isolated_config.path())
+        .args([
+            "browse",
+            "--no-interactive",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+}
+
+// ──────────────────────────────────────────────
+// Edit remove — directory exclusion persistence
+// ──────────────────────────────────────────────
+
+#[test]
+fn edit_remove_directory_excluded_on_reapply() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file(".claude/commands/build.md", "# Build command");
+    ctx.create_repo_file(".claude/commands/test.md", "# Test command");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", ".claude/commands"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(ctx.is_symlink(".claude/commands"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "test-overlay", ".claude/commands"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(!ctx.file_exists(".claude/commands"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "remove",
+            "test-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(
+        !ctx.file_exists(".claude/commands"),
+        ".claude/commands should not reappear after reapply — directory exclusion should persist"
+    );
+}
+
+#[test]
+fn edit_remove_handles_trailing_slash_on_directory() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", ctx.overlay_source()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "test-overlay"])
+        .assert()
+        .success();
+
+    ctx.create_repo_file(".vscode/settings.json", r#"{"editor.tabSize": 2}"#);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "org/repo/test-overlay", ".vscode"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "test-overlay", ".vscode/"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed 1 file"));
+
+    assert!(!ctx.file_exists(".vscode"));
+}
+
+#[test]
+fn browse_fails_when_no_sources_and_no_library() {
+    let ctx = TestContext::new();
+    let isolated_config = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .env("XDG_CONFIG_HOME", isolated_config.path())
+        .args([
+            "browse",
+            "--no-interactive",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No overlay sources configured"));
+}
+
+#[test]
+fn create_yes_falls_back_to_tracked_config() {
+    // Create a source repo with only tracked config files (no AI configs)
+    let source_dir = tempfile::tempdir().unwrap();
+    let source = source_dir.path();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    fs::write(source.join(".envrc"), "export FOO=bar").unwrap();
+    fs::write(source.join(".gitignore"), "node_modules/").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(source)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "add config files"])
+        .current_dir(source)
+        .output()
+        .unwrap();
+
+    let output_dir = tempfile::tempdir().unwrap();
+
+    // create --yes should succeed using tracked config files as fallback
+    // Note: when name + --output are both provided, files go into output/<name>/
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "my-overlay",
+            "--source",
+            source.to_str().unwrap(),
+            "--output",
+            output_dir.path().to_str().unwrap(),
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tracked config file"));
+
+    // Files are placed in output/<name>/ when both name and --output are provided
+    let overlay_dir = output_dir.path().join("my-overlay");
+    let has_envrc = overlay_dir.join(".envrc").exists();
+    let has_gitignore = overlay_dir.join(".gitignore").exists();
+    assert!(
+        has_envrc && has_gitignore,
+        "Both tracked config files should be in the output"
+    );
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — extends
+// ──────────────────────────────────────────────
+
+/// Helper: create a library overlay in the test repo.
+fn create_library_overlay(ctx: &TestContext, name: &str, files: &[(&str, &str)]) {
+    let library_path = ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join(name);
+    fs::create_dir_all(&library_path).unwrap();
+    for (path, content) in files {
+        let file_path = library_path.join(path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(file_path, content).unwrap();
+    }
+}
+
+#[test]
+fn extends_inherits_parent_files() {
+    let ctx = TestContext::new();
+
+    // Parent overlay with two files
+    create_library_overlay(
+        &ctx,
+        "parent",
+        &[("file-a.txt", "content-a"), ("file-b.txt", "content-b")],
+    );
+
+    // Child overlay extends parent, adds its own file
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-c.txt", "content-c"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists("file-a.txt"),
+        "inherited file-a should exist"
+    );
+    assert!(
+        ctx.file_exists("file-b.txt"),
+        "inherited file-b should exist"
+    );
+    assert!(
+        ctx.file_exists("file-c.txt"),
+        "child's own file-c should exist"
+    );
+    assert_eq!(ctx.read_file("file-a.txt"), "content-a");
+    assert_eq!(ctx.read_file("file-b.txt"), "content-b");
+    assert_eq!(ctx.read_file("file-c.txt"), "content-c");
+}
+
+#[test]
+fn extends_child_wins_on_conflict() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "parent", &[("shared.txt", "parent-content")]);
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("shared.txt", "child-content"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        ctx.read_file("shared.txt"),
+        "child-content",
+        "child should win"
+    );
+}
+
+#[test]
+fn extends_multi_level_inheritance() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "grandparent", &[("file-a.txt", "from-grandparent")]);
+
+    create_library_overlay(
+        &ctx,
+        "parent",
+        &[
+            ("file-b.txt", "from-parent"),
+            ("repoverlay.ccl", "extends =\n  overlay = grandparent\n"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-c.txt", "from-child"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists("file-a.txt"),
+        "grandparent file should exist"
+    );
+    assert!(ctx.file_exists("file-b.txt"), "parent file should exist");
+    assert!(ctx.file_exists("file-c.txt"), "child file should exist");
+    assert_eq!(ctx.read_file("file-a.txt"), "from-grandparent");
+    assert_eq!(ctx.read_file("file-b.txt"), "from-parent");
+    assert_eq!(ctx.read_file("file-c.txt"), "from-child");
+}
+
+#[test]
+fn extends_cycle_detection() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(
+        &ctx,
+        "overlay-a",
+        &[
+            ("file-a.txt", "content-a"),
+            ("repoverlay.ccl", "extends =\n  overlay = overlay-b\n"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "overlay-b",
+        &[
+            ("file-b.txt", "content-b"),
+            ("repoverlay.ccl", "extends =\n  overlay = overlay-a\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "overlay-a",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cycle"));
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — includes
+// ──────────────────────────────────────────────
+
+#[test]
+fn includes_cherry_picks_specific_files() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(
+        &ctx,
+        "tools",
+        &[
+            ("file-a.txt", "content-a"),
+            ("file-b.txt", "content-b"),
+            ("file-c.txt", "content-c"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "mine",
+        &[
+            ("file-d.txt", "content-d"),
+            (
+                "repoverlay.ccl",
+                "includes =\n  =\n    overlay = tools\n    files =\n      = file-b.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "mine",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        !ctx.file_exists("file-a.txt"),
+        "file-a should NOT be included"
+    );
+    assert!(
+        ctx.file_exists("file-b.txt"),
+        "file-b should be cherry-picked"
+    );
+    assert!(
+        !ctx.file_exists("file-c.txt"),
+        "file-c should NOT be included"
+    );
+    assert!(
+        ctx.file_exists("file-d.txt"),
+        "child's own file-d should exist"
+    );
+    assert_eq!(ctx.read_file("file-b.txt"), "content-b");
+}
+
+#[test]
+fn includes_missing_file_errors() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "tools", &[("file-a.txt", "content-a")]);
+
+    create_library_overlay(
+        &ctx,
+        "mine",
+        &[
+            ("own-file.txt", "content"),
+            (
+                "repoverlay.ccl",
+                "includes =\n  =\n    overlay = tools\n    files =\n      = nonexistent.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "mine",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nonexistent.txt"));
+}
+
+#[test]
+fn includes_referenced_overlay_with_extends() {
+    let ctx = TestContext::new();
+
+    // base has file-a
+    create_library_overlay(&ctx, "base", &[("file-a.txt", "from-base")]);
+
+    // tools extends base, adds file-b
+    create_library_overlay(
+        &ctx,
+        "tools",
+        &[
+            ("file-b.txt", "from-tools"),
+            ("repoverlay.ccl", "extends =\n  overlay = base\n"),
+        ],
+    );
+
+    // mine includes file-a from tools (which tools inherited from base)
+    create_library_overlay(
+        &ctx,
+        "mine",
+        &[
+            ("file-c.txt", "from-mine"),
+            (
+                "repoverlay.ccl",
+                "includes =\n  =\n    overlay = tools\n    files =\n      = file-a.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "mine",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists("file-a.txt"),
+        "inherited file from base via tools"
+    );
+    assert!(!ctx.file_exists("file-b.txt"), "file-b not cherry-picked");
+    assert!(ctx.file_exists("file-c.txt"), "child's own file");
+    assert_eq!(ctx.read_file("file-a.txt"), "from-base");
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — precedence
+// ──────────────────────────────────────────────
+
+#[test]
+fn composition_precedence_child_over_extends_over_includes() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "included", &[("shared.txt", "from-included")]);
+
+    create_library_overlay(&ctx, "parent", &[("shared.txt", "from-parent")]);
+
+    // child extends parent AND includes "included", plus has its own shared.txt
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("shared.txt", "from-child"),
+            (
+                "repoverlay.ccl",
+                "extends =\n  overlay = parent\n\nincludes =\n  =\n    overlay = included\n    files =\n      = shared.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        ctx.read_file("shared.txt"),
+        "from-child",
+        "child wins over extends and includes"
+    );
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — extends with mappings
+// ──────────────────────────────────────────────
+
+#[test]
+fn extends_inherits_parent_mappings() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(
+        &ctx,
+        "parent",
+        &[
+            ("template.env", "SECRET=foo"),
+            ("repoverlay.ccl", "mappings =\n  template.env = .env\n"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-c.txt", "content-c"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        ctx.file_exists(".env"),
+        "parent's mapping should be applied"
+    );
+    assert!(
+        !ctx.file_exists("template.env"),
+        "source file should be mapped, not placed directly"
+    );
+    assert!(ctx.file_exists("file-c.txt"), "child's own file");
+}
+
+// ──────────────────────────────────────────────
+// Overlay composition — state and cleanup
+// ──────────────────────────────────────────────
+
+#[test]
+fn composed_overlay_state_records_resolved_files() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "parent", &[("file-a.txt", "content-a")]);
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-b.txt", "content-b"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // State file should exist and contain both files
+    let state_content = fs::read_to_string(ctx.repo_path().join(".repoverlay/overlays/child.ccl"))
+        .expect("state file should exist");
+
+    assert!(
+        state_content.contains("file-a.txt"),
+        "state should include inherited file"
+    );
+    assert!(
+        state_content.contains("file-b.txt"),
+        "state should include child's file"
+    );
+}
+
+#[test]
+fn remove_cleans_up_composed_overlay() {
+    let ctx = TestContext::new();
+
+    create_library_overlay(&ctx, "parent", &[("file-a.txt", "content-a")]);
+
+    create_library_overlay(
+        &ctx,
+        "child",
+        &[
+            ("file-b.txt", "content-b"),
+            ("repoverlay.ccl", "extends =\n  overlay = parent\n"),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists("file-a.txt"));
+    assert!(ctx.file_exists("file-b.txt"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "remove",
+            "child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        !ctx.file_exists("file-a.txt"),
+        "inherited file should be removed"
+    );
+    assert!(
+        !ctx.file_exists("file-b.txt"),
+        "child file should be removed"
+    );
+}
+
+#[test]
+fn extends_diamond_dependency_is_not_a_cycle() {
+    let ctx = TestContext::new();
+
+    // shared-base is referenced by both branch-x and branch-y
+    create_library_overlay(&ctx, "shared-base", &[("base.txt", "from-base")]);
+
+    create_library_overlay(
+        &ctx,
+        "branch-x",
+        &[
+            ("x.txt", "from-x"),
+            ("repoverlay.ccl", "extends =\n  overlay = shared-base\n"),
+        ],
+    );
+
+    create_library_overlay(
+        &ctx,
+        "branch-y",
+        &[
+            ("y.txt", "from-y"),
+            ("repoverlay.ccl", "extends =\n  overlay = shared-base\n"),
+        ],
+    );
+
+    // child includes files from both branches (diamond through shared-base)
+    create_library_overlay(
+        &ctx,
+        "diamond-child",
+        &[
+            ("child.txt", "from-child"),
+            (
+                "repoverlay.ccl",
+                "includes =\n  =\n    overlay = branch-x\n    files =\n      = base.txt\n  =\n    overlay = branch-y\n    files =\n      = y.txt\n",
+            ),
+        ],
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "diamond-child",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists("base.txt"), "base file via diamond");
+    assert!(ctx.file_exists("y.txt"), "branch-y file");
+    assert!(ctx.file_exists("child.txt"), "child's own file");
 }
