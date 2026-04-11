@@ -1,0 +1,7 @@
+component: fixes
+kind: Fixed
+body: |-
+    Log warnings when .ccl state files fail to parse instead of silently skipping
+
+    Previously, corrupted or unparseable .ccl state files were silently ignored. Now repoverlay logs a warning message identifying the problematic file before skipping it, making it easier to diagnose configuration issues.
+time: 2026-04-11T14:45:45.060849-07:00
