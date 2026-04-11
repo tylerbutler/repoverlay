@@ -39,12 +39,12 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.0", features = ["derive", "env"] }
-clap_complete = "4.6"
+clap_complete = "4.6.1"
 clap-markdown = "0.1.5"
-env_logger = "0.11"
-log = "0.4"
+env_logger = "0.11.10"
+log = "0.4.29"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0"
+serde_json = "1.0.149"
 walkdir = "2.5.0"
 chrono = { version = "0.4.44", features = ["serde"] }
 thiserror = "2.0.18"
@@ -55,11 +55,11 @@ directories = "6.0.0"
 dialoguer = "0.12.0"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 tui-tree-widget = "0.24"
-sickle = { version = "0.1.2", features = ["serde"] }
+sickle = { version = "0.2.0", features = ["serde"] }
 dirs = "6.0.0"
-fuzzy-matcher = "0.3"
-libc = "0.2"
-tiny-update-check = "1.1"
+fuzzy-matcher = "0.3.7"
+libc = "0.2.184"
+tiny-update-check = "1.1.1"
 similar = "2.7.0"
 indicatif = "0.18.4"
 ctrlc = "3.5.2"

@@ -1,5 +1,6 @@
 [tools]
 changie = "latest"
+"github:cargo-bins/cargo-binstall" = "1.17.9"
 hk = "latest"
 just = "latest"
 python = "latest"
