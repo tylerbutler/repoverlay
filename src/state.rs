@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
-use log::debug;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -592,13 +592,20 @@ pub(crate) fn remove_external_state(target: &Path, overlay_name: &str) -> Result
     if state_file.exists() {
         // Read existing state and mark it as removed
         let content = fs::read_to_string(&state_file)?;
-        if let Ok(mut state) = sickle::from_str::<OverlayState>(&content) {
-            state.removed_at = Some(Utc::now());
-            let updated_content = sickle::to_string(&state).context("Failed to serialize state")?;
-            fs::write(&state_file, updated_content)?;
-        } else {
-            // If we can't parse it, just delete it
-            fs::remove_file(&state_file)?;
+        match sickle::from_str::<OverlayState>(&content) {
+            Ok(mut state) => {
+                state.removed_at = Some(Utc::now());
+                let updated_content =
+                    sickle::to_string(&state).context("Failed to serialize state")?;
+                fs::write(&state_file, updated_content)?;
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to parse state file {}, deleting it: {e}",
+                    state_file.display()
+                );
+                fs::remove_file(&state_file)?;
+            }
         }
     }
 
@@ -627,16 +634,21 @@ pub(crate) fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
             && path.file_name() != Some(std::ffi::OsStr::new(".target_path"))
         {
             let content = fs::read_to_string(&path)?;
-            if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
-                // Skip overlays that were explicitly removed
-                if state.removed_at.is_some() {
-                    debug!(
-                        "skipping removed overlay '{}' (removed at {:?})",
-                        state.name, state.removed_at
-                    );
-                    continue;
+            match sickle::from_str::<OverlayState>(&content) {
+                Ok(state) => {
+                    // Skip overlays that were explicitly removed
+                    if state.removed_at.is_some() {
+                        debug!(
+                            "skipping removed overlay '{}' (removed at {:?})",
+                            state.name, state.removed_at
+                        );
+                        continue;
+                    }
+                    states.push(state);
                 }
-                states.push(state);
+                Err(e) => {
+                    warn!("Failed to parse state file {}: {e}", path.display());
+                }
             }
         }
     }
@@ -715,12 +727,17 @@ pub(crate) fn load_all_overlay_targets(
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "ccl") {
             let content = fs::read_to_string(&path)?;
-            if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
-                for file in &state.files {
-                    targets.insert(
-                        file.target.to_string_lossy().to_string(),
-                        state.name.clone(),
-                    );
+            match sickle::from_str::<OverlayState>(&content) {
+                Ok(state) => {
+                    for file in &state.files {
+                        targets.insert(
+                            file.target.to_string_lossy().to_string(),
+                            state.name.clone(),
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to parse state file {}: {e}", path.display());
                 }
             }
         }
