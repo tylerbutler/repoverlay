@@ -1160,6 +1160,7 @@ fn get_fuzzy_suggestions_multi_source(
 ) -> Vec<String> {
     let available: Vec<String> = manager
         .list_overlays_for_repo(org, repo)
+        .unwrap_or_default()
         .into_iter()
         .map(|n| n.to_string())
         .collect();
