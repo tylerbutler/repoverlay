@@ -979,6 +979,13 @@ mod tests {
             let config = generate_overlay_config("test");
             assert!(config.contains(".envrc.template = .envrc"));
         }
+
+        #[test]
+        fn handles_empty_name() {
+            let config = generate_overlay_config("");
+            assert!(config.contains("name = \n"));
+            assert!(config.contains("overlay ="));
+        }
     }
 
     mod restore_overlays_tests {

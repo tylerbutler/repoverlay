@@ -721,6 +721,36 @@ fn status_json_with_name_filter() {
 }
 
 #[test]
+fn status_name_filter_text_mode() {
+    let ctx = TestContext::new();
+    let overlay1 = common::create_overlay_dir(&[(".envrc", "export FOO=1")]);
+    let overlay2 = common::create_overlay_dir(&[(".tool-versions", "nodejs 20.0.0")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay1.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "first"])
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", overlay2.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "second"])
+        .assert()
+        .success();
+
+    // Text mode (no --json) with --name filter should show only the filtered overlay
+    cargo_bin_cmd!("repoverlay")
+        .args(["status", "--name", "first"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("first"))
+        .stdout(predicate::str::contains("second").not());
+}
+
+#[test]
 fn status_quiet_exits_1_when_no_overlays() {
     let ctx = TestContext::new();
 
@@ -901,6 +931,50 @@ fn switch_help_shows_options() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Switch"));
+}
+
+// ============================================================================
+// Sync Command Tests
+// ============================================================================
+
+#[test]
+fn sync_help_shows_options() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["sync", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Sync"));
+}
+
+// ============================================================================
+// Completions Command Tests
+// ============================================================================
+
+#[test]
+fn completions_bash_produces_output() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["completions", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
+#[test]
+fn completions_zsh_produces_output() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["completions", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
+#[test]
+fn completions_fish_produces_output() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["completions", "fish"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
 }
 
 // ============================================================================
