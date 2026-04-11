@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 use crate::overlay_name::OverlayName;
 
@@ -559,6 +561,22 @@ pub(crate) fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
     Ok(base.join(target_hash))
 }
 
+/// Write content to a file atomically using write-then-rename.
+///
+/// Creates a temporary file in the same directory as the target path,
+/// writes the content, then atomically renames it into place. This
+/// prevents corruption if the process is interrupted mid-write.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let dir = path
+        .parent()
+        .context("State file has no parent directory")?;
+    let mut tmp = NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path)
+        .context("Failed to atomically persist state file")?;
+    Ok(())
+}
+
 /// Save overlay state to the external backup location.
 pub(crate) fn save_external_state(
     target: &Path,
@@ -577,7 +595,7 @@ pub(crate) fn save_external_state(
 
     let state_file = dir.join(format!("{overlay_name}.ccl"));
     let content = sickle::to_string(state).context("Failed to serialize state to CCL")?;
-    fs::write(&state_file, content)?;
+    atomic_write(&state_file, &content)?;
 
     Ok(())
 }
@@ -597,7 +615,7 @@ pub(crate) fn remove_external_state(target: &Path, overlay_name: &str) -> Result
         if let Ok(mut state) = sickle::from_str::<OverlayState>(&content) {
             state.removed_at = Some(Utc::now());
             let updated_content = sickle::to_string(&state).context("Failed to serialize state")?;
-            fs::write(&state_file, updated_content)?;
+            atomic_write(&state_file, &updated_content)?;
         } else {
             // If we can't parse it, just delete it
             fs::remove_file(&state_file)?;
@@ -776,7 +794,7 @@ pub(crate) fn save_overlay_state(target: &Path, state: &OverlayState) -> Result<
     let state_file = overlays_dir.join(format!("{normalized_name}.ccl"));
 
     let content = sickle::to_string(state).context("Failed to serialize overlay state")?;
-    fs::write(&state_file, content)?;
+    atomic_write(&state_file, &content)?;
 
     Ok(())
 }
