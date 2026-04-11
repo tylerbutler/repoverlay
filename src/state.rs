@@ -497,8 +497,6 @@ pub(crate) struct ExcludedFile {
 }
 
 /// Configuration file for an overlay source (repoverlay.ccl).
-/// Note: This uses nested structures which won't roundtrip through sickle,
-/// but it's only read (not written) by repoverlay.
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub(crate) struct OverlayConfig {
     #[serde(default)]
@@ -1492,7 +1490,6 @@ overlay =
     }
 
     #[test]
-    #[ignore = "tylerbutler/santa#71: forward slashes in map keys cause parsing errors in sickle"]
     fn test_overlay_config_mappings_with_forward_slashes() {
         let config_str = r"
 overlay =
