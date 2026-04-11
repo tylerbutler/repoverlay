@@ -114,4 +114,26 @@ mod tests {
     fn overlay_name_rejects_paths_in_debug() {
         let _ = OverlayName::new("org/repo/name");
     }
+
+    #[test]
+    fn overlay_name_ordering() {
+        let a = OverlayName::new("alpha");
+        let b = OverlayName::new("beta");
+        let c = OverlayName::new("gamma");
+
+        assert!(a < b);
+        assert!(b < c);
+        assert!(a < c);
+
+        let mut names = vec![c.clone(), a.clone(), b.clone()];
+        names.sort();
+        assert_eq!(names, vec![a, b, c]);
+    }
+
+    #[test]
+    fn overlay_name_as_ref_str() {
+        let name = OverlayName::new("my-overlay");
+        let s: &str = name.as_ref();
+        assert_eq!(s, "my-overlay");
+    }
 }
