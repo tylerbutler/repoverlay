@@ -274,4 +274,23 @@ mod tests {
         assert!(id.matches("tylerbutler", "fluidframework"));
         assert!(id.matches("TYLERBUTLER", "FLUIDFRAMEWORK"));
     }
+
+    #[test]
+    fn repo_identity_matches_returns_false_when_both_none() {
+        let id = RepoIdentity {
+            origin: None,
+            upstream: None,
+        };
+        assert!(!id.matches("any-org", "any-repo"));
+    }
+
+    #[test]
+    fn repo_identity_matches_upstream_only() {
+        let id = RepoIdentity {
+            origin: None,
+            upstream: Some(("microsoft".to_string(), "FluidFramework".to_string())),
+        };
+        assert!(id.matches("microsoft", "FluidFramework"));
+        assert!(!id.matches("tylerbutler", "FluidFramework"));
+    }
 }
