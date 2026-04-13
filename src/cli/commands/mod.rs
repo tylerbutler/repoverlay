@@ -3,6 +3,7 @@ pub(crate) mod cache;
 pub(crate) mod create;
 pub(crate) mod edit;
 pub(crate) mod library;
+pub(crate) mod r#move;
 pub(crate) mod source;
 pub(crate) mod sync;
 
