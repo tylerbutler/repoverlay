@@ -45,7 +45,7 @@ jobs:
           exit 0
       - name: Comment on PR with breaking changes
         if: steps.semver.outputs.has_breaking == 'true'
-        uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # ratchet:marocchino/sticky-pull-request-comment@v3.0.2
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # ratchet:marocchino/sticky-pull-request-comment@v3.0.4
         with:
           header: semver-check
           message: |
@@ -60,7 +60,7 @@ jobs:
             If these changes are intentional, please ensure the version bump reflects the breaking change.
       - name: Remove semver comment if no breaking changes
         if: steps.semver.outputs.has_breaking == 'false'
-        uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # ratchet:marocchino/sticky-pull-request-comment@v3.0.2
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # ratchet:marocchino/sticky-pull-request-comment@v3.0.4
         with:
           header: semver-check
           delete: true
@@ -118,7 +118,7 @@ jobs:
 
       - name: Comment on PR with size change
         if: steps.main-size.outputs.bytes != '0' && steps.diff.outputs.significant == 'true'
-        uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # ratchet:marocchino/sticky-pull-request-comment@v3.0.2
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # ratchet:marocchino/sticky-pull-request-comment@v3.0.4
         with:
           header: binary-size
           message: |
@@ -132,7 +132,7 @@ jobs:
 
       - name: Remove size comment if not significant
         if: steps.main-size.outputs.bytes != '0' && steps.diff.outputs.significant == 'false'
-        uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # ratchet:marocchino/sticky-pull-request-comment@v3.0.2
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # ratchet:marocchino/sticky-pull-request-comment@v3.0.4
         with:
           header: binary-size
           delete: true
@@ -153,7 +153,7 @@ jobs:
           head-sha: ${{ github.event.pull_request.head.sha }}
       - name: Comment with changelog preview
         if: steps.changelog.outputs.has-entries == 'true'
-        uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # ratchet:marocchino/sticky-pull-request-comment@v3.0.2
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # ratchet:marocchino/sticky-pull-request-comment@v3.0.4
         with:
           header: changelog
           message: |
@@ -164,7 +164,7 @@ jobs:
             ${{ steps.changelog.outputs.preview }}
       - name: Comment about missing changelog
         if: steps.changelog.outputs.has-entries == 'false' && steps.changelog.outputs.needs-entry == 'true'
-        uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # ratchet:marocchino/sticky-pull-request-comment@v3.0.2
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # ratchet:marocchino/sticky-pull-request-comment@v3.0.4
         with:
           header: changelog
           message: |
@@ -179,7 +179,7 @@ jobs:
             ```
       - name: Remove changelog comment
         if: steps.changelog.outputs.has-entries == 'false' && steps.changelog.outputs.needs-entry == 'false'
-        uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # ratchet:marocchino/sticky-pull-request-comment@v3.0.2
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # ratchet:marocchino/sticky-pull-request-comment@v3.0.4
         with:
           header: changelog
           delete: true
