@@ -246,6 +246,40 @@ enum Commands {
         force: bool,
     },
 
+    /// Move an overlay to a new location
+    ///
+    /// Relocates an overlay's source files and updates applied state references.
+    /// Destinations: "library", "source:<name>", or a filesystem path.
+    ///
+    /// Examples:
+    ///   repoverlay move my-overlay --to library
+    ///   repoverlay move my-overlay --to /path/to/dir
+    ///   repoverlay move my-overlay --to source:shared-repo
+    Move {
+        /// Name of the applied overlay to move
+        overlay: String,
+
+        /// Destination: "library", "source:<name>", or a filesystem path
+        #[arg(long)]
+        to: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Overwrite if destination already exists
+        #[arg(long)]
+        force: bool,
+
+        /// Rename the overlay at the destination
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Switch to a different overlay (removes all existing overlays first)
     Switch {
         /// Path to overlay source directory OR GitHub URL
@@ -777,6 +811,24 @@ pub(crate) fn run() -> Result<()> {
             } else {
                 create_overlay_command(&source, name, output, &include, dry_run, yes, force)?;
             }
+        }
+        Commands::Move {
+            overlay,
+            to,
+            target,
+            force,
+            name,
+            dry_run,
+        } => {
+            let target = target.unwrap_or_else(|| PathBuf::from("."));
+            commands::r#move::handle_move_command(
+                &overlay,
+                &to,
+                &target,
+                force,
+                name.as_deref(),
+                dry_run,
+            )?;
         }
         Commands::Switch {
             source,

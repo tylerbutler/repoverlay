@@ -4050,3 +4050,479 @@ fn extends_diamond_dependency_is_not_a_cycle() {
     assert!(ctx.file_exists("y.txt"), "branch-y file");
     assert!(ctx.file_exists("child.txt"), "child's own file");
 }
+
+// ── Move command tests ──────────────────────────────────────────────────────
+
+#[test]
+fn move_help_displays() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["move", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Move"));
+}
+
+#[test]
+fn move_to_library() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay (symlink mode — the default on unix)
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "test-move",
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.is_symlink(".envrc"));
+    assert!(ctx.overlay_state_exists("test-move"));
+
+    // Move to library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "test-move",
+            "--to",
+            "library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // State should still exist and reference library source
+    assert!(ctx.overlay_state_exists("test-move"));
+    let state_content =
+        fs::read_to_string(ctx.repo_path().join(".repoverlay/overlays/test-move.ccl"))
+            .expect("state file should exist");
+    assert!(
+        state_content.contains("Library"),
+        "state source should be Library, got: {state_content}"
+    );
+
+    // Symlink should still work (now pointing to library)
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.is_symlink(".envrc"));
+
+    // Library should contain the overlay
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/library/test-move/.envrc")
+            .exists()
+    );
+
+    // Original source should still exist (it's the test temp dir, not managed by us)
+    // but the old source path in state should be replaced
+}
+
+#[test]
+fn move_to_filesystem_path() {
+    let ctx = TestContext::new();
+
+    // Create a library overlay and apply it
+    create_library_overlay(&ctx, "lib-overlay", &[(".envrc", "export LIB=true")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "lib-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.overlay_state_exists("lib-overlay"));
+
+    // Move to a filesystem path
+    let dest = tempfile::TempDir::new().unwrap();
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "lib-overlay",
+            "--to",
+            dest.path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // State should reference Local source now
+    let state_content =
+        fs::read_to_string(ctx.repo_path().join(".repoverlay/overlays/lib-overlay.ccl"))
+            .expect("state file should exist");
+    assert!(
+        state_content.contains("Local"),
+        "state source should be Local, got: {state_content}"
+    );
+
+    // Overlay files should exist at destination
+    assert!(dest.path().join("lib-overlay/.envrc").exists());
+
+    // Library entry should be removed
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/library/lib-overlay")
+            .exists(),
+        "library entry should be removed after move"
+    );
+}
+
+#[test]
+fn move_preserves_copy_entries() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply with --copy
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "copied",
+            "--copy",
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(!ctx.is_symlink(".envrc"), "should be a copy, not symlink");
+
+    let content_before = ctx.read_file(".envrc");
+
+    // Move to library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "copied",
+            "--to",
+            "library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Copied file should be unchanged (not re-linked)
+    assert!(ctx.file_exists(".envrc"));
+    assert!(
+        !ctx.is_symlink(".envrc"),
+        "copy entry should remain a copy after move"
+    );
+    assert_eq!(ctx.read_file(".envrc"), content_before);
+
+    // State should now reference library
+    let state_content = fs::read_to_string(ctx.repo_path().join(".repoverlay/overlays/copied.ccl"))
+        .expect("state file should exist");
+    assert!(
+        state_content.contains("Library"),
+        "state source should be Library"
+    );
+}
+
+#[test]
+fn move_name_conflict_errors() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "conflict-test",
+        ])
+        .assert()
+        .success();
+
+    // Pre-create a library overlay with same name
+    create_library_overlay(&ctx, "conflict-test", &[("other.txt", "existing")]);
+
+    // Move should fail due to name conflict
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "conflict-test",
+            "--to",
+            "library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+}
+
+#[test]
+fn move_force_overwrites() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "force-test",
+        ])
+        .assert()
+        .success();
+
+    // Pre-create a library overlay with same name
+    create_library_overlay(&ctx, "force-test", &[("other.txt", "existing")]);
+
+    // Move with --force should succeed
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "force-test",
+            "--to",
+            "library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--force",
+        ])
+        .assert()
+        .success();
+
+    // Library should have the moved overlay's content, not the old one
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/library/force-test/.envrc")
+            .exists()
+    );
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/library/force-test/other.txt")
+            .exists(),
+        "old library content should be replaced"
+    );
+}
+
+#[test]
+fn move_with_rename() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "original-name",
+        ])
+        .assert()
+        .success();
+
+    // Move to library with a new name
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "original-name",
+            "--to",
+            "library",
+            "--name",
+            "renamed",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Library should have the new name
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/library/renamed/.envrc")
+            .exists()
+    );
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/library/original-name")
+            .exists(),
+        "old name should not exist in library"
+    );
+}
+
+#[test]
+fn move_dry_run() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+
+    // Apply overlay
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "dry-run-test",
+        ])
+        .assert()
+        .success();
+
+    // Read state before
+    let state_before = fs::read_to_string(
+        ctx.repo_path()
+            .join(".repoverlay/overlays/dry-run-test.ccl"),
+    )
+    .expect("state file should exist");
+
+    // Move with --dry-run
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "dry-run-test",
+            "--to",
+            "library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    // Nothing should have changed
+    let state_after = fs::read_to_string(
+        ctx.repo_path()
+            .join(".repoverlay/overlays/dry-run-test.ccl"),
+    )
+    .expect("state file should still exist");
+    assert_eq!(
+        state_before, state_after,
+        "state should not change on dry run"
+    );
+
+    // Library should not have been created
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/library/dry-run-test")
+            .exists(),
+        "library entry should not exist after dry run"
+    );
+}
+
+#[test]
+fn move_circular_noop() {
+    let ctx = TestContext::new();
+
+    // Create a library overlay and apply it
+    create_library_overlay(&ctx, "circular-test", &[(".envrc", "export C=true")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "circular-test",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Move from library to library should warn
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "circular-test",
+            "--to",
+            "library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already"));
+}
+
+#[test]
+fn move_nonexistent_overlay_errors() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "nonexistent",
+            "--to",
+            "library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn move_symlinks_recreated_pointing_to_new_location() {
+    let ctx = TestContext::new().with_overlay(&[
+        (".envrc", "export FOO=bar"),
+        (".editorconfig", "root = true"),
+    ]);
+
+    // Apply with symlinks
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            ctx.overlay_source(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "relink-test",
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.is_symlink(".envrc"));
+    assert!(ctx.is_symlink(".editorconfig"));
+
+    // Read symlink targets before move
+    let old_envrc_target = fs::read_link(ctx.repo_path().join(".envrc")).unwrap();
+
+    // Move to library
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "relink-test",
+            "--to",
+            "library",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Symlinks should still be symlinks
+    assert!(ctx.is_symlink(".envrc"));
+    assert!(ctx.is_symlink(".editorconfig"));
+
+    // Symlinks should now point to the library location
+    let new_envrc_target = fs::read_link(ctx.repo_path().join(".envrc")).unwrap();
+    assert_ne!(
+        old_envrc_target, new_envrc_target,
+        "symlink target should change after move"
+    );
+    assert!(
+        new_envrc_target
+            .to_string_lossy()
+            .contains(".repoverlay/library"),
+        "symlink should point to library: {}",
+        new_envrc_target.display()
+    );
+
+    // Files should still be readable through the symlinks
+    assert_eq!(ctx.read_file(".envrc"), "export FOO=bar");
+    assert_eq!(ctx.read_file(".editorconfig"), "root = true");
+}

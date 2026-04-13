@@ -1,0 +1,11 @@
+component: move
+kind: Added
+body: |-
+    `repoverlay move` command for relocating overlays
+
+    Adds a new top-level `move` command that relocates an overlay's source files between locations while preserving applied state. Supports moving to the in-repo library (`--to library`), to a filesystem path (`--to /path/to/dir`), or renaming on move (`--name`).
+
+    The operation is interrupt-safe: files are copied to the destination, state is updated, symlinks are re-created pointing to the new location, then the source is deleted. If interrupted, the worst case is a duplicate that can be cleaned up manually.
+
+    Supports `--force` to overwrite existing destinations and `--dry-run` to preview changes.
+time: 2026-04-13T12:00:00.000000-07:00
