@@ -1,0 +1,7 @@
+component: apply
+kind: Fixed
+body: |-
+    Resolve three-part overlay references using repo-local sources
+
+    Three-part references like `org/repo/overlay` failed with "Overlay repository not configured" when the source was configured at the repo level via `repoverlay source add`. Repo-local sources in `.repoverlay/config.ccl` are now correctly loaded during resolution.
+time: 2026-04-13T22:32:26.000000000+00:00

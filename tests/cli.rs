@@ -4629,3 +4629,68 @@ fn move_symlinks_recreated_pointing_to_new_location() {
     assert_eq!(ctx.read_file(".envrc"), "export FOO=bar");
     assert_eq!(ctx.read_file(".editorconfig"), "root = true");
 }
+
+// ============================================================================
+// Three-Part Resolution with Repo-Local Sources (issue #276)
+// ============================================================================
+
+#[test]
+fn apply_three_part_resolves_repo_local_source() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create a local overlays directory with org/repo/overlay structure
+    let overlay_dir = ctx.repo_path().join("my-overlays/acme/widgets/my-overlay");
+    fs::create_dir_all(&overlay_dir).expect("Failed to create overlay dir");
+    fs::write(overlay_dir.join(".envrc"), "export FOO=bar").unwrap();
+
+    // Add as repo-local source
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "local-src"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Apply using three-part reference — this should resolve via the repo-local source
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", "acme/widgets/my-overlay"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Applying"));
+
+    assert!(ctx.file_exists(".envrc"));
+    assert_eq!(ctx.read_file(".envrc"), "export FOO=bar");
+}
+
+#[test]
+fn apply_three_part_with_source_filter_resolves_repo_local_source() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Create a local overlays directory with org/repo/overlay structure
+    let overlay_dir = ctx.repo_path().join("my-overlays/acme/widgets/my-overlay");
+    fs::create_dir_all(&overlay_dir).expect("Failed to create overlay dir");
+    fs::write(overlay_dir.join(".editorconfig"), "root = true").unwrap();
+
+    // Add as repo-local source
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "team-src"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Apply using --from to target the repo-local source by name
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", "acme/widgets/my-overlay", "--from", "team-src"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".editorconfig"));
+    assert_eq!(ctx.read_file(".editorconfig"), "root = true");
+}

@@ -1,0 +1,7 @@
+component: apply
+kind: Fixed
+body: |-
+    Match GitHub URLs against repo-local sources for overlay repo upgrade
+
+    When applying via a GitHub URL that matches a configured source, repoverlay upgrades to editable overlay repo mode. This matching now includes repo-local sources, not just global ones.
+time: 2026-04-13T22:32:27.000000000+00:00
