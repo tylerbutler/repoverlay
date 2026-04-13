@@ -234,6 +234,7 @@ fn parse_destination(to: &str, target: &Path, dest_name: &str) -> Result<Destina
         let dest = library_path.join(dest_name);
         Ok(Destination::Library { path: dest })
     } else if let Some(source_name) = to.strip_prefix("source:") {
+        // TODO(#273): support moving to named sources
         bail!(
             "Moving to named source '{source_name}' is not yet implemented. \
              Use a filesystem path instead."
