@@ -1,0 +1,7 @@
+component: fixes
+kind: Fixed
+body: |-
+    Resolve three-part overlay references using repo-local sources
+
+    `resolve_three_part()` and `find_matching_source()` loaded only global config, ignoring sources configured at the repo level via `repoverlay source add`. Three-part references like `org/repo/overlay` and GitHub URL matching now correctly merge repo-local sources from `.repoverlay/config.ccl`.
+time: 2026-04-13T22:32:26.000000000+00:00

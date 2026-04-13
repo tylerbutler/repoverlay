@@ -61,8 +61,12 @@ pub(crate) enum ResolvedSources {
 ///
 /// Loads the user config and checks each source URL against the provided
 /// owner and repo. Returns the first matching source, if any.
-fn find_matching_source(owner: &str, repo: &str) -> Option<config::Source> {
-    let config = config::load_config(None).ok()?;
+fn find_matching_source(
+    owner: &str,
+    repo: &str,
+    target_path: Option<&Path>,
+) -> Option<config::Source> {
+    let config = config::load_config(target_path).ok()?;
     config.sources.into_iter().find(|source| {
         source
             .url
@@ -106,7 +110,7 @@ pub(crate) fn try_upgrade_github_source(target: &Path, state: &mut OverlayState)
         parts[2].to_string(),
     );
 
-    let Some(source) = find_matching_source(&owner, &gh_repo) else {
+    let Some(source) = find_matching_source(&owner, &gh_repo, Some(target)) else {
         return Ok(false);
     };
 
@@ -200,7 +204,7 @@ pub(crate) fn resolve_source(
             // as an overlay repo (editable) instead of a read-only GitHub source.
             if let Ok(github_source) = GitHubSource::parse(&url)
                 && let Some(matched) =
-                    find_matching_source(&github_source.owner, &github_source.repo)
+                    find_matching_source(&github_source.owner, &github_source.repo, target_path)
             {
                 // Check if the URL includes a subpath that looks like org/repo/name
                 if let Some(ref subpath) = github_source.subpath {
@@ -768,8 +772,8 @@ fn resolve_three_part(
 ) -> Result<ResolvedSource> {
     debug!("resolving three-part reference: {org}/{repo}/{name}");
 
-    // Load config
-    let config = config::load_config(None)?;
+    // Load config (pass target_path to include repo-local sources)
+    let config = config::load_config(target_path)?;
 
     // Detect upstream for fallback resolution
     let upstream = target_path.and_then(|p| detect_upstream(p).ok()).flatten();
