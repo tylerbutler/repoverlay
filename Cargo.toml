@@ -58,7 +58,7 @@ tui-tree-widget = "0.24"
 sickle = { version = "0.2", features = ["serde"] }
 dirs = "6.0.0"
 fuzzy-matcher = "0.3.7"
-libc = "0.2.184"
+libc = "0.2.185"
 tiny-update-check = "1.1.1"
 similar = "2.7.0"
 indicatif = "0.18.4"
