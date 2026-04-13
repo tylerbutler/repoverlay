@@ -221,6 +221,10 @@ enum Commands {
         #[arg(short, long)]
         source: Option<PathBuf>,
 
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
         /// Output directory for local overlay creation (no overlay repo required)
         #[arg(short, long, conflicts_with = "into")]
         output: Option<PathBuf>,
@@ -796,6 +800,7 @@ pub(crate) fn run() -> Result<()> {
             name,
             include,
             source,
+            target,
             output,
             into,
             no_apply,
@@ -805,7 +810,10 @@ pub(crate) fn run() -> Result<()> {
         } => {
             let source = source.unwrap_or_else(|| PathBuf::from("."));
             if into.as_deref() == Some("library") {
-                create_into_library(&source, name, &include, dry_run, yes, no_apply, force)?;
+                let target = target.unwrap_or_else(|| PathBuf::from("."));
+                create_into_library(
+                    &source, &target, name, &include, dry_run, yes, no_apply, force,
+                )?;
             } else if let Some(dest) = &into {
                 bail!("Unknown --into destination: {dest}. Valid values: library");
             } else {

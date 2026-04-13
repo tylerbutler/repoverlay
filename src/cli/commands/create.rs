@@ -92,9 +92,10 @@ pub(crate) fn parse_overlay_name_arg(
 /// Create an overlay directly into the in-repo library.
 ///
 /// After creation, prompts to apply the overlay (unless `--yes` or `--no-apply`).
-#[allow(clippy::fn_params_excessive_bools)]
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 pub(crate) fn create_into_library(
     source: &Path,
+    target: &Path,
     name: Option<String>,
     include: &[PathBuf],
     dry_run: bool,
@@ -110,8 +111,17 @@ pub(crate) fn create_into_library(
         );
     }
 
+    // Validate target is a git repo
+    if !target.join(".git").exists() {
+        bail!(
+            "Target directory is not a git repository: {}",
+            target.display()
+        );
+    }
+
     let source = canonicalize_path(source, "Source")?;
-    let library_path = library::get_library_path(&source)?;
+    let target = canonicalize_path(target, "Target")?;
+    let library_path = library::get_library_path(&target)?;
 
     // Determine overlay name
     let overlay_name = name.unwrap_or_else(|| "overlay".to_string());
@@ -123,12 +133,12 @@ pub(crate) fn create_into_library(
     }
 
     // Auto-fix gitignore if library path is ignored
-    if library::ensure_library_not_gitignored(&source, &library_path)? {
+    if library::ensure_library_not_gitignored(&target, &library_path)? {
         eprintln!(
             "{} Updated .gitignore to track library path {}",
             "Note:".cyan().bold(),
             library_path
-                .strip_prefix(&source)
+                .strip_prefix(&target)
                 .unwrap_or(&library_path)
                 .display()
         );
@@ -179,7 +189,7 @@ pub(crate) fn create_into_library(
             let overlay_source = output_path.to_string_lossy().to_string();
             crate::apply_overlay(
                 &overlay_source,
-                &source,
+                &target,
                 false,
                 Some(overlay_name),
                 None,

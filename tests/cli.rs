@@ -2907,6 +2907,8 @@ fn create_into_library_with_include() {
             "CLAUDE.md",
             "--source",
             ctx.repo_path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
             "--no-apply",
             "-y",
         ])
@@ -2938,6 +2940,8 @@ fn create_into_library_with_name() {
             ".envrc",
             "--source",
             ctx.repo_path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
             "--no-apply",
             "-y",
         ])
@@ -2966,6 +2970,8 @@ fn create_into_library_applies_by_default_with_yes() {
             "--include",
             ".envrc",
             "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "--target",
             ctx.repo_path().to_str().unwrap(),
             "-y",
         ])
@@ -3012,6 +3018,103 @@ fn create_into_library_no_apply_requires_into() {
         .args(["create", "--no-apply", "-y"])
         .assert()
         .failure();
+}
+
+// --- create --into library resolves to target, not source (#275) ---
+
+#[test]
+fn create_into_library_uses_target_not_source() {
+    // Source repo: has files to extract
+    let source_ctx = TestContext::new();
+    source_ctx.create_repo_file(".envrc", "use flake");
+
+    // Target repo: where the library overlay should land
+    let target_ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "--into",
+            "library",
+            "--include",
+            ".envrc",
+            "--source",
+            source_ctx.repo_path().to_str().unwrap(),
+            "--target",
+            target_ctx.repo_path().to_str().unwrap(),
+            "--no-apply",
+            "-y",
+        ])
+        .assert()
+        .success();
+
+    // Overlay must be in the TARGET repo's library
+    let target_library = target_ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("overlay");
+    assert!(
+        target_library.join(".envrc").exists(),
+        "Overlay should be in target repo's library, but was not found at {}",
+        target_library.display()
+    );
+
+    // Overlay must NOT be in the source repo's library
+    let source_library = source_ctx
+        .repo_path()
+        .join(".repoverlay")
+        .join("library")
+        .join("overlay");
+    assert!(
+        !source_library.exists(),
+        "Overlay should NOT be in source repo's library, but was found at {}",
+        source_library.display()
+    );
+}
+
+#[test]
+fn create_into_library_applies_to_target_repo() {
+    // Source repo: has files to extract
+    let source_ctx = TestContext::new();
+    source_ctx.create_repo_file(".envrc", "use flake");
+
+    // Target repo: where overlay should be applied
+    let target_ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "my-overlay",
+            "--into",
+            "library",
+            "--include",
+            ".envrc",
+            "--source",
+            source_ctx.repo_path().to_str().unwrap(),
+            "--target",
+            target_ctx.repo_path().to_str().unwrap(),
+            "-y",
+        ])
+        .assert()
+        .success();
+
+    // Overlay should be applied in the target repo
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "status",
+            "--target",
+            target_ctx.repo_path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-overlay"));
+
+    // Target repo should have the overlay file
+    assert!(
+        target_ctx.file_exists(".envrc"),
+        "Overlay file should be applied in target repo"
+    );
 }
 
 // --- library import by name (#220) ---
