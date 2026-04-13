@@ -172,6 +172,7 @@ cd "$TEST_DIR"
 
 mkdir target-library-repo && cd target-library-repo
 git init
+git remote add origin https://github.com/example/library-repo.git
 git commit --allow-empty -m "init"
 cd "$TEST_DIR"
 

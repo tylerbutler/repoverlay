@@ -4271,6 +4271,26 @@ directories =
             );
         }
 
+        /// Issue #277: `sync --all` must skip library-source overlays without
+        /// trying to load an overlay-repo config.
+        #[test]
+        fn handle_sync_all_skips_library_sources() {
+            let repo = create_test_repo();
+
+            save_test_state(
+                repo.path(),
+                "library-overlay",
+                OverlaySource::library("library-overlay".to_string()),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let result = handle_sync(repo.path(), None, true, false);
+            assert!(
+                result.is_ok(),
+                "sync --all should succeed when only library overlays are applied: {result:?}"
+            );
+        }
+
         #[test]
         fn handle_sync_all_identifies_overlay_repo_sources() {
             let repo = create_test_repo();
@@ -6269,6 +6289,50 @@ directories =
             assert!(
                 msg.contains("GitHub") && (msg.contains("sync") || msg.contains("syncable")),
                 "sync error for GitHub source should mention the source type. Got: {msg}"
+            );
+        }
+
+        /// Issue #277: `handle_sync` for a single name with a library source
+        /// should fail with a clear error about library sources not being
+        /// syncable (not a confusing "Could not detect target repository" error).
+        #[test]
+        fn issue_277_sync_single_rejects_library_source() {
+            let repo = create_test_repo();
+
+            // Set up a git remote so parse_overlay_name_arg can detect org/repo
+            std::process::Command::new("git")
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/testorg/testrepo.git",
+                ])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+
+            // Create a library-sourced overlay
+            save_test_state(
+                repo.path(),
+                "library-overlay",
+                OverlaySource::library("library-overlay".to_string()),
+                vec![(".envrc", ".envrc")],
+            );
+
+            let result = handle_sync(
+                repo.path(),
+                Some("library-overlay".to_string()),
+                false, // not --all
+                false,
+            );
+
+            // Should fail because library sources aren't syncable
+            assert!(result.is_err(), "sync should fail for library sources");
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("library") && (msg.contains("sync") || msg.contains("syncable")),
+                "Bug #277: sync error for library source should mention the source type \
+                 and syncability. Got: {msg}"
             );
         }
 
