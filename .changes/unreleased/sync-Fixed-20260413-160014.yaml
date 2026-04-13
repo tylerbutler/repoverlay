@@ -1,0 +1,7 @@
+component: sync
+kind: Fixed
+body: |-
+    Add missing git remote setup in TC-06 manual test for library overlay sync rejection
+
+    The `sync.md` TC-06 test case was missing a `git remote add origin` step for the `target-library-repo`. Without it, `sync` failed with "Could not detect target repository from git remote" instead of reaching the library-rejection logic being tested. Also added automated tests covering library source rejection for both `sync --all` and single-name paths.
+time: 2026-04-13T16:00:14.307780000-07:00
