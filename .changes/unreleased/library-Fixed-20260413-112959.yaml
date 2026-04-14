@@ -1,7 +1,0 @@
-component: library
-kind: Fixed
-body: |-
-    Use atomic write-then-rename for state files to prevent corruption
-
-    State file writes previously used a non-atomic truncate-then-write pattern, which could leave corrupted or empty files if the process was interrupted mid-write. State files are now written to a temporary file in the same directory and atomically renamed into place using tempfile::NamedTempFile.
-time: 2026-04-13T11:29:59.721696000-07:00
