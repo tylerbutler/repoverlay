@@ -1,0 +1,7 @@
+component: fixes
+kind: Fixed
+body: |-
+    Save-source prompt duplicate-check now sees repo-local sources
+
+    `prompt_save_source()` loaded only global config when checking for duplicates, so it could prompt the user to save a source that was already configured at the repo level. The duplicate-check now loads the merged config (global + repo-local) while still writing saves to the global config file.
+time: 2026-04-13T22:32:28.000000000+00:00

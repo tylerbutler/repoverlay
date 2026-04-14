@@ -493,7 +493,7 @@ fn resolve_two_part(
 
     // Skip save prompt when source is already configured
     if matched_source.is_none() {
-        prompt_save_source(owner, repo)?;
+        prompt_save_source(owner, repo, target_path)?;
     }
 
     // Resolve each selected overlay to a ResolvedSource
@@ -550,25 +550,37 @@ fn resolve_two_part(
     }
 }
 
+/// Check whether a source is already configured (globally or repo-locally).
+///
+/// Returns `true` if a source with a matching URL or name is found in the merged config.
+fn source_is_configured(owner: &str, repo: &str, target_path: Option<&Path>) -> Result<bool> {
+    let config = config::load_config(target_path)?;
+    let url = format!("https://github.com/{owner}/{repo}");
+    let source_name = repo;
+
+    Ok(config
+        .sources
+        .iter()
+        .any(|s| s.url.as_deref() == Some(&url) || s.name == source_name))
+}
+
 /// Prompt the user to save a source for future use, if not already configured.
 ///
 /// Skips silently if the source is already configured or the session is non-interactive.
-fn prompt_save_source(owner: &str, repo: &str) -> Result<()> {
+fn prompt_save_source(owner: &str, repo: &str, target_path: Option<&Path>) -> Result<()> {
     if !is_interactive() {
         return Ok(());
     }
 
+    if source_is_configured(owner, repo, target_path)? {
+        return Ok(());
+    }
+
+    // Load global-only config for saving — repo-local sources should not be
+    // written into the global config file.
     let mut config = config::load_config(None)?;
     let url = format!("https://github.com/{owner}/{repo}");
     let source_name = repo.to_string();
-
-    if config
-        .sources
-        .iter()
-        .any(|s| s.url.as_deref() == Some(&url) || s.name == source_name)
-    {
-        return Ok(());
-    }
 
     let prompt = format!("Save {owner}/{repo} as a source for future use?");
     let confirmed = dialoguer::Confirm::new()
@@ -1729,6 +1741,86 @@ mod tests {
             let result = resolve_local_path(temp.path(), "test-dir", false).unwrap();
             // The returned path should be canonical (absolute, no symlinks)
             assert!(result.path.is_absolute());
+        }
+    }
+
+    mod source_is_configured_tests {
+        use super::*;
+
+        /// Helper to write a repo-local config with the given sources.
+        fn write_repo_config(repo_path: &Path, sources_ccl: &str) {
+            let config_dir = repo_path.join(".repoverlay");
+            fs::create_dir_all(&config_dir).unwrap();
+            fs::write(config_dir.join("config.ccl"), sources_ccl).unwrap();
+        }
+
+        #[test]
+        fn not_configured_returns_false() {
+            let temp = TempDir::new().unwrap();
+            let result = source_is_configured("someowner", "somerepo", Some(temp.path())).unwrap();
+            assert!(!result);
+        }
+
+        #[test]
+        fn configured_in_repo_local_returns_true() {
+            let temp = TempDir::new().unwrap();
+            write_repo_config(
+                temp.path(),
+                r"
+sources =
+  =
+    name = my-overlays
+    url = https://github.com/acme/my-overlays
+",
+            );
+
+            let result = source_is_configured("acme", "my-overlays", Some(temp.path())).unwrap();
+            assert!(
+                result,
+                "source_is_configured should find repo-local sources"
+            );
+        }
+
+        #[test]
+        fn configured_in_repo_local_matches_by_name() {
+            let temp = TempDir::new().unwrap();
+            write_repo_config(
+                temp.path(),
+                r"
+sources =
+  =
+    name = my-overlays
+    url = https://example.com/different-url
+",
+            );
+
+            // URL won't match github pattern, but name matches
+            let result = source_is_configured("acme", "my-overlays", Some(temp.path())).unwrap();
+            assert!(result, "source_is_configured should match by name");
+        }
+
+        #[test]
+        fn configured_in_repo_local_matches_by_url() {
+            let temp = TempDir::new().unwrap();
+            write_repo_config(
+                temp.path(),
+                r"
+sources =
+  =
+    name = different-name
+    url = https://github.com/acme/my-overlays
+",
+            );
+
+            let result = source_is_configured("acme", "my-overlays", Some(temp.path())).unwrap();
+            assert!(result, "source_is_configured should match by URL");
+        }
+
+        #[test]
+        fn none_target_path_still_works() {
+            // With None, only global config is checked — should not panic
+            let result = source_is_configured("nonexistent-owner", "nonexistent-repo", None);
+            assert!(result.is_ok());
         }
     }
 }
