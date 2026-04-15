@@ -1,7 +1,0 @@
-component: create
-kind: Fixed
-body: |-
-    `create --into library` resolves library path relative to target repo instead of source
-
-    Previously, `create --into library --source <path>` placed the overlay into the source repo's library instead of the target repo's (cwd). Added `--target` parameter to the `create` command for explicit target specification, consistent with other commands like `move` and `switch`.
-time: 2026-04-13T15:00:00.000000000-07:00
