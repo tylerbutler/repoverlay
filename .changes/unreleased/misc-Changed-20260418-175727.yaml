@@ -1,0 +1,12 @@
+component: misc
+kind: Changed
+body: |-
+    Homebrew formula publishing uses a GitHub App installation token
+
+    The release workflow's homebrew publish step now authenticates to the
+    tap repository with a short-lived GitHub App installation token minted
+    by `tylerbutler/actions/publish-homebrew-formula`, replacing the
+    long-lived `HOMEBREW_TAP_TOKEN` PAT. Reuses the existing
+    `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` secrets already used by
+    release-plz and changie-release. No change to published binaries.
+time: 2026-04-18T17:57:27.000000000+00:00
