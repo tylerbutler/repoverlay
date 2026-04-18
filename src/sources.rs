@@ -307,8 +307,11 @@ impl SourceManager {
     /// List overlay names for a specific org/repo across all sources.
     ///
     /// Returns unique overlay names (deduplicated across sources).
-    #[must_use]
-    pub(crate) fn list_overlays_for_repo(&self, org: &str, repo: &str) -> Vec<OverlayName> {
+    pub(crate) fn list_overlays_for_repo(
+        &self,
+        org: &str,
+        repo: &str,
+    ) -> anyhow::Result<Vec<OverlayName>> {
         let mut names = std::collections::HashSet::new();
 
         for ms in &self.sources {
@@ -319,7 +322,7 @@ impl SourceManager {
                     }
                     if let Ok(overlays) = manager.list_overlays_for_repo(org, repo) {
                         for overlay in overlays {
-                            names.insert(OverlayName::new(overlay.name));
+                            names.insert(OverlayName::try_new(overlay.name)?);
                         }
                     }
                 }
@@ -329,7 +332,7 @@ impl SourceManager {
                             if overlay.org.eq_ignore_ascii_case(org)
                                 && overlay.repo.eq_ignore_ascii_case(repo)
                             {
-                                names.insert(OverlayName::new(overlay.name));
+                                names.insert(OverlayName::try_new(overlay.name)?);
                             }
                         }
                     }
@@ -339,7 +342,7 @@ impl SourceManager {
 
         let mut result: Vec<_> = names.into_iter().collect();
         result.sort();
-        result
+        Ok(result)
     }
 
     /// Get the base path for a named source.
@@ -1360,7 +1363,9 @@ mod tests {
         };
 
         // Should find overlays from cloned source, skip uncloned source
-        let overlays = manager.list_overlays_for_repo("microsoft", "FluidFramework");
+        let overlays = manager
+            .list_overlays_for_repo("microsoft", "FluidFramework")
+            .unwrap();
         assert_eq!(overlays.len(), 2);
         assert!(overlays.contains(&OverlayName::new("claude-config")));
         assert!(overlays.contains(&OverlayName::new("vscode-settings")));
@@ -1419,7 +1424,9 @@ mod tests {
         };
 
         // Should deduplicate across sources
-        let overlays = manager.list_overlays_for_repo("microsoft", "FluidFramework");
+        let overlays = manager
+            .list_overlays_for_repo("microsoft", "FluidFramework")
+            .unwrap();
         assert_eq!(overlays.len(), 1);
         assert_eq!(overlays[0], "claude-config");
     }
@@ -1462,7 +1469,9 @@ mod tests {
         };
 
         // Different repo should return empty
-        let overlays = manager.list_overlays_for_repo("google", "chromium");
+        let overlays = manager
+            .list_overlays_for_repo("google", "chromium")
+            .unwrap();
         assert!(overlays.is_empty());
     }
 
@@ -2059,7 +2068,9 @@ mod tests {
 
         let manager = SourceManager::new(sources, Some(repo_root)).unwrap();
 
-        let overlays = manager.list_overlays_for_repo("microsoft", "FluidFramework");
+        let overlays = manager
+            .list_overlays_for_repo("microsoft", "FluidFramework")
+            .unwrap();
         assert_eq!(overlays.len(), 2);
         assert!(overlays.contains(&OverlayName::new("claude-config")));
         assert!(overlays.contains(&OverlayName::new("vscode-settings")));

@@ -35,7 +35,7 @@ pub(crate) struct TreeNode<'a, Id> {
     /// Display text for this node.
     pub(crate) text: Line<'a>,
     /// Child nodes.
-    pub(crate) children: Vec<TreeNode<'a, Id>>,
+    pub(crate) children: Vec<Self>,
 }
 
 /// State for a multi-select tree widget.

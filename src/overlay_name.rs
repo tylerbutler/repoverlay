@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use anyhow::bail;
+
 /// A normalized overlay name, as stored in `.ccl` file stems.
 ///
 /// This newtype prevents accidental comparison between overlay names
@@ -14,17 +16,29 @@ use std::fmt;
 pub(crate) struct OverlayName(String);
 
 impl OverlayName {
-    /// Create a new `OverlayName` from a string.
+    /// Create a new `OverlayName` from a string that is already known to be valid.
     ///
-    /// The name must be a simple overlay name (e.g., `"my-overlay"`),
-    /// not a path like `"org/repo/name"`.
+    /// Use this only when the name comes from a trusted source (e.g., file stems
+    /// from directory listing). For user-provided input, use [`try_new`](Self::try_new).
     pub(crate) fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         debug_assert!(
-            !name.contains('/'),
+            !name.contains('/') && !name.contains('\\'),
             "OverlayName must not contain path separators: {name}"
         );
         Self(name)
+    }
+
+    /// Create a new `OverlayName` from user-provided input, validating that it
+    /// contains no path separators.
+    ///
+    /// Returns an error if the name contains `/` or `\`.
+    pub(crate) fn try_new(name: impl Into<String>) -> anyhow::Result<Self> {
+        let name = name.into();
+        if name.contains('/') || name.contains('\\') {
+            bail!("Overlay name must not contain path separators: {name}");
+        }
+        Ok(Self(name))
     }
 
     /// Get the underlying string slice.
@@ -110,8 +124,53 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "must not contain path separators")]
-    fn overlay_name_rejects_paths_in_debug() {
-        let _ = OverlayName::new("org/repo/name");
+    fn try_new_rejects_forward_slash() {
+        let result = OverlayName::try_new("org/repo/name");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("path separators"),
+            "expected path separator error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn try_new_rejects_backslash() {
+        let result = OverlayName::try_new(r"org\repo\name");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("path separators"),
+            "expected path separator error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn try_new_accepts_valid_name() {
+        let result = OverlayName::try_new("my-overlay");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().as_str(), "my-overlay");
+    }
+
+    #[test]
+    fn overlay_name_ordering() {
+        let a = OverlayName::new("alpha");
+        let b = OverlayName::new("beta");
+        let c = OverlayName::new("gamma");
+
+        assert!(a < b);
+        assert!(b < c);
+        assert!(a < c);
+
+        let mut names = vec![c.clone(), a.clone(), b.clone()];
+        names.sort();
+        assert_eq!(names, vec![a, b, c]);
+    }
+
+    #[test]
+    fn overlay_name_as_ref_str() {
+        let name = OverlayName::new("my-overlay");
+        let s: &str = name.as_ref();
+        assert_eq!(s, "my-overlay");
     }
 }

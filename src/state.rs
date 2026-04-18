@@ -6,12 +6,14 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
-use log::debug;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 use crate::overlay_name::OverlayName;
 
@@ -497,14 +499,12 @@ pub(crate) struct ExcludedFile {
 }
 
 /// Configuration file for an overlay source (repoverlay.ccl).
-/// Note: This uses nested structures which won't roundtrip through sickle,
-/// but it's only read (not written) by repoverlay.
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub(crate) struct OverlayConfig {
     #[serde(default)]
     pub(crate) overlay: OverlayConfigMeta,
     #[serde(default)]
-    pub(crate) mappings: std::collections::HashMap<String, String>,
+    pub(crate) mappings: std::collections::HashMap<String, Vec<String>>,
     /// Directories to symlink as a unit (not walk their contents).
     /// These directories will be symlinked directly instead of having
     /// their individual files symlinked.
@@ -559,6 +559,22 @@ pub(crate) fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
     Ok(base.join(target_hash))
 }
 
+/// Write content to a file atomically using write-then-rename.
+///
+/// Creates a temporary file in the same directory as the target path,
+/// writes the content, then atomically renames it into place. This
+/// prevents corruption if the process is interrupted mid-write.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let dir = path
+        .parent()
+        .context("State file has no parent directory")?;
+    let mut tmp = NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path)
+        .context("Failed to atomically persist state file")?;
+    Ok(())
+}
+
 /// Save overlay state to the external backup location.
 pub(crate) fn save_external_state(
     target: &Path,
@@ -577,7 +593,7 @@ pub(crate) fn save_external_state(
 
     let state_file = dir.join(format!("{overlay_name}.ccl"));
     let content = sickle::to_string(state).context("Failed to serialize state to CCL")?;
-    fs::write(&state_file, content)?;
+    atomic_write(&state_file, &content)?;
 
     Ok(())
 }
@@ -594,13 +610,20 @@ pub(crate) fn remove_external_state(target: &Path, overlay_name: &str) -> Result
     if state_file.exists() {
         // Read existing state and mark it as removed
         let content = fs::read_to_string(&state_file)?;
-        if let Ok(mut state) = sickle::from_str::<OverlayState>(&content) {
-            state.removed_at = Some(Utc::now());
-            let updated_content = sickle::to_string(&state).context("Failed to serialize state")?;
-            fs::write(&state_file, updated_content)?;
-        } else {
-            // If we can't parse it, just delete it
-            fs::remove_file(&state_file)?;
+        match sickle::from_str::<OverlayState>(&content) {
+            Ok(mut state) => {
+                state.removed_at = Some(Utc::now());
+                let updated_content =
+                    sickle::to_string(&state).context("Failed to serialize state")?;
+                atomic_write(&state_file, &updated_content)?;
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to parse state file {}, deleting it: {e}",
+                    state_file.display()
+                );
+                fs::remove_file(&state_file)?;
+            }
         }
     }
 
@@ -629,16 +652,21 @@ pub(crate) fn load_external_states(target: &Path) -> Result<Vec<OverlayState>> {
             && path.file_name() != Some(std::ffi::OsStr::new(".target_path"))
         {
             let content = fs::read_to_string(&path)?;
-            if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
-                // Skip overlays that were explicitly removed
-                if state.removed_at.is_some() {
-                    debug!(
-                        "skipping removed overlay '{}' (removed at {:?})",
-                        state.name, state.removed_at
-                    );
-                    continue;
+            match sickle::from_str::<OverlayState>(&content) {
+                Ok(state) => {
+                    // Skip overlays that were explicitly removed
+                    if state.removed_at.is_some() {
+                        debug!(
+                            "skipping removed overlay '{}' (removed at {:?})",
+                            state.name, state.removed_at
+                        );
+                        continue;
+                    }
+                    states.push(state);
                 }
-                states.push(state);
+                Err(e) => {
+                    warn!("Failed to parse state file {}: {e}", path.display());
+                }
             }
         }
     }
@@ -717,12 +745,17 @@ pub(crate) fn load_all_overlay_targets(
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "ccl") {
             let content = fs::read_to_string(&path)?;
-            if let Ok(state) = sickle::from_str::<OverlayState>(&content) {
-                for file in &state.files {
-                    targets.insert(
-                        file.target.to_string_lossy().to_string(),
-                        state.name.clone(),
-                    );
+            match sickle::from_str::<OverlayState>(&content) {
+                Ok(state) => {
+                    for file in &state.files {
+                        targets.insert(
+                            file.target.to_string_lossy().to_string(),
+                            state.name.clone(),
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to parse state file {}: {e}", path.display());
                 }
             }
         }
@@ -776,7 +809,7 @@ pub(crate) fn save_overlay_state(target: &Path, state: &OverlayState) -> Result<
     let state_file = overlays_dir.join(format!("{normalized_name}.ccl"));
 
     let content = sickle::to_string(state).context("Failed to serialize overlay state")?;
-    fs::write(&state_file, content)?;
+    atomic_write(&state_file, &content)?;
 
     Ok(())
 }
@@ -1492,7 +1525,6 @@ overlay =
     }
 
     #[test]
-    #[ignore = "tylerbutler/santa#71: forward slashes in map keys cause parsing errors in sickle"]
     fn test_overlay_config_mappings_with_forward_slashes() {
         let config_str = r"
 overlay =
@@ -1506,11 +1538,11 @@ mappings =
         assert_eq!(config.mappings.len(), 2);
         assert_eq!(
             config.mappings.get("config/settings.json"),
-            Some(&".vscode/settings.json".to_string())
+            Some(&vec![".vscode/settings.json".to_string()])
         );
         assert_eq!(
             config.mappings.get("src/template.env"),
-            Some(&".env".to_string())
+            Some(&vec![".env".to_string()])
         );
     }
 
