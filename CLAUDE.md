@@ -25,3 +25,8 @@ This repository optionally uses **jj (Jujutsu)** colocated with git. Check for a
 - **Clippy pedantic + nursery** lints enabled
 - **CCL format** used for configuration and state files (not TOML)
 - Tests use `tempfile::TempDir` for temporary git repos
+- **Release pipeline** (three tools, three files):
+  - `release-plz.toml` — version bumps + crates.io publish, driven by conventional commits
+  - `.changie.yaml` — changelog fragments in `.changes/unreleased/*.yaml`, aggregated per release
+  - `dist-workspace.toml` — binary + homebrew publish via `cargo-dist`; custom `./publish-homebrew-tap` job uses a GitHub App token (see `.github/workflows/publish-homebrew-tap.yml`)
+- **No changelog fragments for CI-only changes.** If the change doesn't affect the published binary (workflows, release plumbing, repo policy), skip the changie entry — even when the `changelog` skill suggests one
