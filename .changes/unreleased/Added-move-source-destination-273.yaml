@@ -1,9 +1,0 @@
-kind: Added
-body: |
-  Add named source destinations to `repoverlay move`
-
-  Use `repoverlay move --to source:<name>` to move an overlay into a configured overlay
-  source. The target repository path is detected from the current git remote, or can be
-  set explicitly with `--target-repo org/repo`.
-time: 2025-01-01T00:00:00Z
-component: move
