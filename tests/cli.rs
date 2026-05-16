@@ -8,7 +8,7 @@ use predicates::prelude::*;
 use std::fs;
 
 mod common;
-use common::{SourceTestContext, TestContext, envrc_overlay};
+use common::{SourceTestContext, TestContext, create_overlay_dir, envrc_overlay};
 
 #[test]
 fn help_displays() {
@@ -34,7 +34,8 @@ fn apply_help_displays() {
         .args(["apply", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Apply an overlay"));
+        .stdout(predicate::str::contains("Apply an overlay"))
+        .stdout(predicate::str::contains("repoverlay browse"));
 }
 
 #[test]
@@ -119,6 +120,36 @@ fn browse_rejects_three_part_source() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Invalid source for browse"));
+}
+
+#[test]
+fn apply_help_mentions_browse_for_interactive() {
+    // apply help text should guide interactive users toward browse
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("repoverlay browse"));
+}
+
+#[test]
+fn apply_help_mentions_scripting() {
+    // apply help text should clarify it is the scripting / power-user path
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("scripting"));
+}
+
+#[test]
+fn root_help_browse_listed_as_recommended() {
+    // top-level help should list browse as "recommended"
+    cargo_bin_cmd!("repoverlay")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("recommended"));
 }
 
 #[test]
@@ -930,7 +961,52 @@ fn switch_help_shows_options() {
         .args(["switch", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Switch"));
+        .stdout(predicate::str::contains("Switch"))
+        .stdout(predicate::str::contains("--dry-run"));
+}
+
+#[test]
+fn switch_dry_run_previews_without_changing_overlays() {
+    let ctx = TestContext::new();
+    let overlay_a = create_overlay_dir(&[(".config-a", "alpha")]);
+    let overlay_b = create_overlay_dir(&[(".config-b", "beta")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            overlay_a.path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "overlay-a",
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".config-a"));
+    assert!(!ctx.file_exists(".config-b"));
+    assert!(ctx.overlay_state_exists("overlay-a"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "switch",
+            overlay_b.path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "overlay-b",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"))
+        .stdout(predicate::str::contains("would remove"))
+        .stdout(predicate::str::contains("Would apply"));
+
+    assert!(ctx.file_exists(".config-a"));
+    assert!(!ctx.file_exists(".config-b"));
+    assert!(ctx.overlay_state_exists("overlay-a"));
+    assert!(!ctx.overlay_state_exists("overlay-b"));
 }
 
 // ============================================================================

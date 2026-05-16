@@ -1,0 +1,13 @@
+component: browse
+kind: Changed
+body: |-
+    `browse` is now the documented primary workflow for interactive overlay application
+
+    - `browse` help text and command list clarify it is the recommended interactive path
+    - `apply` help text updated to describe it as the scripting/power-user command,
+      with explicit guidance to use `browse` for interactive discovery
+    - Non-interactive `browse` output now directs users to run browse in a terminal
+      instead of suggesting the `apply org/repo/name` syntax
+    - A tip is printed to stderr when `apply` is used with the `org/repo/name`
+      configured-source syntax, encouraging `browse` for interactive workflows
+time: 2026-05-16T02:18:40.000000000+00:00
