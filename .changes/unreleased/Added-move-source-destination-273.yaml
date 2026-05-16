@@ -1,0 +1,8 @@
+kind: Added
+body: |
+  `repoverlay move --to source:<name>` now moves an overlay into a named overlay source.
+
+  The org/repo directory placement is inferred from the git origin remote or can be
+  specified explicitly with `--target-repo org/repo`. After the move, repoverlay prints a
+  reminder to commit and push in the source repo to make the overlay available to others.
+time: 2025-01-01T00:00:00Z
