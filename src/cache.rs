@@ -397,7 +397,13 @@ impl CacheManager {
             return Ok(None);
         }
 
-        let current_commit = self.get_current_commit(&repo_path)?;
+        let current_commit = match self.get_current_commit(&repo_path) {
+            Ok(commit) => commit,
+            Err(err) => {
+                warn!("could not determine current commit for cached repo: {err}");
+                return Ok(None);
+            }
+        };
 
         // Fetch latest
         let output = git_in_dir(&repo_path, &["fetch", "--depth", "1", "origin"])?;
