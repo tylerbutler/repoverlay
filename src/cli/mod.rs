@@ -286,6 +286,12 @@ enum Commands {
         #[arg(long)]
         name: Option<String>,
 
+        /// Override the target repository (org/repo format, e.g. acme/my-app)
+        ///
+        /// Used when moving to a named source and the git origin remote cannot be parsed.
+        #[arg(long)]
+        target_repo: Option<String>,
+
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
@@ -844,6 +850,7 @@ pub(crate) fn run() -> Result<()> {
             target,
             force,
             name,
+            target_repo,
             dry_run,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
@@ -853,6 +860,7 @@ pub(crate) fn run() -> Result<()> {
                 &target,
                 force,
                 name.as_deref(),
+                target_repo.as_deref(),
                 dry_run,
             )?;
         }

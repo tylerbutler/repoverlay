@@ -3,12 +3,15 @@ use colored::Colorize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::config::load_config;
 use crate::library;
 use crate::overlay_repo::copy_dir_recursive;
+use crate::sources::SourceManager;
 use crate::state::{
     EntryType, LinkType, OverlaySource, load_overlay_state, normalize_overlay_name,
     save_external_state, save_overlay_state,
 };
+use crate::upstream::detect_repo_identity;
 
 use super::resolve_target;
 
@@ -19,6 +22,7 @@ pub(crate) fn handle_move_command(
     target: &Path,
     force: bool,
     name_override: Option<&str>,
+    target_repo: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
     let target = resolve_target(Some(target.to_path_buf()))?;
@@ -34,7 +38,7 @@ pub(crate) fn handle_move_command(
     let dest_name = name_override.unwrap_or(overlay);
 
     // Parse and resolve destination
-    let destination = parse_destination(to, &target, dest_name)?;
+    let destination = parse_destination(to, &target, dest_name, target_repo)?;
 
     // Check for circular move (same location)
     if let Destination::Library { ref path } = destination {
@@ -196,19 +200,38 @@ pub(crate) fn handle_move_command(
         println!("  Re-linked {relinked} symlink(s)");
     }
 
+    if matches!(destination, Destination::SourceRepo { .. }) {
+        println!(
+            "\n{} Changes are not committed. Commit and push in the source repo to make them available.",
+            "Note:".yellow().bold()
+        );
+    }
+
     Ok(())
 }
 
 /// Parsed destination for a move operation.
 enum Destination {
-    Library { path: PathBuf },
-    Path { path: PathBuf },
+    Library {
+        path: PathBuf,
+    },
+    Path {
+        path: PathBuf,
+    },
+    SourceRepo {
+        /// Full path where the overlay will be placed: `<source-base>/org/repo/name`
+        path: PathBuf,
+        source_name: String,
+        org: String,
+        repo: String,
+        overlay_name: String,
+    },
 }
 
 impl Destination {
     fn path(&self) -> &Path {
         match self {
-            Self::Library { path } | Self::Path { path } => path,
+            Self::Library { path } | Self::Path { path } | Self::SourceRepo { path, .. } => path,
         }
     }
 
@@ -216,6 +239,13 @@ impl Destination {
         match self {
             Self::Library { path } => format!("library ({})", path.display()),
             Self::Path { path } => path.display().to_string(),
+            Self::SourceRepo {
+                source_name,
+                org,
+                repo,
+                overlay_name,
+                ..
+            } => format!("source:{source_name} ({org}/{repo}/{overlay_name})"),
         }
     }
 
@@ -223,27 +253,109 @@ impl Destination {
         match self {
             Self::Library { .. } => OverlaySource::library(name.to_string()),
             Self::Path { path } => OverlaySource::local(path.clone()),
+            Self::SourceRepo {
+                source_name,
+                org,
+                repo,
+                overlay_name,
+                ..
+            } => OverlaySource::OverlayRepo {
+                org: org.clone(),
+                repo: repo.clone(),
+                name: overlay_name.clone(),
+                commit: "local".to_string(),
+                resolved_via: None,
+                source_name: Some(source_name.clone()),
+            },
         }
     }
 }
 
 /// Parse the `--to` argument into a resolved destination.
-fn parse_destination(to: &str, target: &Path, dest_name: &str) -> Result<Destination> {
+fn parse_destination(
+    to: &str,
+    target: &Path,
+    dest_name: &str,
+    target_repo: Option<&str>,
+) -> Result<Destination> {
     if to == "library" {
         let library_path = library::get_library_path(target)?;
         let dest = library_path.join(dest_name);
         Ok(Destination::Library { path: dest })
     } else if let Some(source_name) = to.strip_prefix("source:") {
-        // TODO(#273): support moving to named sources
-        bail!(
-            "Moving to named source '{source_name}' is not yet implemented. \
-             Use a filesystem path instead."
-        );
+        resolve_source_destination(source_name, target, dest_name, target_repo)
     } else {
         let base = PathBuf::from(to);
         let dest = base.join(dest_name);
         Ok(Destination::Path { path: dest })
     }
+}
+
+/// Resolve a `source:<name>` destination to a concrete filesystem path.
+fn resolve_source_destination(
+    source_name: &str,
+    target: &Path,
+    dest_name: &str,
+    target_repo: Option<&str>,
+) -> Result<Destination> {
+    let config = load_config(Some(target))?;
+    let source_mgr = SourceManager::new(config.sources, Some(target))?;
+
+    let source_base = source_mgr
+        .get_source_base_path(source_name)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No source named '{source_name}' is configured. \
+                 Use `repoverlay source list` to see available sources."
+            )
+        })?
+        .to_path_buf();
+
+    let (org, repo) = resolve_org_repo(target, target_repo)?;
+
+    let dest = source_base.join(&org).join(&repo).join(dest_name);
+
+    Ok(Destination::SourceRepo {
+        path: dest,
+        source_name: source_name.to_string(),
+        org,
+        repo,
+        overlay_name: dest_name.to_string(),
+    })
+}
+
+/// Resolve the org/repo pair from `--target-repo` flag or by detecting the git origin remote.
+fn resolve_org_repo(target: &Path, target_repo: Option<&str>) -> Result<(String, String)> {
+    if let Some(tr) = target_repo {
+        return parse_target_repo(tr);
+    }
+
+    let identity = detect_repo_identity(target)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Could not detect the target repository org/repo from git remotes.\n\
+             Specify it explicitly with --target-repo org/repo."
+        )
+    })?;
+
+    identity.origin.or(identity.upstream).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Could not parse a GitHub org/repo from the git remotes.\n\
+             Specify it explicitly with --target-repo org/repo."
+        )
+    })
+}
+
+/// Parse a `org/repo` string into its two components.
+fn parse_target_repo(target_repo: &str) -> Result<(String, String)> {
+    let mut parts = target_repo.splitn(2, '/');
+    let org = parts.next().unwrap_or("").trim();
+    let repo = parts.next().unwrap_or("").trim();
+    if org.is_empty() || repo.is_empty() {
+        bail!(
+            "--target-repo must be in 'org/repo' format (e.g. acme/my-app), got: '{target_repo}'"
+        );
+    }
+    Ok((org.to_string(), repo.to_string()))
 }
 
 /// Resolve the filesystem path for the current overlay source.
