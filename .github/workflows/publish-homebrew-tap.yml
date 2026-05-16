@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-22.04
     if: ${{ !fromJson(inputs.plan).announcement_is_prerelease || fromJson(inputs.plan).publish_prereleases }}
     steps:
-      - uses: tylerbutler/actions/publish-homebrew-formula@c4c45a8284082163bc58623acfc4b3dc98633c3d # ratchet:tylerbutler/actions/publish-homebrew-formula@main
+      - uses: tylerbutler/actions/publish-homebrew-formula@1629403295067f43d639169be094e55b8a2b839d # ratchet:tylerbutler/actions/publish-homebrew-formula@main
         with:
           # Reuses the shared release App (see release-plz.yml, changie-release.yml).
           # The App must be installed on tylerbutler/homebrew-tap with contents:write.
