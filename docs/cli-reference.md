@@ -11,6 +11,7 @@ This document contains the help content for the `repoverlay` command-line progra
 * [`repoverlay restore`↴](#repoverlay-restore)
 * [`repoverlay update`↴](#repoverlay-update)
 * [`repoverlay create`↴](#repoverlay-create)
+* [`repoverlay move`↴](#repoverlay-move)
 * [`repoverlay switch`↴](#repoverlay-switch)
 * [`repoverlay cache`↴](#repoverlay-cache)
 * [`repoverlay cache list`↴](#repoverlay-cache-list)
@@ -25,6 +26,11 @@ This document contains the help content for the `repoverlay` command-line progra
 * [`repoverlay source add`↴](#repoverlay-source-add)
 * [`repoverlay source list`↴](#repoverlay-source-list)
 * [`repoverlay source remove`↴](#repoverlay-source-remove)
+* [`repoverlay library`↴](#repoverlay-library)
+* [`repoverlay library list`↴](#repoverlay-library-list)
+* [`repoverlay library import`↴](#repoverlay-library-import)
+* [`repoverlay library export`↴](#repoverlay-library-export)
+* [`repoverlay library remove`↴](#repoverlay-library-remove)
 * [`repoverlay completions`↴](#repoverlay-completions)
 
 ## `repoverlay`
@@ -35,35 +41,39 @@ Overlay config files into git repositories without committing them
 
 ###### **Subcommands:**
 
-* `apply` — Apply an overlay to a git repository
+* `apply` — Apply an overlay to a git repository (scripting / power-user)
 * `remove` — Remove applied overlay(s)
 * `status` — Show the status of applied overlays
 * `restore` — Restore overlays after git clean or other removal
 * `update` — Update applied overlays from remote sources
 * `create` — Create a new overlay from files in a repository
+* `move` — Move an overlay to a new location
 * `switch` — Switch to a different overlay (removes all existing overlays first)
 * `cache` — Manage the overlay cache
 * `browse` — Browse and apply overlays interactively (recommended)
 * `sync` — Sync changes from an applied overlay back to the overlay repo
 * `edit` — Edit an existing applied overlay
 * `source` — Manage overlay sources (for multi-source configurations)
+* `library` — Manage the in-repo overlay library
 * `completions` — Generate shell completions
 
 
 
 ## `repoverlay apply`
 
-Apply an overlay to a git repository
+Apply an overlay to a git repository (scripting / power-user)
 
-For interactive use, consider `repoverlay browse` instead.
+Applies an overlay directly from a path, GitHub URL, or configured source. Intended for scripting and automation workflows.
+
+For interactive discovery and application, use `repoverlay browse` instead — it lists available overlays and lets you select which to apply.
 
 **Usage:** `repoverlay apply [OPTIONS] <SOURCE>`
 
 ###### **Arguments:**
 
-* `<SOURCE>` — Path to overlay source directory OR GitHub URL
+* `<SOURCE>` — Overlay source: local path, GitHub URL, or configured source reference
 
-   Examples: ./my-overlay <https://github.com/owner/repo> <https://github.com/owner/repo/tree/main/overlays/rust>
+   Supported formats: ./my-overlay             (local path) /absolute/path           (local absolute path) <https://github.com/owner/repo> <https://github.com/owner/repo/tree/main/overlays/rust> org/repo/overlay-name    (configured source reference)
 
 ###### **Options:**
 
@@ -171,10 +181,37 @@ Examples: repoverlay create my-overlay              # Detects org/repo from git 
 
 * `-i`, `--include <INCLUDE>` — Include files/directories or glob patterns (can be specified multiple times)
 * `-s`, `--source <SOURCE>` — Source repository to extract files from (defaults to current directory)
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `-o`, `--output <OUTPUT>` — Output directory for local overlay creation (no overlay repo required)
+* `--into <DEST>` — Create the overlay directly into a destination ("library")
+* `--no-apply` — Skip applying the overlay after creating into the library
 * `--dry-run` — Show what would be created without creating files
 * `-y`, `--yes` — Skip interactive prompts, use defaults
 * `-f`, `--force` — Force overwrite if overlay already exists
+
+
+
+## `repoverlay move`
+
+Move an overlay to a new location
+
+Relocates an overlay's source files and updates applied state references. Destinations: "library", "source:<name>", or a filesystem path.
+
+Examples: repoverlay move my-overlay --to library repoverlay move my-overlay --to /path/to/dir repoverlay move my-overlay --to source:shared-repo
+
+**Usage:** `repoverlay move [OPTIONS] --to <TO> <OVERLAY>`
+
+###### **Arguments:**
+
+* `<OVERLAY>` — Name of the applied overlay to move
+
+###### **Options:**
+
+* `--to <TO>` — Destination: "library", "source:<name>", or a filesystem path
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `--force` — Overwrite if destination already exists
+* `--name <NAME>` — Rename the overlay at the destination
+* `--dry-run` — Show what would happen without making changes
 
 
 
@@ -417,6 +454,85 @@ Remove an overlay source
 ###### **Arguments:**
 
 * `<NAME>` — Name of the source to remove
+
+
+
+## `repoverlay library`
+
+Manage the in-repo overlay library
+
+**Usage:** `repoverlay library <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List overlays in the library
+* `import` — Import an overlay into the library
+* `export` — Export an overlay from the library
+* `remove` — Remove an overlay from the library
+
+
+
+## `repoverlay library list`
+
+List overlays in the library
+
+**Usage:** `repoverlay library list [OPTIONS]`
+
+###### **Options:**
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay library import`
+
+Import an overlay into the library
+
+**Usage:** `repoverlay library import [OPTIONS] <SOURCE>`
+
+###### **Arguments:**
+
+* `<SOURCE>` — Overlay source (path, GitHub URL, or org/repo/name)
+
+###### **Options:**
+
+* `--name <NAME>` — Name for the imported overlay (defaults to source name)
+* `-f`, `--force` — Force overwrite if overlay already exists
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay library export`
+
+Export an overlay from the library
+
+**Usage:** `repoverlay library export [OPTIONS] --to <DEST> <OVERLAY>`
+
+###### **Arguments:**
+
+* `<OVERLAY>` — Name of the overlay to export
+
+###### **Options:**
+
+* `--to <DEST>` — Destination path
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay library remove`
+
+Remove an overlay from the library
+
+**Usage:** `repoverlay library remove [OPTIONS] <OVERLAY>`
+
+###### **Arguments:**
+
+* `<OVERLAY>` — Name of the overlay to remove
+
+###### **Options:**
+
+* `-f`, `--force` — Force removal even if overlay is currently applied
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 
 
 

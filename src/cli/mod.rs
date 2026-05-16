@@ -9,6 +9,7 @@ use colored::Colorize;
 use std::io::{self};
 use std::path::PathBuf;
 
+use crate::reference::SourceReference;
 use crate::{
     ConflictStrategy, apply_overlay, config, repair_git_exclude, restore_overlays, show_status,
     show_status_json, status_has_overlays, switch_overlay,
@@ -44,16 +45,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Apply an overlay to a git repository
+    /// Apply an overlay to a git repository (scripting / power-user)
     ///
-    /// For interactive use, consider `repoverlay browse` instead.
+    /// Applies an overlay directly from a path, GitHub URL, or configured source.
+    /// Intended for scripting and automation workflows.
+    ///
+    /// For interactive discovery and application, use `repoverlay browse` instead —
+    /// it lists available overlays and lets you select which to apply.
     Apply {
-        /// Path to overlay source directory OR GitHub URL
+        /// Overlay source: local path, GitHub URL, or configured source reference
         ///
-        /// Examples:
-        ///   ./my-overlay
+        /// Supported formats:
+        ///   ./my-overlay             (local path)
+        ///   /absolute/path           (local absolute path)
         ///   <https://github.com/owner/repo>
         ///   <https://github.com/owner/repo/tree/main/overlays/rust>
+        ///   org/repo/overlay-name    (configured source reference)
         source: String,
 
         /// Target repository directory (defaults to current directory)
@@ -721,6 +728,17 @@ pub(crate) fn run() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
+            // Nudge users toward `browse` when using the three-part configured-source syntax
+            // interactively; `apply` remains fully supported for scripting.
+            if matches!(
+                SourceReference::parse(&source),
+                SourceReference::ThreePart { .. }
+            ) {
+                eprintln!(
+                    "{} `repoverlay browse` is the recommended way to interactively discover and apply overlays.",
+                    "tip:".cyan().bold(),
+                );
+            }
             apply_overlay(
                 &source,
                 &target,
