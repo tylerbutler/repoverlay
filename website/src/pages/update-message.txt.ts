@@ -8,10 +8,11 @@ function getVersion(): string {
 		"utf-8",
 	);
 	const match = cargoToml.match(/^version\s*=\s*"(.+?)"/m);
-	if (!match) {
+	const version = match?.[1];
+	if (!version) {
 		throw new Error("Could not find version in Cargo.toml");
 	}
-	return match[1];
+	return version;
 }
 
 export const GET: APIRoute = () => {

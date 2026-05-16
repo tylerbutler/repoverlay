@@ -1,2 +1,7 @@
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - esbuild
+  - sharp
+
 overrides:
-  yaml@>=2.0.0 <2.8.3: '>=2.8.3'
+  yaml@>=2.0.0 <2.8.3: '>=2.9.0'

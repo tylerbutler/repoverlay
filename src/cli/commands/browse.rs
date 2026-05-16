@@ -95,8 +95,8 @@ fn print_overlay_list(overlays: &[AvailableOverlay], filtered: bool) {
     }
 
     println!(
-        "\nTo apply an overlay: repoverlay apply {}",
-        "<org>/<repo>/<name>".dimmed()
+        "\n{}",
+        "Run `repoverlay browse` in an interactive terminal to select and apply overlays.".dimmed()
     );
 }
 

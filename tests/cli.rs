@@ -34,7 +34,8 @@ fn apply_help_displays() {
         .args(["apply", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Apply an overlay"));
+        .stdout(predicate::str::contains("Apply an overlay"))
+        .stdout(predicate::str::contains("repoverlay browse"));
 }
 
 #[test]
@@ -119,6 +120,36 @@ fn browse_rejects_three_part_source() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("Invalid source for browse"));
+}
+
+#[test]
+fn apply_help_mentions_browse_for_interactive() {
+    // apply help text should guide interactive users toward browse
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("repoverlay browse"));
+}
+
+#[test]
+fn apply_help_mentions_scripting() {
+    // apply help text should clarify it is the scripting / power-user path
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("scripting"));
+}
+
+#[test]
+fn root_help_browse_listed_as_recommended() {
+    // top-level help should list browse as "recommended"
+    cargo_bin_cmd!("repoverlay")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("recommended"));
 }
 
 #[test]
