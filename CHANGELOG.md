@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.14.0 - 2026-05-16
+
+
+### Command: `browse`
+
+
+#### Changed
+
+##### Make `browse` the recommended interactive workflow
+
+The CLI help now points interactive users to `repoverlay browse` for discovering and applying overlays, while `repoverlay apply` is framed as the scripting and advanced workflow. Non-interactive `browse` output also tells users to run it in a terminal.
+
+
+### Command: `move`
+
+
+#### Added
+
+##### Add named source destinations to `repoverlay move`
+
+Use `repoverlay move --to source:<name>` to move an overlay into a configured overlay source. The target repository path is detected from the current git remote, or can be set explicitly with `--target-repo org/repo`.
+
+
 ## v0.13.0 - 2026-04-14
 
 

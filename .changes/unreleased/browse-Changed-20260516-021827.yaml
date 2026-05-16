@@ -1,9 +1,0 @@
-component: browse
-kind: Changed
-body: |-
-    Make `browse` the recommended interactive workflow
-
-    The CLI help now points interactive users to `repoverlay browse` for discovering and
-    applying overlays, while `repoverlay apply` is framed as the scripting and advanced
-    workflow. Non-interactive `browse` output also tells users to run it in a terminal.
-time: 2026-05-16T02:18:40.000000000+00:00
