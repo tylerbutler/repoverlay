@@ -8,7 +8,7 @@ use predicates::prelude::*;
 use std::fs;
 
 mod common;
-use common::{SourceTestContext, TestContext, envrc_overlay};
+use common::{SourceTestContext, TestContext, create_overlay_dir, envrc_overlay};
 
 #[test]
 fn help_displays() {
@@ -930,7 +930,52 @@ fn switch_help_shows_options() {
         .args(["switch", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Switch"));
+        .stdout(predicate::str::contains("Switch"))
+        .stdout(predicate::str::contains("--dry-run"));
+}
+
+#[test]
+fn switch_dry_run_previews_without_changing_overlays() {
+    let ctx = TestContext::new();
+    let overlay_a = create_overlay_dir(&[(".config-a", "alpha")]);
+    let overlay_b = create_overlay_dir(&[(".config-b", "beta")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            overlay_a.path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "overlay-a",
+        ])
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".config-a"));
+    assert!(!ctx.file_exists(".config-b"));
+    assert!(ctx.overlay_state_exists("overlay-a"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "switch",
+            overlay_b.path().to_str().unwrap(),
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--name",
+            "overlay-b",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run"))
+        .stdout(predicate::str::contains("would remove"))
+        .stdout(predicate::str::contains("Would apply"));
+
+    assert!(ctx.file_exists(".config-a"));
+    assert!(!ctx.file_exists(".config-b"));
+    assert!(ctx.overlay_state_exists("overlay-a"));
+    assert!(!ctx.overlay_state_exists("overlay-b"));
 }
 
 // ============================================================================
@@ -4628,6 +4673,184 @@ fn move_symlinks_recreated_pointing_to_new_location() {
     // Files should still be readable through the symlinks
     assert_eq!(ctx.read_file(".envrc"), "export FOO=bar");
     assert_eq!(ctx.read_file(".editorconfig"), "root = true");
+}
+
+// ============================================================================
+// Move to named source (issue #273)
+// ============================================================================
+
+#[test]
+fn move_to_named_source_local() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Set up a local overlay source directory (org/repo/name structure)
+    let overlays_root = ctx.repo_path().join("my-overlays");
+    fs::create_dir_all(&overlays_root).unwrap();
+
+    // Add the local source via `source add`
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "local-src"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Create and apply a library overlay so we have something to move
+    create_library_overlay(&ctx, "move-me", &[(".envrc", "export MOVED=1")]);
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "move-me",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.overlay_state_exists("move-me"));
+
+    // Move to source:local-src, specifying org/repo explicitly via --target-repo
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "move-me",
+            "--to",
+            "source:local-src",
+            "--target-repo",
+            "acme/my-app",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Commit and push"));
+
+    // Overlay file should be in the source under org/repo/name
+    let dest = ctx
+        .repo_path()
+        .join("my-overlays/acme/my-app/move-me/.envrc");
+    assert!(
+        dest.exists(),
+        "overlay file should exist in source: {}",
+        dest.display()
+    );
+
+    // State should be OverlayRepo
+    let state_content =
+        fs::read_to_string(ctx.repo_path().join(".repoverlay/overlays/move-me.ccl"))
+            .expect("state file should exist");
+    assert!(
+        state_content.contains("OverlayRepo"),
+        "state source should be OverlayRepo, got: {state_content}"
+    );
+
+    // Symlink should still work
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.is_symlink(".envrc"));
+}
+
+#[test]
+fn move_to_unknown_source_errors() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    create_library_overlay(&ctx, "err-overlay", &[(".envrc", "export E=1")]);
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "err-overlay",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Moving to a non-existent source should fail with a helpful message
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "err-overlay",
+            "--to",
+            "source:no-such-source",
+            "--target-repo",
+            "acme/my-app",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no-such-source"));
+}
+
+#[test]
+fn move_to_source_infers_org_repo_from_git_remote() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    // Set an origin remote so org/repo can be auto-detected
+    std::process::Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/my-app.git",
+        ])
+        .current_dir(ctx.repo_path())
+        .output()
+        .expect("Failed to add remote");
+
+    // Set up local source
+    let overlays_root = ctx.repo_path().join("overlays");
+    fs::create_dir_all(&overlays_root).unwrap();
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./overlays", "--name", "my-src"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Apply a library overlay
+    create_library_overlay(&ctx, "inferred-test", &[(".editorconfig", "root = true")]);
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "inferred-test",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Move without --target-repo — should infer acme/my-app from origin remote
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "move",
+            "inferred-test",
+            "--to",
+            "source:my-src",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success();
+
+    // Verify overlay landed at org/repo/name
+    let dest = ctx
+        .repo_path()
+        .join("overlays/acme/my-app/inferred-test/.editorconfig");
+    assert!(
+        dest.exists(),
+        "overlay should be at inferred path: {}",
+        dest.display()
+    );
 }
 
 // ============================================================================
