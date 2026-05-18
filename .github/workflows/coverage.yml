@@ -26,7 +26,7 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install tools
-        uses: taiki-e/install-action@3771e22aa892e03fd35585fae288baad1755695c # ratchet:taiki-e/install-action@v2
+        uses: taiki-e/install-action@b550161ef8a7bc4f2a671c0b03a18ac9ccedea1e # ratchet:taiki-e/install-action@v2
         with:
           tool: just,cargo-llvm-cov
 
