@@ -27,15 +27,6 @@ enum ManagedSourceBackend {
 }
 
 impl ManagedSourceBackend {
-    /// Whether this backend needs to be cloned before use.
-    #[allow(dead_code)] // Utility method for future use
-    fn needs_clone(&self) -> bool {
-        match self {
-            Self::Git(manager) => manager.needs_clone(),
-            Self::Local { .. } => false,
-        }
-    }
-
     /// The base path where overlays are stored.
     fn repo_path(&self) -> &Path {
         match self {
@@ -213,8 +204,8 @@ impl SourceManager {
                     if manager.needs_clone() {
                         continue;
                     }
-                    if let Ok((path, resolved_via)) =
-                        manager.get_overlay_path_with_fallback(org, repo, name, upstream)
+                    if let Some((path, resolved_via)) =
+                        manager.find_overlay_path_with_fallback(org, repo, name, upstream)?
                     {
                         let commit = manager.get_current_commit()?;
                         return Ok(Some(ResolvedOverlay {
@@ -282,7 +273,6 @@ impl SourceManager {
     ///
     /// Returns a list of (source, `resolved_via`) pairs for each source
     /// that has the overlay.
-    #[must_use]
     #[allow(dead_code)] // Utility method for future `resolve` command
     pub(crate) fn find_all_matches(
         &self,
@@ -290,7 +280,7 @@ impl SourceManager {
         repo: &str,
         name: &str,
         upstream: Option<&UpstreamInfo>,
-    ) -> Vec<(Source, ResolvedVia)> {
+    ) -> Result<Vec<(Source, ResolvedVia)>> {
         let mut matches = Vec::new();
 
         for ms in &self.sources {
@@ -299,8 +289,8 @@ impl SourceManager {
                     if manager.needs_clone() {
                         continue;
                     }
-                    if let Ok((_, resolved_via)) =
-                        manager.get_overlay_path_with_fallback(org, repo, name, upstream)
+                    if let Some((_, resolved_via)) =
+                        manager.find_overlay_path_with_fallback(org, repo, name, upstream)?
                     {
                         matches.push((ms.source.clone(), resolved_via));
                     }
@@ -323,7 +313,7 @@ impl SourceManager {
             }
         }
 
-        matches
+        Ok(matches)
     }
 
     /// List overlay names for a specific org/repo across all sources.
@@ -342,20 +332,16 @@ impl SourceManager {
                     if manager.needs_clone() {
                         continue;
                     }
-                    if let Ok(overlays) = manager.list_overlays_for_repo(org, repo) {
-                        for overlay in overlays {
-                            names.insert(OverlayName::try_new(overlay.name)?);
-                        }
+                    for overlay in manager.list_overlays_for_repo(org, repo)? {
+                        names.insert(OverlayName::try_new(overlay.name)?);
                     }
                 }
                 ManagedSourceBackend::Local { path: base_path } => {
-                    if let Ok(overlays) = list_overlays_in_dir(base_path) {
-                        for overlay in overlays {
-                            if overlay.org.eq_ignore_ascii_case(org)
-                                && overlay.repo.eq_ignore_ascii_case(repo)
-                            {
-                                names.insert(OverlayName::try_new(overlay.name)?);
-                            }
+                    for overlay in list_overlays_in_dir(base_path)? {
+                        if overlay.org.eq_ignore_ascii_case(org)
+                            && overlay.repo.eq_ignore_ascii_case(repo)
+                        {
+                            names.insert(OverlayName::try_new(overlay.name)?);
                         }
                     }
                 }
@@ -441,8 +427,8 @@ fn get_flat_overlay_path_in_dir(base: &Path, name: &str) -> Option<PathBuf> {
     let overlays = list_overlays_in_dir(base).ok()?;
     let overlay = overlays
         .iter()
-        .find(|overlay| overlay.flat && overlay.name.eq_ignore_ascii_case(name))?;
-    let overlay_path = base.join(overlay.relative_path());
+        .find(|overlay| overlay.is_flat() && overlay.name.eq_ignore_ascii_case(name))?;
+    let overlay_path = base.join(overlay.source_relative_path());
     let canonical_overlay = overlay_path.canonicalize().ok()?;
     let canonical_base = base.canonicalize().ok()?;
     if canonical_overlay.starts_with(canonical_base) && canonical_overlay.is_dir() {
@@ -572,20 +558,21 @@ fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
             continue;
         }
 
-        if path.is_dir() {
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("reading file type for {}", path.display()))?;
+
+        if file_type.is_dir() {
             has_overlay_dirs = true;
             let overlay_name = name;
             let has_config = path.join("repoverlay.ccl").exists();
             let relative_path = PathBuf::from(&overlay_name);
 
-            overlays.push(AvailableOverlay {
-                org: String::new(),
-                repo: String::new(),
-                name: overlay_name,
-                has_config,
-                flat: true,
+            overlays.push(AvailableOverlay::flat(
+                overlay_name,
                 relative_path,
-            });
+                has_config,
+            ));
         } else if is_overlay_file(&path) {
             has_root_files = true;
         }
@@ -599,14 +586,7 @@ fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
         );
         let has_config = base.join("repoverlay.ccl").exists();
 
-        overlays.push(AvailableOverlay {
-            org: String::new(),
-            repo: String::new(),
-            name: dir_name,
-            has_config,
-            flat: true,
-            relative_path: PathBuf::new(),
-        });
+        overlays.push(AvailableOverlay::flat(dir_name, PathBuf::new(), has_config));
     }
 
     overlays.sort_by(|a, b| a.name.cmp(&b.name));
@@ -680,18 +660,12 @@ fn list_overlays_in_structured_dir(base: &Path) -> Result<Vec<AvailableOverlay>>
 
                 let overlay_name = overlay_entry.file_name().to_string_lossy().to_string();
                 let has_config = overlay_path.join("repoverlay.ccl").exists();
-                let relative_path = PathBuf::from(&org_name)
-                    .join(&repo_name)
-                    .join(&overlay_name);
-
-                overlays.push(AvailableOverlay {
-                    org: org_name.clone(),
-                    repo: repo_name.clone(),
-                    name: overlay_name,
+                overlays.push(AvailableOverlay::structured(
+                    org_name.clone(),
+                    repo_name.clone(),
+                    overlay_name,
                     has_config,
-                    flat: false,
-                    relative_path,
-                });
+                ));
             }
         }
     }
@@ -1206,12 +1180,43 @@ mod tests {
         };
 
         // Should find in both sources
-        let matches =
-            manager.find_all_matches("microsoft", "FluidFramework", "claude-config", None);
+        let matches = manager
+            .find_all_matches("microsoft", "FluidFramework", "claude-config", None)
+            .unwrap();
 
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].0.name, "personal");
         assert_eq!(matches[1].0.name, "team");
+    }
+
+    #[test]
+    fn git_source_resolution_propagates_invalid_overlay_name() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("source");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        let source = Source {
+            name: "git-source".to_string(),
+            url: Some("file://dummy".to_string()),
+            path: None,
+        };
+        let manager = SourceManager {
+            sources: vec![ManagedSource {
+                source,
+                backend: ManagedSourceBackend::Git(
+                    OverlayRepoManager::new(OverlayRepoConfig {
+                        url: "file://dummy".to_string(),
+                        local_path: Some(repo_path),
+                    })
+                    .unwrap(),
+                ),
+            }],
+        };
+
+        let err = manager
+            .resolve("org", "repo", "../escape", None, None)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("path traversal"));
     }
 
     #[test]
@@ -2005,7 +2010,7 @@ mod tests {
         let overlays = list_overlays_in_dir(base).unwrap();
         assert_eq!(overlays.len(), 2);
 
-        assert!(overlays.iter().all(|o| o.flat));
+        assert!(overlays.iter().all(AvailableOverlay::is_flat));
         assert!(overlays.iter().all(|o| o.org.is_empty()));
         assert!(overlays.iter().all(|o| o.repo.is_empty()));
 
@@ -2033,7 +2038,7 @@ mod tests {
         assert_eq!(overlays.len(), 1);
 
         let overlay = &overlays[0];
-        assert!(overlay.flat);
+        assert!(overlay.is_flat());
         assert!(overlay.has_config);
         assert!(overlay.org.is_empty());
         assert!(overlay.repo.is_empty());
@@ -2050,8 +2055,8 @@ mod tests {
         let overlays = list_overlays_in_dir(base).unwrap();
 
         assert_eq!(overlays.len(), 1);
-        assert!(overlays[0].flat);
-        assert_eq!(overlays[0].relative_path(), PathBuf::new());
+        assert!(overlays[0].is_flat());
+        assert_eq!(overlays[0].source_relative_path(), PathBuf::new());
     }
 
     #[test]
@@ -2063,8 +2068,8 @@ mod tests {
         let overlays = list_overlays_in_dir(base).unwrap();
 
         assert_eq!(overlays.len(), 1);
-        assert!(overlays[0].flat);
-        assert_eq!(overlays[0].relative_path(), PathBuf::new());
+        assert!(overlays[0].is_flat());
+        assert_eq!(overlays[0].source_relative_path(), PathBuf::new());
     }
 
     #[test]
@@ -2080,7 +2085,7 @@ mod tests {
 
         assert_eq!(overlays.len(), 1);
         assert_eq!(overlays[0].name, "config-a");
-        assert_eq!(overlays[0].relative_path(), Path::new("config-a"));
+        assert_eq!(overlays[0].source_relative_path(), Path::new("config-a"));
     }
 
     #[test]
@@ -2103,53 +2108,58 @@ mod tests {
         assert_eq!(overlays[0].name, "visible");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn flat_source_listing_ignores_symlinked_directories() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join(".envrc"), "export SECRET=1").unwrap();
+        symlink(&outside, source.join("escape")).unwrap();
+
+        let overlays = list_overlays_in_dir(&source).unwrap();
+
+        assert!(overlays.is_empty());
+    }
+
     #[test]
     fn test_flat_overlay_relative_path() {
         use crate::overlay_repo::AvailableOverlay;
 
-        let flat = AvailableOverlay {
-            org: String::new(),
-            repo: String::new(),
-            name: "my-config".to_string(),
-            has_config: true,
-            flat: true,
-            relative_path: PathBuf::from("my-config"),
-        };
-        assert_eq!(flat.relative_path(), Path::new("my-config"));
+        let flat =
+            AvailableOverlay::flat("my-config".to_string(), PathBuf::from("my-config"), true);
+        assert_eq!(flat.source_relative_path(), Path::new("my-config"));
 
-        let structured = AvailableOverlay {
-            org: "org".to_string(),
-            repo: "repo".to_string(),
-            name: "overlay".to_string(),
-            has_config: false,
-            flat: false,
-            relative_path: PathBuf::from("org/repo/overlay"),
-        };
-        assert_eq!(structured.relative_path(), Path::new("org/repo/overlay"));
+        let structured = AvailableOverlay::structured(
+            "org".to_string(),
+            "repo".to_string(),
+            "overlay".to_string(),
+            false,
+        );
+        assert_eq!(
+            structured.source_relative_path(),
+            Path::new("org/repo/overlay")
+        );
     }
 
     #[test]
     fn test_flat_overlay_display() {
         use crate::overlay_repo::AvailableOverlay;
 
-        let flat = AvailableOverlay {
-            org: String::new(),
-            repo: String::new(),
-            name: "my-config".to_string(),
-            has_config: true,
-            flat: true,
-            relative_path: PathBuf::from("my-config"),
-        };
+        let flat =
+            AvailableOverlay::flat("my-config".to_string(), PathBuf::from("my-config"), true);
         assert_eq!(flat.to_string(), "my-config");
 
-        let structured = AvailableOverlay {
-            org: "org".to_string(),
-            repo: "repo".to_string(),
-            name: "overlay".to_string(),
-            has_config: false,
-            flat: false,
-            relative_path: PathBuf::from("org/repo/overlay"),
-        };
+        let structured = AvailableOverlay::structured(
+            "org".to_string(),
+            "repo".to_string(),
+            "overlay".to_string(),
+            false,
+        );
         assert_eq!(structured.to_string(), "org/repo/overlay");
     }
 
@@ -2169,7 +2179,7 @@ mod tests {
 
         let overlays = list_overlays_in_dir(base).unwrap();
         assert_eq!(overlays.len(), 2);
-        assert!(overlays.iter().all(|o| !o.flat));
+        assert!(overlays.iter().all(|o| !o.is_flat()));
 
         let names: Vec<String> = overlays
             .iter()
@@ -2240,15 +2250,6 @@ mod tests {
 
         let commit = manager.get_source_commit("local").unwrap();
         assert_eq!(commit, "local");
-    }
-
-    #[test]
-    fn test_local_source_needs_clone_false() {
-        let temp = TempDir::new().unwrap();
-        let local_backend = ManagedSourceBackend::Local {
-            path: temp.path().to_path_buf(),
-        };
-        assert!(!local_backend.needs_clone());
     }
 
     #[test]
@@ -2423,7 +2424,9 @@ mod tests {
 
         let manager = SourceManager::new(sources, Some(repo_root)).unwrap();
 
-        let matches = manager.find_all_matches("org", "repo", "overlay", None);
+        let matches = manager
+            .find_all_matches("org", "repo", "overlay", None)
+            .unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].0.name, "local");
         assert_eq!(matches[0].1, ResolvedVia::Direct);

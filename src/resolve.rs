@@ -685,17 +685,12 @@ pub(crate) fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableO
         for (repo_dir, repo_name) in visible_subdirs(&org_path)? {
             for (overlay_path, overlay_name) in visible_subdirs(&repo_dir)? {
                 let has_config = overlay_path.join("repoverlay.ccl").exists();
-                let relative_path = PathBuf::from(&org_name)
-                    .join(&repo_name)
-                    .join(&overlay_name);
-                overlays.push(AvailableOverlay {
-                    org: org_name.clone(),
-                    repo: repo_name.clone(),
-                    name: overlay_name,
+                overlays.push(AvailableOverlay::structured(
+                    org_name.clone(),
+                    repo_name.clone(),
+                    overlay_name,
                     has_config,
-                    flat: false,
-                    relative_path,
-                });
+                ));
             }
         }
     }
@@ -861,17 +856,28 @@ fn resolve_from_sources_with_suggestions(
 
     // Resolve overlay from sources
     if let Some(resolved) = manager.resolve(org, repo, name, upstream, source_filter)? {
-        if resolved.flat {
+        if resolved.source.is_local() {
             let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
-            println!(
-                "{} overlay: {}{}",
-                "Resolving".blue().bold(),
-                name,
-                source_suffix,
-            );
+            if resolved.flat {
+                println!(
+                    "{} overlay: {}{}",
+                    "Resolving".blue().bold(),
+                    name,
+                    source_suffix,
+                );
+            } else {
+                println!(
+                    "{} overlay: {}/{}/{}{}",
+                    "Resolving".blue().bold(),
+                    org,
+                    repo,
+                    name,
+                    source_suffix,
+                );
+            }
             return Ok(ResolvedSource {
                 path: resolved.path.clone(),
-                source_info: OverlaySource::local(resolved.path),
+                source_info: OverlaySource::configured_local(resolved.path, resolved.source.name),
             });
         }
 
@@ -898,6 +904,13 @@ fn resolve_from_sources_with_suggestions(
             via_suffix,
             source_suffix,
         );
+
+        if resolved.source.is_local() {
+            return Ok(ResolvedSource {
+                path: resolved.path.clone(),
+                source_info: OverlaySource::configured_local(resolved.path, resolved.source.name),
+            });
+        }
 
         return Ok(ResolvedSource {
             path: resolved.path,
@@ -991,8 +1004,8 @@ fn resolve_one_part_from_configured_source(
             source_suffix,
         );
 
-        let source_info = if resolved.flat {
-            OverlaySource::local(resolved.path.clone())
+        let source_info = if resolved.source.is_local() {
+            OverlaySource::configured_local(resolved.path.clone(), resolved.source.name)
         } else {
             OverlaySource::overlay_repo_full(
                 String::new(),
@@ -1153,7 +1166,7 @@ mod tests {
 
             assert_eq!(source.path, PathBuf::from("/some/path"));
             match source.source_info {
-                OverlaySource::Local { path } => {
+                OverlaySource::Local { path, .. } => {
                     assert_eq!(path, PathBuf::from("/origin"));
                 }
                 _ => panic!("Expected Local source"),
@@ -1234,7 +1247,10 @@ mod tests {
                 ResolvedSources::Single(source) => {
                     assert_eq!(source.path, overlay);
                     match source.source_info {
-                        OverlaySource::Local { path } => assert_eq!(path, overlay),
+                        OverlaySource::Local { path, source_name } => {
+                            assert_eq!(path, overlay);
+                            assert_eq!(source_name.as_deref(), Some("local"));
+                        }
                         other => panic!("expected local source, got {other:?}"),
                     }
                 }

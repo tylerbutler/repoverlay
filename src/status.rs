@@ -189,7 +189,7 @@ pub(crate) fn show_single_overlay_status(target: &Path, name: &str) -> Result<()
 
     // Display source based on type
     match &state.source {
-        OverlaySource::Local { path } => {
+        OverlaySource::Local { path, .. } => {
             println!("    Source:  {}", path.display());
         }
         OverlaySource::GitHub {
