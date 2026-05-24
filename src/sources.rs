@@ -204,6 +204,10 @@ impl SourceManager {
                     if manager.needs_clone() {
                         continue;
                     }
+                    // Git sources require org/repo addressing; flat lookup is local-only.
+                    if org.is_empty() || repo.is_empty() {
+                        continue;
+                    }
                     if let Some((path, resolved_via)) =
                         manager.find_overlay_path_with_fallback(org, repo, name, upstream)?
                     {
@@ -1217,6 +1221,36 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("path traversal"));
+    }
+
+    #[test]
+    fn git_source_resolution_with_empty_org_or_repo_returns_none() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("source");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        let source = Source {
+            name: "git-source".to_string(),
+            url: Some("file://dummy".to_string()),
+            path: None,
+        };
+        let manager = SourceManager {
+            sources: vec![ManagedSource {
+                source,
+                backend: ManagedSourceBackend::Git(
+                    OverlayRepoManager::new(OverlayRepoConfig {
+                        url: "file://dummy".to_string(),
+                        local_path: Some(repo_path),
+                    })
+                    .unwrap(),
+                ),
+            }],
+        };
+
+        let resolved = manager
+            .resolve("", "", "some-overlay", None, Some("git-source"))
+            .unwrap();
+
+        assert!(resolved.is_none());
     }
 
     #[test]
