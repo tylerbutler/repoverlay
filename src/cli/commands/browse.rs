@@ -211,6 +211,7 @@ pub(crate) fn browse_overlays(
                 name: lib_overlay.name.clone(),
                 has_config: true,
                 flat: true,
+                relative_path: lib_overlay.name.clone().into(),
             });
         }
     }
@@ -239,20 +240,14 @@ pub(crate) fn browse_overlays(
         let base_path = mgr
             .get_source_base_path(&source.name)
             .ok_or_else(|| anyhow::anyhow!("Source base path not found: {}", source.name))?;
-        let overlay_path = base_path.join(&o.org).join(&o.repo).join(&o.name);
         let commit = mgr.get_source_commit(&source.name)?;
 
-        Ok(ResolvedSource {
-            path: overlay_path,
-            source_info: OverlaySource::overlay_repo_full(
-                o.org.clone(),
-                o.repo.clone(),
-                o.name.clone(),
-                commit,
-                ResolvedVia::Direct,
-                source.name.clone(),
-            ),
-        })
+        Ok(resolve_configured_browse_source(
+            base_path,
+            o,
+            commit,
+            source.name.clone(),
+        ))
     };
 
     browse_and_apply(
@@ -400,16 +395,7 @@ fn browse_local_source(
     };
 
     let local_base = local_path.to_path_buf();
-    let build_source_info = move |o: &AvailableOverlay| {
-        let overlay_path = local_base.join(o.relative_path());
-        if !overlay_path.exists() {
-            bail!("Overlay directory not found: {}", overlay_path.display());
-        }
-        Ok(ResolvedSource {
-            path: overlay_path,
-            source_info: OverlaySource::local(local_base.clone()),
-        })
-    };
+    let build_source_info = move |o: &AvailableOverlay| resolve_local_browse_source(&local_base, o);
 
     browse_and_apply(
         overlays,
@@ -420,6 +406,43 @@ fn browse_local_source(
         show_all,
         build_source_info,
     )
+}
+
+fn resolve_local_browse_source(local_base: &Path, o: &AvailableOverlay) -> Result<ResolvedSource> {
+    let overlay_path = local_base.join(o.relative_path());
+    if !overlay_path.exists() {
+        bail!("Overlay directory not found: {}", overlay_path.display());
+    }
+    Ok(ResolvedSource {
+        path: overlay_path.clone(),
+        source_info: OverlaySource::local(overlay_path),
+    })
+}
+
+fn resolve_configured_browse_source(
+    base_path: &Path,
+    o: &AvailableOverlay,
+    commit: impl Into<String>,
+    source_name: impl Into<String>,
+) -> ResolvedSource {
+    let overlay_path = base_path.join(o.relative_path());
+    let source_info = if o.flat {
+        OverlaySource::local(overlay_path.clone())
+    } else {
+        OverlaySource::overlay_repo_full(
+            o.org.clone(),
+            o.repo.clone(),
+            o.name.clone(),
+            commit.into(),
+            ResolvedVia::Direct,
+            source_name.into(),
+        )
+    };
+
+    ResolvedSource {
+        path: overlay_path,
+        source_info,
+    }
 }
 
 /// Shared logic for browse: filter, display, select, and apply overlays.
@@ -511,4 +534,92 @@ where
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flat_overlay(name: &str, relative_path: &str) -> AvailableOverlay {
+        AvailableOverlay {
+            org: String::new(),
+            repo: String::new(),
+            name: name.to_string(),
+            has_config: false,
+            flat: true,
+            relative_path: PathBuf::from(relative_path),
+        }
+    }
+
+    fn structured_overlay() -> AvailableOverlay {
+        AvailableOverlay {
+            org: "owner".to_string(),
+            repo: "repo".to_string(),
+            name: "config".to_string(),
+            has_config: false,
+            flat: false,
+            relative_path: PathBuf::from("owner/repo/config"),
+        }
+    }
+
+    #[test]
+    fn local_browse_flat_subdirectory_records_overlay_path() {
+        let source = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(source.path().join("config-a")).unwrap();
+        let overlay = flat_overlay("config-a", "config-a");
+
+        let resolved = resolve_local_browse_source(source.path(), &overlay).unwrap();
+
+        assert_eq!(resolved.path, source.path().join("config-a"));
+        match resolved.source_info {
+            OverlaySource::Local { path } => assert_eq!(path, source.path().join("config-a")),
+            other => panic!("expected local source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn configured_browse_flat_subdirectory_records_local_overlay_path() {
+        let source = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(source.path().join("config-a")).unwrap();
+        let overlay = flat_overlay("config-a", "config-a");
+
+        let resolved =
+            resolve_configured_browse_source(source.path(), &overlay, "local", "local-flat");
+
+        assert_eq!(resolved.path, source.path().join("config-a"));
+        match resolved.source_info {
+            OverlaySource::Local { path } => assert_eq!(path, source.path().join("config-a")),
+            other => panic!("expected local source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn configured_browse_structured_preserves_overlay_repo_source() {
+        let source = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(source.path().join("owner/repo/config")).unwrap();
+        let overlay = structured_overlay();
+
+        let resolved =
+            resolve_configured_browse_source(source.path(), &overlay, "abc123", "shared");
+
+        assert_eq!(resolved.path, source.path().join("owner/repo/config"));
+        match resolved.source_info {
+            OverlaySource::OverlayRepo {
+                org,
+                repo,
+                name,
+                commit,
+                resolved_via,
+                source_name,
+            } => {
+                assert_eq!(org, "owner");
+                assert_eq!(repo, "repo");
+                assert_eq!(name, "config");
+                assert_eq!(commit, "abc123");
+                assert_eq!(resolved_via, Some(ResolvedVia::Direct));
+                assert_eq!(source_name.as_deref(), Some("shared"));
+            }
+            other => panic!("expected overlay repo source, got {other:?}"),
+        }
+    }
 }

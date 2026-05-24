@@ -59,6 +59,8 @@ pub(crate) struct AvailableOverlay {
     ///
     /// Flat overlays use a simpler directory structure without org/repo nesting.
     pub(crate) flat: bool,
+    /// Source-relative path to the overlay directory.
+    pub(crate) relative_path: PathBuf,
 }
 
 impl std::fmt::Display for AvailableOverlay {
@@ -86,13 +88,11 @@ impl AvailableOverlay {
     ///
     /// For structured overlays: `org/repo/name`
     /// For flat overlays: just `name` (or empty if the base dir itself is the overlay)
-    pub(crate) fn relative_path(&self) -> std::path::PathBuf {
+    pub(crate) fn relative_path(&self) -> PathBuf {
         if self.flat {
-            std::path::PathBuf::from(&self.name)
+            self.relative_path.clone()
         } else {
-            std::path::PathBuf::from(&self.org)
-                .join(&self.repo)
-                .join(&self.name)
+            PathBuf::from(&self.org).join(&self.repo).join(&self.name)
         }
     }
 }
@@ -323,6 +323,9 @@ impl OverlayRepoManager {
 
                     // Check if it has a config file
                     let has_config = overlay_path.join("repoverlay.ccl").exists();
+                    let relative_path = PathBuf::from(&org_name)
+                        .join(&repo_name)
+                        .join(&overlay_name);
 
                     overlays.push(AvailableOverlay {
                         org: org_name.clone(),
@@ -330,6 +333,7 @@ impl OverlayRepoManager {
                         name: overlay_name,
                         has_config,
                         flat: false,
+                        relative_path,
                     });
                 }
             }
@@ -661,6 +665,7 @@ mod tests {
             name: "claude-config".to_string(),
             has_config: true,
             flat: false,
+            relative_path: PathBuf::from("microsoft/FluidFramework/claude-config"),
         };
 
         let cloned = overlay.clone();
@@ -1612,6 +1617,7 @@ mod tests {
             name: "vscode-setup".to_string(),
             has_config: true,
             flat: false,
+            relative_path: PathBuf::from("microsoft/FluidFramework/vscode-setup"),
         };
         assert_eq!(o.to_string(), "microsoft/FluidFramework/vscode-setup");
     }
@@ -1624,6 +1630,7 @@ mod tests {
             name: "vscode-setup".to_string(),
             has_config: true,
             flat: false,
+            relative_path: PathBuf::from("microsoft/FluidFramework/vscode-setup"),
         };
         let bold = o.display_bold();
         assert!(bold.contains("microsoft"));
@@ -1640,6 +1647,7 @@ mod tests {
                 name: "claude-config".to_string(),
                 has_config: true,
                 flat: false,
+                relative_path: PathBuf::from("microsoft/FluidFramework/claude-config"),
             },
             AvailableOverlay {
                 org: "owner".to_string(),
@@ -1647,6 +1655,7 @@ mod tests {
                 name: "my-overlay".to_string(),
                 has_config: false,
                 flat: false,
+                relative_path: PathBuf::from("owner/repo/my-overlay"),
             },
         ];
         let output: Vec<String> = overlays.iter().map(|o| format!("{o}")).collect();

@@ -96,6 +96,31 @@ fn browse_help_shows_source_argument() {
 }
 
 #[test]
+fn browse_local_flat_dotfile_root_lists_single_overlay() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let source_dir = ctx.repo_path().join("flat-source");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(source_dir.join(".envrc"), "export FOO=bar").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "browse",
+            "./flat-source",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--no-interactive",
+        ])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(flat)"))
+        .stdout(predicate::str::contains("flat-source"));
+}
+
+#[test]
 fn browse_rejects_nonexistent_local_path_source() {
     cargo_bin_cmd!("repoverlay")
         .args(["browse", "./my-overlay"])
@@ -470,6 +495,79 @@ fn apply_respects_path_mappings() {
         !ctx.file_exists(".envrc"),
         ".envrc should not exist (was mapped)"
     );
+}
+
+#[test]
+fn apply_from_configured_local_flat_subdirectory_source() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let source_dir = ctx.repo_path().join("overlays");
+    let overlay_dir = source_dir.join("config-a");
+    fs::create_dir_all(&overlay_dir).unwrap();
+    fs::write(overlay_dir.join(".envrc"), "export A=1").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./overlays", "--name", "local-flat"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "config-a",
+            "--from",
+            "local-flat",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert_eq!(ctx.read_file(".envrc"), "export A=1");
+    assert!(ctx.overlay_state_exists("config-a"));
+}
+
+#[test]
+fn apply_from_configured_local_flat_root_source() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let source_dir = ctx.repo_path().join("flat-source");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(source_dir.join(".envrc"), "export ROOT=1").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./flat-source", "--name", "local-flat"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "flat-source",
+            "--from",
+            "local-flat",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert_eq!(ctx.read_file(".envrc"), "export ROOT=1");
+    assert!(ctx.overlay_state_exists("flat-source"));
 }
 
 // ============================================================================

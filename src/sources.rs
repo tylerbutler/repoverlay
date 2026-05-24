@@ -62,6 +62,8 @@ pub(crate) struct ResolvedOverlay {
     pub(crate) resolved_via: ResolvedVia,
     /// Current commit SHA of the source repository.
     pub(crate) commit: String,
+    /// Whether the overlay came from a flat local source layout.
+    pub(crate) flat: bool,
 }
 
 /// Manager for multiple overlay sources.
@@ -220,20 +222,39 @@ impl SourceManager {
                             source: ms.source.clone(),
                             resolved_via,
                             commit,
+                            flat: false,
                         }));
                     }
                 }
                 ManagedSourceBackend::Local { path: base_path } => {
-                    if let Some(overlay_path) = get_overlay_path_in_dir(base_path, org, repo, name)
+                    let structured_overlay_path = if org.is_empty() || repo.is_empty() {
+                        None
+                    } else {
+                        get_overlay_path_in_dir(base_path, org, repo, name)
+                    };
+                    if let Some(overlay_path) = structured_overlay_path {
+                        return Ok(Some(ResolvedOverlay {
+                            path: overlay_path,
+                            source: ms.source.clone(),
+                            resolved_via: ResolvedVia::Direct,
+                            commit: String::from("local"),
+                            flat: false,
+                        }));
+                    }
+                    if (source_filter.is_some() || org.is_empty() || repo.is_empty())
+                        && let Some(overlay_path) = get_flat_overlay_path_in_dir(base_path, name)
                     {
                         return Ok(Some(ResolvedOverlay {
                             path: overlay_path,
                             source: ms.source.clone(),
                             resolved_via: ResolvedVia::Direct,
                             commit: String::from("local"),
+                            flat: true,
                         }));
                     }
                     if let Some(upstream_info) = upstream
+                        && !org.is_empty()
+                        && !repo.is_empty()
                         && let Some(overlay_path) = get_overlay_path_in_dir(
                             base_path,
                             &upstream_info.org,
@@ -246,6 +267,7 @@ impl SourceManager {
                             source: ms.source.clone(),
                             resolved_via: ResolvedVia::Upstream,
                             commit: String::from("local"),
+                            flat: false,
                         }));
                     }
                 }
@@ -415,6 +437,21 @@ fn get_overlay_path_in_dir(base: &Path, org: &str, repo: &str, name: &str) -> Op
     }
 }
 
+fn get_flat_overlay_path_in_dir(base: &Path, name: &str) -> Option<PathBuf> {
+    let overlays = list_overlays_in_dir(base).ok()?;
+    let overlay = overlays
+        .iter()
+        .find(|overlay| overlay.flat && overlay.name.eq_ignore_ascii_case(name))?;
+    let overlay_path = base.join(overlay.relative_path());
+    let canonical_overlay = overlay_path.canonicalize().ok()?;
+    let canonical_base = base.canonicalize().ok()?;
+    if canonical_overlay.starts_with(canonical_base) && canonical_overlay.is_dir() {
+        Some(overlay_path)
+    } else {
+        None
+    }
+}
+
 /// Validate path component safety for org/repo/overlay segments.
 fn is_valid_path_component(component: &str) -> bool {
     !component.is_empty()
@@ -437,44 +474,80 @@ pub(crate) enum SourceLayout {
 /// Detect whether a directory uses structured (org/repo/name) or flat layout.
 ///
 /// A directory is considered structured if any visible top-level subdirectory
-/// contains a visible subdirectory that itself contains a visible subdirectory
-/// (i.e., 3 levels of nesting exist). Otherwise it is flat.
+/// contains a visible subdirectory that itself contains a visible overlay
+/// directory with at least one descendant file. Otherwise it is flat.
 pub(crate) fn detect_source_layout(base: &Path) -> Result<SourceLayout> {
     if !base.exists() {
         return Ok(SourceLayout::Flat);
     }
 
-    for top_entry in fs::read_dir(base)? {
-        let top_entry = top_entry?;
-        if !top_entry.path().is_dir() || top_entry.file_name().to_string_lossy().starts_with('.') {
+    for top_entry in fs::read_dir(base).with_context(|| format!("reading {}", base.display()))? {
+        let top_entry =
+            top_entry.with_context(|| format!("reading entry in {}", base.display()))?;
+        if !is_visible_candidate_dir(&top_entry)? {
             continue;
         }
 
-        // Check if this top-level dir contains a subdir that contains a subdir
-        if let Ok(mid_entries) = fs::read_dir(top_entry.path()) {
-            for mid_entry in mid_entries {
-                let Ok(mid_entry) = mid_entry else { continue };
-                if !mid_entry.path().is_dir()
-                    || mid_entry.file_name().to_string_lossy().starts_with('.')
-                {
+        let top_path = top_entry.path();
+        for mid_entry in
+            fs::read_dir(&top_path).with_context(|| format!("reading {}", top_path.display()))?
+        {
+            let mid_entry =
+                mid_entry.with_context(|| format!("reading entry in {}", top_path.display()))?;
+            if !is_visible_candidate_dir(&mid_entry)? {
+                continue;
+            }
+
+            let mid_path = mid_entry.path();
+            for leaf_entry in fs::read_dir(&mid_path)
+                .with_context(|| format!("reading {}", mid_path.display()))?
+            {
+                let leaf_entry = leaf_entry
+                    .with_context(|| format!("reading entry in {}", mid_path.display()))?;
+                if !is_visible_candidate_dir(&leaf_entry)? {
                     continue;
                 }
 
-                if let Ok(leaf_entries) = fs::read_dir(mid_entry.path()) {
-                    for leaf_entry in leaf_entries {
-                        let Ok(leaf_entry) = leaf_entry else { continue };
-                        if leaf_entry.path().is_dir()
-                            && !leaf_entry.file_name().to_string_lossy().starts_with('.')
-                        {
-                            return Ok(SourceLayout::Structured);
-                        }
-                    }
+                if is_valid_structured_overlay_leaf(&leaf_entry.path())? {
+                    return Ok(SourceLayout::Structured);
                 }
             }
         }
     }
 
     Ok(SourceLayout::Flat)
+}
+
+fn is_visible_candidate_dir(entry: &fs::DirEntry) -> Result<bool> {
+    if entry.file_name().to_string_lossy().starts_with('.') {
+        return Ok(false);
+    }
+
+    let path = entry.path();
+    let file_type = entry
+        .file_type()
+        .with_context(|| format!("reading file type for {}", path.display()))?;
+    Ok(file_type.is_dir())
+}
+
+fn is_valid_structured_overlay_leaf(path: &Path) -> Result<bool> {
+    contains_any_file(path)
+}
+
+fn contains_any_file(path: &Path) -> Result<bool> {
+    for entry in fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
+        let entry = entry.with_context(|| format!("reading entry in {}", path.display()))?;
+        let entry_path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("reading file type for {}", entry_path.display()))?;
+
+        if file_type.is_file() || (file_type.is_dir() && contains_any_file(&entry_path)?) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// List overlays from a flat (non-nested) directory.
@@ -484,22 +557,26 @@ pub(crate) fn detect_source_layout(base: &Path) -> Result<SourceLayout> {
 /// overlay named after the directory.
 fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
     let mut overlays = Vec::new();
-    let mut has_subdirs = false;
-    let mut has_files = false;
+    let mut has_overlay_dirs = false;
+    let mut has_root_files = false;
 
     for entry in fs::read_dir(base)? {
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if name.starts_with('.') {
+        if is_hidden_name(&name) {
+            if is_overlay_file(&path) {
+                has_root_files = true;
+            }
             continue;
         }
 
         if path.is_dir() {
-            has_subdirs = true;
+            has_overlay_dirs = true;
             let overlay_name = name;
             let has_config = path.join("repoverlay.ccl").exists();
+            let relative_path = PathBuf::from(&overlay_name);
 
             overlays.push(AvailableOverlay {
                 org: String::new(),
@@ -507,13 +584,14 @@ fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
                 name: overlay_name,
                 has_config,
                 flat: true,
+                relative_path,
             });
-        } else {
-            has_files = true;
+        } else if is_overlay_file(&path) {
+            has_root_files = true;
         }
     }
 
-    if !has_subdirs && has_files {
+    if !has_overlay_dirs && has_root_files {
         // The directory itself is a single overlay (has files but no subdirs)
         let dir_name = base.file_name().map_or_else(
             || "overlay".to_string(),
@@ -527,11 +605,20 @@ fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
             name: dir_name,
             has_config,
             flat: true,
+            relative_path: PathBuf::new(),
         });
     }
 
     overlays.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(overlays)
+}
+
+fn is_hidden_name(name: &str) -> bool {
+    name.starts_with('.')
+}
+
+fn is_overlay_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// List all overlays in a directory, auto-detecting layout.
@@ -565,7 +652,7 @@ fn list_overlays_in_structured_dir(base: &Path) -> Result<Vec<AvailableOverlay>>
         let org_entry = org_entry?;
         let org_path = org_entry.path();
 
-        if !org_path.is_dir() || org_entry.file_name().to_string_lossy().starts_with('.') {
+        if !is_visible_candidate_dir(&org_entry)? {
             continue;
         }
 
@@ -575,7 +662,7 @@ fn list_overlays_in_structured_dir(base: &Path) -> Result<Vec<AvailableOverlay>>
             let repo_entry = repo_entry?;
             let repo_path = repo_entry.path();
 
-            if !repo_path.is_dir() || repo_entry.file_name().to_string_lossy().starts_with('.') {
+            if !is_visible_candidate_dir(&repo_entry)? {
                 continue;
             }
 
@@ -585,14 +672,17 @@ fn list_overlays_in_structured_dir(base: &Path) -> Result<Vec<AvailableOverlay>>
                 let overlay_entry = overlay_entry?;
                 let overlay_path = overlay_entry.path();
 
-                if !overlay_path.is_dir()
-                    || overlay_entry.file_name().to_string_lossy().starts_with('.')
+                if !is_visible_candidate_dir(&overlay_entry)?
+                    || !is_valid_structured_overlay_leaf(&overlay_path)?
                 {
                     continue;
                 }
 
                 let overlay_name = overlay_entry.file_name().to_string_lossy().to_string();
                 let has_config = overlay_path.join("repoverlay.ccl").exists();
+                let relative_path = PathBuf::from(&org_name)
+                    .join(&repo_name)
+                    .join(&overlay_name);
 
                 overlays.push(AvailableOverlay {
                     org: org_name.clone(),
@@ -600,6 +690,7 @@ fn list_overlays_in_structured_dir(base: &Path) -> Result<Vec<AvailableOverlay>>
                     name: overlay_name,
                     has_config,
                     flat: false,
+                    relative_path,
                 });
             }
         }
@@ -1569,6 +1660,59 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_flat_local_source_subdirectory_overlay() {
+        let temp = TempDir::new().unwrap();
+        let repo_root = temp.path();
+        let local_source = repo_root.join("overlays");
+        let overlay = local_source.join("config-a");
+        fs::create_dir_all(&overlay).unwrap();
+        fs::write(overlay.join(".envrc"), "export A=1").unwrap();
+
+        let manager = SourceManager::new(
+            vec![Source {
+                name: "local".to_string(),
+                url: None,
+                path: Some(PathBuf::from("overlays")),
+            }],
+            Some(repo_root),
+        )
+        .unwrap();
+
+        let resolved = manager
+            .resolve("", "", "config-a", None, Some("local"))
+            .unwrap();
+
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().path, overlay);
+    }
+
+    #[test]
+    fn test_resolve_flat_local_source_root_overlay() {
+        let temp = TempDir::new().unwrap();
+        let repo_root = temp.path();
+        let local_source = repo_root.join("my-overlay");
+        fs::create_dir_all(&local_source).unwrap();
+        fs::write(local_source.join(".envrc"), "export ROOT=1").unwrap();
+
+        let manager = SourceManager::new(
+            vec![Source {
+                name: "local".to_string(),
+                url: None,
+                path: Some(PathBuf::from("my-overlay")),
+            }],
+            Some(repo_root),
+        )
+        .unwrap();
+
+        let resolved = manager
+            .resolve("", "", "my-overlay", None, Some("local"))
+            .unwrap();
+
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().path, local_source);
+    }
+
+    #[test]
     fn test_local_source_with_upstream_fallback() {
         let temp = TempDir::new().unwrap();
         let repo_root = temp.path();
@@ -1746,6 +1890,61 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_structured_requires_leaf_overlay_files() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+        fs::create_dir_all(base.join("org").join("repo").join("empty-overlay")).unwrap();
+
+        let layout = detect_source_layout(base).unwrap();
+
+        assert_eq!(layout, SourceLayout::Flat);
+    }
+
+    #[test]
+    fn test_detect_structured_allows_dotfile_overlay_files() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+        let overlay = base.join("org").join("repo").join("overlay");
+        fs::create_dir_all(&overlay).unwrap();
+        fs::write(overlay.join(".envrc"), "export FOO=bar").unwrap();
+
+        let layout = detect_source_layout(base).unwrap();
+
+        assert_eq!(layout, SourceLayout::Structured);
+    }
+
+    #[test]
+    fn test_detect_structured_allows_nested_only_overlay_files() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+        let workflow_dir = base
+            .join("org")
+            .join("repo")
+            .join("overlay")
+            .join(".github")
+            .join("workflows");
+        fs::create_dir_all(&workflow_dir).unwrap();
+        fs::write(workflow_dir.join("ci.yml"), "name: ci").unwrap();
+
+        let layout = detect_source_layout(base).unwrap();
+
+        assert_eq!(layout, SourceLayout::Structured);
+    }
+
+    #[test]
+    fn test_list_structured_dir_omits_empty_overlay_leaves() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+        create_local_source_dir(base, &[("org", "repo", "populated")]);
+        fs::create_dir_all(base.join("org").join("repo").join("empty")).unwrap();
+
+        let overlays = list_overlays_in_dir(base).unwrap();
+
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0].name, "populated");
+    }
+
+    #[test]
     fn test_detect_flat_layout_with_subdirs() {
         let temp = TempDir::new().unwrap();
         let base = temp.path();
@@ -1843,6 +2042,48 @@ mod tests {
     }
 
     #[test]
+    fn test_flat_root_overlay_relative_path_is_empty() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+        fs::write(base.join(".envrc"), "export FOO=bar").unwrap();
+
+        let overlays = list_overlays_in_dir(base).unwrap();
+
+        assert_eq!(overlays.len(), 1);
+        assert!(overlays[0].flat);
+        assert_eq!(overlays[0].relative_path(), PathBuf::new());
+    }
+
+    #[test]
+    fn test_list_flat_dir_dotfile_only_single_overlay() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+        fs::write(base.join(".envrc"), "export FOO=bar").unwrap();
+
+        let overlays = list_overlays_in_dir(base).unwrap();
+
+        assert_eq!(overlays.len(), 1);
+        assert!(overlays[0].flat);
+        assert_eq!(overlays[0].relative_path(), PathBuf::new());
+    }
+
+    #[test]
+    fn test_flat_dir_with_subdirs_ignores_root_files_for_discovery() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+        fs::write(base.join(".envrc"), "root file ignored for discovery").unwrap();
+        let overlay_a = base.join("config-a");
+        fs::create_dir_all(&overlay_a).unwrap();
+        fs::write(overlay_a.join(".envrc"), "export A=1").unwrap();
+
+        let overlays = list_overlays_in_dir(base).unwrap();
+
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0].name, "config-a");
+        assert_eq!(overlays[0].relative_path(), Path::new("config-a"));
+    }
+
+    #[test]
     fn test_list_flat_dir_skips_hidden() {
         let temp = TempDir::new().unwrap();
         let base = temp.path();
@@ -1872,6 +2113,7 @@ mod tests {
             name: "my-config".to_string(),
             has_config: true,
             flat: true,
+            relative_path: PathBuf::from("my-config"),
         };
         assert_eq!(flat.relative_path(), Path::new("my-config"));
 
@@ -1881,6 +2123,7 @@ mod tests {
             name: "overlay".to_string(),
             has_config: false,
             flat: false,
+            relative_path: PathBuf::from("org/repo/overlay"),
         };
         assert_eq!(structured.relative_path(), Path::new("org/repo/overlay"));
     }
@@ -1895,6 +2138,7 @@ mod tests {
             name: "my-config".to_string(),
             has_config: true,
             flat: true,
+            relative_path: PathBuf::from("my-config"),
         };
         assert_eq!(flat.to_string(), "my-config");
 
@@ -1904,6 +2148,7 @@ mod tests {
             name: "overlay".to_string(),
             has_config: false,
             flat: false,
+            relative_path: PathBuf::from("org/repo/overlay"),
         };
         assert_eq!(structured.to_string(), "org/repo/overlay");
     }

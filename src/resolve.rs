@@ -194,6 +194,16 @@ pub(crate) fn resolve_source(
         );
     }
 
+    if source_filter.is_some() && is_unqualified_overlay_name(source_str) {
+        return resolve_one_part_from_configured_source(
+            source_str,
+            target_path,
+            source_filter,
+            update,
+        )
+        .map(ResolvedSources::Single);
+    }
+
     // Parse input into structured reference
     let reference = SourceReference::parse(source_str);
     debug!("parsed reference: {reference:?}");
@@ -274,6 +284,11 @@ pub(crate) fn resolve_source(
             None,
         ),
 
+        SourceReference::OnePart { username } if source_filter.is_some() => {
+            resolve_one_part_from_configured_source(&username, target_path, source_filter, update)
+                .map(ResolvedSources::Single)
+        }
+
         SourceReference::OnePart { username } => {
             // Before treating as a GitHub username, check if this is an applied
             // overlay name that could be resolved from its source. This catches
@@ -313,6 +328,13 @@ pub(crate) fn resolve_source(
             )
         }
     }
+}
+
+fn is_unqualified_overlay_name(source_str: &str) -> bool {
+    !source_str.is_empty()
+        && !source_str.contains('/')
+        && !source_str.starts_with('.')
+        && source_str != "~"
 }
 
 /// Resolve a GitHub URL source.
@@ -663,12 +685,16 @@ pub(crate) fn list_overlays_from_path(repo_path: &Path) -> Result<Vec<AvailableO
         for (repo_dir, repo_name) in visible_subdirs(&org_path)? {
             for (overlay_path, overlay_name) in visible_subdirs(&repo_dir)? {
                 let has_config = overlay_path.join("repoverlay.ccl").exists();
+                let relative_path = PathBuf::from(&org_name)
+                    .join(&repo_name)
+                    .join(&overlay_name);
                 overlays.push(AvailableOverlay {
                     org: org_name.clone(),
                     repo: repo_name.clone(),
                     name: overlay_name,
                     has_config,
                     flat: false,
+                    relative_path,
                 });
             }
         }
@@ -831,18 +857,24 @@ fn resolve_from_sources_with_suggestions(
 ) -> Result<ResolvedSource> {
     let manager = sources::SourceManager::new(sources.to_vec(), repo_root)?;
 
-    // Ensure all sources are cloned and up-to-date
-    manager.ensure_all_cloned()?;
-
-    if update {
-        println!("{} overlay sources...", "Updating".blue().bold());
-        manager.pull_all()?;
-    } else {
-        debug!("skipping overlay source update (--no-update)");
-    }
+    prepare_sources_for_resolution(&manager, sources, source_filter, update)?;
 
     // Resolve overlay from sources
     if let Some(resolved) = manager.resolve(org, repo, name, upstream, source_filter)? {
+        if resolved.flat {
+            let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
+            println!(
+                "{} overlay: {}{}",
+                "Resolving".blue().bold(),
+                name,
+                source_suffix,
+            );
+            return Ok(ResolvedSource {
+                path: resolved.path.clone(),
+                source_info: OverlaySource::local(resolved.path),
+            });
+        }
+
         // Determine actual org/repo for state tracking
         let via_upstream = resolved.resolved_via == state::ResolvedVia::Upstream;
         let (actual_org, actual_repo) = match (upstream, via_upstream) {
@@ -885,6 +917,137 @@ fn resolve_from_sources_with_suggestions(
     let source_list = manager.source_names().join(", ");
     let error_msg = format_not_found_error(org, repo, name, &suggestions, Some(&source_list));
     bail!("{error_msg}")
+}
+
+/// Resolve a one-part overlay name from an explicitly configured source.
+///
+/// Used for `apply <name> --from <source>` before falling back to GitHub username
+/// expansion, so flat local sources can be addressed by overlay name.
+fn resolve_one_part_from_configured_source(
+    name: &str,
+    target_path: Option<&Path>,
+    source_filter: Option<&str>,
+    update: bool,
+) -> Result<ResolvedSource> {
+    let config = config::load_config(target_path)?;
+    if config.sources.is_empty() {
+        bail!(
+            "Overlay source not configured.\n\n\
+             Add a source with: repoverlay source add <url-or-path>"
+        );
+    }
+
+    let manager = sources::SourceManager::new(config.sources.clone(), target_path)?;
+    prepare_sources_for_resolution(&manager, &config.sources, source_filter, update)?;
+
+    let upstream = target_path.and_then(|p| detect_upstream(p).ok()).flatten();
+    if let Some((org, repo)) = target_path
+        .and_then(|p| upstream::detect_repo_identity(p).ok().flatten())
+        .and_then(|identity| identity.origin.or(identity.upstream))
+        && let Some(resolved) =
+            manager.resolve(&org, &repo, name, upstream.as_ref(), source_filter)?
+        && !resolved.flat
+    {
+        let via_upstream = resolved.resolved_via == state::ResolvedVia::Upstream;
+        let (actual_org, actual_repo) = match (upstream.as_ref(), via_upstream) {
+            (Some(up), true) => (up.org.clone(), up.repo.clone()),
+            _ => (org, repo),
+        };
+        let via_suffix = if via_upstream {
+            " (via upstream)".dimmed().to_string()
+        } else {
+            String::new()
+        };
+        let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
+        println!(
+            "{} overlay: {}/{}/{}{}{}",
+            "Resolving".blue().bold(),
+            actual_org,
+            actual_repo,
+            name,
+            via_suffix,
+            source_suffix,
+        );
+
+        return Ok(ResolvedSource {
+            path: resolved.path,
+            source_info: OverlaySource::overlay_repo_full(
+                actual_org,
+                actual_repo,
+                name.to_string(),
+                resolved.commit,
+                resolved.resolved_via,
+                resolved.source.name,
+            ),
+        });
+    }
+
+    if let Some(resolved) = manager.resolve("", "", name, None, source_filter)? {
+        let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
+        println!(
+            "{} overlay: {}{}",
+            "Resolving".blue().bold(),
+            name,
+            source_suffix,
+        );
+
+        let source_info = if resolved.flat {
+            OverlaySource::local(resolved.path.clone())
+        } else {
+            OverlaySource::overlay_repo_full(
+                String::new(),
+                String::new(),
+                name.to_string(),
+                resolved.commit,
+                resolved.resolved_via,
+                resolved.source.name,
+            )
+        };
+
+        return Ok(ResolvedSource {
+            path: resolved.path,
+            source_info,
+        });
+    }
+
+    let suggestions = get_fuzzy_suggestions_multi_source(&manager, "", "", name);
+    let source_list = manager.source_names().join(", ");
+    let error_msg = format_not_found_error("", "", name, &suggestions, Some(&source_list));
+    bail!("{error_msg}")
+}
+
+fn prepare_sources_for_resolution(
+    manager: &sources::SourceManager,
+    sources: &[config::Source],
+    source_filter: Option<&str>,
+    update: bool,
+) -> Result<()> {
+    if selected_sources_are_all_local(sources, source_filter) {
+        debug!("skipping overlay source clone/update for local-only source selection");
+        return Ok(());
+    }
+
+    manager.ensure_all_cloned()?;
+
+    if update {
+        println!("{} overlay sources...", "Updating".blue().bold());
+        manager.pull_all()?;
+    } else {
+        debug!("skipping overlay source update (--no-update)");
+    }
+
+    Ok(())
+}
+
+fn selected_sources_are_all_local(sources: &[config::Source], source_filter: Option<&str>) -> bool {
+    if let Some(filter_name) = source_filter {
+        return sources
+            .iter()
+            .find(|source| source.name == filter_name)
+            .is_none_or(config::Source::is_local);
+    }
+
+    !sources.is_empty() && sources.iter().all(config::Source::is_local)
 }
 
 /// Get fuzzy suggestions for overlay names from multi-source config.
@@ -1036,6 +1199,46 @@ mod tests {
                     assert_eq!(v[1].path, PathBuf::from("/path/b"));
                 }
                 ResolvedSources::Single(_) => panic!("Expected Multiple variant"),
+            }
+        }
+    }
+
+    mod configured_source_tests {
+        use super::*;
+
+        #[test]
+        fn one_part_with_source_filter_resolves_flat_local_source() {
+            let temp = TempDir::new().unwrap();
+            let repo_root = temp.path();
+            let local_source = repo_root.join("overlays");
+            let overlay = local_source.join("config-a");
+            fs::create_dir_all(&overlay).unwrap();
+            fs::write(overlay.join(".envrc"), "export A=1").unwrap();
+            config::save_repo_config(
+                repo_root,
+                &config::RepoverlayConfig {
+                    sources: vec![config::Source {
+                        name: "local".to_string(),
+                        url: None,
+                        path: Some(PathBuf::from("overlays")),
+                    }],
+                    library_path: None,
+                },
+            )
+            .unwrap();
+
+            let resolved =
+                resolve_source("config-a", None, false, Some(repo_root), Some("local")).unwrap();
+
+            match resolved {
+                ResolvedSources::Single(source) => {
+                    assert_eq!(source.path, overlay);
+                    match source.source_info {
+                        OverlaySource::Local { path } => assert_eq!(path, overlay),
+                        other => panic!("expected local source, got {other:?}"),
+                    }
+                }
+                ResolvedSources::Multiple(_) => panic!("expected single source"),
             }
         }
     }
