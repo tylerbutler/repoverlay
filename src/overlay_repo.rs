@@ -413,36 +413,6 @@ impl OverlayRepoManager {
         Ok(path)
     }
 
-    /// Get the path to a specific overlay with upstream fallback.
-    ///
-    /// Resolution order:
-    /// 1. Try exact match: `org/repo/name`
-    /// 2. If upstream provided, try: `upstream.org/upstream.repo/name`
-    ///
-    /// Returns the path and how it was resolved.
-    #[allow(dead_code)]
-    pub(crate) fn get_overlay_path_with_fallback(
-        &self,
-        org: &str,
-        repo: &str,
-        name: &str,
-        upstream: Option<&UpstreamInfo>,
-    ) -> Result<(PathBuf, ResolvedVia)> {
-        if let Some(found) = self.find_overlay_path_with_fallback(org, repo, name, upstream)? {
-            return Ok(found);
-        }
-
-        // Nothing found - provide helpful error
-        let mut msg = format!("Overlay not found: {org}/{repo}/{name}");
-        if let Some(up) = upstream {
-            use std::fmt::Write;
-            let up_org = &up.org;
-            let up_repo = &up.repo;
-            let _ = write!(msg, "\nAlso checked upstream: {up_org}/{up_repo}/{name}");
-        }
-        bail!("{msg}");
-    }
-
     /// Find the path to a specific overlay with upstream fallback.
     ///
     /// Returns `Ok(None)` only when the overlay is absent. Invalid input and
@@ -1161,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_overlay_path_with_fallback_direct_match() {
+    fn test_find_overlay_path_with_fallback_direct_match() {
         let temp = TempDir::new().unwrap();
         let repo_path = temp.path().join("overlay-repo");
         fs::create_dir_all(repo_path.join(".git")).unwrap();
@@ -1180,20 +1150,21 @@ mod tests {
         });
 
         let (path, resolved_via) = manager
-            .get_overlay_path_with_fallback(
+            .find_overlay_path_with_fallback(
                 "tylerbutler",
                 "FluidFramework",
                 "claude-config",
                 upstream.as_ref(),
             )
-            .unwrap();
+            .unwrap()
+            .expect("overlay should be found");
 
         assert!(path.ends_with("tylerbutler/FluidFramework/claude-config"));
         assert_eq!(resolved_via, crate::state::ResolvedVia::Direct);
     }
 
     #[test]
-    fn test_get_overlay_path_with_fallback_uses_upstream() {
+    fn test_find_overlay_path_with_fallback_uses_upstream() {
         let temp = TempDir::new().unwrap();
         let repo_path = temp.path().join("overlay-repo");
         fs::create_dir_all(repo_path.join(".git")).unwrap();
@@ -1213,20 +1184,21 @@ mod tests {
         });
 
         let (path, resolved_via) = manager
-            .get_overlay_path_with_fallback(
+            .find_overlay_path_with_fallback(
                 "tylerbutler",
                 "FluidFramework",
                 "claude-config",
                 upstream.as_ref(),
             )
-            .unwrap();
+            .unwrap()
+            .expect("upstream overlay should be found");
 
         assert!(path.ends_with("microsoft/FluidFramework/claude-config"));
         assert_eq!(resolved_via, crate::state::ResolvedVia::Upstream);
     }
 
     #[test]
-    fn test_get_overlay_path_with_fallback_no_upstream_fails() {
+    fn test_find_overlay_path_with_fallback_no_upstream_returns_none() {
         let temp = TempDir::new().unwrap();
         let repo_path = temp.path().join("overlay-repo");
         fs::create_dir_all(repo_path.join(".git")).unwrap();
@@ -1239,14 +1211,11 @@ mod tests {
 
         let manager = OverlayRepoManager::new(config).unwrap();
 
-        let result = manager.get_overlay_path_with_fallback(
-            "tylerbutler",
-            "FluidFramework",
-            "claude-config",
-            None,
-        );
+        let result = manager
+            .find_overlay_path_with_fallback("tylerbutler", "FluidFramework", "claude-config", None)
+            .unwrap();
 
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 
     #[test]

@@ -284,11 +284,6 @@ pub(crate) fn resolve_source(
             None,
         ),
 
-        SourceReference::OnePart { username } if source_filter.is_some() => {
-            resolve_one_part_from_configured_source(&username, target_path, source_filter, update)
-                .map(ResolvedSources::Single)
-        }
-
         SourceReference::OnePart { username } => {
             // Before treating as a GitHub username, check if this is an applied
             // overlay name that could be resolved from its source. This catches
@@ -330,6 +325,10 @@ pub(crate) fn resolve_source(
     }
 }
 
+/// Whether a source string looks like a bare overlay name (no path/URL syntax).
+///
+/// Used to short-circuit `apply <name> --from <source>` before
+/// `SourceReference::parse` rejects names that collide with cwd directories.
 fn is_unqualified_overlay_name(source_str: &str) -> bool {
     !source_str.is_empty()
         && !source_str.contains('/')
@@ -904,13 +903,6 @@ fn resolve_from_sources_with_suggestions(
             via_suffix,
             source_suffix,
         );
-
-        if resolved.source.is_local() {
-            return Ok(ResolvedSource {
-                path: resolved.path.clone(),
-                source_info: OverlaySource::configured_local(resolved.path, resolved.source.name),
-            });
-        }
 
         return Ok(ResolvedSource {
             path: resolved.path,

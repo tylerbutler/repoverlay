@@ -555,8 +555,8 @@ fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if is_hidden_name(&name) {
-            if is_overlay_file(&path) {
+        if name.starts_with('.') {
+            if path.is_file() {
                 has_root_files = true;
             }
             continue;
@@ -577,7 +577,7 @@ fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
                 relative_path,
                 has_config,
             ));
-        } else if is_overlay_file(&path) {
+        } else if file_type.is_file() {
             has_root_files = true;
         }
     }
@@ -595,14 +595,6 @@ fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
 
     overlays.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(overlays)
-}
-
-fn is_hidden_name(name: &str) -> bool {
-    name.starts_with('.')
-}
-
-fn is_overlay_file(path: &Path) -> bool {
-    path.is_file()
 }
 
 /// List all overlays in a directory, auto-detecting layout.
