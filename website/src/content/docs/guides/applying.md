@@ -92,6 +92,10 @@ repoverlay source remove tylerbutler
 
 Sources are checked in priority order when resolving overlay references. Earlier sources have higher priority.
 
+Local directory sources may use the shared `org/repo/overlay-name/` layout or a flat
+layout. In a flat layout, each top-level directory is an overlay; if there are no
+top-level overlay directories, the source directory itself is treated as one overlay.
+
 ## Conflict handling
 
 If an overlay file conflicts with an existing file in the repo, repoverlay fails by default. You can control this behavior:

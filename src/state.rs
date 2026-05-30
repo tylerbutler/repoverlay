@@ -42,6 +42,9 @@ pub(crate) enum OverlaySource {
     Local {
         /// Absolute path to the overlay directory
         path: PathBuf,
+        /// Configured source name, when this local path came from a named source.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_name: Option<String>,
     },
     /// GitHub repository overlay
     GitHub {
@@ -88,7 +91,18 @@ pub(crate) enum OverlaySource {
 impl OverlaySource {
     /// Create a new local source.
     pub(crate) const fn local(path: PathBuf) -> Self {
-        Self::Local { path }
+        Self::Local {
+            path,
+            source_name: None,
+        }
+    }
+
+    /// Create a new local source with configured source provenance.
+    pub(crate) const fn configured_local(path: PathBuf, source_name: String) -> Self {
+        Self::Local {
+            path,
+            source_name: Some(source_name),
+        }
     }
 
     /// Create a new GitHub source.
@@ -171,7 +185,10 @@ impl OverlaySource {
     #[allow(dead_code)]
     pub(crate) fn display(&self) -> String {
         match self {
-            Self::Local { path } => path.display().to_string(),
+            Self::Local { path, source_name } => source_name.as_ref().map_or_else(
+                || path.display().to_string(),
+                |name| format!("{} [{name}]", path.display()),
+            ),
             Self::Library { name } => format!("{name} (library)"),
             Self::GitHub {
                 url,
@@ -231,7 +248,7 @@ impl OverlaySource {
     #[allow(dead_code)]
     pub(crate) fn local_path(&self) -> Option<&Path> {
         match self {
-            Self::Local { path } => Some(path),
+            Self::Local { path, .. } => Some(path),
             Self::Library { .. } | Self::GitHub { .. } | Self::OverlayRepo { .. } => None,
         }
     }
@@ -281,7 +298,7 @@ pub(crate) trait SourceResolver {
 impl SourceResolver for OverlaySource {
     fn resolve_local_path(&self) -> Result<PathBuf> {
         match self {
-            Self::Local { path } => Ok(path.clone()),
+            Self::Local { path, .. } => Ok(path.clone()),
             Self::Library { name } => {
                 // Library path resolution requires repo context — this is handled
                 // by the caller passing the resolved library path. Use
@@ -992,10 +1009,44 @@ mod tests {
         let deserialized: OverlaySource = sickle::from_str(&serialized).unwrap();
 
         match deserialized {
-            OverlaySource::Local { path } => {
+            OverlaySource::Local { path, source_name } => {
                 assert_eq!(path, PathBuf::from("/path/to/overlay"));
+                assert_eq!(source_name, None);
             }
             _ => panic!("Expected Local source"),
+        }
+    }
+
+    #[test]
+    fn configured_local_source_preserves_source_name_and_path() {
+        let path = PathBuf::from("/tmp/repoverlay-test/config-a");
+        let source = OverlaySource::configured_local(path.clone(), "local-flat".to_string());
+
+        assert_eq!(source.local_path(), Some(path.as_path()));
+        assert!(source.is_mutable());
+        assert!(!source.is_syncable());
+        assert!(!source.is_updatable());
+        assert_eq!(
+            source.display(),
+            "/tmp/repoverlay-test/config-a [local-flat]"
+        );
+    }
+
+    #[test]
+    fn local_source_without_source_name_deserializes_for_backwards_compatibility() {
+        let serialized = sickle::to_string(&OverlaySource::local(PathBuf::from(
+            "/tmp/repoverlay-test/config-a",
+        )))
+        .unwrap();
+
+        let source: OverlaySource = sickle::from_str(&serialized).unwrap();
+
+        match source {
+            OverlaySource::Local { path, source_name } => {
+                assert_eq!(path, PathBuf::from("/tmp/repoverlay-test/config-a"));
+                assert_eq!(source_name, None);
+            }
+            other => panic!("expected local source, got {other:?}"),
         }
     }
 
@@ -1795,6 +1846,7 @@ directories =
             "test".to_string(),
             OverlaySource::Local {
                 path: PathBuf::from("/tmp"),
+                source_name: None,
             },
         );
         state.add_file(FileEntry {
@@ -1822,6 +1874,7 @@ directories =
             "test".to_string(),
             OverlaySource::Local {
                 path: PathBuf::from("/tmp"),
+                source_name: None,
             },
         );
         let removed = state.remove_file(&PathBuf::from("nonexistent.txt"));

@@ -365,7 +365,7 @@ fn resolve_source_path(target: &Path, source: &OverlaySource) -> Result<PathBuf>
             let library_path = library::get_library_path(target)?;
             Ok(library_path.join(name))
         }
-        OverlaySource::Local { path } => Ok(path.clone()),
+        OverlaySource::Local { path, .. } => Ok(path.clone()),
         OverlaySource::GitHub { .. } => {
             bail!("Cannot move a GitHub-sourced overlay. Import it to the library first.")
         }

@@ -63,7 +63,7 @@ pub(crate) fn restore_overlays(
     for state in &external_states {
         println!("  - {}", state.name);
         match &state.source {
-            OverlaySource::Local { path } => {
+            OverlaySource::Local { path, .. } => {
                 println!("    Source: {}", path.display());
             }
             OverlaySource::GitHub { url, git_ref, .. } => {
@@ -93,7 +93,7 @@ pub(crate) fn restore_overlays(
     // Restore each overlay
     for state in external_states {
         let source_str = match &state.source {
-            OverlaySource::Local { path } => path.to_string_lossy().to_string(),
+            OverlaySource::Local { path, .. } => path.to_string_lossy().to_string(),
             OverlaySource::GitHub {
                 url,
                 owner,

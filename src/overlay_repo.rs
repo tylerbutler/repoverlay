@@ -58,12 +58,14 @@ pub(crate) struct AvailableOverlay {
     /// Whether this overlay comes from a flat (non-nested) source layout.
     ///
     /// Flat overlays use a simpler directory structure without org/repo nesting.
-    pub(crate) flat: bool,
+    flat: bool,
+    /// Source-relative path to the overlay directory.
+    source_relative_path: PathBuf,
 }
 
 impl std::fmt::Display for AvailableOverlay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.flat {
+        if self.is_flat() {
             write!(f, "{}", self.name)
         } else {
             write!(f, "{}/{}/{}", self.org, self.repo, self.name)
@@ -75,25 +77,70 @@ impl AvailableOverlay {
     /// Format the overlay path for display with the overlay name in bold.
     pub(crate) fn display_bold(&self) -> String {
         use colored::Colorize;
-        if self.flat {
+        if self.is_flat() {
             self.name.bold().to_string()
         } else {
             format!("{}/{}/{}", self.org, self.repo, self.name.bold())
         }
     }
 
+    /// Create metadata for an overlay in structured `org/repo/name` layout.
+    pub(crate) fn structured(org: String, repo: String, name: String, has_config: bool) -> Self {
+        let source_relative_path = PathBuf::from(&org).join(&repo).join(&name);
+        Self {
+            org,
+            repo,
+            name,
+            has_config,
+            flat: false,
+            source_relative_path,
+        }
+    }
+
+    /// Create metadata for an overlay in flat source layout.
+    pub(crate) const fn flat(
+        name: String,
+        source_relative_path: PathBuf,
+        has_config: bool,
+    ) -> Self {
+        Self {
+            org: String::new(),
+            repo: String::new(),
+            name,
+            has_config,
+            flat: true,
+            source_relative_path,
+        }
+    }
+
+    /// Create metadata for a synthetic flat overlay namespace, such as the in-repo library.
+    pub(crate) const fn synthetic_flat(
+        org: String,
+        name: String,
+        source_relative_path: PathBuf,
+        has_config: bool,
+    ) -> Self {
+        Self {
+            org,
+            repo: String::new(),
+            name,
+            has_config,
+            flat: true,
+            source_relative_path,
+        }
+    }
+
+    /// Whether this overlay comes from a flat source layout.
+    pub(crate) const fn is_flat(&self) -> bool {
+        self.flat
+    }
+
     /// Returns the relative path from the source base directory to this overlay.
     ///
     /// For structured overlays: `org/repo/name`
     /// For flat overlays: just `name` (or empty if the base dir itself is the overlay)
-    pub(crate) fn relative_path(&self) -> std::path::PathBuf {
-        if self.flat {
-            std::path::PathBuf::from(&self.name)
-        } else {
-            std::path::PathBuf::from(&self.org)
-                .join(&self.repo)
-                .join(&self.name)
-        }
+    pub(crate) fn source_relative_path(&self) -> PathBuf {
+        self.source_relative_path.clone()
     }
 }
 
@@ -323,14 +370,12 @@ impl OverlayRepoManager {
 
                     // Check if it has a config file
                     let has_config = overlay_path.join("repoverlay.ccl").exists();
-
-                    overlays.push(AvailableOverlay {
-                        org: org_name.clone(),
-                        repo: repo_name.clone(),
-                        name: overlay_name,
+                    overlays.push(AvailableOverlay::structured(
+                        org_name.clone(),
+                        repo_name.clone(),
+                        overlay_name,
                         has_config,
-                        flat: false,
-                    });
+                    ));
                 }
             }
         }
@@ -368,27 +413,25 @@ impl OverlayRepoManager {
         Ok(path)
     }
 
-    /// Get the path to a specific overlay with upstream fallback.
+    /// Find the path to a specific overlay with upstream fallback.
     ///
-    /// Resolution order:
-    /// 1. Try exact match: `org/repo/name`
-    /// 2. If upstream provided, try: `upstream.org/upstream.repo/name`
-    ///
-    /// Returns the path and how it was resolved.
-    pub(crate) fn get_overlay_path_with_fallback(
+    /// Returns `Ok(None)` only when the overlay is absent. Invalid input and
+    /// filesystem/config errors are returned as errors so callers do not treat
+    /// them as "not found".
+    pub(crate) fn find_overlay_path_with_fallback(
         &self,
         org: &str,
         repo: &str,
         name: &str,
         upstream: Option<&UpstreamInfo>,
-    ) -> Result<(PathBuf, ResolvedVia)> {
+    ) -> Result<Option<(PathBuf, ResolvedVia)>> {
         validate_path_component(org, "org")?;
         validate_path_component(repo, "repo")?;
         validate_path_component(name, "overlay name")?;
         // Try exact match first
         let direct_path = self.repo_path.join(org).join(repo).join(name);
         if direct_path.exists() {
-            return Ok((direct_path, ResolvedVia::Direct));
+            return Ok(Some((direct_path, ResolvedVia::Direct)));
         }
 
         // Try upstream fallback if available
@@ -397,19 +440,11 @@ impl OverlayRepoManager {
             validate_path_component(&up.repo, "upstream repo")?;
             let upstream_path = self.repo_path.join(&up.org).join(&up.repo).join(name);
             if upstream_path.exists() {
-                return Ok((upstream_path, ResolvedVia::Upstream));
+                return Ok(Some((upstream_path, ResolvedVia::Upstream)));
             }
         }
 
-        // Nothing found - provide helpful error
-        let mut msg = format!("Overlay not found: {org}/{repo}/{name}");
-        if let Some(up) = upstream {
-            use std::fmt::Write;
-            let up_org = &up.org;
-            let up_repo = &up.repo;
-            let _ = write!(msg, "\nAlso checked upstream: {up_org}/{up_repo}/{name}");
-        }
-        bail!("{msg}");
+        Ok(None)
     }
 
     /// Stage an overlay for publishing.
@@ -655,19 +690,51 @@ mod tests {
 
     #[test]
     fn test_available_overlay_clone() {
-        let overlay = AvailableOverlay {
-            org: "microsoft".to_string(),
-            repo: "FluidFramework".to_string(),
-            name: "claude-config".to_string(),
-            has_config: true,
-            flat: false,
-        };
+        let overlay = AvailableOverlay::structured(
+            "microsoft".to_string(),
+            "FluidFramework".to_string(),
+            "claude-config".to_string(),
+            true,
+        );
 
         let cloned = overlay.clone();
         assert_eq!(cloned.org, overlay.org);
         assert_eq!(cloned.repo, overlay.repo);
         assert_eq!(cloned.name, overlay.name);
         assert_eq!(cloned.has_config, overlay.has_config);
+    }
+
+    #[test]
+    fn available_overlay_structured_computes_source_relative_path() {
+        let overlay = AvailableOverlay::structured(
+            "owner".to_string(),
+            "repo".to_string(),
+            "config".to_string(),
+            true,
+        );
+
+        assert_eq!(overlay.to_string(), "owner/repo/config");
+        assert_eq!(
+            overlay.source_relative_path(),
+            PathBuf::from("owner").join("repo").join("config")
+        );
+        assert!(!overlay.is_flat());
+    }
+
+    #[test]
+    fn available_overlay_flat_uses_supplied_source_relative_path() {
+        let overlay = AvailableOverlay::flat(
+            "config-a".to_string(),
+            PathBuf::from("nested/config-a"),
+            false,
+        );
+
+        assert_eq!(overlay.to_string(), "config-a");
+        assert_eq!(
+            overlay.source_relative_path(),
+            PathBuf::from("nested/config-a")
+        );
+        assert!(overlay.is_flat());
     }
 
     #[test]
@@ -1064,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_overlay_path_with_fallback_direct_match() {
+    fn test_find_overlay_path_with_fallback_direct_match() {
         let temp = TempDir::new().unwrap();
         let repo_path = temp.path().join("overlay-repo");
         fs::create_dir_all(repo_path.join(".git")).unwrap();
@@ -1083,20 +1150,21 @@ mod tests {
         });
 
         let (path, resolved_via) = manager
-            .get_overlay_path_with_fallback(
+            .find_overlay_path_with_fallback(
                 "tylerbutler",
                 "FluidFramework",
                 "claude-config",
                 upstream.as_ref(),
             )
-            .unwrap();
+            .unwrap()
+            .expect("overlay should be found");
 
         assert!(path.ends_with("tylerbutler/FluidFramework/claude-config"));
         assert_eq!(resolved_via, crate::state::ResolvedVia::Direct);
     }
 
     #[test]
-    fn test_get_overlay_path_with_fallback_uses_upstream() {
+    fn test_find_overlay_path_with_fallback_uses_upstream() {
         let temp = TempDir::new().unwrap();
         let repo_path = temp.path().join("overlay-repo");
         fs::create_dir_all(repo_path.join(".git")).unwrap();
@@ -1116,20 +1184,21 @@ mod tests {
         });
 
         let (path, resolved_via) = manager
-            .get_overlay_path_with_fallback(
+            .find_overlay_path_with_fallback(
                 "tylerbutler",
                 "FluidFramework",
                 "claude-config",
                 upstream.as_ref(),
             )
-            .unwrap();
+            .unwrap()
+            .expect("upstream overlay should be found");
 
         assert!(path.ends_with("microsoft/FluidFramework/claude-config"));
         assert_eq!(resolved_via, crate::state::ResolvedVia::Upstream);
     }
 
     #[test]
-    fn test_get_overlay_path_with_fallback_no_upstream_fails() {
+    fn test_find_overlay_path_with_fallback_no_upstream_returns_none() {
         let temp = TempDir::new().unwrap();
         let repo_path = temp.path().join("overlay-repo");
         fs::create_dir_all(repo_path.join(".git")).unwrap();
@@ -1142,14 +1211,43 @@ mod tests {
 
         let manager = OverlayRepoManager::new(config).unwrap();
 
-        let result = manager.get_overlay_path_with_fallback(
-            "tylerbutler",
-            "FluidFramework",
-            "claude-config",
-            None,
-        );
+        let result = manager
+            .find_overlay_path_with_fallback("tylerbutler", "FluidFramework", "claude-config", None)
+            .unwrap();
 
-        assert!(result.is_err());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn find_overlay_path_with_fallback_returns_none_for_absent_overlay() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(temp.path().to_path_buf()),
+        };
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        let found = manager
+            .find_overlay_path_with_fallback("org", "repo", "missing", None)
+            .unwrap();
+
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn find_overlay_path_with_fallback_propagates_invalid_components() {
+        let temp = TempDir::new().unwrap();
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(temp.path().to_path_buf()),
+        };
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        let err = manager
+            .find_overlay_path_with_fallback("org", "repo", "../escape", None)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("path traversal"));
     }
 
     #[test]
@@ -1606,25 +1704,23 @@ mod tests {
 
     #[test]
     fn available_overlay_display() {
-        let o = AvailableOverlay {
-            org: "microsoft".to_string(),
-            repo: "FluidFramework".to_string(),
-            name: "vscode-setup".to_string(),
-            has_config: true,
-            flat: false,
-        };
+        let o = AvailableOverlay::structured(
+            "microsoft".to_string(),
+            "FluidFramework".to_string(),
+            "vscode-setup".to_string(),
+            true,
+        );
         assert_eq!(o.to_string(), "microsoft/FluidFramework/vscode-setup");
     }
 
     #[test]
     fn available_overlay_display_bold_contains_name() {
-        let o = AvailableOverlay {
-            org: "microsoft".to_string(),
-            repo: "FluidFramework".to_string(),
-            name: "vscode-setup".to_string(),
-            has_config: true,
-            flat: false,
-        };
+        let o = AvailableOverlay::structured(
+            "microsoft".to_string(),
+            "FluidFramework".to_string(),
+            "vscode-setup".to_string(),
+            true,
+        );
         let bold = o.display_bold();
         assert!(bold.contains("microsoft"));
         assert!(bold.contains("FluidFramework"));
@@ -1634,20 +1730,18 @@ mod tests {
     #[test]
     fn snapshot_available_overlay_display() {
         let overlays = [
-            AvailableOverlay {
-                org: "microsoft".to_string(),
-                repo: "FluidFramework".to_string(),
-                name: "claude-config".to_string(),
-                has_config: true,
-                flat: false,
-            },
-            AvailableOverlay {
-                org: "owner".to_string(),
-                repo: "repo".to_string(),
-                name: "my-overlay".to_string(),
-                has_config: false,
-                flat: false,
-            },
+            AvailableOverlay::structured(
+                "microsoft".to_string(),
+                "FluidFramework".to_string(),
+                "claude-config".to_string(),
+                true,
+            ),
+            AvailableOverlay::structured(
+                "owner".to_string(),
+                "repo".to_string(),
+                "my-overlay".to_string(),
+                false,
+            ),
         ];
         let output: Vec<String> = overlays.iter().map(|o| format!("{o}")).collect();
         insta::assert_snapshot!(output.join("\n"));

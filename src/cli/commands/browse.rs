@@ -72,7 +72,7 @@ fn print_overlay_list(overlays: &[AvailableOverlay], filtered: bool) {
             if current_group.is_some() {
                 println!();
             }
-            if overlay.flat {
+            if overlay.is_flat() {
                 println!("{}:", "(flat)".dimmed());
             } else {
                 println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
@@ -205,13 +205,12 @@ pub(crate) fn browse_overlays(
     // Add library overlays to the browse list (#218)
     if has_library && target_filter.is_none() {
         for lib_overlay in &library_overlays {
-            overlays.push(AvailableOverlay {
-                org: library::LIBRARY_SOURCE_NAME.to_string(),
-                repo: String::new(),
-                name: lib_overlay.name.clone(),
-                has_config: true,
-                flat: true,
-            });
+            overlays.push(AvailableOverlay::synthetic_flat(
+                library::LIBRARY_SOURCE_NAME.to_string(),
+                lib_overlay.name.clone(),
+                lib_overlay.name.clone().into(),
+                true,
+            ));
         }
     }
 
@@ -239,20 +238,15 @@ pub(crate) fn browse_overlays(
         let base_path = mgr
             .get_source_base_path(&source.name)
             .ok_or_else(|| anyhow::anyhow!("Source base path not found: {}", source.name))?;
-        let overlay_path = base_path.join(&o.org).join(&o.repo).join(&o.name);
         let commit = mgr.get_source_commit(&source.name)?;
 
-        Ok(ResolvedSource {
-            path: overlay_path,
-            source_info: OverlaySource::overlay_repo_full(
-                o.org.clone(),
-                o.repo.clone(),
-                o.name.clone(),
-                commit,
-                ResolvedVia::Direct,
-                source.name.clone(),
-            ),
-        })
+        resolve_configured_browse_source(
+            base_path,
+            o,
+            commit,
+            source.name.clone(),
+            source.is_local(),
+        )
     };
 
     browse_and_apply(
@@ -282,22 +276,20 @@ fn browse_ephemeral_source(
 ) -> Result<()> {
     let reference = SourceReference::parse(source_str);
 
-    // Handle local paths directly
-    if let SourceReference::LocalPath { path, .. } = &reference {
-        let canonical = path
-            .canonicalize()
-            .with_context(|| format!("Path does not exist: {}", path.display()))?;
-        return browse_local_source(
-            &canonical,
-            target_filter,
-            target,
-            no_interactive,
-            dry_run,
-            show_all,
-        );
-    }
-
     let (owner, repo) = match reference {
+        SourceReference::LocalPath { path, .. } => {
+            let canonical = path
+                .canonicalize()
+                .with_context(|| format!("Path does not exist: {}", path.display()))?;
+            return browse_local_source(
+                &canonical,
+                target_filter,
+                target,
+                no_interactive,
+                dry_run,
+                show_all,
+            );
+        }
         SourceReference::OnePart { username } => {
             let default_repo = config::default_overlay_repo_name();
             (username, default_repo)
@@ -313,7 +305,6 @@ fn browse_ephemeral_source(
                  Use a GitHub username, owner/repo, GitHub URL, or local path."
             );
         }
-        SourceReference::LocalPath { .. } => unreachable!(),
     };
 
     let github_url = format!("https://github.com/{owner}/{repo}");
@@ -400,16 +391,7 @@ fn browse_local_source(
     };
 
     let local_base = local_path.to_path_buf();
-    let build_source_info = move |o: &AvailableOverlay| {
-        let overlay_path = local_base.join(o.relative_path());
-        if !overlay_path.exists() {
-            bail!("Overlay directory not found: {}", overlay_path.display());
-        }
-        Ok(ResolvedSource {
-            path: overlay_path,
-            source_info: OverlaySource::local(local_base.clone()),
-        })
-    };
+    let build_source_info = move |o: &AvailableOverlay| resolve_local_browse_source(&local_base, o);
 
     browse_and_apply(
         overlays,
@@ -420,6 +402,69 @@ fn browse_local_source(
         show_all,
         build_source_info,
     )
+}
+
+fn resolve_local_browse_source(local_base: &Path, o: &AvailableOverlay) -> Result<ResolvedSource> {
+    let overlay_path = resolve_browse_overlay_path(local_base, o)?;
+    Ok(ResolvedSource {
+        path: overlay_path.clone(),
+        source_info: OverlaySource::local(overlay_path),
+    })
+}
+
+fn resolve_browse_overlay_path(base: &Path, o: &AvailableOverlay) -> Result<PathBuf> {
+    let overlay_path = base.join(o.source_relative_path());
+    let canonical_base = base
+        .canonicalize()
+        .with_context(|| format!("Source base not found: {}", base.display()))?;
+    let canonical_overlay = overlay_path
+        .canonicalize()
+        .with_context(|| format!("Overlay directory not found: {}", overlay_path.display()))?;
+
+    if !canonical_overlay.starts_with(&canonical_base) {
+        bail!(
+            "Overlay directory escapes source base: {}",
+            overlay_path.display()
+        );
+    }
+
+    if !canonical_overlay.is_dir() {
+        bail!(
+            "Overlay path is not a directory: {}",
+            overlay_path.display()
+        );
+    }
+
+    Ok(canonical_overlay)
+}
+
+fn resolve_configured_browse_source(
+    base_path: &Path,
+    o: &AvailableOverlay,
+    commit: impl Into<String>,
+    source_name: impl Into<String>,
+    source_is_local: bool,
+) -> Result<ResolvedSource> {
+    let overlay_path = resolve_browse_overlay_path(base_path, o)?;
+    let commit = commit.into();
+    let source_name = source_name.into();
+    let source_info = if source_is_local {
+        OverlaySource::configured_local(overlay_path.clone(), source_name)
+    } else {
+        OverlaySource::overlay_repo_full(
+            o.org.clone(),
+            o.repo.clone(),
+            o.name.clone(),
+            commit,
+            ResolvedVia::Direct,
+            source_name,
+        )
+    };
+
+    Ok(ResolvedSource {
+        path: overlay_path,
+        source_info,
+    })
 }
 
 /// Shared logic for browse: filter, display, select, and apply overlays.
@@ -511,4 +556,106 @@ where
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flat_overlay(name: &str, relative_path: &str) -> AvailableOverlay {
+        AvailableOverlay::flat(name.to_string(), PathBuf::from(relative_path), false)
+    }
+
+    fn structured_overlay() -> AvailableOverlay {
+        AvailableOverlay::structured(
+            "owner".to_string(),
+            "repo".to_string(),
+            "config".to_string(),
+            false,
+        )
+    }
+
+    #[test]
+    fn local_browse_flat_subdirectory_records_overlay_path() {
+        let source = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(source.path().join("config-a")).unwrap();
+        let overlay = flat_overlay("config-a", "config-a");
+
+        let resolved = resolve_local_browse_source(source.path(), &overlay).unwrap();
+
+        assert_eq!(resolved.path, source.path().join("config-a"));
+        match resolved.source_info {
+            OverlaySource::Local { path, .. } => assert_eq!(path, source.path().join("config-a")),
+            other => panic!("expected local source, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_browse_rejects_symlink_overlay_that_escapes_source_base() {
+        use std::os::unix::fs::symlink;
+
+        let source = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        fs::write(outside.path().join(".envrc"), "export SECRET=1").unwrap();
+        symlink(outside.path(), source.path().join("escape")).unwrap();
+        let overlay = flat_overlay("escape", "escape");
+
+        let Err(err) = resolve_local_browse_source(source.path(), &overlay) else {
+            panic!("expected symlink escape to be rejected");
+        };
+
+        assert!(err.to_string().contains("escapes source base"));
+    }
+
+    #[test]
+    fn configured_browse_flat_subdirectory_records_local_overlay_path() {
+        let source = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(source.path().join("config-a")).unwrap();
+        let overlay = flat_overlay("config-a", "config-a");
+
+        let resolved =
+            resolve_configured_browse_source(source.path(), &overlay, "local", "local-flat", true)
+                .unwrap();
+
+        assert_eq!(resolved.path, source.path().join("config-a"));
+        match resolved.source_info {
+            OverlaySource::Local { path, source_name } => {
+                assert_eq!(path, source.path().join("config-a"));
+                assert_eq!(source_name.as_deref(), Some("local-flat"));
+            }
+            other => panic!("expected local source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn configured_browse_structured_preserves_overlay_repo_source() {
+        let source = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(source.path().join("owner/repo/config")).unwrap();
+        let overlay = structured_overlay();
+
+        let resolved =
+            resolve_configured_browse_source(source.path(), &overlay, "abc123", "shared", false)
+                .unwrap();
+
+        assert_eq!(resolved.path, source.path().join("owner/repo/config"));
+        match resolved.source_info {
+            OverlaySource::OverlayRepo {
+                org,
+                repo,
+                name,
+                commit,
+                resolved_via,
+                source_name,
+            } => {
+                assert_eq!(org, "owner");
+                assert_eq!(repo, "repo");
+                assert_eq!(name, "config");
+                assert_eq!(commit, "abc123");
+                assert_eq!(resolved_via, Some(ResolvedVia::Direct));
+                assert_eq!(source_name.as_deref(), Some("shared"));
+            }
+            other => panic!("expected overlay repo source, got {other:?}"),
+        }
+    }
 }

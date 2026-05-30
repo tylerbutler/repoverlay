@@ -1575,7 +1575,7 @@ mod tests {
 
             assert_eq!(source.path, PathBuf::from("/some/path"));
             match source.source_info {
-                OverlaySource::Local { path } => {
+                OverlaySource::Local { path, .. } => {
                     assert_eq!(path, PathBuf::from("/origin"));
                 }
                 _ => panic!("Expected Local source"),
@@ -3870,6 +3870,7 @@ mod tests {
                 path: overlay.path().to_path_buf(),
                 source_info: OverlaySource::Local {
                     path: overlay.path().to_path_buf(),
+                    source_name: None,
                 },
             };
             apply_resolved_overlay(
@@ -3892,6 +3893,7 @@ mod tests {
                 path: overlay2.path().to_path_buf(),
                 source_info: OverlaySource::Local {
                     path: overlay2.path().to_path_buf(),
+                    source_name: None,
                 },
             };
             apply_resolved_overlay(
@@ -3925,6 +3927,7 @@ mod tests {
                 path: overlay.path().to_path_buf(),
                 source_info: OverlaySource::Local {
                     path: overlay.path().to_path_buf(),
+                    source_name: None,
                 },
             };
             apply_resolved_overlay(
@@ -3950,6 +3953,7 @@ mod tests {
                 path: overlay2.path().to_path_buf(),
                 source_info: OverlaySource::Local {
                     path: overlay2.path().to_path_buf(),
+                    source_name: None,
                 },
             };
             apply_multiple_overlays(

@@ -1,0 +1,6 @@
+kind: Fixed
+body: |-
+    Fix local flat source detection
+
+    Local directory sources now auto-detect flat overlay folders, including dotfile-only overlays.
+time: 2026-05-24T03:05:42.128536524Z
