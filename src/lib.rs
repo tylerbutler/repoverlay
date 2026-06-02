@@ -9,6 +9,7 @@ mod create;
 mod detection;
 mod fuzzy;
 pub(crate) mod git;
+mod harness_process;
 mod git_exclude;
 mod github;
 mod json_merge;
