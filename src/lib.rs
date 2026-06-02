@@ -16,6 +16,8 @@ mod library;
 mod overlay_name;
 mod overlay_repo;
 mod profile;
+mod profile_applicators;
+mod profile_plan;
 mod reference;
 mod remove;
 mod resolve;
