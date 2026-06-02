@@ -197,7 +197,11 @@ pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result
         }
     }
     for overlay in &state.overlays {
-        if crate::state::load_overlay_state(target, overlay).is_ok() {
+        let overlay_state_path = target
+            .join(crate::state::STATE_DIR)
+            .join(crate::state::OVERLAYS_DIR)
+            .join(format!("{overlay}.ccl"));
+        if overlay_state_path.exists() {
             crate::remove_overlay(target, Some(overlay.clone()), false, false)?;
         }
     }
@@ -219,12 +223,25 @@ pub(crate) fn list_profile_states(target: &Path) -> Result<Vec<ProfileState>> {
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("ccl") {
             continue;
         }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read profile state: {}", path.display()))?;
-        states.push(
-            sickle::from_str(&content)
-                .with_context(|| format!("Failed to parse profile state: {}", path.display()))?,
-        );
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) => {
+                eprintln!(
+                    "Warning: failed to load profile state {}: {err}",
+                    path.display()
+                );
+                continue;
+            }
+        };
+        match sickle::from_str(&content) {
+            Ok(state) => states.push(state),
+            Err(err) => {
+                eprintln!(
+                    "Warning: failed to load profile state {}: {err}",
+                    path.display()
+                );
+            }
+        }
     }
     states.sort_by(|left: &ProfileState, right: &ProfileState| {
         left.name
