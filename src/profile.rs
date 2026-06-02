@@ -41,12 +41,11 @@ impl McpConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
 pub(crate) struct McpServerConfig {
     pub(crate) command: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) args: Vec<String>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) env: BTreeMap<String, String>,
 }
 
@@ -167,6 +166,21 @@ profiles =
         assert_eq!(profile.mcps.servers["rust"].args, vec!["mcp-rust"]);
         assert_eq!(profile.skills, vec!["market:rust-reviewer@playground"]);
         assert_eq!(profile.plugins, vec!["market:rust-dev@playground"]);
+    }
+
+    #[test]
+    fn rejects_mcp_server_without_command() {
+        let ccl = r"
+profiles =
+  bad =
+    mcps =
+      servers =
+        broken =
+          args =
+            = mcp-broken
+";
+
+        assert!(sickle::from_str::<crate::config::RepoverlayConfig>(ccl).is_err());
     }
 
     #[test]
