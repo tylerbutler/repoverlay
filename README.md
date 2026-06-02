@@ -36,7 +36,7 @@ repoverlay manages five kinds of objects:
 - **Overlay** — a set of config files applied to a repo. Lifecycle: `create` → `apply` → `update` → `remove`.
 - **Source** — a configured location (GitHub repo or local directory) to find overlays. Lifecycle: `source add` → `source list` → `source remove`.
 - **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
-- **Profile** — a named AI harness configuration that composes overlays, MCP servers, skills, plugins, and harness/user-level instruction files. Profiles can be applied persistently with `profile apply` or ephemerally with harness commands such as `repoverlay copilot --profile rust-dev`.
+- **Profile** — a named AI harness configuration that can declare overlays, MCP servers, skills, plugins, and harness/user-level instruction files. Profiles can be applied persistently with `profile apply` or ephemerally with harness commands such as `repoverlay copilot --profile rust-dev`.
 - **File** — an individual file within an overlay. Managed via `edit` and `sync`.
 
 ## Installation
@@ -93,20 +93,22 @@ repoverlay apply https://github.com/owner/repo
 repoverlay remove my-overlay
 ```
 
-Profiles compose overlays and AI harness configuration:
+Profiles can declare overlays and AI harness configuration:
 
 ```bash
 repoverlay profile list
 repoverlay profile show rust-dev
 ```
 
-Apply a profile persistently:
+Choose one of the following application modes.
+
+Persistent mode applies the profile until you remove it:
 
 ```bash
 repoverlay profile apply rust-dev --harness copilot
 ```
 
-Or run Copilot with a profile applied only while the harness process runs:
+Ephemeral mode applies the profile only while the harness process runs:
 
 ```bash
 repoverlay copilot --profile rust-dev -- --help
