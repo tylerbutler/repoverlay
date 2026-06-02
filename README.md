@@ -31,11 +31,12 @@ Overlay config files into git repositories without committing them. Files are sy
 
 ## Concepts
 
-repoverlay manages four kinds of objects:
+repoverlay manages five kinds of objects:
 
 - **Overlay** — a set of config files applied to a repo. Lifecycle: `create` → `apply` → `update` → `remove`.
 - **Source** — a configured location (GitHub repo or local directory) to find overlays. Lifecycle: `source add` → `source list` → `source remove`.
 - **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
+- **Profile** — a named AI harness configuration that composes overlays, MCP servers, skills, plugins, and harness/user-level instruction files. Profiles can be applied persistently with `profile apply` or ephemerally with harness commands such as `repoverlay copilot --profile rust-dev`.
 - **File** — an individual file within an overlay. Managed via `edit` and `sync`.
 
 ## Installation
@@ -90,6 +91,15 @@ repoverlay apply https://github.com/owner/repo
 
 # Remove an overlay
 repoverlay remove my-overlay
+```
+
+Profiles compose overlays and AI harness configuration:
+
+```bash
+repoverlay profile list
+repoverlay profile show rust-dev
+repoverlay profile apply rust-dev --harness copilot
+repoverlay copilot --profile rust-dev -- --help
 ```
 
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
