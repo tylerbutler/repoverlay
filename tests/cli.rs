@@ -423,6 +423,124 @@ profiles =
 }
 
 #[test]
+fn profile_status_harness_filter_reports_no_matches() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "status",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No profiles applied."));
+}
+
+#[test]
+fn profile_remove_uses_resolved_overlay_state_names() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let overlay_path = ctx
+        .repo_path()
+        .join("my-overlays")
+        .join("acme")
+        .join("app")
+        .join("dotenv");
+    fs::create_dir_all(&overlay_path).unwrap();
+    fs::write(overlay_path.join(".envrc"), "export PROFILE_OVERLAY=1").unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  env-dev =
+    overlays =
+      = acme/app/dotenv
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "local-src"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "env-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.overlay_state_exists("dotenv"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "env-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed profile env-dev"));
+
+    assert!(!ctx.file_exists(".envrc"));
+    assert!(!ctx.overlay_state_exists("dotenv"));
+}
+
+#[test]
 fn restore_help_displays() {
     cargo_bin_cmd!("repoverlay")
         .args(["restore", "--help"])

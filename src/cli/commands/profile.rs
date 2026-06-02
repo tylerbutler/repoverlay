@@ -76,14 +76,15 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
         ProfileCommand::Status { target, harness } => {
             let target = resolve_target(target)?;
             let states = crate::profile_plan::list_profile_states(&target)?;
+            let states: Vec<_> = states
+                .into_iter()
+                .filter(|state| harness.as_ref().is_none_or(|h| h == &state.harness))
+                .collect();
             if states.is_empty() {
                 println!("No profiles applied.");
                 return Ok(());
             }
             for state in states {
-                if harness.as_ref().is_some_and(|h| h != &state.harness) {
-                    continue;
-                }
                 println!("{} ({})", state.name.bold(), state.harness);
             }
             Ok(())

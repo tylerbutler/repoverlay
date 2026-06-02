@@ -103,6 +103,7 @@ fn apply_profile_with_harness_home(
         for action in plan.actions {
             match action {
                 ProfileAction::ApplyOverlay { reference } => {
+                    let before = crate::state::list_applied_overlays(target)?;
                     crate::apply_overlay(
                         &reference,
                         target,
@@ -115,7 +116,20 @@ fn apply_profile_with_harness_home(
                         None,
                         false,
                     )?;
-                    state.overlays.push(reference);
+                    let after = crate::state::list_applied_overlays(target)?;
+                    let new_overlays: Vec<_> = after
+                        .into_iter()
+                        .filter(|overlay| !before.contains(overlay))
+                        .collect();
+                    if new_overlays.is_empty() {
+                        bail!(
+                            "Profile overlay '{reference}' did not create overlay state; \
+                             cannot record removable overlay name"
+                        );
+                    }
+                    state
+                        .overlays
+                        .extend(new_overlays.into_iter().map(|overlay| overlay.to_string()));
                 }
                 ProfileAction::WriteFile {
                     source,
