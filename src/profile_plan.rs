@@ -201,8 +201,17 @@ pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result
             .join(crate::state::STATE_DIR)
             .join(crate::state::OVERLAYS_DIR)
             .join(format!("{overlay}.ccl"));
-        if overlay_state_path.exists() {
-            crate::remove_overlay(target, Some(overlay.clone()), false, false)?;
+        match overlay_state_path.try_exists() {
+            Ok(false) => (),
+            Ok(true) => crate::remove_overlay(target, Some(overlay.clone()), false, false)?,
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to inspect recorded overlay state: {}",
+                        overlay_state_path.display()
+                    )
+                });
+            }
         }
     }
     crate::profile::remove_profile_state(target, name, harness)?;
