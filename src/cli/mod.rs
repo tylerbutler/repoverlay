@@ -21,6 +21,7 @@ pub(crate) mod commands;
 
 pub(crate) use commands::browse::browse_overlays;
 pub(crate) use commands::cache::handle_cache_command;
+pub(crate) use commands::copilot::handle_copilot_command;
 pub(crate) use commands::create::{create_into_library, create_overlay_command};
 pub(crate) use commands::edit::{add_files_to_overlay, edit_overlay, remove_files_from_overlay};
 pub(crate) use commands::handle_remove;
@@ -537,6 +538,21 @@ enum Commands {
     Library {
         #[command(subcommand)]
         command: LibraryCommand,
+    },
+
+    /// Run GitHub Copilot with a profile applied for the process lifetime
+    Copilot {
+        /// Profile name to apply while Copilot runs
+        #[arg(long)]
+        profile: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Extra arguments forwarded to the Copilot harness
+        #[arg(last = true)]
+        extra_args: Vec<String>,
     },
 
     /// Generate shell completions
@@ -1070,6 +1086,13 @@ pub(crate) fn run() -> Result<()> {
         }
         Commands::Library { command } => {
             handle_library_command(command)?;
+        }
+        Commands::Copilot {
+            profile,
+            target,
+            extra_args,
+        } => {
+            handle_copilot_command(profile, target, extra_args)?;
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();

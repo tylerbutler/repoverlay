@@ -347,6 +347,126 @@ profiles =
 }
 
 #[test]
+fn copilot_profile_runs_command_and_cleans_up() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let marker = ctx.repo_path().join("copilot-ran.txt");
+    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            &format!("echo ran > {}", marker.display()),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(marker.exists());
+    assert!(
+        !copilot_home
+            .path()
+            .join("instructions/rust-dev/copilot-instructions.md")
+            .exists()
+    );
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists()
+    );
+}
+
+#[test]
+fn copilot_profile_preserves_harness_exit_code_after_cleanup() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    description = Rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            "exit 7",
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .code(7);
+}
+
+#[cfg(unix)]
+#[test]
+fn copilot_profile_maps_signal_exit_after_cleanup() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    description = Rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            "kill -TERM $$",
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .code(143);
+
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists()
+    );
+}
+
+#[test]
 fn profile_status_and_remove_manage_profile_state_and_files() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
