@@ -147,25 +147,20 @@ pub(crate) fn inspect_lock(path: &Path) -> Result<LockState> {
 /// Check whether a process with the given PID is currently alive.
 #[cfg(unix)]
 pub(crate) fn pid_is_alive(pid: u32) -> bool {
-    // PID 0 addresses the caller's whole process group with `kill(2)`, so it can
+    // PID 0 addresses the caller's whole process group with kill(2), so it can
     // never identify a single lock owner. Treat it as stale.
     if pid == 0 {
         return false;
     }
 
-    #[allow(unsafe_code, clippy::cast_possible_wrap)]
-    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if result == 0 {
-        // Signal 0 was delivered: the process exists and we may signal it.
-        return true;
-    }
+    let Ok(raw_pid) = i32::try_from(pid) else {
+        return false;
+    };
 
-    // EPERM means the process exists but we lack permission; ESRCH means it is
-    // gone. Anything else is treated conservatively as gone.
-    matches!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::EPERM)
-    )
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(raw_pid), None) {
+        Ok(()) | Err(nix::errno::Errno::EPERM) => true,
+        Err(_) => false,
+    }
 }
 
 /// Check whether a process with the given PID is currently alive.
