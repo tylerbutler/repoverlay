@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde_json::json;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::profile::{ProfileConfig, ProfileScope};
@@ -32,12 +32,16 @@ fn validate_instruction_source(source: &Path) -> Result<()> {
 }
 
 impl CopilotApplicator {
-    pub(crate) fn harness_home_from_env() -> Result<std::path::PathBuf> {
-        if let Some(home) = std::env::var_os("REPOVERLAY_COPILOT_HOME") {
+    fn harness_home_from_override(override_home: Option<std::ffi::OsString>) -> Result<PathBuf> {
+        if let Some(home) = override_home {
             return Ok(home.into());
         }
         let home = dirs::home_dir().context("Could not determine home directory")?;
         Ok(home.join(".config").join("github-copilot"))
+    }
+
+    pub(crate) fn harness_home_from_env() -> Result<PathBuf> {
+        Self::harness_home_from_override(std::env::var_os("REPOVERLAY_COPILOT_HOME"))
     }
 
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
@@ -219,17 +223,21 @@ mod tests {
     }
 
     #[test]
-    #[allow(unsafe_code)]
-    fn copilot_harness_home_defaults_to_github_copilot_config_dir() {
-        unsafe {
-            std::env::remove_var("REPOVERLAY_COPILOT_HOME");
-        }
-        assert!(std::env::var_os("REPOVERLAY_COPILOT_HOME").is_none());
+    fn copilot_harness_home_uses_override_when_provided() {
+        let temp = tempfile::TempDir::new().unwrap();
 
+        assert_eq!(
+            CopilotApplicator::harness_home_from_override(Some(temp.path().into())).unwrap(),
+            temp.path()
+        );
+    }
+
+    #[test]
+    fn copilot_harness_home_defaults_to_github_copilot_config_dir() {
         let expected = dirs::home_dir().unwrap().join(".config/github-copilot");
 
         assert_eq!(
-            CopilotApplicator::harness_home_from_env().unwrap(),
+            CopilotApplicator::harness_home_from_override(None).unwrap(),
             expected
         );
     }
