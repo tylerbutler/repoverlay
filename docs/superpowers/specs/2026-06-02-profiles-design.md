@@ -10,7 +10,8 @@ The first implementation should build the GitHub Copilot harness applicator. The
 
 - Define named profiles in the main repoverlay CCL config.
 - Let profiles compose existing overlays without replacing overlay behavior.
-- Treat MCP servers, skills, plugins, and instruction files as first-class profile objects.
+- Treat MCP servers, skills, plugins, and harness/user-level instruction files as first-class
+  profile objects.
 - Keep profiles harness-neutral and move placement logic into harness applicators.
 - Support both repo-local and user-level/global harness locations.
 - Track profile lifecycle and state separately from overlay state.
@@ -21,13 +22,15 @@ The first implementation should build the GitHub Copilot harness applicator. The
 - Do not add MCP built-ins in v1. MCPs are explicit server definitions.
 - Do not add grouped `default` plugin or skill channels in v1. Skills and plugins are plain lists.
 - Do not make profiles arbitrary harness-specific config blobs.
+- Do not use profile `instructions` for repo-level instruction files. Repo-level files such as
+  `AGENTS.md` should be supplied by overlays.
 - Do not require all harnesses to support every profile object.
 
 ## Profiles vs. overlays
 
 Overlays remain file-tree bundles applied to git repositories. They own source resolution, mappings, symlink/copy behavior, git exclude updates, conflict handling, and overlay state.
 
-Profiles are higher-level compositions. They can reference overlays, but they also express agent capabilities that are not naturally overlays: MCP servers, marketplace skills, plugins, and instruction files such as `AGENTS.md`. Profiles do not encode where these objects are written. A harness applicator decides that.
+Profiles are higher-level compositions. They can reference overlays, but they also express agent capabilities that are not naturally overlays: MCP servers, marketplace skills, plugins, and harness/user-level instruction files. Repo-level instruction files such as `AGENTS.md` should be represented as overlay files, because overlays already own repo-local file placement, conflict handling, git exclusion, and removal. Profiles do not encode where harness/user-level objects are written. A harness applicator decides that.
 
 This keeps overlays reusable and makes profiles portable across agent harnesses.
 
@@ -41,11 +44,6 @@ profiles =
     description = On-call engineer profile
     overlays =
       = oce-base
-
-    instructions =
-      =
-        source = AGENTS.oce.md
-        target = AGENTS.md
 
     mcps =
       servers =
@@ -70,8 +68,7 @@ profiles =
 
     instructions =
       =
-        source = AGENTS.rust.md
-        target = AGENTS.md
+        source = copilot-instructions.md
 
     skills =
       = market:rust-reviewer@playground
@@ -85,7 +82,9 @@ profiles =
 
 - `description`: Optional user-facing metadata.
 - `overlays`: Overlay references resolved with existing library and source semantics.
-- `instructions`: Instruction file entries. Each entry has a `source` and `target`; the harness decides whether the target is repo-local, user-level, merged, or unsupported.
+- `instructions`: Harness/user-level instruction entries. Each entry has a `source`; the harness
+  decides the target, merge behavior, and whether the instruction type is supported. Repo-level
+  instruction files belong in overlays instead.
 - `mcps.servers`: User-defined MCP servers. Each server has a name and fields such as `command`, `args`, `env`, and future transport metadata.
 - `skills`: Plain list of skill references.
 - `plugins`: Plain list of plugin references.
@@ -176,9 +175,9 @@ overlays =
   = rust-base
 files =
   =
-    source = AGENTS.rust.md
-    target = AGENTS.md
-    scope = repo
+    source = copilot-instructions.md
+    target = ~/.config/github-copilot/instructions.md
+    scope = user
     action = write-file
 skipped =
   =
@@ -219,7 +218,7 @@ Unit tests should cover:
 - Config precedence between global and repo-local profiles.
 - Planning for the GitHub Copilot applicator.
 - Warning and skip behavior for unsupported capabilities.
-- Instruction file planning.
+- Harness/user-level instruction file planning.
 - MCP server planning.
 
 Integration tests should cover:
@@ -227,7 +226,7 @@ Integration tests should cover:
 - `profile list`, `profile show`, `profile apply`, `profile status`, and `profile remove`.
 - Profile state file creation and removal.
 - Overlay references applied through a profile.
-- User-level and repo-local action recording.
+- User-level action recording and repo-local overlay recording.
 - Rollback or non-success state behavior on failed apply.
 
 ## Initial implementation slice
@@ -236,7 +235,7 @@ Integration tests should cover:
 2. Add profile command group with `list` and `show`.
 3. Add `ProfileApplicator` trait, plan model, and a dummy test applicator.
 4. Add GitHub Copilot applicator.
-5. Add `profile apply` for overlays and instruction files.
+5. Add `profile apply` for overlays and harness/user-level instruction files.
 6. Add MCP server planning for GitHub Copilot.
 7. Add profile state and `profile status`/`profile remove`.
 8. Add skills and plugins once the GitHub Copilot placement semantics are clear.
