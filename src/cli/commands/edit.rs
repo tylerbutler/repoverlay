@@ -14,7 +14,7 @@ use crate::state::{EntryType, FileEntry, LinkType, OverlaySource, SourceResolver
 use crate::{
     OverlayName, canonicalize_path, list_applied_overlays, load_all_overlay_targets,
     load_overlay_state, normalize_overlay_name, save_external_state, save_overlay_state,
-    selection::is_interactive, update_git_exclude,
+    update_git_exclude,
 };
 
 /// Tracks completed operations for rollback on failure.
@@ -30,42 +30,9 @@ enum RollbackEntry {
     },
 }
 
-/// Edit an existing applied overlay (add files, remove files, or re-select interactively).
-pub(crate) fn edit_overlay(
-    name_arg: &str,
-    target: &std::path::Path,
-    add_files: &[PathBuf],
-    remove_files: &[PathBuf],
-    interactive: bool,
-    dry_run: bool,
-) -> Result<()> {
-    // Validate at least one operation.
-    // In an interactive terminal, default to interactive mode automatically.
-    if add_files.is_empty() && remove_files.is_empty() && !interactive && !is_interactive() {
-        bail!(
-            "No operation specified. Please specify at least one of:\n  \
-             --add <file>      Add files to the overlay\n  \
-             --remove <file>   Remove files from the overlay\n  \
-             --interactive     Re-select files interactively"
-        );
-    }
-
-    // Handle add
-    if !add_files.is_empty() {
-        add_files_to_overlay(name_arg, target, add_files, dry_run)?;
-    }
-
-    // Handle remove (stub for now)
-    if !remove_files.is_empty() {
-        remove_files_from_overlay(name_arg, target, remove_files, dry_run)?;
-    }
-
-    // Interactive mode (explicit flag or auto-detected interactive terminal with no other ops)
-    if interactive || (add_files.is_empty() && remove_files.is_empty() && is_interactive()) {
-        interactive_edit_overlay(name_arg, target, dry_run)?;
-    }
-
-    Ok(())
+/// Edit an existing applied overlay by re-selecting files interactively.
+pub(crate) fn edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
+    interactive_edit_overlay(name_arg, target, dry_run)
 }
 
 /// Resolve an overlay's source to a local filesystem path.
@@ -501,7 +468,7 @@ pub(crate) fn add_files_to_overlay(
     if files.is_empty() {
         bail!(
             "No files specified.\n\n\
-             Usage: repoverlay edit <overlay-name> --add <file> [--add <file>...]"
+             Usage: repoverlay edit add <overlay-name> <file> [file...]"
         );
     }
 

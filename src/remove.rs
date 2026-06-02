@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::OverlayName;
 use crate::canonicalize_path;
+use crate::path_safety::{check_no_symlink_ancestors, validate_repo_relative_path};
 use crate::state::{
     EntryType, META_FILE, OVERLAYS_DIR, STATE_DIR, list_applied_overlays, load_overlay_state,
     normalize_overlay_name, remove_external_state,
@@ -69,12 +70,24 @@ pub(crate) fn remove_overlay(
 
     if remove_all {
         // Remove all overlays
+        let mut errors = Vec::new();
         for overlay_name in &applied_overlays {
-            remove_single_overlay(&target, &overlays_dir, overlay_name.as_str())?;
+            if let Err(e) = remove_single_overlay(&target, &overlays_dir, overlay_name.as_str()) {
+                errors.push(format!("{overlay_name}: {e:#}"));
+            }
         }
 
-        // Clean up state files but preserve library and config
-        cleanup_state_dir(&target)?;
+        if list_applied_overlays(&target)?.is_empty() {
+            // Clean up state files but preserve library and config
+            cleanup_state_dir(&target)?;
+        }
+
+        if !errors.is_empty() {
+            bail!(
+                "Failed to remove one or more overlays:\n{}",
+                errors.join("\n")
+            );
+        }
 
         println!("\n{} Removed all overlays", "✓".green().bold());
     } else if let Some(name) = name {
@@ -144,6 +157,10 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
     let state = load_overlay_state(target, name)?;
 
     println!("{} overlay: {}", "Removing".red().bold(), state.name);
+
+    for entry in state.file_entries() {
+        validate_removal_target(target, &entry.target)?;
+    }
 
     // Remove files and directories
     for entry in state.file_entries() {
@@ -218,15 +235,7 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
             }
         })
         .collect();
-    // Best-effort: don't fail the entire remove if exclude cleanup fails
-    // (e.g. git not available, worktree issues, non-standard git setup)
-    if let Err(e) = update_git_exclude(target, name, &exclude_entries, false) {
-        eprintln!(
-            "  {} Could not update git exclude: {}",
-            "Warning:".yellow(),
-            e
-        );
-    }
+    let exclude_update_result = update_git_exclude(target, name, &exclude_entries, false);
 
     // Remove state file
     fs::remove_file(&state_file)?;
@@ -240,12 +249,38 @@ pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &s
         );
     }
 
+    if let Err(e) = exclude_update_result {
+        return Err(e).context("Managed files were removed, but failed to update git exclude");
+    }
+
     println!(
         "\n{} Removed {} file(s) from '{}'",
         "✓".green().bold(),
         state.file_count(),
         state.name
     );
+
+    Ok(())
+}
+
+fn validate_removal_target(repo_root: &Path, target_rel: &Path) -> Result<()> {
+    validate_repo_relative_path(target_rel).with_context(|| {
+        format!(
+            "Unsafe state target '{}': managed paths must stay within the repository",
+            target_rel.display()
+        )
+    })?;
+
+    if let Some(parent) = target_rel.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        check_no_symlink_ancestors(repo_root, parent).with_context(|| {
+            format!(
+                "Unsafe state target '{}': managed path ancestors must not contain symlinks",
+                target_rel.display()
+            )
+        })?;
+    }
 
     Ok(())
 }
@@ -270,6 +305,7 @@ mod tests {
     // Tests for remove_single_overlay
     mod remove_single_overlay_tests {
         use super::*;
+        use crate::state::{FileEntry, LinkType, OverlayState};
         use crate::{ConflictStrategy, apply_overlay};
 
         fn create_test_repo_with_overlay() -> (TempDir, String) {
@@ -405,6 +441,39 @@ mod tests {
             assert!(!repo.path().join(".vscode/settings.json").exists());
             // Parent .vscode should be cleaned up since it's empty
             assert!(!repo.path().join(".vscode").exists());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn rejects_tampered_state_target_through_symlink_ancestor() {
+            use std::os::unix::fs::symlink;
+
+            let (repo, _) = create_test_repo_with_overlay();
+            let overlays_dir = repo.path().join(STATE_DIR).join(OVERLAYS_DIR);
+            let state_file = overlays_dir.join("test-overlay.ccl");
+            let outside = TempDir::new().unwrap();
+            let external_file = outside.path().join("victim.txt");
+            fs::write(&external_file, "keep me").unwrap();
+            symlink(outside.path(), repo.path().join("linked")).unwrap();
+
+            let content = fs::read_to_string(&state_file).unwrap();
+            let mut state: OverlayState = sickle::from_str(&content).unwrap();
+            state.files = vec![FileEntry {
+                source: Path::new("victim.txt").to_path_buf(),
+                target: Path::new("linked/victim.txt").to_path_buf(),
+                link_type: LinkType::Copy,
+                entry_type: EntryType::File,
+            }];
+            fs::write(&state_file, sickle::to_string(&state).unwrap()).unwrap();
+
+            let result = remove_single_overlay(repo.path(), &overlays_dir, "test-overlay");
+
+            assert!(result.is_err());
+            assert_eq!(fs::read_to_string(external_file).unwrap(), "keep me");
+            assert!(
+                state_file.exists(),
+                "state should remain for failed removal"
+            );
         }
     }
 
@@ -660,6 +729,102 @@ mod tests {
             remove_overlay(&canonical, Some("only-overlay".to_string()), false, false).unwrap();
 
             // State dir should be cleaned up when last overlay is removed
+            assert!(!canonical.join(STATE_DIR).exists());
+        }
+
+        #[test]
+        fn remove_reports_error_when_git_exclude_cleanup_fails_after_removing_files() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::write(overlay.path().join("file.txt"), "content").unwrap();
+
+            apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("exclude-cleanup-fails".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let exclude_path = canonical.join(".git/info/exclude");
+            fs::remove_file(&exclude_path).unwrap();
+            fs::create_dir(&exclude_path).unwrap();
+
+            let result = remove_overlay(
+                &canonical,
+                Some("exclude-cleanup-fails".to_string()),
+                false,
+                false,
+            );
+
+            assert!(result.is_err());
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("Managed files were removed"));
+            assert!(error.contains("failed to update git exclude"));
+            assert!(!canonical.join("file.txt").exists());
+            assert!(
+                !canonical
+                    .join(STATE_DIR)
+                    .join(OVERLAYS_DIR)
+                    .join("exclude-cleanup-fails.ccl")
+                    .exists()
+            );
+        }
+
+        #[test]
+        fn remove_all_continues_after_git_exclude_cleanup_failure() {
+            let repo = create_test_repo();
+            let overlay_one = TempDir::new().unwrap();
+            fs::write(overlay_one.path().join("one.txt"), "one").unwrap();
+            let overlay_two = TempDir::new().unwrap();
+            fs::write(overlay_two.path().join("two.txt"), "two").unwrap();
+
+            apply_overlay(
+                overlay_one.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("one".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+            apply_overlay(
+                overlay_two.path().to_str().unwrap(),
+                repo.path(),
+                true,
+                Some("two".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .unwrap();
+
+            let canonical = repo.path().canonicalize().unwrap();
+            let exclude_path = canonical.join(".git/info/exclude");
+            fs::remove_file(&exclude_path).unwrap();
+            fs::create_dir(&exclude_path).unwrap();
+
+            let result = remove_overlay(&canonical, None, true, false);
+
+            assert!(result.is_err());
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("Failed to remove one or more overlays"));
+            assert!(!canonical.join("one.txt").exists());
+            assert!(!canonical.join("two.txt").exists());
             assert!(!canonical.join(STATE_DIR).exists());
         }
     }

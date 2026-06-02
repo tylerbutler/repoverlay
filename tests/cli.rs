@@ -187,6 +187,60 @@ fn cache_help_displays() {
 }
 
 #[test]
+fn deprecated_cli_surfaces_are_rejected() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["create-local", "--help"])
+        .assert()
+        .failure();
+    cargo_bin_cmd!("repoverlay")
+        .args(["list", "--help"])
+        .assert()
+        .failure();
+    cargo_bin_cmd!("repoverlay")
+        .args(["cache", "clear", "--help"])
+        .assert()
+        .failure();
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "my-overlay", "--add", "file.txt"])
+        .assert()
+        .failure();
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "my-overlay", "--remove", "file.txt"])
+        .assert()
+        .failure();
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "my-overlay", "--interactive"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn replacement_cli_surfaces_are_available() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["create", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--output"));
+    cargo_bin_cmd!("repoverlay")
+        .args(["browse", "--help"])
+        .assert()
+        .success();
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "add", "--help"])
+        .assert()
+        .success();
+    cargo_bin_cmd!("repoverlay")
+        .args(["edit", "remove", "--help"])
+        .assert()
+        .success();
+    cargo_bin_cmd!("repoverlay")
+        .args(["cache", "remove", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--all"));
+}
+
+#[test]
 fn restore_help_displays() {
     cargo_bin_cmd!("repoverlay")
         .args(["restore", "--help"])
@@ -776,12 +830,18 @@ fn status_shows_multiple_overlays() {
 fn status_json_no_overlays() {
     let ctx = TestContext::new();
 
-    cargo_bin_cmd!("repoverlay")
+    let output = cargo_bin_cmd!("repoverlay")
         .args(["status", "--json"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(r#""overlays": []"#));
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["overlays"].as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -804,14 +864,20 @@ fn status_json_with_overlay() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
+    assert_eq!(json["schema_version"], 1);
     let overlays = json["overlays"].as_array().unwrap();
     assert_eq!(overlays.len(), 1);
     assert_eq!(overlays[0]["name"], "json-test");
     assert!(overlays[0]["applied_at"].is_string());
-    assert!(overlays[0]["source"].is_object());
+    assert_eq!(overlays[0]["source"]["type"], "local");
+    assert!(overlays[0]["source"]["path"].is_string());
 
     let files = overlays[0]["files"].as_array().unwrap();
     assert!(!files.is_empty());
+    assert!(files[0]["source"].is_string());
+    assert!(files[0]["target"].is_string());
+    assert_eq!(files[0]["link_type"], "symlink");
+    assert_eq!(files[0]["entry_type"], "file");
     assert_eq!(files[0]["status"], "ok");
 }
 
@@ -976,7 +1042,61 @@ fn restore_all_overlays() {
         .args(["restore"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
+        .success()
+        .stdout(predicate::str::contains("Restore summary:"))
+        .stdout(predicate::str::contains("Restored:"))
+        .stdout(predicate::str::contains("overlay-a"))
+        .stdout(predicate::str::contains("overlay-b"))
+        .stdout(predicate::str::contains("Failed: none"));
+}
+
+#[test]
+fn restore_partial_failure_exits_nonzero_and_summarizes_results() {
+    let ctx = TestContext::new();
+    let restorable_overlay = common::create_overlay_dir(&[(".envrc", "export FOO=1")]);
+    let missing_overlay = common::create_overlay_dir(&[(".tool-versions", "nodejs 20.0.0")]);
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", restorable_overlay.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "restorable"])
+        .assert()
         .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["apply", missing_overlay.path().to_str().unwrap()])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .args(["--name", "missing-source"])
+        .assert()
+        .success();
+
+    fs::remove_dir_all(ctx.repo_path().join(".repoverlay")).unwrap();
+    fs::remove_file(ctx.repo_path().join(".envrc")).unwrap();
+    fs::remove_file(ctx.repo_path().join(".tool-versions")).unwrap();
+    fs::remove_dir_all(missing_overlay.path()).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["restore"])
+        .args(["--target", ctx.repo_path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Restore summary:"))
+        .stdout(predicate::str::contains("Restored: restorable"))
+        .stdout(predicate::str::contains("Failed:"))
+        .stdout(predicate::str::contains("missing-source"))
+        .stderr(predicate::str::contains(
+            "Failed to restore 1 overlay(s): missing-source",
+        ))
+        .stderr(predicate::str::contains("Restored: restorable"));
+
+    assert!(
+        ctx.file_exists(".envrc"),
+        "restore should continue and restore successful overlays"
+    );
+    assert!(
+        !ctx.file_exists(".tool-versions"),
+        "failed overlay file should remain missing"
+    );
 }
 
 #[test]
@@ -1182,15 +1302,6 @@ fn apply_conflicting_file_warns_or_fails() {
 // ============================================================================
 // Cache Command Tests
 // ============================================================================
-
-#[test]
-fn cache_clear_help() {
-    cargo_bin_cmd!("repoverlay")
-        .args(["cache", "clear", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Clear").or(predicate::str::contains("cache")));
-}
 
 #[test]
 fn cache_remove_help() {
@@ -1820,57 +1931,48 @@ fn source_add_local_extracts_name_from_dir() {
 }
 
 // ============================================================================
-// Source Add file:// URL Tests
+// Source Add unsupported URL scheme tests
 // ============================================================================
 
 #[test]
-fn source_add_file_url_succeeds() {
+fn source_add_rejects_file_url() {
     let ctx = SourceTestContext::new();
 
-    // Create an external directory to use as source
-    let external_dir = tempfile::TempDir::new().unwrap();
-
-    let file_url = format!("file://{}", external_dir.path().display());
     ctx.cmd()
-        .args(["source", "add", &file_url, "--name", "file-source"])
+        .args([
+            "source",
+            "add",
+            "file:///home/user/overlays",
+            "--name",
+            "file-source",
+        ])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Added"));
+        .failure()
+        .stderr(predicate::str::contains("https://"))
+        .stderr(predicate::str::contains("ssh://"))
+        .stderr(predicate::str::contains("git@"));
 }
 
 #[test]
-fn source_add_file_url_shows_in_list() {
+fn source_add_rejects_ftp_url() {
     let ctx = SourceTestContext::new();
 
-    let external_dir = tempfile::TempDir::new().unwrap();
-    let file_url = format!("file://{}", external_dir.path().display());
-
     ctx.cmd()
-        .args(["source", "add", &file_url, "--name", "file-listed"])
+        .args(["source", "add", "ftp://example.com/repo.git"])
         .assert()
-        .success();
-
-    ctx.cmd()
-        .args(["source", "list"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("file-listed"));
+        .failure()
+        .stderr(predicate::str::contains("Invalid source URL"));
 }
 
 #[test]
-fn source_add_file_url_extracts_name_from_path() {
+fn source_add_rejects_http_url() {
     let ctx = SourceTestContext::new();
 
-    let external_dir = tempfile::TempDir::new().unwrap();
-    let named_dir = external_dir.path().join("my-overlays");
-    fs::create_dir_all(&named_dir).unwrap();
-
-    let file_url = format!("file://{}", named_dir.display());
     ctx.cmd()
-        .args(["source", "add", &file_url])
+        .args(["source", "add", "http://github.com/org/repo"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("my-overlays"));
+        .failure()
+        .stderr(predicate::str::contains("Invalid source URL"));
 }
 
 // ============================================================================
@@ -1980,7 +2082,7 @@ fn repoverlay_merge_env_var_enables_merge() {
 }
 
 #[test]
-fn cross_overlay_json_auto_merges_without_merge_flag() {
+fn cross_overlay_json_conflict_without_merge_flag_fails() {
     let ctx = TestContext::new();
     let overlay1 = common::create_overlay_dir(&[(
         "settings.json",
@@ -1999,18 +2101,19 @@ fn cross_overlay_json_auto_merges_without_merge_flag() {
         .assert()
         .success();
 
-    // Apply second overlay WITHOUT --merge; should auto-merge the JSON
+    // Apply second overlay WITHOUT --merge; cross-overlay conflicts should fail closed.
     cargo_bin_cmd!("repoverlay")
         .args(["apply", overlay2.path().to_str().unwrap()])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .args(["--name", "second", "--copy"])
         .assert()
-        .success();
+        .failure()
+        .stderr(predicate::str::contains("already managed by overlay"));
 
     let content: serde_json::Value = serde_json::from_str(&ctx.read_file("settings.json")).unwrap();
-    assert_eq!(content["from_overlay1"], true); // preserved from first overlay
-    assert_eq!(content["from_overlay2"], true); // added from second overlay
-    assert_eq!(content["shared"], "overlay2"); // second overlay wins
+    assert_eq!(content["from_overlay1"], true);
+    assert!(content.get("from_overlay2").is_none());
+    assert_eq!(content["shared"], "overlay1");
 }
 
 #[test]
@@ -2035,7 +2138,7 @@ fn cross_overlay_json_deep_merges_nested_objects() {
     cargo_bin_cmd!("repoverlay")
         .args(["apply", overlay2.path().to_str().unwrap()])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .args(["--name", "second", "--copy"])
+        .args(["--name", "second", "--copy", "--merge"])
         .assert()
         .success();
 
@@ -2114,7 +2217,7 @@ fn edit_add_fails_when_file_does_not_exist() {
 }
 
 #[test]
-fn edit_fails_when_no_operation_specified() {
+fn edit_name_only_fails_for_non_applied_overlay() {
     let ctx = TestContext::new();
 
     cargo_bin_cmd!("repoverlay")
@@ -2122,7 +2225,7 @@ fn edit_fails_when_no_operation_specified() {
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("specify at least one"));
+        .stderr(predicate::str::contains("not currently applied"));
 }
 
 #[test]
@@ -2356,7 +2459,7 @@ fn edit_interactive_fails_for_non_applied_overlay() {
     let ctx = TestContext::new();
 
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "nonexistent", "--interactive"])
+        .args(["edit", "nonexistent"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .failure()
@@ -2378,10 +2481,10 @@ fn edit_interactive_non_tty_uses_preselected() {
         .assert()
         .success();
 
-    // In non-TTY mode, interactive should report "No changes" because
+    // In non-TTY mode, edit should report "No changes" because
     // preselected = currently applied, so diff is empty
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--interactive"])
+        .args(["edit", "test-overlay"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -2412,13 +2515,13 @@ fn edit_interactive_includes_files_in_hidden_directories() {
     assert!(ctx.file_exists(".claude/settings.json"));
     assert!(ctx.file_exists(".envrc"));
 
-    // In non-TTY mode, interactive edit should detect all overlay files
+    // In non-TTY mode, edit should detect all overlay files
     // (including those inside hidden directories) and pre-select the applied ones.
     // Since all applied files are detected, the diff is empty -> "No changes".
     // Before the fix, files in hidden directories were skipped by WalkDir,
     // which would cause them to appear as removals instead.
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--interactive"])
+        .args(["edit", "test-overlay"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -2580,57 +2683,23 @@ fn edit_no_name_multiple_overlays_fails_in_non_tty() {
 }
 
 // ──────────────────────────────────────────────
-// Deprecated flag backward compatibility
+// Removed deprecated flag compatibility
 // ──────────────────────────────────────────────
 
 #[test]
-fn edit_deprecated_add_flag_works_with_warning() {
-    let ctx = TestContext::new().with_overlay(&envrc_overlay());
-
-    cargo_bin_cmd!("repoverlay")
-        .args(["apply", ctx.overlay_source()])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .args(["--name", "test-overlay"])
-        .assert()
-        .success();
-
-    ctx.create_repo_file("new-file.txt", "new content");
-
-    // Use deprecated --add flag
+fn edit_deprecated_add_flag_is_rejected() {
     cargo_bin_cmd!("repoverlay")
         .args(["edit", "org/repo/test-overlay", "--add", "new-file.txt"])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Added 1 file"))
-        .stderr(predicate::str::contains("deprecated"));
-
-    assert!(ctx.is_symlink("new-file.txt"));
+        .failure();
 }
 
 #[test]
-fn edit_deprecated_remove_flag_works_with_warning() {
-    let ctx = TestContext::new()
-        .with_overlay(&[(".envrc", "export FOO=bar"), ("extra.txt", "extra content")]);
-
-    cargo_bin_cmd!("repoverlay")
-        .args(["apply", ctx.overlay_source()])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
-        .args(["--name", "test-overlay"])
-        .assert()
-        .success();
-
-    // Use deprecated --remove flag
+fn edit_deprecated_remove_flag_is_rejected() {
     cargo_bin_cmd!("repoverlay")
         .args(["edit", "test-overlay", "--remove", "extra.txt"])
-        .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Removed 1 file"))
-        .stderr(predicate::str::contains("deprecated"));
-
-    assert!(!ctx.file_exists("extra.txt"));
-    assert!(ctx.file_exists(".envrc"));
+        .failure();
 }
 
 // ──────────────────────────────────────────────
@@ -2662,11 +2731,11 @@ fn edit_interactive_excludes_repoverlay_ccl_from_selection() {
         .assert()
         .success();
 
-    // Interactive edit should NOT see repoverlay.ccl as a new file to add.
+    // Edit should NOT see repoverlay.ccl as a new file to add.
     // If it did, the diff would be non-empty (repoverlay.ccl as an addition).
     // "No changes" confirms repoverlay.ccl is properly excluded.
     cargo_bin_cmd!("repoverlay")
-        .args(["edit", "test-overlay", "--interactive"])
+        .args(["edit", "test-overlay"])
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
@@ -3059,7 +3128,8 @@ fn status_shows_library_source_json() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Library"));
+        .stdout(predicate::str::contains(r#""type": "library""#))
+        .stdout(predicate::str::contains(r#""name": "test-overlay""#));
 }
 
 // --- create --into library (#217) ---

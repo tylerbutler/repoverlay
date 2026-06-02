@@ -1714,7 +1714,10 @@ mod tests {
             .unwrap();
 
         assert!(resolved.is_some());
-        assert_eq!(resolved.unwrap().path, overlay);
+        assert_eq!(
+            resolved.unwrap().path.canonicalize().unwrap(),
+            overlay.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -1740,7 +1743,10 @@ mod tests {
             .unwrap();
 
         assert!(resolved.is_some());
-        assert_eq!(resolved.unwrap().path, local_source);
+        assert_eq!(
+            resolved.unwrap().path.canonicalize().unwrap(),
+            local_source.canonicalize().unwrap()
+        );
     }
 
     #[test]

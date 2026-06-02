@@ -436,18 +436,6 @@ enum Commands {
         /// Full form: `org/repo/name` - uses explicit values
         name: Option<String>,
 
-        /// Files to add to the overlay
-        #[arg(short, long, value_name = "FILE", num_args = 1.., hide = true)]
-        add: Vec<PathBuf>,
-
-        /// Files to remove from the overlay
-        #[arg(short, long, value_name = "FILE", num_args = 1.., hide = true)]
-        remove: Vec<PathBuf>,
-
-        /// Re-run interactive file selection with current files pre-selected
-        #[arg(short, long, conflicts_with_all = ["add", "remove"], hide = true)]
-        interactive: bool,
-
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
         target: Option<PathBuf>,
@@ -455,69 +443,6 @@ enum Commands {
         /// Show what would change without making changes
         #[arg(long)]
         dry_run: bool,
-    },
-
-    /// Deprecated: use `create --output` instead
-    #[command(hide = true)]
-    CreateLocal {
-        /// Include specific files or directories
-        #[arg(short, long)]
-        include: Vec<PathBuf>,
-
-        /// Source repository to extract files from (defaults to current directory)
-        #[arg(short, long)]
-        source: Option<PathBuf>,
-
-        /// Output directory for local overlay creation
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        /// Overlay name
-        name: Option<String>,
-
-        /// Show what would be created without creating files
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Skip interactive prompts
-        #[arg(short = 'y', long)]
-        yes: bool,
-
-        /// Force overwrite if overlay already exists
-        #[arg(short, long)]
-        force: bool,
-    },
-
-    /// Deprecated: use `browse` instead
-    #[command(hide = true, name = "list")]
-    List {
-        /// Overlay source
-        #[arg(value_name = "SOURCE")]
-        source: Option<String>,
-
-        /// Filter by target repository
-        #[arg(short = 'f', long)]
-        filter: Option<String>,
-
-        /// Skip updating overlay repo before listing
-        #[arg(long)]
-        no_update: bool,
-
-        /// Target repository directory
-        #[arg(short, long)]
-        target: Option<PathBuf>,
-
-        /// Disable interactive selection
-        #[arg(long)]
-        no_interactive: bool,
-
-        /// Show what would be applied without making changes
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Show all overlays
-        #[arg(long)]
-        show_all: bool,
     },
 
     /// Manage overlay sources (for multi-source configurations)
@@ -565,14 +490,6 @@ pub(crate) enum SourceCommand {
 pub(crate) enum CacheCommand {
     /// List cached repositories
     List,
-
-    /// Clear all cached repositories
-    #[command(hide = true)]
-    Clear {
-        /// Skip confirmation prompt
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
 
     /// Remove cached repositories
     Remove {
@@ -925,9 +842,6 @@ pub(crate) fn run() -> Result<()> {
         Commands::Edit {
             command,
             name,
-            add,
-            remove,
-            interactive,
             target,
             dry_run,
         } => match command {
@@ -951,54 +865,15 @@ pub(crate) fn run() -> Result<()> {
             }
             None => {
                 let target = target.unwrap_or_else(|| PathBuf::from("."));
-                if !add.is_empty() || !remove.is_empty() {
-                    eprintln!(
-                        "{}: --add/--remove flags are deprecated, use `edit add` or `edit remove` subcommands instead",
-                        "Warning".yellow().bold()
-                    );
-                }
                 // When no name is given, interactively select an overlay
                 // and go straight to interactive file selection.
-                let (name, interactive) = match name {
-                    Some(n) => (n, interactive),
-                    None => (select_overlay_interactive(&target)?, true),
+                let name = match name {
+                    Some(n) => n,
+                    None => select_overlay_interactive(&target)?,
                 };
-                edit_overlay(&name, &target, &add, &remove, interactive, dry_run)?;
+                edit_overlay(&name, &target, dry_run)?;
             }
         },
-        Commands::CreateLocal {
-            include,
-            source,
-            output,
-            name,
-            dry_run,
-            yes,
-            force,
-        } => {
-            eprintln!("Warning: `create-local` is deprecated, use `create --output` instead");
-            let source = source.unwrap_or_else(|| PathBuf::from("."));
-            create_overlay_command(&source, name, output, &include, dry_run, yes, force)?;
-        }
-        Commands::List {
-            source,
-            filter,
-            no_update,
-            target,
-            no_interactive,
-            dry_run,
-            show_all,
-        } => {
-            eprintln!("Warning: `list` is deprecated, use `browse` instead");
-            browse_overlays(
-                source.as_deref(),
-                filter.as_deref(),
-                !no_update,
-                target,
-                no_interactive,
-                dry_run,
-                show_all,
-            )?;
-        }
         Commands::Source { command } => {
             handle_source_command(command)?;
         }
@@ -1683,6 +1558,45 @@ mod tests {
             // other.txt should be applied
             let other = repo.path().join("other.txt");
             assert!(other.exists(), "other.txt should exist");
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn skip_conflicts_skips_existing_file_through_symlink_ancestor() {
+            use std::os::unix::fs::symlink;
+
+            let repo = create_test_repo();
+            let outside = TempDir::new().unwrap();
+            fs::write(outside.path().join(".envrc"), "external content").unwrap();
+            symlink(outside.path(), repo.path().join("linked")).unwrap();
+
+            let overlay = create_test_overlay(&[
+                ("linked/.envrc", "overlay content"),
+                ("other.txt", "other content"),
+            ]);
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                None,
+                None,
+                false,
+                ConflictStrategy::SkipConflicts,
+                false,
+                None,
+                false,
+            );
+
+            assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
+            assert_eq!(
+                fs::read_to_string(outside.path().join(".envrc")).unwrap(),
+                "external content"
+            );
+            assert_eq!(
+                fs::read_to_string(repo.path().join("other.txt")).unwrap(),
+                "other content"
+            );
         }
 
         #[test]
@@ -5523,32 +5437,14 @@ directories =
 
         #[test]
         fn cache_clear_subcommand() {
-            let cli = Cli::try_parse_from(["repoverlay", "cache", "clear"]).unwrap();
-
-            match cli.command {
-                Some(Commands::Cache { command }) => match command {
-                    CacheCommand::Clear { yes } => {
-                        assert!(!yes, "default yes should be false");
-                    }
-                    _ => panic!("Expected Cache Clear subcommand"),
-                },
-                _ => panic!("Expected Cache command"),
-            }
+            let result = Cli::try_parse_from(["repoverlay", "cache", "clear"]);
+            assert!(result.is_err());
         }
 
         #[test]
         fn cache_clear_with_yes_flag() {
-            let cli = Cli::try_parse_from(["repoverlay", "cache", "clear", "--yes"]).unwrap();
-
-            match cli.command {
-                Some(Commands::Cache { command }) => match command {
-                    CacheCommand::Clear { yes } => {
-                        assert!(yes, "yes flag should be true");
-                    }
-                    _ => panic!("Expected Cache Clear subcommand"),
-                },
-                _ => panic!("Expected Cache command"),
-            }
+            let result = Cli::try_parse_from(["repoverlay", "cache", "clear", "--yes"]);
+            assert!(result.is_err());
         }
 
         #[test]
@@ -5745,72 +5641,39 @@ directories =
                 Some(Commands::Edit {
                     command: None,
                     name,
-                    add,
-                    remove,
                     ..
                 }) => {
                     assert_eq!(name, Some("my-overlay".to_string()));
-                    assert!(add.is_empty());
-                    assert!(remove.is_empty());
                 }
                 _ => panic!("Expected Edit with no subcommand"),
             }
         }
 
-        // --- deprecated flag tests (backwards compat) ---
+        // --- removed deprecated flag tests ---
 
         #[test]
-        fn edit_deprecated_add_flag_parses() {
-            let cli = Cli::try_parse_from([
+        fn edit_deprecated_add_flag_is_rejected() {
+            let result = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
                 "my-overlay",
                 "--add",
                 "file1.txt",
                 "file2.txt",
-            ])
-            .unwrap();
-
-            match cli.command {
-                Some(Commands::Edit {
-                    command: None,
-                    name,
-                    add,
-                    remove,
-                    ..
-                }) => {
-                    assert_eq!(name, Some("my-overlay".to_string()));
-                    assert_eq!(
-                        add,
-                        vec![PathBuf::from("file1.txt"), PathBuf::from("file2.txt")]
-                    );
-                    assert!(remove.is_empty());
-                }
-                _ => panic!("Expected Edit with deprecated flags"),
-            }
+            ]);
+            assert!(result.is_err());
         }
 
         #[test]
-        fn edit_deprecated_remove_flag_parses() {
-            let cli =
-                Cli::try_parse_from(["repoverlay", "edit", "my-overlay", "--remove", "file1.txt"])
-                    .unwrap();
-
-            match cli.command {
-                Some(Commands::Edit {
-                    command: None,
-                    remove,
-                    ..
-                }) => {
-                    assert_eq!(remove, vec![PathBuf::from("file1.txt")]);
-                }
-                _ => panic!("Expected Edit with deprecated flags"),
-            }
+        fn edit_deprecated_remove_flag_is_rejected() {
+            let result =
+                Cli::try_parse_from(["repoverlay", "edit", "my-overlay", "--remove", "file1.txt"]);
+            assert!(result.is_err());
         }
 
         #[test]
-        fn edit_deprecated_combined_add_remove() {
-            let cli = Cli::try_parse_from([
+        fn edit_deprecated_combined_add_remove_is_rejected() {
+            let result = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
                 "my-overlay",
@@ -5818,21 +5681,8 @@ directories =
                 "new.txt",
                 "--remove",
                 "old.txt",
-            ])
-            .unwrap();
-
-            match cli.command {
-                Some(Commands::Edit {
-                    command: None,
-                    add,
-                    remove,
-                    ..
-                }) => {
-                    assert_eq!(add, vec![PathBuf::from("new.txt")]);
-                    assert_eq!(remove, vec![PathBuf::from("old.txt")]);
-                }
-                _ => panic!("Expected Edit with deprecated flags"),
-            }
+            ]);
+            assert!(result.is_err());
         }
 
         #[test]
@@ -5862,28 +5712,21 @@ directories =
         }
 
         #[test]
-        fn edit_deprecated_dry_run_parses() {
-            let cli = Cli::try_parse_from([
+        fn edit_deprecated_add_with_dry_run_is_rejected() {
+            let result = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
                 "my-overlay",
                 "--add",
                 "f.txt",
                 "--dry-run",
-            ])
-            .unwrap();
-
-            match cli.command {
-                Some(Commands::Edit { dry_run, .. }) => {
-                    assert!(dry_run);
-                }
-                _ => panic!("Expected Edit command"),
-            }
+            ]);
+            assert!(result.is_err());
         }
 
         #[test]
-        fn edit_deprecated_target_flag_parses() {
-            let cli = Cli::try_parse_from([
+        fn edit_deprecated_add_with_target_flag_is_rejected() {
+            let result = Cli::try_parse_from([
                 "repoverlay",
                 "edit",
                 "my-overlay",
@@ -5891,15 +5734,26 @@ directories =
                 "f.txt",
                 "-t",
                 "/repo",
-            ])
-            .unwrap();
+            ]);
+            assert!(result.is_err());
+        }
 
-            match cli.command {
-                Some(Commands::Edit { target, .. }) => {
-                    assert_eq!(target, Some(PathBuf::from("/repo")));
-                }
-                _ => panic!("Expected Edit command"),
-            }
+        #[test]
+        fn edit_deprecated_interactive_flag_is_rejected() {
+            let result = Cli::try_parse_from(["repoverlay", "edit", "my-overlay", "--interactive"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn create_local_command_is_rejected() {
+            let result = Cli::try_parse_from(["repoverlay", "create-local", "--help"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn list_command_is_rejected() {
+            let result = Cli::try_parse_from(["repoverlay", "list", "--help"]);
+            assert!(result.is_err());
         }
 
         #[test]

@@ -1211,6 +1211,13 @@ mod tests {
     mod configured_source_tests {
         use super::*;
 
+        fn assert_same_canonical_path(actual: &Path, expected: &Path) {
+            assert_eq!(
+                actual.canonicalize().unwrap(),
+                expected.canonicalize().unwrap()
+            );
+        }
+
         #[test]
         fn one_part_with_source_filter_resolves_flat_local_source() {
             let temp = TempDir::new().unwrap();
@@ -1237,10 +1244,10 @@ mod tests {
 
             match resolved {
                 ResolvedSources::Single(source) => {
-                    assert_eq!(source.path, overlay);
+                    assert_same_canonical_path(&source.path, &overlay);
                     match source.source_info {
                         OverlaySource::Local { path, source_name } => {
-                            assert_eq!(path, overlay);
+                            assert_same_canonical_path(&path, &overlay);
                             assert_eq!(source_name.as_deref(), Some("local"));
                         }
                         other => panic!("expected local source, got {other:?}"),

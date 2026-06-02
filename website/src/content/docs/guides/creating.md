@@ -40,14 +40,27 @@ repoverlay create my-overlay --force
 
 ## Local output
 
-If you don't have an overlay repository set up, or want to create an overlay in a local directory:
+If you don't have an overlay repository set up, or want to create an overlay in a local directory, use `--output`:
 
 ```bash
 repoverlay create --output ./my-overlay
 repoverlay create --output ./output --include .envrc --include .claude/
 ```
 
-This writes the overlay files to the specified directory without pushing anywhere.
+`create --output` performs two actions:
+1. **Writes overlay files** to the specified directory
+2. **Auto-applies the overlay** to your repository (symlinks replace originals, state saved, `.git/info/exclude` updated)
+
+### Preview without applying
+
+To see what would be created and applied without modifying your repository, use `--dry-run`:
+
+```bash
+# Preview: see what files would be created and applied
+repoverlay create --output ./my-overlay --dry-run
+```
+
+This shows you the overlay contents and what would be applied, without writing files or mutating your repository.
 
 ## Overlay configuration (advanced)
 

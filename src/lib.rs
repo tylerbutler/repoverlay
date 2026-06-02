@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod create;
 mod detection;
+mod fs_util;
 mod fuzzy;
 pub(crate) mod git;
 mod git_exclude;
@@ -15,6 +16,7 @@ mod json_merge;
 mod library;
 mod overlay_name;
 mod overlay_repo;
+mod path_safety;
 mod reference;
 mod remove;
 mod resolve;
@@ -69,9 +71,10 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use cache::CacheManager;
-use json_merge::{is_json_file, merge_json_files};
+use json_merge::{JsonMergeError, is_json_file, merge_json_files};
 pub(crate) use overlay_name::OverlayName;
 use overlay_repo::copy_dir_recursive;
+use path_safety::check_no_symlink_ancestors;
 use state::{
     CONFIG_FILE, EntryType, FileEntry, GlobalMeta, LinkType, META_FILE, OVERLAYS_DIR,
     OverlayConfig, OverlayState, STATE_DIR, list_applied_overlays, load_all_overlay_targets,
@@ -544,6 +547,7 @@ pub(crate) fn apply_resolved_overlay(
         if target_dir.exists() {
             match conflict_strategy {
                 ConflictStrategy::Force => {
+                    validate_managed_target_path(target, &dir_path)?;
                     eprintln!(
                         "  {} Overwriting existing directory: {}",
                         "Force:".yellow(),
@@ -566,6 +570,7 @@ pub(crate) fn apply_resolved_overlay(
                         InteractiveChoice::Skip => continue,
                         InteractiveChoice::Abort => bail!("Aborted by user"),
                         InteractiveChoice::Overwrite => {
+                            validate_managed_target_path(target, &dir_path)?;
                             eprintln!(
                                 "  {} Overwriting existing directory: {}",
                                 "Force:".yellow(),
@@ -597,6 +602,8 @@ pub(crate) fn apply_resolved_overlay(
                 }
             }
         }
+
+        validate_managed_target_path(target, &dir_path)?;
 
         // Create parent directories if needed
         if let Some(parent) = target_dir.parent() {
@@ -682,53 +689,9 @@ pub(crate) fn apply_resolved_overlay(
         let source_file = source_file.clone();
         let target_file = target.join(&target_rel);
 
-        // Validate that the target file is within the target directory (prevent path traversal)
-        // We need to resolve the path to handle .. components, but the file doesn't exist yet.
-        // So we create parent dirs first (if needed) and then check the canonical path.
-        // Alternative: check if the path contains .. that escapes the target.
-        {
-            // Normalize the path by iterating through components
-            let mut normalized = target.to_path_buf();
-            for component in target_rel.components() {
-                use std::path::Component;
-                match component {
-                    Component::ParentDir => {
-                        // Check if going up would escape the target directory
-                        if !normalized.starts_with(target) || normalized == *target {
-                            bail!(
-                                "Path traversal detected: mapping '{}' -> '{}' would escape target directory",
-                                rel_str,
-                                target_rel.display()
-                            );
-                        }
-                        normalized.pop();
-                    }
-                    Component::Normal(c) => {
-                        normalized.push(c);
-                    }
-                    Component::CurDir => {} // Skip . components
-                    Component::RootDir | Component::Prefix(_) => {
-                        bail!(
-                            "Absolute paths not allowed in mappings: '{}' -> '{}'",
-                            rel_str,
-                            target_rel.display()
-                        );
-                    }
-                }
-            }
-            // After processing, ensure we're still within target
-            if !normalized.starts_with(target) {
-                bail!(
-                    "Path traversal detected: mapping '{}' -> '{}' would escape target directory",
-                    rel_str,
-                    target_rel.display()
-                );
-            }
-        }
-
         // Check for conflicts with existing overlays
         if let Some(conflicting_overlay) = existing_targets.get(target_rel_str.as_str()) {
-            if is_json_file(&target_rel) && target_file.exists() {
+            if merge && is_json_file(&target_rel) && target_file.exists() {
                 eprintln!(
                     "  {} Merging '{}' (managed by overlay '{}')",
                     "Merge:".cyan(),
@@ -736,7 +699,7 @@ pub(crate) fn apply_resolved_overlay(
                     conflicting_overlay
                 );
                 if let Some((entry, exclude_path)) =
-                    try_merge_json(&target_file, &source_file, &target_rel, rel_path)
+                    try_merge_json(target, &target_file, &source_file, &target_rel, rel_path)?
                 {
                     state.add_file(entry);
                     exclude_entries.push(exclude_path);
@@ -787,7 +750,7 @@ pub(crate) fn apply_resolved_overlay(
         }
 
         // Check for conflicts with existing files in repo
-        if target_file.exists() {
+        if target_file.exists() || target_file.is_symlink() {
             if merge && is_json_file(&target_rel) {
                 eprintln!(
                     "  {} Merging '{}' with existing repo file",
@@ -795,7 +758,7 @@ pub(crate) fn apply_resolved_overlay(
                     target_rel.display()
                 );
                 if let Some((entry, exclude_path)) =
-                    try_merge_json(&target_file, &source_file, &target_rel, rel_path)
+                    try_merge_json(target, &target_file, &source_file, &target_rel, rel_path)?
                 {
                     state.add_file(entry);
                     exclude_entries.push(exclude_path);
@@ -805,6 +768,13 @@ pub(crate) fn apply_resolved_overlay(
             }
             match conflict_strategy {
                 ConflictStrategy::Force => {
+                    validate_managed_target_path(target, &target_rel).with_context(|| {
+                        format!(
+                            "Unsafe target path for mapping '{}' -> '{}': target paths must stay within the repository and must not contain symlinks",
+                            rel_str,
+                            target_rel.display()
+                        )
+                    })?;
                     eprintln!(
                         "  {} Overwriting existing file: {}",
                         "Force:".yellow(),
@@ -824,6 +794,15 @@ pub(crate) fn apply_resolved_overlay(
                         InteractiveChoice::Skip => continue,
                         InteractiveChoice::Abort => bail!("Aborted by user"),
                         InteractiveChoice::Overwrite => {
+                            validate_managed_target_path(target, &target_rel).with_context(
+                                || {
+                                    format!(
+                                        "Unsafe target path for mapping '{}' -> '{}': target paths must stay within the repository and must not contain symlinks",
+                                        rel_str,
+                                        target_rel.display()
+                                    )
+                                },
+                            )?;
                             eprintln!(
                                 "  {} Overwriting existing file: {}",
                                 "Force:".yellow(),
@@ -852,6 +831,14 @@ pub(crate) fn apply_resolved_overlay(
                 }
             }
         }
+
+        validate_managed_target_path(target, &target_rel).with_context(|| {
+            format!(
+                "Unsafe target path for mapping '{}' -> '{}': target paths must stay within the repository and must not contain symlinks",
+                rel_str,
+                target_rel.display()
+            )
+        })?;
 
         // Create parent directories if needed
         if let Some(parent) = target_file.parent() {
@@ -905,13 +892,12 @@ pub(crate) fn apply_resolved_overlay(
         bail!("No files found in overlay source: {}", source.display());
     }
 
-    // Update .git/info/exclude with this overlay's entries
-    // Best-effort: overlay files may show as untracked if this fails
+    // Update .git/info/exclude with this overlay's entries. This must succeed:
+    // otherwise managed files could be committed accidentally.
     if let Err(e) = update_git_exclude(target, &normalized_name, &exclude_entries, true) {
-        eprintln!(
-            "  {} Could not update git exclude (overlay files may show as untracked): {}",
-            "Warning:".yellow(),
-            e
+        rollback_created_overlay_entries(target, &state);
+        return Err(e).context(
+            "Failed to update git exclude; rolled back created overlay files where practical",
         );
     }
 
@@ -947,6 +933,67 @@ pub(crate) fn apply_resolved_overlay(
     );
 
     Ok(())
+}
+
+fn rollback_created_overlay_entries(target: &Path, state: &OverlayState) {
+    for entry in state.file_entries().iter().rev() {
+        let path = target.join(&entry.target);
+        let result = match entry.entry_type {
+            EntryType::Directory => {
+                if path.is_symlink() {
+                    #[cfg(unix)]
+                    {
+                        fs::remove_file(&path)
+                    }
+                    #[cfg(windows)]
+                    {
+                        fs::remove_dir(&path)
+                    }
+                } else if path.exists() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    Ok(())
+                }
+            }
+            EntryType::File => {
+                if entry.link_type == LinkType::Merged {
+                    Ok(())
+                } else if path.exists() || path.is_symlink() {
+                    fs::remove_file(&path)
+                } else {
+                    Ok(())
+                }
+            }
+        };
+
+        if let Err(e) = result {
+            eprintln!(
+                "  {} Could not roll back '{}': {}",
+                "Warning:".yellow(),
+                entry.target.display(),
+                e
+            );
+        }
+
+        let mut parent = path.parent();
+        while let Some(dir) = parent {
+            if dir == target {
+                break;
+            }
+            if dir
+                .read_dir()
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(false)
+            {
+                if fs::remove_dir(dir).is_err() {
+                    break;
+                }
+                parent = dir.parent();
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 /// Apply multiple overlays atomically.
@@ -1410,6 +1457,15 @@ fn determine_overlay_name(
     normalize_overlay_name(&overlay_name)
 }
 
+fn validate_managed_target_path(repo_root: &Path, target_rel: &Path) -> Result<()> {
+    check_no_symlink_ancestors(repo_root, target_rel).with_context(|| {
+        format!(
+            "Unsafe target path '{}': target paths must stay within the repository and must not contain symlinks",
+            target_rel.display()
+        )
+    })
+}
+
 /// Check overlay files for conflicts with existing (already-applied) overlay targets.
 fn check_files_against_existing(
     source: &Path,
@@ -1442,15 +1498,23 @@ fn check_files_against_existing(
 /// Update .git/info/exclude file.
 /// Attempt to deep merge a JSON overlay file into an existing target file.
 ///
-/// Returns `Some((file_entry, exclude_path))` on success, or `None` if the merge
-/// failed (with a warning printed to stderr). The caller should add the entry to
-/// state and the exclude path to the exclusion list when `Some` is returned.
+/// Returns `Some((file_entry, exclude_path))` on success, or `None` if JSON parsing/merge failed
+/// (with a warning printed to stderr). Path safety violations are returned as errors so callers
+/// abort instead of falling through to conflict handling.
 fn try_merge_json(
+    repo_root: &Path,
     target_file: &Path,
     source_file: &Path,
     target_rel: &Path,
     rel_path: &Path,
-) -> Option<(FileEntry, String)> {
+) -> Result<Option<(FileEntry, String)>> {
+    check_no_symlink_ancestors(repo_root, target_rel).with_context(|| {
+        format!(
+            "Unsafe JSON merge target '{}': target paths must stay within the repository and must not contain symlinks",
+            target_rel.display()
+        )
+    })?;
+
     match merge_json_files(target_file, source_file, target_file) {
         Ok(result) => {
             log_merge_result(target_rel, &result);
@@ -1461,16 +1525,20 @@ fn try_merge_json(
                 entry_type: EntryType::File,
             };
             let exclude_path = target_rel.to_string_lossy().replace('\\', "/");
-            Some((entry, exclude_path))
+            Ok(Some((entry, exclude_path)))
         }
-        Err(e) => {
+        Err(e @ JsonMergeError::Parse { .. }) => {
             eprintln!(
                 "  {} JSON merge failed for '{}': {e}",
                 "Warning:".yellow(),
                 target_rel.display()
             );
-            None
+            Ok(None)
         }
+        Err(e) => Err(anyhow::anyhow!(
+            "Failed to merge JSON '{}': {e}",
+            target_rel.display()
+        )),
     }
 }
 
@@ -2111,6 +2179,52 @@ mod tests {
         }
     }
 
+    mod apply_path_safety_tests {
+        use super::*;
+
+        fn write_overlay_file(dir: &Path, path: &str, content: &str) {
+            let file_path = dir.join(path);
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(file_path, content).unwrap();
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn apply_rejects_normal_file_target_through_symlink_ancestor() {
+            use std::os::unix::fs::symlink;
+
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            let outside = TempDir::new().unwrap();
+
+            symlink(outside.path(), repo.path().join("linked")).unwrap();
+            write_overlay_file(overlay.path(), "linked/config.txt", "secret");
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                repo.path(),
+                false,
+                Some("unsafe".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            );
+
+            assert!(result.is_err());
+            let message = result.unwrap_err().to_string();
+            assert!(
+                message.contains("Unsafe target path") || message.contains("symlink"),
+                "unexpected error: {message}"
+            );
+            assert!(!outside.path().join("config.txt").exists());
+        }
+    }
+
     mod check_overlay_conflicts_tests {
         use super::*;
 
@@ -2120,6 +2234,7 @@ mod tests {
                 if let Some(parent) = file_path.parent() {
                     fs::create_dir_all(parent).unwrap();
                 }
+
                 fs::write(file_path, "content").unwrap();
             }
         }
@@ -3117,8 +3232,11 @@ mod tests {
             let result = try_apply(overlay.path(), repo.path());
             assert!(result.is_err(), "should reject ../etc/passwd mapping");
             assert!(
-                result.unwrap_err().to_string().contains("Path traversal"),
-                "error should mention path traversal"
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Unsafe target path"),
+                "error should mention unsafe target path"
             );
         }
 
@@ -3140,7 +3258,7 @@ mod tests {
         }
 
         #[test]
-        fn allows_traversal_within_target() {
+        fn rejects_traversal_even_when_it_would_stay_within_target() {
             let repo = create_test_repo();
             let overlay = TempDir::new().unwrap();
             make_overlay_with_config(
@@ -3150,16 +3268,14 @@ mod tests {
             );
 
             let result = try_apply(overlay.path(), repo.path());
-            assert!(result.is_ok(), "foo/../bar should be allowed: {result:?}");
-            let canonical = repo.path().canonicalize().unwrap();
             assert!(
-                canonical.join("bar").exists(),
-                "bar should exist after apply"
+                result.is_err(),
+                "foo/../bar should be rejected by the 1.0 path policy"
             );
         }
 
         #[test]
-        fn allows_deeper_traversal_within_target() {
+        fn rejects_deeper_traversal_even_when_it_would_stay_within_target() {
             let repo = create_test_repo();
             let overlay = TempDir::new().unwrap();
             make_overlay_with_config(
@@ -3170,13 +3286,8 @@ mod tests {
 
             let result = try_apply(overlay.path(), repo.path());
             assert!(
-                result.is_ok(),
-                "foo/bar/../../baz should be allowed: {result:?}"
-            );
-            let canonical = repo.path().canonicalize().unwrap();
-            assert!(
-                canonical.join("baz").exists(),
-                "baz should exist after apply"
+                result.is_err(),
+                "foo/bar/../../baz should be rejected by the 1.0 path policy"
             );
         }
 
@@ -3858,6 +3969,161 @@ mod tests {
     mod interactive_apply_tests {
         use super::*;
         use crate::testutil::{create_test_overlay, create_test_repo};
+
+        #[cfg(unix)]
+        #[test]
+        fn merge_rejects_symlink_target_without_touching_external_file() {
+            use std::os::unix::fs::symlink;
+
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[("settings.json", r#"{"overlay": true}"#)]);
+            let external_dir = TempDir::new().unwrap();
+            let external = external_dir.path().join("external.json");
+            fs::write(&external, r#"{"external": true}"#).unwrap();
+            symlink(&external, repo.path().join("settings.json")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::Local {
+                    path: overlay.path().to_path_buf(),
+                    source_name: None,
+                },
+            };
+
+            let result = apply_resolved_overlay(
+                &resolved,
+                repo.path(),
+                true,
+                Some("symlink-target".to_string()),
+                ConflictStrategy::Fail,
+                true,
+            );
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("symlink"));
+            assert_eq!(
+                fs::read_to_string(&external).unwrap(),
+                r#"{"external": true}"#
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn merge_rejects_symlink_ancestor_without_touching_external_file() {
+            use std::os::unix::fs::symlink;
+
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[("config/settings.json", r#"{"overlay": true}"#)]);
+            let external_dir = TempDir::new().unwrap();
+            let external = external_dir.path().join("settings.json");
+            fs::write(&external, r#"{"external": true}"#).unwrap();
+            symlink(external_dir.path(), repo.path().join("config")).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::Local {
+                    path: overlay.path().to_path_buf(),
+                    source_name: None,
+                },
+            };
+
+            let result = apply_resolved_overlay(
+                &resolved,
+                repo.path(),
+                true,
+                Some("symlink-ancestor".to_string()),
+                ConflictStrategy::Fail,
+                true,
+            );
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("symlink"));
+            assert_eq!(
+                fs::read_to_string(&external).unwrap(),
+                r#"{"external": true}"#
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn merge_write_failure_aborts_instead_of_skip_conflicts_fallback() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[("locked/settings.json", r#"{"overlay": true}"#)]);
+            let locked_dir = repo.path().join("locked");
+            fs::create_dir(&locked_dir).unwrap();
+            let target = locked_dir.join("settings.json");
+            fs::write(&target, r#"{"repo": true}"#).unwrap();
+            let original_permissions = fs::metadata(&locked_dir).unwrap().permissions();
+            let mut readonly_permissions = original_permissions.clone();
+            readonly_permissions.set_mode(0o555);
+            fs::set_permissions(&locked_dir, readonly_permissions).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::Local {
+                    path: overlay.path().to_path_buf(),
+                    source_name: None,
+                },
+            };
+
+            let result = apply_resolved_overlay(
+                &resolved,
+                repo.path(),
+                true,
+                Some("write-failure".to_string()),
+                ConflictStrategy::SkipConflicts,
+                true,
+            );
+
+            fs::set_permissions(&locked_dir, original_permissions).unwrap();
+
+            assert!(result.is_err());
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("write"), "{error}");
+            assert_eq!(fs::read_to_string(&target).unwrap(), r#"{"repo": true}"#);
+        }
+
+        #[test]
+        fn apply_fails_and_rolls_back_files_when_git_exclude_cannot_be_updated() {
+            let repo = create_test_repo();
+            let overlay = create_test_overlay(&[("nested/file.txt", "content")]);
+            let exclude_path = repo.path().join(".git/info/exclude");
+            fs::remove_file(&exclude_path).unwrap();
+            fs::create_dir(&exclude_path).unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::Local {
+                    path: overlay.path().to_path_buf(),
+                    source_name: None,
+                },
+            };
+
+            let result = apply_resolved_overlay(
+                &resolved,
+                repo.path(),
+                true,
+                Some("exclude-fails".to_string()),
+                ConflictStrategy::Fail,
+                false,
+            );
+
+            assert!(result.is_err());
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("Failed to update git exclude"));
+            assert!(!repo.path().join("nested/file.txt").exists());
+            assert!(!repo.path().join("nested").exists());
+            assert!(
+                !repo
+                    .path()
+                    .join(STATE_DIR)
+                    .join(OVERLAYS_DIR)
+                    .join("exclude-fails.ccl")
+                    .exists()
+            );
+        }
 
         #[test]
         fn interactive_reapplies_same_name_overlay() {
