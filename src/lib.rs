@@ -1,6 +1,6 @@
 //! repoverlay - Overlay config files into git repositories without committing them.
 //!
-//! This is a CLI tool. There is no public library API.
+//! This is a CLI-first crate. The only supported library entry point is [`run`].
 
 mod cache;
 mod cli;

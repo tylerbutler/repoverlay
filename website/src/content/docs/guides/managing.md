@@ -29,8 +29,8 @@ The `edit` command lets you add or remove files from an applied overlay.
 ### Add files
 
 ```bash
-repoverlay edit my-overlay --add newfile.txt
-repoverlay edit my-overlay --add file1.txt --add file2.txt
+repoverlay edit add my-overlay newfile.txt
+repoverlay edit add my-overlay file1.txt file2.txt
 ```
 
 This copies the files to the overlay source, replaces the originals with symlinks, and updates the overlay state.
@@ -38,7 +38,7 @@ This copies the files to the overlay source, replaces the originals with symlink
 ### Remove files
 
 ```bash
-repoverlay edit my-overlay --remove oldfile.txt
+repoverlay edit remove my-overlay oldfile.txt
 ```
 
 ### Interactive re-selection
@@ -52,7 +52,7 @@ repoverlay edit my-overlay --interactive
 ### Preview changes
 
 ```bash
-repoverlay edit my-overlay --add new.txt --dry-run
+repoverlay edit add my-overlay new.txt --dry-run
 ```
 
 ## Syncing changes back
