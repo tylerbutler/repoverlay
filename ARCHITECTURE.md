@@ -7,7 +7,9 @@ repoverlay is a CLI tool that overlays config files into git repositories withou
 ```
 src/
 ├── main.rs         # CLI entry point (minimal - delegates to lib)
-├── cli.rs          # CLI command definitions and argument parsing (clap)
+├── cli/
+│   ├── mod.rs      # CLI command definitions, argument parsing, and dispatch (clap)
+│   └── commands/   # Command-specific handlers for browse/cache/create/edit/etc.
 ├── lib.rs          # Core library with apply/remove/status/restore/update operations
 ├── state.rs        # State persistence (in-repo and external backup)
 ├── github.rs       # GitHub URL parsing and source resolution
@@ -33,7 +35,10 @@ tests/
 
 - **main.rs** - Minimal CLI entry point. Initializes logging and delegates to `lib::run()`.
 
-- **cli.rs** - CLI command definitions using clap derive macros. Defines all subcommands, arguments, and flags.
+- **cli/** - CLI command definitions using clap derive macros. `mod.rs` defines
+  top-level commands, arguments, flags, and dispatch; `commands/` contains
+  command-specific handlers for browse, cache, create, edit, library, move,
+  source, and sync workflows.
 
 - **lib.rs** - Core operations: `apply_overlay`, `remove_overlay`, `show_status`, `restore_overlays`, `update_overlays`, `create_overlay`, `switch_overlay`. Also handles git exclude file management.
 

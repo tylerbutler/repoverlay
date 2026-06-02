@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Important
+
+- Use the fff MCP tools for all file search operations instead of default tools.
+
 ## Quick Reference
 
 - **Development guide**: [DEV.md](DEV.md) - build commands, testing, CI, release process

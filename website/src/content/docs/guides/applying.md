@@ -8,13 +8,13 @@ This guide covers the different ways to apply overlays to a git repository.
 
 ## Basic usage
 
-The simplest way to get started is to apply from a GitHub username. repoverlay fetches the available overlays and lets you pick interactively:
+The simplest way to get started is to browse overlays from a GitHub username. repoverlay fetches the available overlays and lets you pick interactively:
 
 ```bash
-repoverlay apply tylerbutler
+repoverlay browse tylerbutler
 ```
 
-You can also apply from a local directory or a full GitHub URL:
+For scripting or power-user workflows, use `apply` to apply a specific local directory, GitHub URL, or configured overlay reference directly:
 
 ```bash
 # Local directory
@@ -26,7 +26,7 @@ repoverlay apply https://github.com/owner/repo
 
 ## Where overlays come from
 
-repoverlay supports several source types. It determines the type automatically from what you pass to `apply`:
+repoverlay supports several source types. It determines the type automatically from what you pass to `browse` or `apply`:
 
 - Strings starting with `https://github.com/` are treated as **GitHub URLs**
 - Strings that look like filesystem paths (`./`, `/`, `~/`) are treated as **local directories**
@@ -37,7 +37,7 @@ repoverlay supports several source types. It determines the type automatically f
 ### GitHub usernames
 
 ```bash
-repoverlay apply tylerbutler
+repoverlay browse tylerbutler
 ```
 
 This fetches a default overlay repository for that user, shows available overlays filtered to your current repo, and lets you pick from an interactive list. The first time you use a source, repoverlay will ask if you want to save it for future use.

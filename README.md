@@ -20,10 +20,13 @@ Overlay config files into git repositories without committing them. Files are sy
 | Restore after git clean | `repoverlay restore` |
 | Create overlay | `repoverlay create <name>` |
 | Create local overlay | `repoverlay create --output <path>` |
-| Edit overlay | `repoverlay edit <name> --add <files>` |
+| Edit overlay | `repoverlay edit add <name> <files>` |
 | Sync changes back | `repoverlay sync <name>` |
 | Switch overlays | `repoverlay switch <source>` |
+| Move overlay source | `repoverlay move <name> --to <destination>` |
 | Manage sources | `repoverlay source add/list/remove` |
+| Manage cache | `repoverlay cache list/remove/path` |
+| Manage in-repo library | `repoverlay library list/import/export/remove` |
 | Shell completions | `repoverlay completions <shell>` |
 
 ## Concepts
@@ -89,7 +92,7 @@ repoverlay apply https://github.com/owner/repo
 repoverlay remove my-overlay
 ```
 
-For the full command reference with all options and flags, see [docs/cli-reference.md](docs/cli-reference.md).
+For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 
 ## Overlay Configuration
 

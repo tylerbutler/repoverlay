@@ -211,6 +211,9 @@ Examples: repoverlay move my-overlay --to library repoverlay move my-overlay --t
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--force` — Overwrite if destination already exists
 * `--name <NAME>` — Rename the overlay at the destination
+* `--target-repo <TARGET_REPO>` — Override the target repository (org/repo format, e.g. acme/my-app)
+
+   Used when moving to a named source and the git origin remote cannot be parsed.
 * `--dry-run` — Show what would happen without making changes
 
 
