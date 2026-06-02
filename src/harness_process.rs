@@ -4,6 +4,73 @@ use anyhow::Result;
 use process_wrap::std::{ChildWrapper, CommandWrap};
 use std::process::{Command, ExitStatus};
 
+#[cfg(unix)]
+use std::os::fd::BorrowedFd;
+
+#[cfg(unix)]
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
+#[cfg(unix)]
+use nix::unistd::{Pid, isatty, tcgetpgrp, tcsetpgrp};
+
+/// Decide whether terminal foreground ownership should be handed to the child.
+#[cfg(unix)]
+#[allow(dead_code)]
+const fn should_hand_off_terminal(stdin_is_tty: bool) -> bool {
+    stdin_is_tty
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+pub(crate) struct TerminalForeground {
+    fd: BorrowedFd<'static>,
+    previous_pgid: Pid,
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+impl TerminalForeground {
+    pub(crate) fn acquire(child_pgid: u32) -> Option<Self> {
+        // SAFETY: STDIN_FILENO is a process-global file descriptor. The guard does
+        // not close it and only borrows it while the process is alive.
+        #[allow(unsafe_code)]
+        let fd = unsafe { BorrowedFd::borrow_raw(nix::libc::STDIN_FILENO) };
+        if !should_hand_off_terminal(isatty(fd).unwrap_or(false)) {
+            return None;
+        }
+
+        let previous_pgid = tcgetpgrp(fd).ok()?;
+        let child_pgid = Pid::from_raw(i32::try_from(child_pgid).ok()?);
+        with_ignored_sigttou(|| tcsetpgrp(fd, child_pgid)).ok()?;
+
+        Some(Self { fd, previous_pgid })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TerminalForeground {
+    fn drop(&mut self) {
+        let _ = with_ignored_sigttou(|| tcsetpgrp(self.fd, self.previous_pgid));
+    }
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+fn with_ignored_sigttou<T>(operation: impl FnOnce() -> nix::Result<T>) -> nix::Result<T> {
+    let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+    // SAFETY: Temporarily changing the SIGTTOU disposition around tcsetpgrp
+    // matches POSIX job-control requirements and restores the previous action
+    // before returning.
+    #[allow(unsafe_code)]
+    let previous = unsafe { sigaction(Signal::SIGTTOU, &ignore)? };
+    let result = operation();
+    // SAFETY: Restores the exact signal action returned above.
+    #[allow(unsafe_code)]
+    unsafe {
+        sigaction(Signal::SIGTTOU, &previous)?
+    };
+    result
+}
+
 // Task 6 wires this into Copilot; allow dead_code until then.
 #[allow(dead_code)]
 pub(crate) struct HarnessProcess {
@@ -71,6 +138,18 @@ mod tests {
 
         assert!(process.id() > 0);
         assert_eq!(process.process_group_id(), process.id());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_handoff_disabled_without_tty() {
+        assert!(!super::should_hand_off_terminal(false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_handoff_enabled_with_tty() {
+        assert!(super::should_hand_off_terminal(true));
     }
 
     #[test]
