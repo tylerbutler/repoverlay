@@ -91,9 +91,21 @@ profiles =
 
 ### Merge behavior
 
-Repo-local config has priority over global config. Profiles merge by profile name, and a repo-local profile completely overrides a same-name global profile. Profiles do not deep-merge across config files.
+Repo-local config has priority over global config. Profiles merge by profile name when a repo-local
+profile has the same name as a global profile. The global profile is the base, and the repo-local
+profile is the override.
 
-This avoids surprising inherited capabilities when a repo defines a profile with the same name as a global profile.
+Merge behavior is type-based:
+
+| Field type | Merge behavior |
+| --- | --- |
+| Scalar fields, such as `description` | Repo-local value wins when set; otherwise the global value is kept. |
+| Map fields, such as `mcps.servers` | Repo-local entries merge into the global map; repo-local keys win on conflict. |
+| List fields, such as `overlays`, `instructions`, `skills`, `plugins`, and future `remote_config` | Repo-local list replaces the global list when non-empty; otherwise the global list is kept. |
+
+V1 does not include `mcps.builtins` or grouped list fields such as `plugins.default`. If those fields
+are added later, they should follow the same map/list rules: built-in maps merge by key, and grouped
+lists replace the base list when the overriding list is non-empty.
 
 ## Architecture
 
