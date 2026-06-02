@@ -123,7 +123,9 @@ src/cli/commands/profile.rs
 
 `profile_plan.rs` converts a profile plus harness into an explicit `ProfilePlan`. Planning should be filesystem-light and easy to unit test.
 
-`profile_applicators/` contains one applicator per harness. The first real applicator is GitHub Copilot. Applicators map harness-neutral profile objects to concrete actions, destinations, merge behavior, warnings, and skips.
+`profile_applicators/` contains one applicator per harness. The first real applicator is GitHub
+Copilot. Applicators map harness-neutral profile objects to concrete actions, destinations, merge
+behavior, warnings, skips, and harness execution.
 
 ## Applicator trait
 
@@ -136,10 +138,11 @@ pub(crate) trait ProfileApplicator {
     fn plan(&self, profile: &ResolvedProfile, context: &ProfileContext) -> Result<ProfilePlan>;
     fn apply(&self, plan: &ProfilePlan) -> Result<ProfileApplyResult>;
     fn remove(&self, state: &ProfileState, context: &ProfileContext) -> Result<()>;
+    fn command(&self, context: &ProfileContext, extra_args: &[String]) -> Result<Command>;
 }
 ```
 
-Overlay application should stay in shared profile code, not inside each applicator. The shared planner resolves profile overlays into existing resolved overlay values and applies them using existing overlay functions. Applicators own harness-specific placement and merge logic for MCPs, skills, plugins, and instruction files.
+Overlay application should stay in shared profile code, not inside each applicator. The shared planner resolves profile overlays into existing resolved overlay values and applies them using existing overlay functions. Applicators own harness-specific placement, merge logic, and launch command behavior for MCPs, skills, plugins, and instruction files.
 
 Unsupported capabilities produce warnings and skipped plan items. Conflicts and failed writes still fail the apply by default.
 
@@ -199,6 +202,16 @@ skipped =
 
 Removal should remove profile-owned harness files or merged entries and remove overlays only when the profile applied them and no other applied profile still references them.
 
+Ephemeral profile execution should use the same state schema with an additional session marker:
+
+```ccl
+mode = ephemeral
+session_id = 2026-06-02T15:30:00Z-copilot-rust-dev
+```
+
+Ephemeral state is system-managed metadata. It exists only to make cleanup reliable while the harness
+process is running or if repoverlay is interrupted.
+
 ## Commands
 
 Add a `profile` command group:
@@ -211,6 +224,26 @@ repoverlay profile status [--harness copilot]
 repoverlay profile remove <name> --harness copilot
 ```
 
+Add harness-specific execution entrypoints. For GitHub Copilot:
+
+```bash
+repoverlay copilot --profile rust-dev
+repoverlay copilot --profile oce -- <extra harness args>
+```
+
+`repoverlay copilot --profile <name>` performs an ephemeral profile session:
+
+1. Resolve and plan the profile for the GitHub Copilot harness.
+2. Apply the profile using session-scoped state.
+3. Launch the Copilot harness command.
+4. Wait for the harness process to exit.
+5. Remove only the profile effects created by that session.
+6. Exit with the harness process exit code unless cleanup fails.
+
+Persistent profile commands and ephemeral harness execution are separate. `profile apply` leaves the
+profile installed until `profile remove`. `repoverlay copilot --profile` installs the profile only for
+the lifetime of the launched harness process.
+
 `profile update` can come later. The v1 state should include enough source provenance and fingerprinting to support update without changing state format.
 
 ## Error handling
@@ -221,6 +254,9 @@ repoverlay profile remove <name> --harness copilot
 - File conflicts fail by default.
 - Partial apply failures roll back completed actions where practical.
 - Successful profile state is written only after required actions succeed.
+- Ephemeral execution should attempt cleanup even when the harness exits with a non-zero code.
+- If cleanup fails after the harness exits, repoverlay should report the cleanup error and leave
+  enough session state for a later cleanup command or `profile remove`.
 
 ## Testing
 
@@ -232,6 +268,7 @@ Unit tests should cover:
 - Warning and skip behavior for unsupported capabilities.
 - Harness/user-level instruction file planning.
 - MCP server planning.
+- Ephemeral Copilot command construction.
 
 Integration tests should cover:
 
@@ -240,6 +277,8 @@ Integration tests should cover:
 - Overlay references applied through a profile.
 - User-level action recording and repo-local overlay recording.
 - Rollback or non-success state behavior on failed apply.
+- `repoverlay copilot --profile <name>` applies the profile, runs the harness command, removes the
+  session effects, and preserves the harness exit code.
 
 ## Initial implementation slice
 
@@ -250,4 +289,5 @@ Integration tests should cover:
 5. Add `profile apply` for overlays and harness/user-level instruction files.
 6. Add MCP server planning for GitHub Copilot.
 7. Add profile state and `profile status`/`profile remove`.
-8. Add skills and plugins once the GitHub Copilot placement semantics are clear.
+8. Add `repoverlay copilot --profile <name>` with ephemeral apply/run/remove behavior.
+9. Add skills and plugins once the GitHub Copilot placement semantics are clear.
