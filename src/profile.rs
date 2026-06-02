@@ -96,6 +96,16 @@ pub(crate) fn profile_state_path(target: &Path, name: &str, harness: &str) -> Re
         .join(format!("{name}.{harness}.ccl")))
 }
 
+pub(crate) fn profile_lock_path(target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
+    validate_profile_state_component(name)?;
+    validate_profile_state_component(harness)?;
+
+    Ok(target
+        .join(crate::state::STATE_DIR)
+        .join(PROFILES_DIR)
+        .join(format!("{name}.{harness}.lock")))
+}
+
 pub(crate) fn validate_profile_state_component(component: &str) -> Result<()> {
     if component.is_empty()
         || matches!(component, "." | "..")
@@ -377,5 +387,21 @@ profiles =
                 "unexpected error for invalid harness {invalid:?}: {harness_err}"
             );
         }
+    }
+
+    #[test]
+    fn profile_lock_path_uses_validated_profile_components() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = profile_lock_path(temp.path(), "rust-dev", "copilot").unwrap();
+        assert_eq!(
+            path,
+            temp.path()
+                .join(crate::state::STATE_DIR)
+                .join(PROFILES_DIR)
+                .join("rust-dev.copilot.lock")
+        );
+
+        let err = profile_lock_path(temp.path(), "../evil", "copilot").unwrap_err();
+        assert!(err.to_string().contains("profile state component"));
     }
 }

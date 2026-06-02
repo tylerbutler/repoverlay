@@ -590,6 +590,53 @@ profiles =
     );
 }
 
+#[test]
+fn copilot_profile_refuses_to_run_with_existing_session_lock() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let marker = ctx.repo_path().join("copilot-ran.txt");
+    let profiles_dir = ctx.repo_path().join(".repoverlay/profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(profiles_dir.join("rust-dev.copilot.lock"), "").unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    description = Rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            &format!("echo ran > {}", marker.display()),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Profile 'rust-dev' is already applied or running for copilot",
+        ));
+
+    assert!(!marker.exists());
+    assert!(profiles_dir.join("rust-dev.copilot.lock").exists());
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn copilot_profile_maps_signal_exit_after_cleanup() {

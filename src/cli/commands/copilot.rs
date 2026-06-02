@@ -8,6 +8,16 @@ use std::os::unix::process::ExitStatusExt;
 use crate::profile::ProfileMode;
 use crate::profile_applicators::ProfileApplicator;
 
+struct ProfileRunLock {
+    path: PathBuf,
+}
+
+impl Drop for ProfileRunLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 pub(crate) fn handle_copilot_command(
     profile: String,
     target: Option<PathBuf>,
@@ -27,6 +37,36 @@ pub(crate) fn handle_copilot_command(
              ephemeral session"
         );
     }
+
+    let lock_path = crate::profile::profile_lock_path(&target, &profile, "copilot")?;
+    let lock_parent = lock_path
+        .parent()
+        .context("Profile lock file has no parent directory")?;
+    std::fs::create_dir_all(lock_parent).with_context(|| {
+        format!(
+            "Failed to create profile lock directory: {}",
+            lock_parent.display()
+        )
+    })?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_file) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            bail!(
+                "Profile '{profile}' is already applied or running for copilot; remove it before \
+                 running an ephemeral session"
+            );
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("Failed to create profile lock: {}", lock_path.display())
+            });
+        }
+    }
+    let profile_run_lock = ProfileRunLock { path: lock_path };
 
     let session_id = format!(
         "{}-copilot-{}",
@@ -69,7 +109,9 @@ pub(crate) fn handle_copilot_command(
     }
 
     let status = status_result?;
-    std::process::exit(exit_code_from_status(status));
+    let exit_code = exit_code_from_status(status);
+    drop(profile_run_lock);
+    std::process::exit(exit_code);
 }
 
 fn exit_code_from_status(status: ExitStatus) -> i32 {
