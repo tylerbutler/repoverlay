@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use colored::Colorize;
 use std::path::PathBuf;
 
@@ -73,8 +73,29 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
             )?;
             Ok(())
         }
-        ProfileCommand::Status { .. } | ProfileCommand::Remove { .. } => {
-            bail!("profile status/remove are added in the profile lifecycle task")
+        ProfileCommand::Status { target, harness } => {
+            let target = resolve_target(target)?;
+            let states = crate::profile_plan::list_profile_states(&target)?;
+            if states.is_empty() {
+                println!("No profiles applied.");
+                return Ok(());
+            }
+            for state in states {
+                if harness.as_ref().is_some_and(|h| h != &state.harness) {
+                    continue;
+                }
+                println!("{} ({})", state.name.bold(), state.harness);
+            }
+            Ok(())
+        }
+        ProfileCommand::Remove {
+            name,
+            harness,
+            target,
+        } => {
+            let target = resolve_target(target)?;
+            crate::profile_plan::remove_profile(&name, &harness, &target)?;
+            Ok(())
         }
     }
 }

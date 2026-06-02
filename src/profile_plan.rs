@@ -170,6 +170,103 @@ fn apply_profile_with_harness_home(
     Ok(state)
 }
 
+pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result<()> {
+    crate::profile::validate_profile_state_component(name)?;
+    crate::profile::validate_profile_state_component(harness)?;
+
+    let state = crate::profile::load_profile_state(target, name, harness)?;
+    for file in &state.files {
+        if file.action == "write-file" && file.target.exists() {
+            ensure_removable_profile_file(name, harness, target, file)?;
+            fs::remove_file(&file.target)
+                .with_context(|| format!("Failed to remove {}", file.target.display()))?;
+        }
+    }
+    for overlay in &state.overlays {
+        if crate::state::load_overlay_state(target, overlay).is_ok() {
+            crate::remove_overlay(target, Some(overlay.clone()), false, false)?;
+        }
+    }
+    crate::profile::remove_profile_state(target, name, harness)?;
+    println!("Removed profile {name} for {harness}");
+    Ok(())
+}
+
+pub(crate) fn list_profile_states(target: &Path) -> Result<Vec<ProfileState>> {
+    let dir = target.join(crate::state::STATE_DIR).join("profiles");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut states = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("Failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("ccl") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read profile state: {}", path.display()))?;
+        states.push(
+            sickle::from_str(&content)
+                .with_context(|| format!("Failed to parse profile state: {}", path.display()))?,
+        );
+    }
+    states.sort_by(|left: &ProfileState, right: &ProfileState| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.harness.cmp(&right.harness))
+    });
+    Ok(states)
+}
+
+fn ensure_removable_profile_file(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    file: &ProfileFileEntry,
+) -> Result<()> {
+    let allowed_root = match (harness, file.scope) {
+        ("copilot", ProfileScope::User) => CopilotApplicator::harness_home_from_env()?
+            .join("instructions")
+            .join(name),
+        (_, ProfileScope::Repo) => repo_target.to_path_buf(),
+        _ => bail!("Unsupported harness '{harness}'"),
+    };
+
+    if !file.target.starts_with(&allowed_root) {
+        bail!(
+            "Refusing to remove profile file outside managed location: {}",
+            file.target.display()
+        );
+    }
+
+    let allowed_root = fs::canonicalize(&allowed_root).with_context(|| {
+        format!(
+            "Failed to inspect profile removal root: {}",
+            allowed_root.display()
+        )
+    })?;
+    let target_parent = file
+        .target
+        .parent()
+        .context("Profile removal target has no parent directory")?;
+    let target_parent = fs::canonicalize(target_parent).with_context(|| {
+        format!(
+            "Failed to inspect profile removal target: {}",
+            file.target.display()
+        )
+    })?;
+    if !target_parent.starts_with(&allowed_root) {
+        bail!(
+            "Refusing to remove profile file outside managed location: {}",
+            file.target.display()
+        );
+    }
+
+    Ok(())
+}
+
 fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
     for action in &plan.actions {
         match action {
@@ -433,6 +530,41 @@ profiles =
         );
         assert!(!temp.path().join("mcp.json").exists());
         assert!(!temp.path().join(".repoverlay/profiles").exists());
+    }
+
+    #[test]
+    fn remove_profile_rejects_write_file_target_outside_harness_home() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let outside = temp.path().join("outside.md");
+        fs::write(&outside, "keep me").unwrap();
+        crate::profile::save_profile_state(
+            temp.path(),
+            &ProfileState {
+                name: "rust-dev".to_string(),
+                harness: "copilot".to_string(),
+                mode: ProfileMode::Persistent,
+                session_id: None,
+                applied_at: Utc::now(),
+                profile_fingerprint: "test".to_string(),
+                overlays: Vec::new(),
+                files: vec![ProfileFileEntry {
+                    source: PathBuf::from("<test>"),
+                    target: outside.clone(),
+                    scope: ProfileScope::User,
+                    action: "write-file".to_string(),
+                }],
+                skipped: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let err = remove_profile("rust-dev", "copilot", temp.path()).unwrap_err();
+
+        assert!(
+            err.to_string().contains("Refusing to remove profile file"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read_to_string(outside).unwrap(), "keep me");
     }
 
     #[test]
