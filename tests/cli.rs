@@ -189,6 +189,7 @@ fn cache_help_displays() {
 #[test]
 fn profile_list_shows_repo_profiles() {
     let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
     ctx.write_repo_config(
         r"
 profiles =
@@ -205,6 +206,7 @@ profiles =
             ctx.repo_path().to_str().unwrap(),
         ])
         .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("rust-dev"))
@@ -214,6 +216,7 @@ profiles =
 #[test]
 fn profile_list_uses_current_directory_as_default_target() {
     let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
     ctx.write_repo_config(
         r"
 profiles =
@@ -226,6 +229,7 @@ profiles =
         .args(["profile", "list"])
         .current_dir(ctx.repo_path())
         .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("local-profile"))
@@ -235,6 +239,7 @@ profiles =
 #[test]
 fn profile_show_prints_profile_details() {
     let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
     ctx.write_repo_config(
         r"
 profiles =
@@ -256,6 +261,7 @@ profiles =
             ctx.repo_path().to_str().unwrap(),
         ])
         .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("rust-dev"))
@@ -266,6 +272,7 @@ profiles =
 #[test]
 fn profile_show_uses_current_directory_as_default_target() {
     let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
     ctx.write_repo_config(
         r"
 profiles =
@@ -279,6 +286,7 @@ profiles =
         .args(["profile", "show", "local-profile"])
         .current_dir(ctx.repo_path())
         .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("local-profile"))
