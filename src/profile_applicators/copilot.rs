@@ -15,11 +15,8 @@ impl CopilotApplicator {
         if let Some(home) = std::env::var_os("REPOVERLAY_COPILOT_HOME") {
             return Ok(home.into());
         }
-        let config_dir = std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
-            .context("Could not determine home directory")?;
-        Ok(config_dir.join("github-copilot"))
+        let home = dirs::home_dir().context("Could not determine home directory")?;
+        Ok(home.join(".config").join("github-copilot"))
     }
 
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
@@ -165,17 +162,20 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn copilot_harness_home_defaults_to_github_copilot_config_dir() {
+        let temp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", temp.path());
+            std::env::remove_var("REPOVERLAY_COPILOT_HOME");
+        }
         assert!(std::env::var_os("REPOVERLAY_COPILOT_HOME").is_none());
 
-        let expected_base = std::env::var_os("XDG_CONFIG_HOME").map_or_else(
-            || dirs::home_dir().unwrap().join(".config"),
-            std::path::PathBuf::from,
-        );
+        let expected = dirs::home_dir().unwrap().join(".config/github-copilot");
 
         assert_eq!(
             CopilotApplicator::harness_home_from_env().unwrap(),
-            expected_base.join("github-copilot")
+            expected
         );
     }
 
