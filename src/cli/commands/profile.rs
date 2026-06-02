@@ -74,7 +74,7 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
             Ok(())
         }
         ProfileCommand::Status { .. } | ProfileCommand::Remove { .. } => {
-            bail!("profile apply/status/remove are added in the profile lifecycle task")
+            bail!("profile status/remove are added in the profile lifecycle task")
         }
     }
 }

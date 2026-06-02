@@ -49,6 +49,24 @@ pub(crate) fn apply_profile(
     mode: ProfileMode,
     session_id: Option<String>,
 ) -> Result<ProfileState> {
+    apply_profile_with_harness_home(
+        name,
+        harness,
+        target,
+        mode,
+        session_id,
+        CopilotApplicator::harness_home_from_env()?,
+    )
+}
+
+fn apply_profile_with_harness_home(
+    name: &str,
+    harness: &str,
+    target: &Path,
+    mode: ProfileMode,
+    session_id: Option<String>,
+    harness_home: PathBuf,
+) -> Result<ProfileState> {
     crate::profile::validate_profile_state_component(name)?;
     crate::profile::validate_profile_state_component(harness)?;
 
@@ -62,7 +80,7 @@ pub(crate) fn apply_profile(
         profile_name: name.to_string(),
         target: target.to_path_buf(),
         profile_asset_dir: target.to_path_buf(),
-        harness_home: CopilotApplicator::harness_home_from_env()?,
+        harness_home,
         mode,
         session_id: session_id.clone(),
     };
@@ -80,57 +98,74 @@ pub(crate) fn apply_profile(
         skipped: Vec::new(),
     };
 
-    for action in plan.actions {
-        match action {
-            ProfileAction::ApplyOverlay { reference } => {
-                crate::apply_overlay(
-                    &reference,
-                    target,
-                    false,
-                    None,
-                    None,
-                    true,
-                    crate::ConflictStrategy::Fail,
-                    false,
-                    None,
-                    false,
-                )?;
-                state.overlays.push(reference);
-            }
-            ProfileAction::WriteFile {
-                source,
-                target,
-                scope,
-            } => {
-                copy_profile_file(&source, &target)?;
-                state.files.push(ProfileFileEntry {
+    let mut rollbacks = Vec::new();
+    let apply_result = (|| -> Result<()> {
+        for action in plan.actions {
+            match action {
+                ProfileAction::ApplyOverlay { reference } => {
+                    crate::apply_overlay(
+                        &reference,
+                        target,
+                        false,
+                        None,
+                        None,
+                        true,
+                        crate::ConflictStrategy::Fail,
+                        false,
+                        None,
+                        false,
+                    )?;
+                    state.overlays.push(reference);
+                }
+                ProfileAction::WriteFile {
                     source,
                     target,
                     scope,
-                    action: "write-file".to_string(),
-                });
-            }
-            ProfileAction::MergeJson {
-                target,
-                value,
-                scope,
-            } => {
-                merge_json_value(&target, &value)?;
-                state.files.push(ProfileFileEntry {
-                    source: PathBuf::from("<generated>"),
+                } => {
+                    if scope == ProfileScope::User {
+                        rollbacks.push(capture_file_rollback(&target)?);
+                    }
+                    copy_profile_file(&source, &target)?;
+                    state.files.push(ProfileFileEntry {
+                        source,
+                        target,
+                        scope,
+                        action: "write-file".to_string(),
+                    });
+                }
+                ProfileAction::MergeJson {
                     target,
+                    value,
                     scope,
-                    action: "merge-json".to_string(),
-                });
-            }
-            ProfileAction::SkipCapability { capability, reason } => {
-                eprintln!("Warning: skipped {capability}: {reason}");
-                state.skipped.push(SkippedCapability { capability, reason });
+                } => {
+                    if scope == ProfileScope::User {
+                        rollbacks.push(capture_file_rollback(&target)?);
+                    }
+                    merge_json_value(&target, &value)?;
+                    state.files.push(ProfileFileEntry {
+                        source: PathBuf::from("<generated>"),
+                        target,
+                        scope,
+                        action: "merge-json".to_string(),
+                    });
+                }
+                ProfileAction::SkipCapability { capability, reason } => {
+                    eprintln!("Warning: skipped {capability}: {reason}");
+                    state.skipped.push(SkippedCapability { capability, reason });
+                }
             }
         }
+
+        save_profile_state(target, &state)
+    })();
+
+    if let Err(err) = apply_result {
+        rollback_user_file_changes(&rollbacks).with_context(|| {
+            format!("Profile apply failed ({err}); failed to roll back user config changes")
+        })?;
+        return Err(err);
     }
 
-    save_profile_state(target, &state)?;
     println!("Applied profile {name} for {harness}");
     Ok(state)
 }
@@ -139,9 +174,7 @@ fn preflight_plan(plan: &ProfilePlan) -> Result<()> {
     for action in &plan.actions {
         match action {
             ProfileAction::WriteFile { source, target, .. } => {
-                if !source.is_file() {
-                    bail!("Profile source file not found: {}", source.display());
-                }
+                ensure_regular_profile_source(source)?;
                 if target.as_os_str().is_empty() {
                     bail!("Profile target path must not be empty");
                 }
@@ -162,6 +195,84 @@ fn preflight_plan(plan: &ProfilePlan) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct FileRollback {
+    path: PathBuf,
+    prior_bytes: Option<Vec<u8>>,
+}
+
+fn capture_file_rollback(path: &Path) -> Result<FileRollback> {
+    let prior_bytes = match fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to capture existing user config before modifying {}",
+                    path.display()
+                )
+            });
+        }
+    };
+
+    Ok(FileRollback {
+        path: path.to_path_buf(),
+        prior_bytes,
+    })
+}
+
+fn rollback_user_file_changes(rollbacks: &[FileRollback]) -> Result<()> {
+    for rollback in rollbacks.iter().rev() {
+        match &rollback.prior_bytes {
+            Some(bytes) => {
+                if let Some(parent) = rollback.path.parent() {
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!(
+                            "Failed to recreate parent directory for {}",
+                            rollback.path.display()
+                        )
+                    })?;
+                }
+                fs::write(&rollback.path, bytes)
+                    .with_context(|| format!("Failed to restore {}", rollback.path.display()))?;
+            }
+            None => {
+                if rollback.path.exists() {
+                    fs::remove_file(&rollback.path)
+                        .with_context(|| format!("Failed to remove {}", rollback.path.display()))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_regular_profile_source(source: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(source) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            bail!("Profile source file not found: {}", source.display());
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to inspect profile source file: {}",
+                    source.display()
+                )
+            });
+        }
+    };
+
+    if metadata.file_type().is_symlink() {
+        bail!("Refusing profile source symlink: {}", source.display());
+    }
+    if !metadata.is_file() {
+        bail!("Profile source file not found: {}", source.display());
+    }
+
+    Ok(())
+}
+
 fn copilot_applicator(harness: &str) -> Result<CopilotApplicator> {
     if harness == "copilot" {
         Ok(CopilotApplicator)
@@ -171,6 +282,7 @@ fn copilot_applicator(harness: &str) -> Result<CopilotApplicator> {
 }
 
 fn copy_profile_file(source: &Path, target: &Path) -> Result<()> {
+    ensure_regular_profile_source(source)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -214,10 +326,33 @@ fn merge_json_objects(base: &mut Value, overlay: &Value) {
     match (base, overlay) {
         (Value::Object(base_map), Value::Object(overlay_map)) => {
             for (key, value) in overlay_map {
-                merge_json_objects(base_map.entry(key.clone()).or_insert(Value::Null), value);
+                let base_value = base_map.entry(key.clone()).or_insert(Value::Null);
+                if key == "servers" {
+                    merge_json_servers(base_value, value);
+                } else {
+                    merge_json_objects(base_value, value);
+                }
             }
         }
         (base_value, overlay_value) => *base_value = overlay_value.clone(),
+    }
+}
+
+fn merge_json_servers(base: &mut Value, overlay: &Value) {
+    let Value::Object(overlay_servers) = overlay else {
+        *base = overlay.clone();
+        return;
+    };
+
+    if !base.is_object() {
+        *base = Value::Object(serde_json::Map::new());
+    }
+    let Value::Object(base_servers) = base else {
+        unreachable!("base was just initialized as an object");
+    };
+
+    for (server_name, server_value) in overlay_servers {
+        base_servers.insert(server_name.clone(), server_value.clone());
     }
 }
 
@@ -303,6 +438,34 @@ profiles =
         assert!(!target.exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn preflight_rejects_symlink_instruction_source() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let outside = temp.path().join("outside.md");
+        let symlink = temp.path().join("copilot-instructions.md");
+        fs::write(&outside, "Do not copy through symlink.").unwrap();
+        std::os::unix::fs::symlink(&outside, &symlink).unwrap();
+        let plan = ProfilePlan {
+            profile_name: "rust-dev".to_string(),
+            harness: "copilot".to_string(),
+            actions: vec![ProfileAction::WriteFile {
+                source: symlink,
+                target: temp
+                    .path()
+                    .join("instructions/rust-dev/copilot-instructions.md"),
+                scope: ProfileScope::User,
+            }],
+        };
+
+        let err = preflight_plan(&plan).unwrap_err();
+
+        assert!(
+            err.to_string().contains("profile source symlink"),
+            "unexpected error: {err}"
+        );
+    }
+
     #[test]
     fn apply_profile_uses_honest_fingerprint_prefix() {
         let temp = tempfile::TempDir::new().unwrap();
@@ -373,6 +536,77 @@ profiles =
             serde_json::from_str(&fs::read_to_string(target).unwrap()).unwrap();
         assert_eq!(merged["servers"]["existing"]["command"], "old");
         assert_eq!(merged["servers"]["rust"]["command"], "uvx");
+    }
+
+    #[test]
+    fn merge_json_value_replaces_managed_mcp_server_object() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("mcp.json");
+        fs::write(
+            &target,
+            r#"{"servers":{"rust":{"command":"old","env":{"SECRET":"stale"}},"other":{"command":"keep"}}}"#,
+        )
+        .unwrap();
+
+        merge_json_value(
+            &target,
+            &serde_json::json!({
+                "servers": {
+                    "rust": {
+                        "command": "uvx",
+                        "env": {}
+                    }
+                }
+            }),
+        )
+        .unwrap();
+
+        let merged: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(target).unwrap()).unwrap();
+        assert_eq!(merged["servers"]["rust"]["command"], "uvx");
+        assert_eq!(merged["servers"]["rust"]["env"], serde_json::json!({}));
+        assert!(merged["servers"]["rust"]["env"]["SECRET"].is_null());
+        assert_eq!(merged["servers"]["other"]["command"], "keep");
+    }
+
+    #[test]
+    fn apply_profile_rolls_back_user_files_when_state_save_fails() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let copilot_home = temp.path().join("copilot-home");
+        write_config(
+            temp.path(),
+            r"
+profiles =
+  rust-dev =
+    mcps =
+      servers =
+        rust =
+          command = uvx
+",
+        );
+        fs::write(temp.path().join(".repoverlay/profiles"), "not a directory").unwrap();
+        let target = copilot_home.join("mcp.json");
+        fs::create_dir_all(&copilot_home).unwrap();
+        fs::write(&target, r#"{"servers":{"other":{"command":"keep"}}}"#).unwrap();
+
+        let err = apply_profile_with_harness_home(
+            "rust-dev",
+            "copilot",
+            temp.path(),
+            ProfileMode::Persistent,
+            None,
+            copilot_home,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("File exists"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            r#"{"servers":{"other":{"command":"keep"}}}"#
+        );
     }
 
     #[test]
