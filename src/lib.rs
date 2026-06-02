@@ -361,6 +361,58 @@ pub(crate) fn apply_overlay(
     )
 }
 
+/// RAII guard that removes overlay files created during a single
+/// `apply_resolved_overlay` call if the call returns before committing.
+///
+/// Profile application uses [`ConflictStrategy::Fail`], so any tracked path was
+/// newly created by this call (never an overwrite of a pre-existing file), which
+/// makes removing it on partial failure safe. On the success path the caller
+/// invokes [`OverlayApplyGuard::commit`] so nothing is removed.
+struct OverlayApplyGuard {
+    target: PathBuf,
+    overlay_name: String,
+    created: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl OverlayApplyGuard {
+    fn new(target: &Path, overlay_name: &str) -> Self {
+        Self {
+            target: target.to_path_buf(),
+            overlay_name: overlay_name.to_string(),
+            created: Vec::new(),
+            committed: false,
+        }
+    }
+
+    fn track(&mut self, path: PathBuf) {
+        self.created.push(path);
+    }
+
+    const fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for OverlayApplyGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for path in self.created.iter().rev() {
+            if let Ok(metadata) = fs::symlink_metadata(path) {
+                if metadata.file_type().is_dir() {
+                    let _ = fs::remove_dir_all(path);
+                } else {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+        // Best-effort: drop any exclude section written before the failure.
+        let _ = update_git_exclude(&self.target, &self.overlay_name, &[], false);
+    }
+}
+
 /// Apply a single resolved overlay to a target repository.
 ///
 /// This contains the core overlay application logic, separated from source resolution
@@ -440,6 +492,9 @@ pub(crate) fn apply_resolved_overlay(
     // Collect files to overlay and build state
     let mut state = OverlayState::new(overlay_name.clone(), resolved.source_info.clone());
     let mut exclude_entries: Vec<String> = Vec::new();
+    // Track files/directories created during this call so a partial failure
+    // (before state is persisted) can be rolled back automatically.
+    let mut apply_guard = OverlayApplyGuard::new(target, &normalized_name);
 
     // Load exclusions from previous external state (survives remove/reapply cycles)
     let previous_exclusions =
@@ -638,6 +693,7 @@ pub(crate) fn apply_resolved_overlay(
 
         println!("  {} {}/", "+".green(), dir_path.display());
 
+        apply_guard.track(target_dir.clone());
         state.add_file(FileEntry {
             source: dir_path.clone(),
             target: dir_path.clone(),
@@ -892,6 +948,7 @@ pub(crate) fn apply_resolved_overlay(
 
         println!("  {} {}", "+".green(), target_rel.display());
 
+        apply_guard.track(target_file.clone());
         state.add_file(FileEntry {
             source: rel_path.clone(),
             target: target_rel.clone(),
@@ -932,6 +989,9 @@ pub(crate) fn apply_resolved_overlay(
 
     // Save overlay state to in-repo location
     save_overlay_state(target, &state)?;
+    // State is persisted; the overlay is now removable via the normal path, so
+    // the partial-apply rollback guard must not delete the applied files.
+    apply_guard.commit();
 
     // Save external backup for restore capability
     if let Err(e) = save_external_state(target, &normalized_name, &state) {
@@ -1520,6 +1580,63 @@ mod tests {
             .output()
             .expect("Failed to init git repo");
         dir
+    }
+
+    // Tests for the overlay partial-apply rollback guard
+    mod overlay_apply_guard_tests {
+        use super::*;
+
+        #[test]
+        fn removes_tracked_files_when_not_committed() {
+            let dir = TempDir::new().unwrap();
+            let file = dir.path().join("created.txt");
+            let nested = dir.path().join("nested");
+            fs::create_dir_all(&nested).unwrap();
+            fs::write(&file, "data").unwrap();
+            fs::write(nested.join("inner.txt"), "data").unwrap();
+
+            {
+                let mut guard = OverlayApplyGuard::new(dir.path(), "overlay");
+                guard.track(file.clone());
+                guard.track(nested.clone());
+            }
+
+            assert!(!file.exists());
+            assert!(!nested.exists());
+        }
+
+        #[test]
+        fn preserves_tracked_files_after_commit() {
+            let dir = TempDir::new().unwrap();
+            let file = dir.path().join("created.txt");
+            fs::write(&file, "data").unwrap();
+
+            {
+                let mut guard = OverlayApplyGuard::new(dir.path(), "overlay");
+                guard.track(file.clone());
+                guard.commit();
+            }
+
+            assert!(file.exists());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn removes_symlink_without_touching_target() {
+            let dir = TempDir::new().unwrap();
+            let outside = dir.path().join("outside.txt");
+            fs::write(&outside, "keep").unwrap();
+            let link = dir.path().join("link.txt");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+            {
+                let mut guard = OverlayApplyGuard::new(dir.path(), "overlay");
+                guard.track(link.clone());
+            }
+
+            assert!(!link.exists());
+            assert_eq!(fs::read_to_string(&outside).unwrap(), "keep");
+        }
     }
 
     // Tests for validate_git_repo

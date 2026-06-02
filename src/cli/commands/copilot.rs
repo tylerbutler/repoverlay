@@ -109,9 +109,11 @@ pub(crate) fn handle_copilot_command(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(spawn_error) => {
-            if let Err(cleanup_error) =
-                crate::profile_plan::remove_profile(&context.profile_name, "copilot", &target)
-            {
+            if let Err(cleanup_error) = crate::profile_plan::remove_profile_for_session(
+                &context.profile_name,
+                "copilot",
+                &target,
+            ) {
                 bail!(
                     "Failed to run Copilot harness: {spawn_error}; profile cleanup also failed: \
                      {cleanup_error}"
@@ -125,7 +127,7 @@ pub(crate) fn handle_copilot_command(
     crate::git::unregister_child();
 
     let cleanup_result =
-        crate::profile_plan::remove_profile(&context.profile_name, "copilot", &target);
+        crate::profile_plan::remove_profile_for_session(&context.profile_name, "copilot", &target);
     if let Err(error) = cleanup_result {
         bail!("Copilot exited, but profile cleanup failed: {error}");
     }
@@ -139,16 +141,22 @@ pub(crate) fn handle_copilot_command(
 fn wait_for_copilot_harness(child: &mut Child) -> Result<ExitStatus> {
     let mut forwarded_interrupt = false;
     loop {
+        // If interrupted, terminate the whole child process group before we
+        // accept any child exit as final, so Copilot descendants are signaled
+        // before profile cleanup runs.
+        if crate::git::is_interrupted() && !forwarded_interrupt {
+            terminate_copilot_harness(child);
+            forwarded_interrupt = true;
+        }
+
         if let Some(status) = child
             .try_wait()
             .context("Failed to wait for Copilot harness")?
         {
+            if crate::git::is_interrupted() && !forwarded_interrupt {
+                terminate_copilot_harness(child);
+            }
             return Ok(status);
-        }
-
-        if crate::git::is_interrupted() && !forwarded_interrupt {
-            terminate_copilot_harness(child);
-            forwarded_interrupt = true;
         }
 
         std::thread::sleep(Duration::from_millis(50));

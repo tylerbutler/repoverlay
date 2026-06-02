@@ -100,6 +100,7 @@ fn apply_profile_with_harness_home(
     };
     let plan = applicator.plan(profile, &context)?;
     preflight_plan(&plan, &context.profile_asset_dir)?;
+    check_mcp_ownership_conflicts(&plan, target, harness)?;
     let mut state = ProfileState {
         name: name.to_string(),
         harness: harness.to_string(),
@@ -224,6 +225,33 @@ pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result
     crate::profile::validate_profile_state_component(name)?;
     crate::profile::validate_profile_state_component(harness)?;
 
+    let lock_path = crate::profile::profile_lock_path(target, name, harness)?;
+    if lock_path
+        .try_exists()
+        .with_context(|| format!("Failed to inspect profile lock: {}", lock_path.display()))?
+    {
+        bail!(
+            "Profile '{name}' is currently in use by an ephemeral '{harness}' session; \
+             stop that session before removing the profile"
+        );
+    }
+
+    remove_profile_inner(name, harness, target)
+}
+
+/// Remove a profile on behalf of the ephemeral session that owns its lock.
+///
+/// This bypasses the profile lock check enforced by [`remove_profile`] so the
+/// owning `repoverlay copilot --profile` session can clean itself up while still
+/// holding its lock. Callers must only use this for the session that created the
+/// lock.
+pub(crate) fn remove_profile_for_session(name: &str, harness: &str, target: &Path) -> Result<()> {
+    crate::profile::validate_profile_state_component(name)?;
+    crate::profile::validate_profile_state_component(harness)?;
+    remove_profile_inner(name, harness, target)
+}
+
+fn remove_profile_inner(name: &str, harness: &str, target: &Path) -> Result<()> {
     let state = crate::profile::load_profile_state(target, name, harness)?;
     for file in state.files.iter().rev() {
         match file.action.as_str() {
@@ -381,6 +409,84 @@ fn reject_duplicate_profile_target(
 ) -> Result<()> {
     if !seen_targets.insert(target.to_path_buf()) {
         bail!("duplicate profile target: {}", target.display());
+    }
+    Ok(())
+}
+
+/// Collect the MCP server keys a `merge-json` value would manage.
+fn planned_mcp_server_keys(value: &Value) -> BTreeSet<String> {
+    value
+        .get("servers")
+        .and_then(Value::as_object)
+        .map(|servers| servers.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Read the MCP server keys an already-applied profile manages for a target.
+///
+/// Returns `None` if the backup metadata cannot be read or parsed, in which case
+/// callers should fall back to conservative same-target locking.
+fn owned_mcp_server_keys(file: &ProfileFileEntry) -> Option<BTreeSet<String>> {
+    let content = fs::read_to_string(&file.source).ok()?;
+    let backup: MergeJsonBackup = serde_json::from_str(&content).ok()?;
+    Some(backup.servers.keys().cloned().collect())
+}
+
+/// Reject applying a profile whose planned MCP merge would manage `mcp.json`
+/// server keys already owned by another applied profile for the same harness.
+///
+/// Precise key tracking is used when the other profile's backup metadata is
+/// readable; otherwise we conservatively reject any other profile that already
+/// manages the same `mcp.json` target.
+fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path, harness: &str) -> Result<()> {
+    let existing = list_profile_states(target)?;
+    for action in &plan.actions {
+        let ProfileAction::MergeJson {
+            target: json_target,
+            value,
+            ..
+        } = action
+        else {
+            continue;
+        };
+        let planned_keys = planned_mcp_server_keys(value);
+        for state in &existing {
+            if state.harness != harness {
+                continue;
+            }
+            for file in &state.files {
+                if file.action != "merge-json" || file.target != *json_target {
+                    continue;
+                }
+                match owned_mcp_server_keys(file) {
+                    Some(owned) => {
+                        let mut overlap: Vec<&String> = planned_keys.intersection(&owned).collect();
+                        overlap.sort();
+                        if !overlap.is_empty() {
+                            let keys = overlap
+                                .iter()
+                                .map(|key| format!("'{key}'"))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            bail!(
+                                "MCP server key(s) {keys} in {} are already managed by applied \
+                                 profile '{}' for {harness}; remove that profile first",
+                                json_target.display(),
+                                state.name
+                            );
+                        }
+                    }
+                    None => {
+                        bail!(
+                            "{} is already managed by applied profile '{}' for {harness} and its \
+                             ownership metadata could not be read; remove that profile first",
+                            json_target.display(),
+                            state.name
+                        );
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -702,6 +808,7 @@ fn restore_write_file_backup(
                     )
                 })?;
             }
+            reject_symlink_profile_target(&file.target)?;
             fs::copy(backup, &file.target).with_context(|| {
                 format!(
                     "Failed to restore {} from {}",
@@ -869,6 +976,7 @@ fn copilot_applicator(harness: &str) -> Result<CopilotApplicator> {
 
 fn copy_profile_file(source: &Path, target: &Path, profile_asset_dir: &Path) -> Result<()> {
     ensure_regular_profile_source(source, profile_asset_dir)?;
+    reject_symlink_profile_target(target)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -880,6 +988,22 @@ fn copy_profile_file(source: &Path, target: &Path, profile_asset_dir: &Path) -> 
         )
     })?;
     Ok(())
+}
+
+/// Refuse to write through a profile-managed target whose final component is a
+/// symlink, so a pre-existing symlink cannot redirect writes/restores to a file
+/// outside the managed location.
+fn reject_symlink_profile_target(target: &Path) -> Result<()> {
+    match fs::symlink_metadata(target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => bail!(
+            "Refusing to write through symlinked profile target: {}",
+            target.display()
+        ),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err)
+            .with_context(|| format!("Failed to inspect profile target: {}", target.display())),
+    }
 }
 
 fn atomic_write(path: &Path, content: &str) -> Result<()> {

@@ -1384,6 +1384,262 @@ profiles =
 }
 
 #[test]
+fn profile_apply_rejects_conflicting_mcp_server_ownership() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  alpha =
+    mcps =
+      servers =
+        rust =
+          command = uvx
+          args =
+            = mcp-rust
+  beta =
+    mcps =
+      servers =
+        rust =
+          command = other
+          args =
+            = mcp-other
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "alpha",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let alpha_state = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/alpha.copilot.ccl");
+    let original_alpha_state = fs::read_to_string(&alpha_state).unwrap();
+    let original_mcp = fs::read_to_string(copilot_home.path().join("mcp.json")).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "beta",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "already managed by applied profile",
+        ));
+
+    // Profile A's state and the merged MCP config remain intact.
+    assert_eq!(
+        fs::read_to_string(&alpha_state).unwrap(),
+        original_alpha_state
+    );
+    assert_eq!(
+        fs::read_to_string(copilot_home.path().join("mcp.json")).unwrap(),
+        original_mcp
+    );
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/beta.copilot.ccl")
+            .exists()
+    );
+}
+
+#[test]
+fn profile_apply_allows_disjoint_mcp_server_ownership() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  alpha =
+    mcps =
+      servers =
+        rust =
+          command = uvx
+          args =
+            = mcp-rust
+  beta =
+    mcps =
+      servers =
+        other =
+          command = other
+          args =
+            = mcp-other
+",
+    );
+
+    for profile in ["alpha", "beta"] {
+        cargo_bin_cmd!("repoverlay")
+            .args([
+                "profile",
+                "apply",
+                profile,
+                "--harness",
+                "copilot",
+                "--target",
+                ctx.repo_path().to_str().unwrap(),
+            ])
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+            .assert()
+            .success();
+    }
+
+    let mcp: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(copilot_home.path().join("mcp.json")).unwrap())
+            .unwrap();
+    assert_eq!(mcp["servers"]["rust"]["command"], "uvx");
+    assert_eq!(mcp["servers"]["other"]["command"], "other");
+}
+
+#[test]
+fn profile_remove_fails_when_session_lock_present() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let state_file = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/rust-dev.copilot.ccl");
+    let original_state = fs::read_to_string(&state_file).unwrap();
+    let instruction_target = copilot_home
+        .path()
+        .join("instructions/rust-dev/copilot-instructions.md");
+
+    // Simulate an active ephemeral session holding the profile lock.
+    let lock_file = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/rust-dev.copilot.lock");
+    fs::write(&lock_file, "").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("currently in use by an ephemeral"));
+
+    // Lock blocked removal: state and managed file are left intact.
+    assert_eq!(fs::read_to_string(&state_file).unwrap(), original_state);
+    assert!(instruction_target.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_apply_refuses_symlinked_instruction_target() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    let outside_file = outside.path().join("secret.txt");
+    fs::write(&outside_file, "outside-secret").unwrap();
+
+    ctx.create_repo_file("copilot-instructions.md", "profile");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    // Pre-create the managed instruction target as a symlink to an outside file.
+    let instruction_target = copilot_home
+        .path()
+        .join("instructions/rust-dev/copilot-instructions.md");
+    fs::create_dir_all(instruction_target.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside_file, &instruction_target).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Refusing to write through symlinked profile target",
+        ));
+
+    // The outside file was never overwritten.
+    assert_eq!(fs::read_to_string(&outside_file).unwrap(), "outside-secret");
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists()
+    );
+}
+
+#[test]
 fn restore_help_displays() {
     cargo_bin_cmd!("repoverlay")
         .args(["restore", "--help"])
