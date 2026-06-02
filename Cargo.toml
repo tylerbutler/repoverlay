@@ -65,6 +65,8 @@ indicatif = "0.18.4"
 ctrlc = "3.5.2"
 glob = "0.3.3"
 tempfile = "3"
+process-wrap = { version = "9.1.0", default-features = false, features = ["std", "process-group", "job-object", "creation-flags"] }
+nix = { version = "0.31.3", features = ["process", "signal", "term"] }
 
 [build-dependencies]
 vergen = { version = "9", features = ["build"] }
