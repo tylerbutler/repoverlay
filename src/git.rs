@@ -55,7 +55,7 @@ static CHILD_PID: std::sync::OnceLock<Arc<std::sync::Mutex<Option<u32>>>> =
     std::sync::OnceLock::new();
 
 /// Register a child process so Ctrl+C will kill it.
-fn register_child(child: &Child) {
+pub(crate) fn register_child(child: &Child) {
     if let Some(pid_lock) = CHILD_PID.get()
         && let Ok(mut guard) = pid_lock.lock()
     {
@@ -64,7 +64,7 @@ fn register_child(child: &Child) {
 }
 
 /// Unregister the child process after it exits.
-fn unregister_child() {
+pub(crate) fn unregister_child() {
     if let Some(pid_lock) = CHILD_PID.get()
         && let Ok(mut guard) = pid_lock.lock()
     {

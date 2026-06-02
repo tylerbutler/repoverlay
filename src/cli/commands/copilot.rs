@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use std::process::ExitStatus;
+use std::process::{Child, ExitStatus};
+use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
@@ -100,8 +103,14 @@ pub(crate) fn handle_copilot_command(
     let mut command = applicator.command(&context, &extra_args)?;
     drop(extra_args);
     command.current_dir(&target);
+    #[cfg(unix)]
+    command.process_group(0);
 
-    let status_result = command.status().context("Failed to run Copilot harness");
+    let mut child = command.spawn().context("Failed to run Copilot harness")?;
+    crate::git::register_child(&child);
+    let status_result = wait_for_copilot_harness(&mut child);
+    crate::git::unregister_child();
+
     let cleanup_result =
         crate::profile_plan::remove_profile(&context.profile_name, "copilot", &target);
     if let Err(error) = cleanup_result {
@@ -112,6 +121,41 @@ pub(crate) fn handle_copilot_command(
     let exit_code = exit_code_from_status(status);
     drop(profile_run_lock);
     std::process::exit(exit_code);
+}
+
+fn wait_for_copilot_harness(child: &mut Child) -> Result<ExitStatus> {
+    let mut forwarded_interrupt = false;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("Failed to wait for Copilot harness")?
+        {
+            return Ok(status);
+        }
+
+        if crate::git::is_interrupted() && !forwarded_interrupt {
+            terminate_copilot_harness(child);
+            forwarded_interrupt = true;
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(unix)]
+fn terminate_copilot_harness(child: &mut Child) {
+    #[allow(unsafe_code, clippy::cast_possible_wrap)]
+    unsafe {
+        if libc::kill(-(child.id() as libc::pid_t), libc::SIGTERM) == 0 {
+            return;
+        }
+    }
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn terminate_copilot_harness(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn exit_code_from_status(status: ExitStatus) -> i32 {

@@ -6,6 +6,11 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 mod common;
 use common::{SourceTestContext, TestContext, create_overlay_dir, envrc_overlay};
@@ -393,6 +398,95 @@ profiles =
             .join(".repoverlay/profiles/rust-dev.copilot.ccl")
             .exists()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn copilot_profile_cleans_up_after_wrapper_sigint() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let instruction_file = copilot_home
+        .path()
+        .join("instructions/rust-dev/copilot-instructions.md");
+    let harness_ready = ctx.repo_path().join("copilot-ready.txt");
+    let state_file = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/rust-dev.copilot.ccl");
+    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin("repoverlay"));
+    command
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            &format!(
+                "echo ready > {}; trap 'exit 130' TERM INT; sleep 30",
+                harness_ready.display()
+            ),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+    // The Rust test harness may ignore SIGINT. Reset it before exec so the
+    // repoverlay process can install its normal Ctrl+C handler.
+    #[allow(unsafe_code)]
+    unsafe {
+        command.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+
+    let setup_deadline = Instant::now() + Duration::from_secs(5);
+    while (!instruction_file.exists() && !state_file.exists()) || !harness_ready.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("repoverlay exited before applying profile: {status}");
+        }
+        assert!(
+            Instant::now() < setup_deadline,
+            "profile was not applied before timeout"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    #[allow(unsafe_code, clippy::cast_possible_wrap)]
+    unsafe {
+        assert_eq!(libc::kill(child.id() as libc::pid_t, libc::SIGINT), 0);
+    }
+
+    let exit_deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= exit_deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("repoverlay did not exit after SIGINT");
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+
+    assert_eq!(status.code(), Some(130));
+    assert!(!instruction_file.exists());
+    assert!(!state_file.exists());
 }
 
 #[test]
