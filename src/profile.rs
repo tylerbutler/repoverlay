@@ -96,7 +96,7 @@ pub(crate) fn profile_state_path(target: &Path, name: &str, harness: &str) -> Re
         .join(format!("{name}.{harness}.ccl")))
 }
 
-fn validate_profile_state_component(component: &str) -> Result<()> {
+pub(crate) fn validate_profile_state_component(component: &str) -> Result<()> {
     if component.is_empty()
         || matches!(component, "." | "..")
         || component.contains('/')
@@ -328,7 +328,7 @@ profiles =
             mode: ProfileMode::Persistent,
             session_id: None,
             applied_at: Utc::now(),
-            profile_fingerprint: "sha256:test".to_string(),
+            profile_fingerprint: "sickle-hash:test".to_string(),
             overlays: vec!["rust-base".to_string()],
             files: Vec::new(),
             skipped: Vec::new(),
@@ -350,7 +350,7 @@ profiles =
             mode: ProfileMode::Persistent,
             session_id: None,
             applied_at: Utc::now(),
-            profile_fingerprint: "sha256:test".to_string(),
+            profile_fingerprint: "sickle-hash:test".to_string(),
             overlays: Vec::new(),
             files: Vec::new(),
             skipped: Vec::new(),
