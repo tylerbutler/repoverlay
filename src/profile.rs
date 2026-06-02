@@ -1,9 +1,14 @@
 //! Profile configuration, merge rules, and state metadata.
 
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[allow(dead_code)]
+const PROFILES_DIR: &str = "profiles";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -77,6 +82,45 @@ fn merge_list<T: Clone>(base: &[T], override_list: &[T]) -> Vec<T> {
     } else {
         override_list.to_vec()
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn profile_state_path(target: &Path, name: &str, harness: &str) -> PathBuf {
+    target
+        .join(crate::state::STATE_DIR)
+        .join(PROFILES_DIR)
+        .join(format!("{name}.{harness}.ccl"))
+}
+
+#[allow(dead_code)]
+pub(crate) fn save_profile_state(target: &Path, state: &ProfileState) -> Result<()> {
+    let path = profile_state_path(target, &state.name, &state.harness);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = sickle::to_string(state).context("Failed to serialize profile state")?;
+    fs::write(&path, content)
+        .with_context(|| format!("Failed to write profile state: {}", path.display()))?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(crate) fn load_profile_state(target: &Path, name: &str, harness: &str) -> Result<ProfileState> {
+    let path = profile_state_path(target, name, harness);
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read profile state: {}", path.display()))?;
+    sickle::from_str(&content)
+        .with_context(|| format!("Failed to parse profile state: {}", path.display()))
+}
+
+#[allow(dead_code)]
+pub(crate) fn remove_profile_state(target: &Path, name: &str, harness: &str) -> Result<()> {
+    let path = profile_state_path(target, name, harness);
+    if path.exists() {
+        fs::remove_file(&path)
+            .with_context(|| format!("Failed to remove profile state: {}", path.display()))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -247,5 +291,47 @@ profiles =
         );
         assert_eq!(merged.skills, vec!["base-skill"]);
         assert_eq!(merged.plugins, vec!["repo-plugin"]);
+    }
+
+    #[test]
+    fn saves_and_loads_profile_state() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let state = ProfileState {
+            name: "rust-dev".to_string(),
+            harness: "copilot".to_string(),
+            mode: ProfileMode::Persistent,
+            session_id: None,
+            applied_at: Utc::now(),
+            profile_fingerprint: "sha256:test".to_string(),
+            overlays: vec!["rust-base".to_string()],
+            files: Vec::new(),
+            skipped: Vec::new(),
+        };
+
+        save_profile_state(temp.path(), &state).unwrap();
+        let loaded = load_profile_state(temp.path(), "rust-dev", "copilot").unwrap();
+        assert_eq!(loaded.name, "rust-dev");
+        assert_eq!(loaded.harness, "copilot");
+        assert_eq!(loaded.overlays, vec!["rust-base"]);
+    }
+
+    #[test]
+    fn removes_profile_state_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let state = ProfileState {
+            name: "rust-dev".to_string(),
+            harness: "copilot".to_string(),
+            mode: ProfileMode::Persistent,
+            session_id: None,
+            applied_at: Utc::now(),
+            profile_fingerprint: "sha256:test".to_string(),
+            overlays: Vec::new(),
+            files: Vec::new(),
+            skipped: Vec::new(),
+        };
+
+        save_profile_state(temp.path(), &state).unwrap();
+        remove_profile_state(temp.path(), "rust-dev", "copilot").unwrap();
+        assert!(load_profile_state(temp.path(), "rust-dev", "copilot").is_err());
     }
 }
