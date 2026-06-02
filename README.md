@@ -98,9 +98,21 @@ Profiles compose overlays and AI harness configuration:
 ```bash
 repoverlay profile list
 repoverlay profile show rust-dev
+```
+
+Apply a profile persistently:
+
+```bash
 repoverlay profile apply rust-dev --harness copilot
+```
+
+Or run Copilot with a profile applied only while the harness process runs:
+
+```bash
 repoverlay copilot --profile rust-dev -- --help
 ```
+
+Copilot v1 applies overlays, MCP servers, and harness/user-level instruction files. Skills and plugins are accepted in profile config but skipped with warnings until Copilot placement semantics are defined.
 
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 
