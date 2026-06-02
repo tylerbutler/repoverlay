@@ -1228,6 +1228,7 @@ mod tests {
                         path: Some(PathBuf::from("overlays")),
                     }],
                     library_path: None,
+                    profiles: std::collections::BTreeMap::new(),
                 },
             )
             .unwrap();

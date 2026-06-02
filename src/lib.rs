@@ -15,6 +15,7 @@ mod json_merge;
 mod library;
 mod overlay_name;
 mod overlay_repo;
+mod profile;
 mod reference;
 mod remove;
 mod resolve;

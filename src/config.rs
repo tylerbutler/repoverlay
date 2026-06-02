@@ -6,7 +6,6 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -21,6 +20,9 @@ pub(crate) struct RepoverlayConfig {
     /// When not set, defaults to `.repoverlay/library/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) library_path: Option<String>,
+    /// Named profile definitions.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) profiles: std::collections::BTreeMap<String, crate::profile::ProfileConfig>,
 }
 
 impl RepoverlayConfig {
@@ -469,47 +471,43 @@ pub(crate) fn load_repo_config(repo_root: &Path) -> Result<Option<RepoverlayConf
 /// When `repo_path` is provided, repo-local sources are loaded first (higher priority),
 /// followed by global sources. When `None`, only global config is loaded.
 pub(crate) fn load_config(repo_path: Option<&Path>) -> Result<RepoverlayConfig> {
-    let mut config = load_global_config()?;
+    let config = load_global_config()?;
 
     if let Some(repo_root) = repo_path
         && let Some(repo_config) = load_repo_config(repo_root)?
     {
-        let mut merged_sources = repo_config.sources;
-        merged_sources.extend(config.sources);
-        config.sources = merged_sources;
+        return Ok(merge_repo_config(config, repo_config));
     }
 
     Ok(config)
 }
 
-/// Generate a config file for multi-source configuration.
-pub(crate) fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
-    let mut output = String::new();
-    output.push_str("/= repoverlay global configuration\n");
-    output.push_str("/= This file configures repoverlay's overlay sources.\n\n");
+pub(crate) fn merge_repo_config(
+    mut global: RepoverlayConfig,
+    repo_config: RepoverlayConfig,
+) -> RepoverlayConfig {
+    let mut merged_sources = repo_config.sources;
+    merged_sources.extend(global.sources);
+    global.sources = merged_sources;
 
-    if !config.sources.is_empty() {
-        output.push_str(
-            "/= Sources are checked in priority order (first listed = highest priority).\n",
-        );
-        output.push_str(
-            "/= To change priority, edit this file directly or remove and re-add sources.\n",
-        );
-        output.push_str("sources =\n");
-
-        for source in &config.sources {
-            output.push_str("  =\n");
-            let _ = writeln!(output, "    name = {}", source.name);
-            if let Some(url) = &source.url {
-                let _ = writeln!(output, "    url = {url}");
-            }
-            if let Some(path) = &source.path {
-                let _ = writeln!(output, "    path = {}", path.display());
-            }
-        }
+    if repo_config.library_path.is_some() {
+        global.library_path = repo_config.library_path;
     }
 
-    output
+    for (name, repo_profile) in repo_config.profiles {
+        let merged_profile = global.profiles.get(&name).map_or_else(
+            || repo_profile.clone(),
+            |base| crate::profile::merge_profile_config(base, &repo_profile),
+        );
+        global.profiles.insert(name, merged_profile);
+    }
+
+    global
+}
+
+/// Generate a config file for multi-source configuration.
+pub(crate) fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
+    sickle::to_string(config).expect("RepoverlayConfig serialization should not fail")
 }
 
 /// Save the global configuration.
@@ -611,6 +609,62 @@ sources =
             config.sources[0].url().unwrap(),
             "https://github.com/org/overlays"
         );
+    }
+
+    #[test]
+    fn test_load_config_merges_same_name_profiles() {
+        let temp = TempDir::new().unwrap();
+        let repo_config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&repo_config_dir).unwrap();
+
+        let repo_ccl = r"
+profiles =
+  rust-dev =
+    overlays =
+      = repo-rust
+    mcps =
+      servers =
+        repo =
+          command = repo-mcp
+";
+        fs::write(repo_config_dir.join("config.ccl"), repo_ccl).unwrap();
+
+        let global = RepoverlayConfig {
+            profiles: std::collections::BTreeMap::from([(
+                "rust-dev".to_string(),
+                crate::profile::ProfileConfig {
+                    description: Some("Global Rust".to_string()),
+                    overlays: vec!["global-rust".to_string()],
+                    instructions: vec![crate::profile::InstructionConfig {
+                        source: "global.md".to_string(),
+                    }],
+                    mcps: crate::profile::McpConfig {
+                        servers: std::collections::BTreeMap::from([(
+                            "global".to_string(),
+                            crate::profile::McpServerConfig {
+                                command: "global-mcp".to_string(),
+                                args: Vec::new(),
+                                env: std::collections::BTreeMap::new(),
+                            },
+                        )]),
+                    },
+                    skills: vec!["global-skill".to_string()],
+                    plugins: vec!["global-plugin".to_string()],
+                },
+            )]),
+            ..RepoverlayConfig::default()
+        };
+        let repo = load_repo_config(temp.path()).unwrap().unwrap();
+        let merged = merge_repo_config(global, repo);
+        let profile = merged.profiles.get("rust-dev").unwrap();
+
+        assert_eq!(profile.description.as_deref(), Some("Global Rust"));
+        assert_eq!(profile.overlays, vec!["repo-rust"]);
+        assert!(profile.mcps.servers.contains_key("global"));
+        assert!(profile.mcps.servers.contains_key("repo"));
+        assert_eq!(profile.instructions[0].source, "global.md");
+        assert_eq!(profile.skills, vec!["global-skill"]);
+        assert_eq!(profile.plugins, vec!["global-plugin"]);
     }
 
     #[test]
@@ -802,6 +856,7 @@ sources =
                 },
             ],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         let ccl = sickle::to_string(&config).unwrap();
@@ -953,6 +1008,7 @@ sources =
                 path: None,
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         let result = config.get_default_overlay_repo_config();
@@ -966,6 +1022,7 @@ sources =
         let config = RepoverlayConfig {
             sources: vec![],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         let result = config.get_default_overlay_repo_config();
@@ -983,6 +1040,7 @@ sources =
                 path: None,
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(None);
@@ -1006,6 +1064,7 @@ sources =
                 },
             ],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(Some("secondary"));
@@ -1022,6 +1081,7 @@ sources =
                 path: None,
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(Some("nonexistent"));
@@ -1252,6 +1312,7 @@ sources =
                 path: None,
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         save_repo_config(temp.path(), &config).unwrap();
@@ -1342,6 +1403,7 @@ sources =
                 path: Some(PathBuf::from("my-overlays")),
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         let ccl = generate_sources_config_ccl(&config);
@@ -1375,6 +1437,7 @@ sources =
                 },
             ],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         let ccl = generate_sources_config_ccl(&config);
@@ -1514,6 +1577,7 @@ sources =
                 path: Some(PathBuf::from("my-overlays")),
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
         };
 
         save_repo_config(temp.path(), &config).unwrap();
