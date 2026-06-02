@@ -74,6 +74,18 @@ fn apply_profile_with_harness_home(
 ) -> Result<ProfileState> {
     crate::profile::validate_profile_state_component(name)?;
     crate::profile::validate_profile_state_component(harness)?;
+    let state_path = crate::profile::profile_state_path(target, name, harness)?;
+    match state_path.try_exists() {
+        Ok(true) => bail!(
+            "Profile '{name}' is already applied for {harness}; remove it before applying again"
+        ),
+        Ok(false) => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("Failed to inspect profile state: {}", state_path.display())
+            });
+        }
+    }
 
     let config = crate::config::load_config(Some(target))?;
     let profile = config
@@ -138,18 +150,27 @@ fn apply_profile_with_harness_home(
                 }
                 ProfileAction::WriteFile {
                     source,
-                    target,
+                    target: file_target,
                     scope,
                 } => {
                     if scope == ProfileScope::User {
-                        rollbacks.push(capture_file_rollback(&target)?);
+                        rollbacks.push(capture_file_rollback(&file_target)?);
                     }
-                    copy_profile_file(&source, &target, &context.profile_asset_dir)?;
+                    let (backup, existed) = capture_write_file_backup(
+                        name,
+                        harness,
+                        target,
+                        &file_target,
+                        action_index,
+                    )?;
+                    copy_profile_file(&source, &file_target, &context.profile_asset_dir)?;
                     state.files.push(ProfileFileEntry {
                         source,
-                        target,
+                        target: file_target,
                         scope,
                         action: "write-file".to_string(),
+                        backup,
+                        existed,
                     });
                 }
                 ProfileAction::MergeJson {
@@ -173,6 +194,8 @@ fn apply_profile_with_harness_home(
                         target: json_target,
                         scope,
                         action: "merge-json".to_string(),
+                        backup: None,
+                        existed: false,
                     });
                 }
                 ProfileAction::SkipCapability { capability, reason } => {
@@ -186,6 +209,9 @@ fn apply_profile_with_harness_home(
     })();
 
     if let Err(err) = apply_result {
+        rollback_applied_overlays(target, &state.overlays).with_context(|| {
+            format!("Profile apply failed ({err}); failed to roll back applied overlays")
+        })?;
         rollback_user_file_changes(&rollbacks).with_context(|| {
             format!("Profile apply failed ({err}); failed to roll back user config changes")
         })?;
@@ -203,10 +229,8 @@ pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result
     let state = crate::profile::load_profile_state(target, name, harness)?;
     for file in &state.files {
         match file.action.as_str() {
-            "write-file" if file.target.exists() => {
-                ensure_removable_profile_file(name, harness, target, file)?;
-                fs::remove_file(&file.target)
-                    .with_context(|| format!("Failed to remove {}", file.target.display()))?;
+            "write-file" => {
+                restore_write_file_backup(name, harness, target, file)?;
             }
             "merge-json" => {
                 restore_merge_json_backup(name, harness, target, file)?;
@@ -402,7 +426,15 @@ fn rollback_user_file_changes(rollbacks: &[FileRollback]) -> Result<()> {
     Ok(())
 }
 
-fn merge_json_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
+fn rollback_applied_overlays(repo_target: &Path, overlays: &[String]) -> Result<()> {
+    for overlay in overlays.iter().rev() {
+        crate::remove_overlay(repo_target, Some(overlay.clone()), false, false)
+            .with_context(|| format!("Failed to remove profile overlay '{overlay}'"))?;
+    }
+    Ok(())
+}
+
+fn profile_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
     crate::profile::validate_profile_state_component(name)?;
     crate::profile::validate_profile_state_component(harness)?;
 
@@ -413,6 +445,10 @@ fn merge_json_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Resul
         .join(format!("{name}.{harness}")))
 }
 
+fn merge_json_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
+    profile_backup_dir(repo_target, name, harness)
+}
+
 fn merge_json_backup_path(
     repo_target: &Path,
     name: &str,
@@ -421,6 +457,53 @@ fn merge_json_backup_path(
 ) -> Result<PathBuf> {
     Ok(merge_json_backup_dir(repo_target, name, harness)?
         .join(format!("merge-json-{action_index}.bak")))
+}
+
+fn write_file_backup_path(
+    repo_target: &Path,
+    name: &str,
+    harness: &str,
+    action_index: usize,
+) -> Result<PathBuf> {
+    Ok(profile_backup_dir(repo_target, name, harness)?
+        .join(format!("write-file-{action_index}.bak")))
+}
+
+fn capture_write_file_backup(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    write_target: &Path,
+    action_index: usize,
+) -> Result<(Option<PathBuf>, bool)> {
+    match fs::read(write_target) {
+        Ok(bytes) => {
+            let backup_path = write_file_backup_path(repo_target, name, harness, action_index)?;
+            if let Some(parent) = backup_path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Failed to create profile backup directory: {}",
+                        parent.display()
+                    )
+                })?;
+            }
+            fs::write(&backup_path, bytes).with_context(|| {
+                format!(
+                    "Failed to back up profile file target {} to {}",
+                    write_target.display(),
+                    backup_path.display()
+                )
+            })?;
+            Ok((Some(backup_path), true))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok((None, false)),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to capture existing profile file before modifying {}",
+                write_target.display()
+            )
+        }),
+    }
 }
 
 fn capture_merge_json_backup(
@@ -503,6 +586,55 @@ fn restore_merge_json_backup(
     Ok(())
 }
 
+fn restore_write_file_backup(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    file: &ProfileFileEntry,
+) -> Result<()> {
+    match (&file.backup, file.existed) {
+        (Some(backup), _) => {
+            ensure_removable_profile_file(name, harness, repo_target, file)?;
+            ensure_valid_profile_backup_source(name, harness, repo_target, backup)?;
+            if let Some(parent) = file.target.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Failed to recreate parent directory for {}",
+                        file.target.display()
+                    )
+                })?;
+            }
+            fs::copy(backup, &file.target).with_context(|| {
+                format!(
+                    "Failed to restore {} from {}",
+                    file.target.display(),
+                    backup.display()
+                )
+            })?;
+            if let Err(err) = fs::remove_file(backup) {
+                eprintln!(
+                    "Warning: failed to remove profile file backup {}: {err}",
+                    backup.display()
+                );
+            }
+        }
+        (None, true) => {
+            bail!(
+                "Profile file {} was recorded as existing but has no backup",
+                file.target.display()
+            );
+        }
+        (None, false) => {
+            if file.target.exists() {
+                ensure_removable_profile_file(name, harness, repo_target, file)?;
+                fs::remove_file(&file.target)
+                    .with_context(|| format!("Failed to remove {}", file.target.display()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn ensure_removable_profile_json(harness: &str, file: &ProfileFileEntry) -> Result<()> {
     if harness != "copilot" || file.scope != ProfileScope::User {
         bail!("Unsupported profile JSON target for harness '{harness}'");
@@ -541,6 +673,35 @@ fn ensure_valid_merge_json_backup_source(
     if !source.starts_with(&backup_root) {
         bail!(
             "Refusing profile JSON backup outside managed location: {}",
+            source.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_valid_profile_backup_source(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    source: &Path,
+) -> Result<()> {
+    if source.as_os_str().is_empty() {
+        bail!("Profile backup source must not be empty");
+    }
+    if source
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!(
+            "Refusing profile backup source with parent directory traversal: {}",
+            source.display()
+        );
+    }
+
+    let backup_root = profile_backup_dir(repo_target, name, harness)?;
+    if !source.starts_with(&backup_root) {
+        bail!(
+            "Refusing profile backup outside managed location: {}",
             source.display()
         );
     }
@@ -755,6 +916,8 @@ profiles =
                     target: outside.clone(),
                     scope: ProfileScope::User,
                     action: "write-file".to_string(),
+                    backup: None,
+                    existed: false,
                 }],
                 skipped: Vec::new(),
             },
@@ -985,7 +1148,7 @@ profiles =
     }
 
     #[test]
-    fn apply_profile_rolls_back_user_files_when_state_save_fails() {
+    fn apply_profile_rejects_state_metadata_errors_before_side_effects() {
         let temp = tempfile::TempDir::new().unwrap();
         let copilot_home = temp.path().join("copilot-home");
         write_config(
@@ -1015,7 +1178,7 @@ profiles =
         .unwrap_err();
 
         assert!(
-            err.to_string().contains("profile backup directory"),
+            err.to_string().contains("Failed to inspect profile state"),
             "unexpected error: {err}"
         );
         assert_eq!(

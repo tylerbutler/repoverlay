@@ -192,6 +192,10 @@ pub(crate) struct ProfileFileEntry {
     pub(crate) target: PathBuf,
     pub(crate) scope: ProfileScope,
     pub(crate) action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) backup: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) existed: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
