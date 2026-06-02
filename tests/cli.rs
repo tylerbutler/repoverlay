@@ -187,6 +187,62 @@ fn cache_help_displays() {
 }
 
 #[test]
+fn profile_list_shows_repo_profiles() {
+    let ctx = TestContext::new();
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    description = Rust development
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "list",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rust-dev"))
+        .stdout(predicate::str::contains("Rust development"));
+}
+
+#[test]
+fn profile_show_prints_profile_details() {
+    let ctx = TestContext::new();
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    description = Rust development
+    overlays =
+      = rust-base
+    skills =
+      = market:rust-reviewer@playground
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "show",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rust-dev"))
+        .stdout(predicate::str::contains("rust-base"))
+        .stdout(predicate::str::contains("market:rust-reviewer@playground"));
+}
+
+#[test]
 fn restore_help_displays() {
     cargo_bin_cmd!("repoverlay")
         .args(["restore", "--help"])

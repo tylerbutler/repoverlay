@@ -1,0 +1,70 @@
+use anyhow::{Result, bail};
+use colored::Colorize;
+
+use crate::cli::ProfileCommand;
+use crate::config;
+
+pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
+    match command {
+        ProfileCommand::List { target } => {
+            let config = config::load_config(target.as_deref())?;
+            if config.profiles.is_empty() {
+                println!("No profiles configured.");
+                return Ok(());
+            }
+
+            for (name, profile) in &config.profiles {
+                match &profile.description {
+                    Some(description) => println!("{} - {description}", name.bold()),
+                    None => println!("{}", name.bold()),
+                }
+            }
+            Ok(())
+        }
+        ProfileCommand::Show { name, target } => {
+            let config = config::load_config(target.as_deref())?;
+            let profile = config
+                .profiles
+                .get(&name)
+                .ok_or_else(|| anyhow::anyhow!("Profile '{name}' not found"))?;
+
+            println!("{}", name.bold());
+            if let Some(description) = &profile.description {
+                println!("  Description: {description}");
+            }
+            print_list("Overlays", &profile.overlays);
+            print_list(
+                "Instructions",
+                &profile
+                    .instructions
+                    .iter()
+                    .map(|entry| entry.source.clone())
+                    .collect::<Vec<_>>(),
+            );
+            if !profile.mcps.servers.is_empty() {
+                println!("  MCP servers:");
+                for (server, config) in &profile.mcps.servers {
+                    println!("    - {} ({})", server, config.command);
+                }
+            }
+            print_list("Skills", &profile.skills);
+            print_list("Plugins", &profile.plugins);
+            Ok(())
+        }
+        ProfileCommand::Apply { .. }
+        | ProfileCommand::Status { .. }
+        | ProfileCommand::Remove { .. } => {
+            bail!("profile apply/status/remove are added in the profile lifecycle task")
+        }
+    }
+}
+
+fn print_list(label: &str, values: &[String]) {
+    if values.is_empty() {
+        return;
+    }
+    println!("  {label}:");
+    for value in values {
+        println!("    - {value}");
+    }
+}

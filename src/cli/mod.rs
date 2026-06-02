@@ -25,6 +25,7 @@ pub(crate) use commands::create::{create_into_library, create_overlay_command};
 pub(crate) use commands::edit::{add_files_to_overlay, edit_overlay, remove_files_from_overlay};
 pub(crate) use commands::handle_remove;
 pub(crate) use commands::library::handle_library_command;
+pub(crate) use commands::profile::handle_profile_command;
 pub(crate) use commands::source::handle_source_command;
 pub(crate) use commands::sync::{handle_sync, select_overlay_interactive};
 
@@ -526,6 +527,12 @@ enum Commands {
         command: SourceCommand,
     },
 
+    /// Manage repository profiles
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
+    },
+
     /// Manage the in-repo overlay library
     Library {
         #[command(subcommand)]
@@ -558,6 +565,62 @@ pub(crate) enum SourceCommand {
     Remove {
         /// Name of the source to remove
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ProfileCommand {
+    /// List configured profiles
+    List {
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Show a configured profile
+    Show {
+        /// Profile name
+        name: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Apply a profile persistently
+    Apply {
+        /// Profile name
+        name: String,
+
+        #[arg(long)]
+        harness: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Show applied profile state
+    Status {
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        #[arg(long)]
+        harness: Option<String>,
+    },
+
+    /// Remove an applied profile
+    Remove {
+        /// Profile name
+        name: String,
+
+        #[arg(long)]
+        harness: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
     },
 }
 
@@ -1001,6 +1064,9 @@ pub(crate) fn run() -> Result<()> {
         }
         Commands::Source { command } => {
             handle_source_command(command)?;
+        }
+        Commands::Profile { command } => {
+            handle_profile_command(command)?;
         }
         Commands::Library { command } => {
             handle_library_command(command)?;
