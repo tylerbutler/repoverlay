@@ -4,10 +4,13 @@ use anyhow::Result;
 use process_wrap::std::{ChildWrapper, CommandWrap};
 use std::process::{Command, ExitStatus};
 
+// Task 6 wires this into Copilot; allow dead_code until then.
+#[allow(dead_code)]
 pub(crate) struct HarnessProcess {
     child: Box<dyn ChildWrapper>,
 }
 
+#[allow(dead_code)]
 impl HarnessProcess {
     pub(crate) fn spawn(command: Command) -> Result<Self> {
         let mut command = CommandWrap::from(command);
