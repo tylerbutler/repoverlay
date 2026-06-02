@@ -737,7 +737,11 @@ fn copilot_profile_refuses_to_run_with_existing_session_lock() {
     let marker = ctx.repo_path().join("copilot-ran.txt");
     let profiles_dir = ctx.repo_path().join(".repoverlay/profiles");
     fs::create_dir_all(&profiles_dir).unwrap();
-    fs::write(profiles_dir.join("rust-dev.copilot.lock"), "").unwrap();
+    fs::write(
+        profiles_dir.join("rust-dev.copilot.lock"),
+        format!("{}\n", std::process::id()),
+    )
+    .unwrap();
     ctx.write_repo_config(
         r"
 profiles =
@@ -1559,7 +1563,7 @@ profiles =
     let lock_file = ctx
         .repo_path()
         .join(".repoverlay/profiles/rust-dev.copilot.lock");
-    fs::write(&lock_file, "").unwrap();
+    fs::write(&lock_file, format!("{}\n", std::process::id())).unwrap();
 
     cargo_bin_cmd!("repoverlay")
         .args([
@@ -1581,6 +1585,120 @@ profiles =
     // Lock blocked removal: state and managed file are left intact.
     assert_eq!(fs::read_to_string(&state_file).unwrap(), original_state);
     assert!(instruction_target.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_remove_recovers_stale_session_lock() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let state_file = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/rust-dev.copilot.ccl");
+    let instruction_target = copilot_home
+        .path()
+        .join("instructions/rust-dev/copilot-instructions.md");
+    assert!(state_file.exists());
+    assert!(instruction_target.exists());
+
+    // Simulate a lock orphaned by a SIGKILLed session: a dead PID. i32::MAX is
+    // above every platform's PID ceiling, so it can never be alive.
+    let lock_file = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/rust-dev.copilot.lock");
+    fs::write(&lock_file, format!("{}\n", i32::MAX)).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    // Stale lock was recovered: state, managed file, and lock are all cleaned up.
+    assert!(!state_file.exists());
+    assert!(!instruction_target.exists());
+    assert!(!lock_file.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn copilot_profile_recovers_stale_session_lock() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let marker = ctx.repo_path().join("copilot-ran.txt");
+    let profiles_dir = ctx.repo_path().join(".repoverlay/profiles");
+    fs::create_dir_all(&profiles_dir).unwrap();
+    // A lock left behind by a dead session must not block a new session.
+    let lock_file = profiles_dir.join("rust-dev.copilot.lock");
+    fs::write(&lock_file, format!("{}\n", i32::MAX)).unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    description = Rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            &format!("echo ran > {}", marker.display()),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    // The session ran and cleaned up its own lock afterwards.
+    assert!(marker.exists());
+    assert!(!lock_file.exists());
 }
 
 #[cfg(unix)]

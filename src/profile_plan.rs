@@ -226,14 +226,24 @@ pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result
     crate::profile::validate_profile_state_component(harness)?;
 
     let lock_path = crate::profile::profile_lock_path(target, name, harness)?;
-    if lock_path
-        .try_exists()
-        .with_context(|| format!("Failed to inspect profile lock: {}", lock_path.display()))?
-    {
-        bail!(
-            "Profile '{name}' is currently in use by an ephemeral '{harness}' session; \
-             stop that session before removing the profile"
-        );
+    match crate::profile::inspect_lock(&lock_path)? {
+        crate::profile::LockState::Live => {
+            bail!(
+                "Profile '{name}' is currently in use by an ephemeral '{harness}' session; \
+                 stop that session before removing the profile"
+            );
+        }
+        crate::profile::LockState::Stale => {
+            // The owning session died without releasing the lock (e.g. SIGKILL or
+            // power loss). Recover it so removal can proceed.
+            std::fs::remove_file(&lock_path).with_context(|| {
+                format!(
+                    "Failed to remove stale profile lock: {}",
+                    lock_path.display()
+                )
+            })?;
+        }
+        crate::profile::LockState::Absent => {}
     }
 
     remove_profile_inner(name, harness, target)

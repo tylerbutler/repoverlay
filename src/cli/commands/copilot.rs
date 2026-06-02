@@ -21,6 +21,73 @@ impl Drop for ProfileRunLock {
     }
 }
 
+/// Decide whether terminal foreground ownership should be handed to the child.
+///
+/// Handoff is only safe when stdin is a controlling terminal. When stdin is a
+/// pipe or file (tests, CI, non-interactive use) there is no foreground process
+/// group to manage, so handoff is disabled.
+#[cfg(unix)]
+const fn should_hand_off_terminal(stdin_is_tty: bool) -> bool {
+    stdin_is_tty
+}
+
+/// RAII guard that transfers terminal foreground ownership to a child process
+/// group and restores the previous foreground group on drop.
+///
+/// Interactive harnesses that read from the terminal must be in the foreground
+/// process group, otherwise they receive `SIGTTIN`/`SIGTTOU` and hang. Because
+/// the child is spawned in its own process group, we explicitly hand the
+/// controlling terminal over with `tcsetpgrp` while it runs.
+#[cfg(unix)]
+struct TerminalForeground {
+    fd: libc::c_int,
+    previous_pgid: libc::pid_t,
+}
+
+#[cfg(unix)]
+impl TerminalForeground {
+    /// Hand terminal foreground ownership to `child_pgid` when stdin is a
+    /// controlling terminal. Returns `None` when no TTY is present or the
+    /// handoff could not be performed, in which case behavior is unchanged.
+    fn acquire(child_pgid: libc::pid_t) -> Option<Self> {
+        let fd = libc::STDIN_FILENO;
+        #[allow(unsafe_code)]
+        let stdin_is_tty = unsafe { libc::isatty(fd) == 1 };
+        if !should_hand_off_terminal(stdin_is_tty) {
+            return None;
+        }
+
+        #[allow(unsafe_code)]
+        unsafe {
+            let previous_pgid = libc::tcgetpgrp(fd);
+            if previous_pgid < 0 {
+                return None;
+            }
+            // Calling tcsetpgrp from a background group raises SIGTTOU; ignore it
+            // around the call so we are not stopped while reassigning ownership.
+            let previous_handler = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+            let result = libc::tcsetpgrp(fd, child_pgid);
+            libc::signal(libc::SIGTTOU, previous_handler);
+            if result != 0 {
+                return None;
+            }
+            Some(Self { fd, previous_pgid })
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TerminalForeground {
+    fn drop(&mut self) {
+        #[allow(unsafe_code)]
+        unsafe {
+            let previous_handler = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+            libc::tcsetpgrp(self.fd, self.previous_pgid);
+            libc::signal(libc::SIGTTOU, previous_handler);
+        }
+    }
+}
+
 pub(crate) fn handle_copilot_command(
     profile: String,
     target: Option<PathBuf>,
@@ -51,12 +118,27 @@ pub(crate) fn handle_copilot_command(
             lock_parent.display()
         )
     })?;
+    // Recover a lock orphaned by a dead session (SIGKILL/power loss) before trying
+    // to claim it; a live lock is left in place so `create_new` rejects us below.
+    if crate::profile::inspect_lock(&lock_path)? == crate::profile::LockState::Stale {
+        std::fs::remove_file(&lock_path).with_context(|| {
+            format!(
+                "Failed to remove stale profile lock: {}",
+                lock_path.display()
+            )
+        })?;
+    }
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&lock_path)
     {
-        Ok(_file) => {}
+        Ok(mut file) => {
+            use std::io::Write;
+            writeln!(file, "{}", std::process::id()).with_context(|| {
+                format!("Failed to write profile lock: {}", lock_path.display())
+            })?;
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             bail!(
                 "Profile '{profile}' is already applied or running for copilot; remove it before \
@@ -123,7 +205,18 @@ pub(crate) fn handle_copilot_command(
         }
     };
     crate::git::register_child(&child);
+    // The child runs in its own process group; give it the controlling terminal
+    // while it runs so interactive harnesses stay in the foreground.
+    #[cfg(unix)]
+    let terminal_foreground = {
+        #[allow(clippy::cast_possible_wrap)]
+        let child_pgid = child.id() as libc::pid_t;
+        TerminalForeground::acquire(child_pgid)
+    };
     let status_result = wait_for_copilot_harness(&mut child);
+    // Restore foreground ownership before profile cleanup runs.
+    #[cfg(unix)]
+    drop(terminal_foreground);
     crate::git::unregister_child();
 
     let cleanup_result =
@@ -190,4 +283,19 @@ fn exit_code_from_status(status: ExitStatus) -> i32 {
     }
 
     1
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::should_hand_off_terminal;
+
+    #[test]
+    fn terminal_handoff_disabled_without_tty() {
+        assert!(!should_hand_off_terminal(false));
+    }
+
+    #[test]
+    fn terminal_handoff_enabled_with_tty() {
+        assert!(should_hand_off_terminal(true));
+    }
 }

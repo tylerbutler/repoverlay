@@ -106,6 +106,77 @@ pub(crate) fn profile_lock_path(target: &Path, name: &str, harness: &str) -> Res
         .join(format!("{name}.{harness}.lock")))
 }
 
+/// Liveness of an ephemeral session lock file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LockState {
+    /// No lock file is present.
+    Absent,
+    /// The lock file is held by a process that is still alive.
+    Live,
+    /// The lock file exists but its owner is dead, missing, or unparsable.
+    ///
+    /// Stale locks are left behind when a session is `SIGKILL`ed or the machine
+    /// loses power, and may be safely recovered.
+    Stale,
+}
+
+/// Inspect an ephemeral session lock file and classify its liveness.
+///
+/// The lock file stores the PID of the owning process. A lock is considered
+/// [`LockState::Stale`] when the file is empty, its contents cannot be parsed as
+/// a PID, or the recorded process is no longer alive. This lets callers recover
+/// from locks orphaned by `SIGKILL` or power loss instead of blocking forever.
+pub(crate) fn inspect_lock(path: &Path) -> Result<LockState> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LockState::Absent);
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to read profile lock: {}", path.display()));
+        }
+    };
+
+    match content.trim().parse::<u32>() {
+        Ok(pid) if pid_is_alive(pid) => Ok(LockState::Live),
+        _ => Ok(LockState::Stale),
+    }
+}
+
+/// Check whether a process with the given PID is currently alive.
+#[cfg(unix)]
+pub(crate) fn pid_is_alive(pid: u32) -> bool {
+    // PID 0 addresses the caller's whole process group with `kill(2)`, so it can
+    // never identify a single lock owner. Treat it as stale.
+    if pid == 0 {
+        return false;
+    }
+
+    #[allow(unsafe_code, clippy::cast_possible_wrap)]
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if result == 0 {
+        // Signal 0 was delivered: the process exists and we may signal it.
+        return true;
+    }
+
+    // EPERM means the process exists but we lack permission; ESRCH means it is
+    // gone. Anything else is treated conservatively as gone.
+    matches!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM)
+    )
+}
+
+/// Check whether a process with the given PID is currently alive.
+///
+/// On non-Unix platforms liveness cannot be probed portably, so we conservatively
+/// assume the owner is still alive to avoid deleting a valid lock.
+#[cfg(not(unix))]
+pub(crate) fn pid_is_alive(_pid: u32) -> bool {
+    true
+}
+
 pub(crate) fn validate_profile_state_component(component: &str) -> Result<()> {
     if component.is_empty()
         || matches!(component, "." | "..")
@@ -407,5 +478,56 @@ profiles =
 
         let err = profile_lock_path(temp.path(), "../evil", "copilot").unwrap_err();
         assert!(err.to_string().contains("profile state component"));
+    }
+
+    #[test]
+    fn inspect_lock_reports_absent_when_missing() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("missing.lock");
+        assert_eq!(inspect_lock(&path).unwrap(), LockState::Absent);
+    }
+
+    #[test]
+    fn inspect_lock_reports_live_for_current_process() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("live.lock");
+        fs::write(&path, format!("{}\n", std::process::id())).unwrap();
+        assert_eq!(inspect_lock(&path).unwrap(), LockState::Live);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_lock_reports_stale_for_dead_pid() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("dead.lock");
+        // i32::MAX is above every platform's PID ceiling, so it cannot be alive.
+        fs::write(&path, format!("{}\n", i32::MAX)).unwrap();
+        assert_eq!(inspect_lock(&path).unwrap(), LockState::Stale);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_lock_reports_stale_for_unparsable_contents() {
+        let temp = tempfile::TempDir::new().unwrap();
+        for contents in ["", "   ", "not-a-pid", "0"] {
+            let path = temp.path().join("garbage.lock");
+            fs::write(&path, contents).unwrap();
+            assert_eq!(
+                inspect_lock(&path).unwrap(),
+                LockState::Stale,
+                "expected stale lock for contents {contents:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pid_is_alive_detects_current_process() {
+        assert!(pid_is_alive(std::process::id()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_is_alive_rejects_zero_pid() {
+        assert!(!pid_is_alive(0));
     }
 }
