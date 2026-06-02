@@ -85,7 +85,7 @@ fn apply_profile_with_harness_home(
         session_id: session_id.clone(),
     };
     let plan = applicator.plan(profile, &context)?;
-    preflight_plan(&plan)?;
+    preflight_plan(&plan, &context.profile_asset_dir)?;
     let mut state = ProfileState {
         name: name.to_string(),
         harness: harness.to_string(),
@@ -125,7 +125,7 @@ fn apply_profile_with_harness_home(
                     if scope == ProfileScope::User {
                         rollbacks.push(capture_file_rollback(&target)?);
                     }
-                    copy_profile_file(&source, &target)?;
+                    copy_profile_file(&source, &target, &context.profile_asset_dir)?;
                     state.files.push(ProfileFileEntry {
                         source,
                         target,
@@ -170,11 +170,11 @@ fn apply_profile_with_harness_home(
     Ok(state)
 }
 
-fn preflight_plan(plan: &ProfilePlan) -> Result<()> {
+fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
     for action in &plan.actions {
         match action {
             ProfileAction::WriteFile { source, target, .. } => {
-                ensure_regular_profile_source(source)?;
+                ensure_regular_profile_source(source, profile_asset_dir)?;
                 if target.as_os_str().is_empty() {
                     bail!("Profile target path must not be empty");
                 }
@@ -247,7 +247,34 @@ fn rollback_user_file_changes(rollbacks: &[FileRollback]) -> Result<()> {
     Ok(())
 }
 
-fn ensure_regular_profile_source(source: &Path) -> Result<()> {
+fn ensure_regular_profile_source(source: &Path, profile_asset_dir: &Path) -> Result<()> {
+    let root_canonical = fs::canonicalize(profile_asset_dir).with_context(|| {
+        format!(
+            "Failed to inspect profile asset directory: {}",
+            profile_asset_dir.display()
+        )
+    })?;
+    let source_canonical = match fs::canonicalize(source) {
+        Ok(path) => path,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            bail!("Profile source file not found: {}", source.display());
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to inspect profile source file: {}",
+                    source.display()
+                )
+            });
+        }
+    };
+    if !source_canonical.starts_with(&root_canonical) {
+        bail!(
+            "Refusing profile source escaping the profile asset directory: {}",
+            source.display()
+        );
+    }
+
     let metadata = match fs::symlink_metadata(source) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -281,8 +308,8 @@ fn copilot_applicator(harness: &str) -> Result<CopilotApplicator> {
     }
 }
 
-fn copy_profile_file(source: &Path, target: &Path) -> Result<()> {
-    ensure_regular_profile_source(source)?;
+fn copy_profile_file(source: &Path, target: &Path, profile_asset_dir: &Path) -> Result<()> {
+    ensure_regular_profile_source(source, profile_asset_dir)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -429,7 +456,7 @@ profiles =
             ],
         };
 
-        let err = preflight_plan(&plan).unwrap_err();
+        let err = preflight_plan(&plan, temp.path()).unwrap_err();
 
         assert!(
             err.to_string().contains("Profile source file not found"),
@@ -458,11 +485,63 @@ profiles =
             }],
         };
 
-        let err = preflight_plan(&plan).unwrap_err();
+        let err = preflight_plan(&plan, temp.path()).unwrap_err();
 
         assert!(
             err.to_string().contains("profile source symlink"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_profile_rejects_instruction_source_beneath_symlinked_directory() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let copilot_home = tempfile::TempDir::new().unwrap();
+        fs::write(
+            outside.path().join("copilot-instructions.md"),
+            "Do not copy from outside profile assets.",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), temp.path().join("assets")).unwrap();
+        write_config(
+            temp.path(),
+            r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = assets/copilot-instructions.md
+",
+        );
+
+        let err = apply_profile_with_harness_home(
+            "rust-dev",
+            "copilot",
+            temp.path(),
+            ProfileMode::Persistent,
+            None,
+            copilot_home.path().to_path_buf(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("profile source escaping the profile asset directory"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !copilot_home
+                .path()
+                .join("instructions/rust-dev/copilot-instructions.md")
+                .exists()
+        );
+        assert!(
+            !temp
+                .path()
+                .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+                .exists()
         );
     }
 
@@ -496,6 +575,7 @@ profiles =
 
     #[test]
     fn preflight_rejects_empty_action_inputs() {
+        let temp = tempfile::TempDir::new().unwrap();
         let plan = ProfilePlan {
             profile_name: "rust-dev".to_string(),
             harness: "copilot".to_string(),
@@ -511,7 +591,7 @@ profiles =
             ],
         };
 
-        let err = preflight_plan(&plan).unwrap_err();
+        let err = preflight_plan(&plan, temp.path()).unwrap_err();
 
         assert!(
             err.to_string()
