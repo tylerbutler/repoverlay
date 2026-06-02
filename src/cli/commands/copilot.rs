@@ -17,6 +17,17 @@ pub(crate) fn handle_copilot_command(
     let target = crate::canonicalize_path(&target, "Target")?;
     crate::validate_git_repo(&target)?;
 
+    let state_path = crate::profile::profile_state_path(&target, &profile, "copilot")?;
+    if state_path
+        .try_exists()
+        .with_context(|| format!("Failed to inspect profile state: {}", state_path.display()))?
+    {
+        bail!(
+            "Profile '{profile}' is already applied for copilot; remove it before running an \
+             ephemeral session"
+        );
+    }
+
     let session_id = format!(
         "{}-copilot-{}",
         chrono::Utc::now().format("%Y%m%d%H%M%S"),
@@ -37,20 +48,22 @@ pub(crate) fn handle_copilot_command(
         .context("Profile disappeared after apply")?;
 
     let context = crate::profile_applicators::ProfileContext {
-        profile_name: profile.clone(),
+        profile_name: profile,
         target: target.clone(),
         profile_asset_dir: target.clone(),
         harness_home:
             crate::profile_applicators::copilot::CopilotApplicator::harness_home_from_env()?,
         mode: ProfileMode::Ephemeral,
-        session_id: state.session_id.clone(),
+        session_id: state.session_id,
     };
     let applicator = crate::profile_applicators::copilot::CopilotApplicator;
     let mut command = applicator.command(&context, &extra_args)?;
+    drop(extra_args);
     command.current_dir(&target);
 
     let status_result = command.status().context("Failed to run Copilot harness");
-    let cleanup_result = crate::profile_plan::remove_profile(&profile, "copilot", &target);
+    let cleanup_result =
+        crate::profile_plan::remove_profile(&context.profile_name, "copilot", &target);
     if let Err(error) = cleanup_result {
         bail!("Copilot exited, but profile cleanup failed: {error}");
     }

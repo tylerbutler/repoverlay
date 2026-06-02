@@ -396,15 +396,100 @@ profiles =
 }
 
 #[test]
-fn copilot_profile_preserves_harness_exit_code_after_cleanup() {
+fn copilot_profile_removes_generated_mcp_json_after_cleanup() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
+    let mcp_json = copilot_home.path().join("mcp.json");
     ctx.write_repo_config(
         r"
 profiles =
   rust-dev =
-    description = Rust
+    mcps =
+      servers =
+        rust =
+          command = uvx
+          args =
+            = mcp-rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            &format!("test -f {}", mcp_json.display()),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(!mcp_json.exists());
+}
+
+#[test]
+fn copilot_profile_restores_existing_mcp_json_after_cleanup() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let mcp_json = copilot_home.path().join("mcp.json");
+    let original_mcp_json = r#"{"servers":{"existing":{"command":"keep"}}}"#;
+    fs::write(&mcp_json, original_mcp_json).unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    mcps =
+      servers =
+        rust =
+          command = uvx
+          args =
+            = mcp-rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            &format!("grep -q mcp-rust {}", mcp_json.display()),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert_eq!(fs::read_to_string(mcp_json).unwrap(), original_mcp_json);
+}
+
+#[test]
+fn copilot_profile_preserves_harness_exit_code_after_cleanup() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
 ",
     );
 
@@ -425,6 +510,84 @@ profiles =
         .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
         .assert()
         .code(7);
+
+    assert!(
+        !copilot_home
+            .path()
+            .join("instructions/rust-dev/copilot-instructions.md")
+            .exists()
+    );
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists()
+    );
+}
+
+#[test]
+fn copilot_profile_refuses_to_overwrite_applied_profile_state() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            "true",
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Profile 'rust-dev' is already applied for copilot",
+        ));
+
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists()
+    );
+    assert!(
+        copilot_home
+            .path()
+            .join("instructions/rust-dev/copilot-instructions.md")
+            .exists()
+    );
 }
 
 #[cfg(unix)]

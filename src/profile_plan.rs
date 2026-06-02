@@ -42,6 +42,11 @@ pub(crate) enum ProfileAction {
     },
 }
 
+// Sentinel stored in ProfileFileEntry.source for merge-json actions when no target file existed
+// before the profile was applied. During removal, this means the generated target should be
+// deleted instead of restored from a backup file.
+const MISSING_MERGE_JSON_BACKUP_SOURCE: &str = "<missing>";
+
 pub(crate) fn apply_profile(
     name: &str,
     harness: &str,
@@ -100,7 +105,7 @@ fn apply_profile_with_harness_home(
 
     let mut rollbacks = Vec::new();
     let apply_result = (|| -> Result<()> {
-        for action in plan.actions {
+        for (action_index, action) in plan.actions.into_iter().enumerate() {
             match action {
                 ProfileAction::ApplyOverlay { reference } => {
                     let before = crate::state::list_applied_overlays(target)?;
@@ -148,17 +153,24 @@ fn apply_profile_with_harness_home(
                     });
                 }
                 ProfileAction::MergeJson {
-                    target,
+                    target: json_target,
                     value,
                     scope,
                 } => {
                     if scope == ProfileScope::User {
-                        rollbacks.push(capture_file_rollback(&target)?);
+                        rollbacks.push(capture_file_rollback(&json_target)?);
                     }
-                    merge_json_value(&target, &value)?;
-                    state.files.push(ProfileFileEntry {
-                        source: PathBuf::from("<generated>"),
+                    let backup_source = capture_merge_json_backup(
+                        name,
+                        harness,
                         target,
+                        &json_target,
+                        action_index,
+                    )?;
+                    merge_json_value(&json_target, &value)?;
+                    state.files.push(ProfileFileEntry {
+                        source: backup_source,
+                        target: json_target,
                         scope,
                         action: "merge-json".to_string(),
                     });
@@ -190,10 +202,16 @@ pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result
 
     let state = crate::profile::load_profile_state(target, name, harness)?;
     for file in &state.files {
-        if file.action == "write-file" && file.target.exists() {
-            ensure_removable_profile_file(name, harness, target, file)?;
-            fs::remove_file(&file.target)
-                .with_context(|| format!("Failed to remove {}", file.target.display()))?;
+        match file.action.as_str() {
+            "write-file" if file.target.exists() => {
+                ensure_removable_profile_file(name, harness, target, file)?;
+                fs::remove_file(&file.target)
+                    .with_context(|| format!("Failed to remove {}", file.target.display()))?;
+            }
+            "merge-json" => {
+                restore_merge_json_backup(name, harness, target, file)?;
+            }
+            _ => {}
         }
     }
     for overlay in &state.overlays {
@@ -380,6 +398,151 @@ fn rollback_user_file_changes(rollbacks: &[FileRollback]) -> Result<()> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn merge_json_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
+    crate::profile::validate_profile_state_component(name)?;
+    crate::profile::validate_profile_state_component(harness)?;
+
+    Ok(repo_target
+        .join(crate::state::STATE_DIR)
+        .join("profiles")
+        .join("backups")
+        .join(format!("{name}.{harness}")))
+}
+
+fn merge_json_backup_path(
+    repo_target: &Path,
+    name: &str,
+    harness: &str,
+    action_index: usize,
+) -> Result<PathBuf> {
+    Ok(merge_json_backup_dir(repo_target, name, harness)?
+        .join(format!("merge-json-{action_index}.bak")))
+}
+
+fn capture_merge_json_backup(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    merge_target: &Path,
+    action_index: usize,
+) -> Result<PathBuf> {
+    match fs::read(merge_target) {
+        Ok(bytes) => {
+            let backup_path = merge_json_backup_path(repo_target, name, harness, action_index)?;
+            if let Some(parent) = backup_path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Failed to create profile backup directory: {}",
+                        parent.display()
+                    )
+                })?;
+            }
+            fs::write(&backup_path, bytes).with_context(|| {
+                format!(
+                    "Failed to back up profile JSON target {} to {}",
+                    merge_target.display(),
+                    backup_path.display()
+                )
+            })?;
+            Ok(backup_path)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(PathBuf::from(MISSING_MERGE_JSON_BACKUP_SOURCE))
+        }
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Failed to capture existing profile JSON before modifying {}",
+                merge_target.display()
+            )
+        }),
+    }
+}
+
+fn restore_merge_json_backup(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    file: &ProfileFileEntry,
+) -> Result<()> {
+    ensure_removable_profile_json(harness, file)?;
+
+    if file.source == Path::new(MISSING_MERGE_JSON_BACKUP_SOURCE) {
+        if file.target.exists() {
+            fs::remove_file(&file.target)
+                .with_context(|| format!("Failed to remove {}", file.target.display()))?;
+        }
+        return Ok(());
+    }
+
+    ensure_valid_merge_json_backup_source(name, harness, repo_target, &file.source)?;
+    if let Some(parent) = file.target.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to recreate parent directory for {}",
+                file.target.display()
+            )
+        })?;
+    }
+    fs::copy(&file.source, &file.target).with_context(|| {
+        format!(
+            "Failed to restore {} from {}",
+            file.target.display(),
+            file.source.display()
+        )
+    })?;
+    if let Err(err) = fs::remove_file(&file.source) {
+        eprintln!(
+            "Warning: failed to remove profile JSON backup {}: {err}",
+            file.source.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_removable_profile_json(harness: &str, file: &ProfileFileEntry) -> Result<()> {
+    if harness != "copilot" || file.scope != ProfileScope::User {
+        bail!("Unsupported profile JSON target for harness '{harness}'");
+    }
+
+    let allowed_target = CopilotApplicator::harness_home_from_env()?.join("mcp.json");
+    if file.target != allowed_target {
+        bail!(
+            "Refusing to restore profile JSON outside managed location: {}",
+            file.target.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_valid_merge_json_backup_source(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    source: &Path,
+) -> Result<()> {
+    if source.as_os_str().is_empty() {
+        bail!("Profile JSON backup source must not be empty");
+    }
+    if source
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!(
+            "Refusing profile JSON backup source with parent directory traversal: {}",
+            source.display()
+        );
+    }
+
+    let backup_root = merge_json_backup_dir(repo_target, name, harness)?;
+    if !source.starts_with(&backup_root) {
+        bail!(
+            "Refusing profile JSON backup outside managed location: {}",
+            source.display()
+        );
     }
     Ok(())
 }
@@ -852,7 +1015,7 @@ profiles =
         .unwrap_err();
 
         assert!(
-            err.to_string().contains("File exists"),
+            err.to_string().contains("profile backup directory"),
             "unexpected error: {err}"
         );
         assert_eq!(
