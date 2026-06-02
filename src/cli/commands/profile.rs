@@ -4,10 +4,13 @@ use colored::Colorize;
 use crate::cli::ProfileCommand;
 use crate::config;
 
+use super::resolve_target;
+
 pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
     match command {
         ProfileCommand::List { target } => {
-            let config = config::load_config(target.as_deref())?;
+            let target = resolve_target(target)?;
+            let config = config::load_config(Some(&target))?;
             if config.profiles.is_empty() {
                 println!("No profiles configured.");
                 return Ok(());
@@ -22,7 +25,8 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
             Ok(())
         }
         ProfileCommand::Show { name, target } => {
-            let config = config::load_config(target.as_deref())?;
+            let target = resolve_target(target)?;
+            let config = config::load_config(Some(&target))?;
             let profile = config
                 .profiles
                 .get(&name)

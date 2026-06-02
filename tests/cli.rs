@@ -212,6 +212,27 @@ profiles =
 }
 
 #[test]
+fn profile_list_uses_current_directory_as_default_target() {
+    let ctx = TestContext::new();
+    ctx.write_repo_config(
+        r"
+profiles =
+  local-profile =
+    description = Repo local
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["profile", "list"])
+        .current_dir(ctx.repo_path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local-profile"))
+        .stdout(predicate::str::contains("Repo local"));
+}
+
+#[test]
 fn profile_show_prints_profile_details() {
     let ctx = TestContext::new();
     ctx.write_repo_config(
