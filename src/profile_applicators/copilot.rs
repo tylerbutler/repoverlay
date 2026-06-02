@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde_json::json;
+use std::path::{Component, Path};
 use std::process::Command;
 
 use crate::profile::{ProfileConfig, ProfileScope};
@@ -9,6 +10,26 @@ use crate::profile_applicators::{AgentHarness, ProfileApplicator, ProfileContext
 use crate::profile_plan::{ProfileAction, ProfilePlan};
 
 pub(crate) struct CopilotApplicator;
+
+fn validate_instruction_source(source: &Path) -> Result<()> {
+    for component in source.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!(
+                    "Instruction source '{}' must stay within the profile asset directory",
+                    source.display()
+                );
+            }
+        }
+    }
+
+    if source.is_absolute() {
+        anyhow::bail!("Instruction source '{}' must be relative", source.display());
+    }
+
+    Ok(())
+}
 
 impl CopilotApplicator {
     pub(crate) fn harness_home_from_env() -> Result<std::path::PathBuf> {
@@ -66,7 +87,9 @@ impl ProfileApplicator for CopilotApplicator {
         }
 
         for instruction in &profile.instructions {
-            let source = context.profile_asset_dir.join(&instruction.source);
+            let source_rel = Path::new(&instruction.source);
+            validate_instruction_source(source_rel)?;
+            let source = context.profile_asset_dir.join(source_rel);
             let file_name = source
                 .file_name()
                 .map(std::ffi::OsStr::to_owned)
@@ -162,11 +185,43 @@ mod tests {
     }
 
     #[test]
+    fn copilot_rejects_unsafe_instruction_sources() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let source_dir = temp.path().join("profile-assets");
+        let context = ProfileContext {
+            profile_name: "rust-dev".to_string(),
+            target: temp.path().to_path_buf(),
+            profile_asset_dir: source_dir,
+            harness_home: temp.path().join("copilot-home"),
+            mode: crate::profile::ProfileMode::Persistent,
+            session_id: None,
+        };
+
+        let unsafe_sources = vec![
+            "../secret.md".to_string(),
+            temp.path().join("secret.md").display().to_string(),
+        ];
+
+        for source in unsafe_sources {
+            let profile = ProfileConfig {
+                instructions: vec![InstructionConfig {
+                    source: source.clone(),
+                }],
+                ..ProfileConfig::default()
+            };
+
+            let err = CopilotApplicator.plan(&profile, &context).unwrap_err();
+            assert!(
+                err.to_string().contains("Instruction source"),
+                "unexpected error for {source}: {err}"
+            );
+        }
+    }
+
+    #[test]
     #[allow(unsafe_code)]
     fn copilot_harness_home_defaults_to_github_copilot_config_dir() {
-        let temp = tempfile::TempDir::new().unwrap();
         unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", temp.path());
             std::env::remove_var("REPOVERLAY_COPILOT_HOME");
         }
         assert!(std::env::var_os("REPOVERLAY_COPILOT_HOME").is_none());
