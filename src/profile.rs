@@ -1,10 +1,11 @@
 //! Profile configuration, merge rules, and state metadata.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
@@ -85,28 +86,53 @@ fn merge_list<T: Clone>(base: &[T], override_list: &[T]) -> Vec<T> {
 }
 
 #[allow(dead_code)]
-pub(crate) fn profile_state_path(target: &Path, name: &str, harness: &str) -> PathBuf {
-    target
+pub(crate) fn profile_state_path(target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
+    validate_profile_state_component(name)?;
+    validate_profile_state_component(harness)?;
+
+    Ok(target
         .join(crate::state::STATE_DIR)
         .join(PROFILES_DIR)
-        .join(format!("{name}.{harness}.ccl"))
+        .join(format!("{name}.{harness}.ccl")))
+}
+
+fn validate_profile_state_component(component: &str) -> Result<()> {
+    if component.is_empty()
+        || matches!(component, "." | "..")
+        || component.contains('/')
+        || component.contains('\\')
+    {
+        bail!("Invalid profile state component: {component:?}");
+    }
+    Ok(())
+}
+
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let dir = path
+        .parent()
+        .context("Profile state file has no parent directory")?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path)
+        .context("Failed to atomically persist profile state")?;
+    Ok(())
 }
 
 #[allow(dead_code)]
 pub(crate) fn save_profile_state(target: &Path, state: &ProfileState) -> Result<()> {
-    let path = profile_state_path(target, &state.name, &state.harness);
+    let path = profile_state_path(target, &state.name, &state.harness)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let content = sickle::to_string(state).context("Failed to serialize profile state")?;
-    fs::write(&path, content)
+    atomic_write(&path, &content)
         .with_context(|| format!("Failed to write profile state: {}", path.display()))?;
     Ok(())
 }
 
 #[allow(dead_code)]
 pub(crate) fn load_profile_state(target: &Path, name: &str, harness: &str) -> Result<ProfileState> {
-    let path = profile_state_path(target, name, harness);
+    let path = profile_state_path(target, name, harness)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read profile state: {}", path.display()))?;
     sickle::from_str(&content)
@@ -115,7 +141,7 @@ pub(crate) fn load_profile_state(target: &Path, name: &str, harness: &str) -> Re
 
 #[allow(dead_code)]
 pub(crate) fn remove_profile_state(target: &Path, name: &str, harness: &str) -> Result<()> {
-    let path = profile_state_path(target, name, harness);
+    let path = profile_state_path(target, name, harness)?;
     if path.exists() {
         fs::remove_file(&path)
             .with_context(|| format!("Failed to remove profile state: {}", path.display()))?;
@@ -333,5 +359,23 @@ profiles =
         save_profile_state(temp.path(), &state).unwrap();
         remove_profile_state(temp.path(), "rust-dev", "copilot").unwrap();
         assert!(load_profile_state(temp.path(), "rust-dev", "copilot").is_err());
+    }
+
+    #[test]
+    fn profile_state_path_rejects_traversal_components() {
+        let temp = tempfile::TempDir::new().unwrap();
+        for invalid in ["../evil", "bad/name", "bad\\name", ".", ""] {
+            let name_err = profile_state_path(temp.path(), invalid, "copilot").unwrap_err();
+            assert!(
+                name_err.to_string().contains("profile state component"),
+                "unexpected error for invalid profile name {invalid:?}: {name_err}"
+            );
+
+            let harness_err = profile_state_path(temp.path(), "rust-dev", invalid).unwrap_err();
+            assert!(
+                harness_err.to_string().contains("profile state component"),
+                "unexpected error for invalid harness {invalid:?}: {harness_err}"
+            );
+        }
     }
 }
