@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use colored::Colorize;
+use std::path::PathBuf;
 
 use crate::cli::ProfileCommand;
 use crate::config;
@@ -55,9 +56,24 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
             print_list("Plugins", &profile.plugins);
             Ok(())
         }
-        ProfileCommand::Apply { .. }
-        | ProfileCommand::Status { .. }
-        | ProfileCommand::Remove { .. } => {
+        ProfileCommand::Apply {
+            name,
+            harness,
+            target,
+        } => {
+            let target = target.unwrap_or_else(|| PathBuf::from("."));
+            let target = crate::canonicalize_path(&target, "Target")?;
+            crate::validate_git_repo(&target)?;
+            crate::profile_plan::apply_profile(
+                &name,
+                &harness,
+                &target,
+                crate::profile::ProfileMode::Persistent,
+                None,
+            )?;
+            Ok(())
+        }
+        ProfileCommand::Status { .. } | ProfileCommand::Remove { .. } => {
             bail!("profile apply/status/remove are added in the profile lifecycle task")
         }
     }
