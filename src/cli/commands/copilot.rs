@@ -106,7 +106,20 @@ pub(crate) fn handle_copilot_command(
     #[cfg(unix)]
     command.process_group(0);
 
-    let mut child = command.spawn().context("Failed to run Copilot harness")?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(spawn_error) => {
+            if let Err(cleanup_error) =
+                crate::profile_plan::remove_profile(&context.profile_name, "copilot", &target)
+            {
+                bail!(
+                    "Failed to run Copilot harness: {spawn_error}; profile cleanup also failed: \
+                     {cleanup_error}"
+                );
+            }
+            return Err(spawn_error).context("Failed to run Copilot harness");
+        }
+    };
     crate::git::register_child(&child);
     let status_result = wait_for_copilot_harness(&mut child);
     crate::git::unregister_child();

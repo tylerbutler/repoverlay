@@ -2,7 +2,9 @@
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -41,11 +43,6 @@ pub(crate) enum ProfileAction {
         reason: String,
     },
 }
-
-// Sentinel stored in ProfileFileEntry.source for merge-json actions when no target file existed
-// before the profile was applied. During removal, this means the generated target should be
-// deleted instead of restored from a backup file.
-const MISSING_MERGE_JSON_BACKUP_SOURCE: &str = "<missing>";
 
 pub(crate) fn apply_profile(
     name: &str,
@@ -187,6 +184,7 @@ fn apply_profile_with_harness_home(
                         target,
                         &json_target,
                         action_index,
+                        &value,
                     )?;
                     merge_json_value(&json_target, &value)?;
                     state.files.push(ProfileFileEntry {
@@ -227,7 +225,7 @@ pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result
     crate::profile::validate_profile_state_component(harness)?;
 
     let state = crate::profile::load_profile_state(target, name, harness)?;
-    for file in &state.files {
+    for file in state.files.iter().rev() {
         match file.action.as_str() {
             "write-file" => {
                 restore_write_file_backup(name, harness, target, file)?;
@@ -350,6 +348,7 @@ fn ensure_removable_profile_file(
 }
 
 fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
+    let mut seen_targets = BTreeSet::new();
     for action in &plan.actions {
         match action {
             ProfileAction::WriteFile { source, target, .. } => {
@@ -357,11 +356,13 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
                 if target.as_os_str().is_empty() {
                     bail!("Profile target path must not be empty");
                 }
+                reject_duplicate_profile_target(&mut seen_targets, target)?;
             }
             ProfileAction::MergeJson { target, .. } => {
                 if target.as_os_str().is_empty() {
                     bail!("Profile JSON target path must not be empty");
                 }
+                reject_duplicate_profile_target(&mut seen_targets, target)?;
             }
             ProfileAction::ApplyOverlay { reference } => {
                 if reference.trim().is_empty() {
@@ -370,6 +371,16 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
             }
             ProfileAction::SkipCapability { .. } => {}
         }
+    }
+    Ok(())
+}
+
+fn reject_duplicate_profile_target(
+    seen_targets: &mut BTreeSet<PathBuf>,
+    target: &Path,
+) -> Result<()> {
+    if !seen_targets.insert(target.to_path_buf()) {
+        bail!("duplicate profile target: {}", target.display());
     }
     Ok(())
 }
@@ -512,36 +523,78 @@ fn capture_merge_json_backup(
     repo_target: &Path,
     merge_target: &Path,
     action_index: usize,
+    value: &Value,
 ) -> Result<PathBuf> {
-    match fs::read(merge_target) {
-        Ok(bytes) => {
-            let backup_path = merge_json_backup_path(repo_target, name, harness, action_index)?;
-            if let Some(parent) = backup_path.parent() {
-                fs::create_dir_all(parent).with_context(|| {
-                    format!(
-                        "Failed to create profile backup directory: {}",
-                        parent.display()
-                    )
-                })?;
-            }
-            fs::write(&backup_path, bytes).with_context(|| {
-                format!(
-                    "Failed to back up profile JSON target {} to {}",
-                    merge_target.display(),
-                    backup_path.display()
-                )
-            })?;
-            Ok(backup_path)
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            Ok(PathBuf::from(MISSING_MERGE_JSON_BACKUP_SOURCE))
-        }
-        Err(err) => Err(err).with_context(|| {
+    let backup_path = merge_json_backup_path(repo_target, name, harness, action_index)?;
+    if let Some(parent) = backup_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
             format!(
-                "Failed to capture existing profile JSON before modifying {}",
+                "Failed to create profile backup directory: {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let existing = match fs::read_to_string(merge_target) {
+        Ok(content) => Some(serde_json::from_str::<Value>(&content).with_context(|| {
+            format!(
+                "Failed to parse existing profile JSON before modifying {}",
                 merge_target.display()
             )
-        }),
+        })?),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to capture existing profile JSON before modifying {}",
+                    merge_target.display()
+                )
+            });
+        }
+    };
+    let backup = MergeJsonBackup::from_existing(value, existing.as_ref());
+    fs::write(&backup_path, serde_json::to_vec_pretty(&backup)?).with_context(|| {
+        format!(
+            "Failed to back up profile JSON target {} to {}",
+            merge_target.display(),
+            backup_path.display()
+        )
+    })?;
+    Ok(backup_path)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct MergeJsonBackup {
+    servers: BTreeMap<String, MergeJsonServerBackup>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct MergeJsonServerBackup {
+    existed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<Value>,
+}
+
+impl MergeJsonBackup {
+    fn from_existing(applied_value: &Value, existing: Option<&Value>) -> Self {
+        let mut servers = BTreeMap::new();
+        let Some(managed_servers) = applied_value.get("servers").and_then(Value::as_object) else {
+            return Self { servers };
+        };
+        let existing_servers = existing
+            .and_then(|value| value.get("servers"))
+            .and_then(Value::as_object);
+        for server_name in managed_servers.keys() {
+            let prior_value = existing_servers.and_then(|servers| servers.get(server_name));
+            servers.insert(
+                server_name.clone(),
+                MergeJsonServerBackup {
+                    existed: prior_value.is_some(),
+                    value: prior_value.cloned(),
+                },
+            );
+        }
+        Self { servers }
     }
 }
 
@@ -553,30 +606,38 @@ fn restore_merge_json_backup(
 ) -> Result<()> {
     ensure_removable_profile_json(harness, file)?;
 
-    if file.source == Path::new(MISSING_MERGE_JSON_BACKUP_SOURCE) {
-        if file.target.exists() {
-            fs::remove_file(&file.target)
-                .with_context(|| format!("Failed to remove {}", file.target.display()))?;
-        }
-        return Ok(());
-    }
-
     ensure_valid_merge_json_backup_source(name, harness, repo_target, &file.source)?;
-    if let Some(parent) = file.target.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to recreate parent directory for {}",
-                file.target.display()
-            )
-        })?;
-    }
-    fs::copy(&file.source, &file.target).with_context(|| {
+    let backup_content = fs::read_to_string(&file.source).with_context(|| {
         format!(
-            "Failed to restore {} from {}",
-            file.target.display(),
+            "Failed to read profile JSON backup {}",
             file.source.display()
         )
     })?;
+    let backup: MergeJsonBackup = serde_json::from_str(&backup_content).with_context(|| {
+        format!(
+            "Failed to parse profile JSON backup {}",
+            file.source.display()
+        )
+    })?;
+    let current_content = fs::read_to_string(&file.target).with_context(|| {
+        format!(
+            "Profile JSON target is missing during removal: {}",
+            file.target.display()
+        )
+    })?;
+    let mut current: Value = serde_json::from_str(&current_content).with_context(|| {
+        format!(
+            "Failed to parse current profile JSON target during removal: {}",
+            file.target.display()
+        )
+    })?;
+    restore_managed_mcp_servers(&mut current, &backup)?;
+    if is_empty_profile_json(&current) {
+        fs::remove_file(&file.target)
+            .with_context(|| format!("Failed to remove {}", file.target.display()))?;
+    } else {
+        atomic_write(&file.target, &serde_json::to_string(&current)?)?;
+    }
     if let Err(err) = fs::remove_file(&file.source) {
         eprintln!(
             "Warning: failed to remove profile JSON backup {}: {err}",
@@ -584,6 +645,43 @@ fn restore_merge_json_backup(
         );
     }
     Ok(())
+}
+
+fn restore_managed_mcp_servers(current: &mut Value, backup: &MergeJsonBackup) -> Result<()> {
+    let current_object = current
+        .as_object_mut()
+        .context("Current profile JSON target must be a JSON object during removal")?;
+    let servers_value = current_object
+        .entry("servers")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let servers = servers_value
+        .as_object_mut()
+        .context("Current profile JSON target field 'servers' must be an object during removal")?;
+
+    for (server_name, prior) in &backup.servers {
+        if prior.existed {
+            let value = prior.value.clone().with_context(|| {
+                format!("Profile JSON backup for server '{server_name}' is missing its prior value")
+            })?;
+            servers.insert(server_name.clone(), value);
+        } else {
+            servers.remove(server_name);
+        }
+    }
+
+    Ok(())
+}
+
+fn is_empty_profile_json(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.is_empty()
+        || (object.len() == 1
+            && object
+                .get("servers")
+                .and_then(Value::as_object)
+                .is_some_and(serde_json::Map::is_empty))
 }
 
 fn restore_write_file_backup(
@@ -1068,6 +1166,55 @@ profiles =
             state.profile_fingerprint.starts_with("sickle-hash:"),
             "unexpected fingerprint: {}",
             state.profile_fingerprint
+        );
+    }
+
+    #[test]
+    fn apply_profile_rejects_duplicate_instruction_targets() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let copilot_home = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("a")).unwrap();
+        fs::create_dir_all(temp.path().join("b")).unwrap();
+        fs::write(temp.path().join("a/instructions.md"), "first").unwrap();
+        fs::write(temp.path().join("b/instructions.md"), "second").unwrap();
+        write_config(
+            temp.path(),
+            r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = a/instructions.md
+      =
+        source = b/instructions.md
+",
+        );
+
+        let err = apply_profile_with_harness_home(
+            "rust-dev",
+            "copilot",
+            temp.path(),
+            ProfileMode::Persistent,
+            None,
+            copilot_home.path().to_path_buf(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("duplicate profile target"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !copilot_home
+                .path()
+                .join("instructions/rust-dev/instructions.md")
+                .exists()
+        );
+        assert!(
+            !temp
+                .path()
+                .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+                .exists()
         );
     }
 

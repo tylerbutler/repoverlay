@@ -400,6 +400,51 @@ profiles =
     );
 }
 
+#[test]
+fn copilot_profile_cleans_up_when_harness_spawn_fails() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let instruction_file = copilot_home
+        .path()
+        .join("instructions/rust-dev/copilot-instructions.md");
+    let state_file = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/rust-dev.copilot.ccl");
+    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env(
+            "REPOVERLAY_COPILOT_COMMAND",
+            ctx.repo_path().join("missing-copilot-command"),
+        )
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to run Copilot harness"));
+
+    assert!(!instruction_file.exists());
+    assert!(!state_file.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn copilot_profile_cleans_up_after_wrapper_sigint() {
@@ -901,6 +946,70 @@ profiles =
         .success();
 
     assert_eq!(fs::read_to_string(instruction_target).unwrap(), "original");
+}
+
+#[test]
+fn profile_remove_preserves_unrelated_mcp_changes() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let mcp_json = copilot_home.path().join("mcp.json");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    mcps =
+      servers =
+        rust =
+          command = uvx
+          args =
+            = mcp-rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    fs::write(
+        &mcp_json,
+        r#"{"servers":{"rust":{"command":"uvx"},"other":{"command":"keep"}},"custom":true}"#,
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let remaining: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(mcp_json).unwrap()).unwrap();
+    assert_eq!(remaining["servers"]["other"]["command"], "keep");
+    assert_eq!(remaining["custom"], true);
+    assert!(remaining["servers"]["rust"].is_null());
 }
 
 #[test]
