@@ -135,7 +135,7 @@ pub(crate) fn handle_copilot_command(
     #[cfg(unix)]
     let terminal_foreground =
         crate::harness_process::TerminalForeground::acquire(child.process_group_id());
-    let status_result = wait_for_copilot_harness(&mut child);
+    let status_result = wait_for_harness(&mut child, "Copilot");
     // Restore foreground ownership before profile cleanup runs.
     #[cfg(unix)]
     drop(terminal_foreground);
@@ -153,13 +153,14 @@ pub(crate) fn handle_copilot_command(
     std::process::exit(exit_code);
 }
 
-fn wait_for_copilot_harness(
+pub(crate) fn wait_for_harness(
     child: &mut crate::harness_process::HarnessProcess,
+    label: &str,
 ) -> Result<ExitStatus> {
     let mut forwarded_interrupt = false;
     loop {
         // If interrupted, terminate the whole child process group before we
-        // accept any child exit as final, so Copilot descendants are signaled
+        // accept any child exit as final, so harness descendants are signaled
         // before profile cleanup runs.
         if crate::git::is_interrupted() && !forwarded_interrupt {
             child.terminate();
@@ -168,7 +169,7 @@ fn wait_for_copilot_harness(
 
         if let Some(status) = child
             .try_wait()
-            .context("Failed to wait for Copilot harness")?
+            .with_context(|| format!("Failed to wait for {label} harness"))?
         {
             // Not redundant with the top-of-loop check: this covers the race where
             // an interrupt arrives between that check and `try_wait` returning the
@@ -184,7 +185,7 @@ fn wait_for_copilot_harness(
     }
 }
 
-fn exit_code_from_status(status: ExitStatus) -> i32 {
+pub(crate) fn exit_code_from_status(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
     }

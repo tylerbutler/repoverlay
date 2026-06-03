@@ -1,5 +1,6 @@
 pub(crate) mod browse;
 pub(crate) mod cache;
+pub(crate) mod claude;
 pub(crate) mod copilot;
 pub(crate) mod create;
 pub(crate) mod edit;

@@ -7044,3 +7044,168 @@ fn plugin_new_rejects_path_traversal_name() {
         .failure();
     assert!(!dir.path().parent().unwrap().join("escape").exists());
 }
+
+#[cfg(unix)]
+fn write_executable_script(path: &std::path::Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, body).unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_profile_loads_bundles_via_plugin_dir_and_cleans_up() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let args_marker = ctx.repo_path().join("claude-args.txt");
+
+    // Local plugin bundle (introspectable -> resolves to a Bundle).
+    ctx.create_repo_file(
+        "plugins/rust/.claude-plugin/plugin.json",
+        r#"{"name":"rust"}"#,
+    );
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    plugins =
+      = ./plugins/rust
+",
+    );
+
+    // Fake Claude command that records its argv to a marker file.
+    let script = ctx.repo_path().join("fake-claude.sh");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n",
+            args_marker.display()
+        ),
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "claude",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_CLAUDE_COMMAND", &script)
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let recorded = fs::read_to_string(&args_marker).unwrap();
+    assert!(
+        recorded.contains("--plugin-dir"),
+        "expected --plugin-dir in argv, got: {recorded}"
+    );
+    assert!(
+        recorded.contains("plugins/rust"),
+        "expected the bundle dir in argv, got: {recorded}"
+    );
+
+    // Ephemeral bundles are loaded natively; nothing is placed and the state is
+    // cleaned up after Claude exits.
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.claude.ccl")
+            .exists()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_profile_forwards_extra_args_after_plugin_dirs() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let args_marker = ctx.repo_path().join("claude-args.txt");
+
+    ctx.create_repo_file(
+        "plugins/rust/.claude-plugin/plugin.json",
+        r#"{"name":"rust"}"#,
+    );
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    plugins =
+      = ./plugins/rust
+",
+    );
+
+    let script = ctx.repo_path().join("fake-claude.sh");
+    write_executable_script(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n",
+            args_marker.display()
+        ),
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "claude",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "--resume",
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_CLAUDE_COMMAND", &script)
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let recorded = fs::read_to_string(&args_marker).unwrap();
+    assert!(recorded.contains("--plugin-dir"));
+    assert!(recorded.contains("--resume"));
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_profile_cleans_up_when_harness_spawn_fails() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let state_file = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/rust-dev.claude.ccl");
+    ctx.create_repo_file(
+        "plugins/rust/.claude-plugin/plugin.json",
+        r#"{"name":"rust"}"#,
+    );
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    plugins =
+      = ./plugins/rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "claude",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env(
+            "REPOVERLAY_CLAUDE_COMMAND",
+            ctx.repo_path().join("missing-claude-command"),
+        )
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to run Claude harness"));
+
+    assert!(!state_file.exists());
+}

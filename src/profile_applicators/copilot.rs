@@ -202,6 +202,7 @@ impl ProfileApplicator for CopilotApplicator {
             harness: "copilot".to_string(),
             actions,
             plugins,
+            plugin_dirs: Vec::new(),
         })
     }
 

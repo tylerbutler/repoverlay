@@ -21,6 +21,7 @@ pub(crate) mod commands;
 
 pub(crate) use commands::browse::browse_overlays;
 pub(crate) use commands::cache::handle_cache_command;
+pub(crate) use commands::claude::handle_claude_command;
 pub(crate) use commands::copilot::handle_copilot_command;
 pub(crate) use commands::create::{create_into_library, create_overlay_command};
 pub(crate) use commands::edit::{add_files_to_overlay, edit_overlay, remove_files_from_overlay};
@@ -565,6 +566,21 @@ enum Commands {
         target: Option<PathBuf>,
 
         /// Extra arguments forwarded to the Copilot harness
+        #[arg(last = true)]
+        extra_args: Vec<String>,
+    },
+
+    /// Run Claude with a profile applied for the process lifetime
+    Claude {
+        /// Profile name to apply while Claude runs
+        #[arg(long)]
+        profile: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Extra arguments forwarded to the Claude harness
         #[arg(last = true)]
         extra_args: Vec<String>,
     },
@@ -1147,6 +1163,13 @@ pub(crate) fn run() -> Result<()> {
             extra_args,
         } => {
             handle_copilot_command(profile, target, extra_args)?;
+        }
+        Commands::Claude {
+            profile,
+            target,
+            extra_args,
+        } => {
+            handle_claude_command(&profile, target, extra_args)?;
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
