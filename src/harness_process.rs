@@ -14,20 +14,17 @@ use nix::unistd::{Pid, isatty, tcgetpgrp, tcsetpgrp};
 
 /// Decide whether terminal foreground ownership should be handed to the child.
 #[cfg(unix)]
-#[allow(dead_code)]
 const fn should_hand_off_terminal(stdin_is_tty: bool) -> bool {
     stdin_is_tty
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
 pub(crate) struct TerminalForeground {
     fd: BorrowedFd<'static>,
     previous_pgid: Pid,
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
 impl TerminalForeground {
     pub(crate) fn acquire(child_pgid: u32) -> Option<Self> {
         // SAFETY: STDIN_FILENO is a process-global file descriptor. The guard does
@@ -54,7 +51,6 @@ impl Drop for TerminalForeground {
 }
 
 #[cfg(unix)]
-#[allow(dead_code)]
 fn with_ignored_sigttou<T>(operation: impl FnOnce() -> nix::Result<T>) -> nix::Result<T> {
     let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
     // SAFETY: Temporarily changing the SIGTTOU disposition around tcsetpgrp
@@ -71,13 +67,10 @@ fn with_ignored_sigttou<T>(operation: impl FnOnce() -> nix::Result<T>) -> nix::R
     result
 }
 
-// Task 6 wires this into Copilot; allow dead_code until then.
-#[allow(dead_code)]
 pub(crate) struct HarnessProcess {
     child: Box<dyn ChildWrapper>,
 }
 
-#[allow(dead_code)]
 impl HarnessProcess {
     pub(crate) fn spawn(command: Command) -> Result<Self> {
         let mut command = CommandWrap::from(command);

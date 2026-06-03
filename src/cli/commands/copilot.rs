@@ -1,10 +1,8 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use std::process::{Child, ExitStatus};
+use std::process::ExitStatus;
 use std::time::Duration;
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
@@ -18,73 +16,6 @@ struct ProfileRunLock {
 impl Drop for ProfileRunLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-/// Decide whether terminal foreground ownership should be handed to the child.
-///
-/// Handoff is only safe when stdin is a controlling terminal. When stdin is a
-/// pipe or file (tests, CI, non-interactive use) there is no foreground process
-/// group to manage, so handoff is disabled.
-#[cfg(unix)]
-const fn should_hand_off_terminal(stdin_is_tty: bool) -> bool {
-    stdin_is_tty
-}
-
-/// RAII guard that transfers terminal foreground ownership to a child process
-/// group and restores the previous foreground group on drop.
-///
-/// Interactive harnesses that read from the terminal must be in the foreground
-/// process group, otherwise they receive `SIGTTIN`/`SIGTTOU` and hang. Because
-/// the child is spawned in its own process group, we explicitly hand the
-/// controlling terminal over with `tcsetpgrp` while it runs.
-#[cfg(unix)]
-struct TerminalForeground {
-    fd: libc::c_int,
-    previous_pgid: libc::pid_t,
-}
-
-#[cfg(unix)]
-impl TerminalForeground {
-    /// Hand terminal foreground ownership to `child_pgid` when stdin is a
-    /// controlling terminal. Returns `None` when no TTY is present or the
-    /// handoff could not be performed, in which case behavior is unchanged.
-    fn acquire(child_pgid: libc::pid_t) -> Option<Self> {
-        let fd = libc::STDIN_FILENO;
-        #[allow(unsafe_code)]
-        let stdin_is_tty = unsafe { libc::isatty(fd) == 1 };
-        if !should_hand_off_terminal(stdin_is_tty) {
-            return None;
-        }
-
-        #[allow(unsafe_code)]
-        unsafe {
-            let previous_pgid = libc::tcgetpgrp(fd);
-            if previous_pgid < 0 {
-                return None;
-            }
-            // Calling tcsetpgrp from a background group raises SIGTTOU; ignore it
-            // around the call so we are not stopped while reassigning ownership.
-            let previous_handler = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
-            let result = libc::tcsetpgrp(fd, child_pgid);
-            libc::signal(libc::SIGTTOU, previous_handler);
-            if result != 0 {
-                return None;
-            }
-            Some(Self { fd, previous_pgid })
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for TerminalForeground {
-    fn drop(&mut self) {
-        #[allow(unsafe_code)]
-        unsafe {
-            let previous_handler = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
-            libc::tcsetpgrp(self.fd, self.previous_pgid);
-            libc::signal(libc::SIGTTOU, previous_handler);
-        }
     }
 }
 
@@ -185,10 +116,8 @@ pub(crate) fn handle_copilot_command(
     let mut command = applicator.command(&context, &extra_args)?;
     drop(extra_args);
     command.current_dir(&target);
-    #[cfg(unix)]
-    command.process_group(0);
 
-    let mut child = match command.spawn() {
+    let mut child = match crate::harness_process::HarnessProcess::spawn(command) {
         Ok(child) => child,
         Err(spawn_error) => {
             if let Err(cleanup_error) = crate::profile_plan::remove_profile_for_session(
@@ -204,15 +133,12 @@ pub(crate) fn handle_copilot_command(
             return Err(spawn_error).context("Failed to run Copilot harness");
         }
     };
-    crate::git::register_child(&child);
+    crate::git::register_child_pid(child.id());
     // The child runs in its own process group; give it the controlling terminal
     // while it runs so interactive harnesses stay in the foreground.
     #[cfg(unix)]
-    let terminal_foreground = {
-        #[allow(clippy::cast_possible_wrap)]
-        let child_pgid = child.id() as libc::pid_t;
-        TerminalForeground::acquire(child_pgid)
-    };
+    let terminal_foreground =
+        crate::harness_process::TerminalForeground::acquire(child.process_group_id());
     let status_result = wait_for_copilot_harness(&mut child);
     // Restore foreground ownership before profile cleanup runs.
     #[cfg(unix)]
@@ -231,14 +157,16 @@ pub(crate) fn handle_copilot_command(
     std::process::exit(exit_code);
 }
 
-fn wait_for_copilot_harness(child: &mut Child) -> Result<ExitStatus> {
+fn wait_for_copilot_harness(
+    child: &mut crate::harness_process::HarnessProcess,
+) -> Result<ExitStatus> {
     let mut forwarded_interrupt = false;
     loop {
         // If interrupted, terminate the whole child process group before we
         // accept any child exit as final, so Copilot descendants are signaled
         // before profile cleanup runs.
         if crate::git::is_interrupted() && !forwarded_interrupt {
-            terminate_copilot_harness(child);
+            child.terminate();
             forwarded_interrupt = true;
         }
 
@@ -247,29 +175,13 @@ fn wait_for_copilot_harness(child: &mut Child) -> Result<ExitStatus> {
             .context("Failed to wait for Copilot harness")?
         {
             if crate::git::is_interrupted() && !forwarded_interrupt {
-                terminate_copilot_harness(child);
+                child.terminate();
             }
             return Ok(status);
         }
 
         std::thread::sleep(Duration::from_millis(50));
     }
-}
-
-#[cfg(unix)]
-fn terminate_copilot_harness(child: &mut Child) {
-    #[allow(unsafe_code, clippy::cast_possible_wrap)]
-    unsafe {
-        if libc::kill(-(child.id() as libc::pid_t), libc::SIGTERM) == 0 {
-            return;
-        }
-    }
-    let _ = child.kill();
-}
-
-#[cfg(not(unix))]
-fn terminate_copilot_harness(child: &mut Child) {
-    let _ = child.kill();
 }
 
 fn exit_code_from_status(status: ExitStatus) -> i32 {
@@ -285,17 +197,3 @@ fn exit_code_from_status(status: ExitStatus) -> i32 {
     1
 }
 
-#[cfg(all(test, unix))]
-mod tests {
-    use super::should_hand_off_terminal;
-
-    #[test]
-    fn terminal_handoff_disabled_without_tty() {
-        assert!(!should_hand_off_terminal(false));
-    }
-
-    #[test]
-    fn terminal_handoff_enabled_with_tty() {
-        assert!(should_hand_off_terminal(true));
-    }
-}
