@@ -221,6 +221,385 @@ impl Serialize for PluginRef {
     }
 }
 
+/// Origin of a resolved plugin bundle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum PluginOrigin {
+    /// Bundle came from a cached git clone (commit-pinned).
+    CachedGit,
+    /// Bundle is a local directory on disk (a local plugin or a local marketplace checkout).
+    LocalPath,
+}
+
+/// Why a plugin must be delegated to the harness rather than managed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum DelegateReason {
+    /// The plugin source is not a cloneable/introspectable git repo (e.g. `npm:`).
+    NonGitSource,
+}
+
+/// A fully resolved plugin reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ResolvedPlugin {
+    /// repoverlay located (and, for git sources, cached) an introspectable bundle.
+    Bundle {
+        /// Plugin name.
+        name: String,
+        /// Directory containing the plugin bundle.
+        bundle_dir: PathBuf,
+        /// Resolved commit SHA, when the bundle is backed by a git repo.
+        resolved_commit: Option<String>,
+        /// Where the bundle came from.
+        origin: PluginOrigin,
+    },
+    /// repoverlay cannot cache/introspect this source; enablement is delegated.
+    Delegate {
+        /// Plugin name.
+        name: String,
+        /// The raw source string from the marketplace entry.
+        source: String,
+        /// Why delegation is required.
+        reason: DelegateReason,
+    },
+}
+
+/// Introspected contents of a plugin bundle directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct PluginBundle {
+    /// Parsed `.claude-plugin/plugin.json`, if present.
+    pub(crate) manifest: Option<serde_json::Value>,
+    /// MCP servers from `.mcp.json` (`mcpServers` object), keyed by server name.
+    pub(crate) mcp_servers: serde_json::Map<String, serde_json::Value>,
+    /// Skill directory names found under `skills/`.
+    pub(crate) skills: Vec<String>,
+}
+
+impl PluginBundle {
+    /// Read and introspect a plugin bundle directory.
+    ///
+    /// Missing `.claude-plugin/plugin.json`, `.mcp.json`, or `skills/` are not
+    /// errors — they yield empty/absent fields. Malformed JSON is an error.
+    #[allow(dead_code)]
+    pub(crate) fn read(dir: &std::path::Path) -> anyhow::Result<Self> {
+        use anyhow::Context;
+
+        let manifest_path = dir.join(".claude-plugin").join("plugin.json");
+        let manifest = if manifest_path.is_file() {
+            let raw = std::fs::read_to_string(&manifest_path)
+                .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+            Some(
+                serde_json::from_str::<serde_json::Value>(&raw)
+                    .with_context(|| format!("Invalid JSON in {}", manifest_path.display()))?,
+            )
+        } else {
+            None
+        };
+
+        let mcp_path = dir.join(".mcp.json");
+        let mcp_servers = if mcp_path.is_file() {
+            let raw = std::fs::read_to_string(&mcp_path)
+                .with_context(|| format!("Failed to read {}", mcp_path.display()))?;
+            let value: serde_json::Value = serde_json::from_str(&raw)
+                .with_context(|| format!("Invalid JSON in {}", mcp_path.display()))?;
+            value
+                .get("mcpServers")
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            serde_json::Map::new()
+        };
+
+        let mut skills = Vec::new();
+        let skills_dir = dir.join("skills");
+        if skills_dir.is_dir() {
+            for entry in std::fs::read_dir(&skills_dir)
+                .with_context(|| format!("Failed to read {}", skills_dir.display()))?
+            {
+                let entry = entry?;
+                if entry.path().join("SKILL.md").is_file()
+                    && let Some(name) = entry.file_name().to_str()
+                {
+                    skills.push(name.to_string());
+                }
+            }
+            skills.sort();
+        }
+
+        Ok(Self {
+            manifest,
+            mcp_servers,
+            skills,
+        })
+    }
+}
+
+/// Classification of a marketplace entry `source` string.
+enum SourceKind {
+    /// A relative subdirectory within the marketplace repo.
+    Subdir(String),
+    /// An external git URL (only github.com is cacheable).
+    GitUrl(String),
+    /// A non-git scheme (e.g. `npm:`) that cannot be cached.
+    NonGit,
+}
+
+/// Classify a marketplace entry `source` string.
+fn classify_source(source: &str) -> SourceKind {
+    if source.contains("://") || source.starts_with("git@") {
+        return SourceKind::GitUrl(source.to_string());
+    }
+    // A leading `scheme:` (e.g. `npm:pkg`) that is not a path means non-git.
+    if let Some((scheme, _)) = source.split_once(':')
+        && !scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        && !source.starts_with("./")
+        && !source.starts_with('/')
+    {
+        return SourceKind::NonGit;
+    }
+    SourceKind::Subdir(source.to_string())
+}
+
+/// Validate that a relative subdir stays within `base`, returning the joined path.
+///
+/// Rejects absolute paths, `..`, and Windows root/prefix components, then verifies
+/// the canonicalized result is still contained in the canonicalized `base`.
+fn confined_subdir(base: &std::path::Path, sub: &str) -> anyhow::Result<PathBuf> {
+    use std::path::Component;
+
+    let sub_path = std::path::Path::new(sub);
+    for component in sub_path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!(
+                    "plugin source '{sub}' must be a relative path within the marketplace"
+                );
+            }
+        }
+    }
+
+    let joined = base.join(sub_path);
+    let canonical_base = base.canonicalize().with_context_dir(base)?;
+    let canonical_joined = joined.canonicalize().with_context_dir(&joined)?;
+    if !canonical_joined.starts_with(&canonical_base) {
+        anyhow::bail!("plugin source '{sub}' escapes the marketplace directory");
+    }
+    Ok(canonical_joined)
+}
+
+/// Small helper trait to attach a path context to canonicalize errors.
+trait CanonicalizeContext {
+    fn with_context_dir(self, path: &std::path::Path) -> anyhow::Result<PathBuf>;
+}
+
+impl CanonicalizeContext for std::io::Result<PathBuf> {
+    fn with_context_dir(self, path: &std::path::Path) -> anyhow::Result<PathBuf> {
+        use anyhow::Context;
+        self.with_context(|| format!("Path does not exist: {}", path.display()))
+    }
+}
+
+/// Best-effort current commit of a local git checkout.
+fn local_git_commit(dir: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (!sha.is_empty()).then_some(sha)
+}
+
+/// Resolve a plugin reference into a concrete bundle (or a delegate marker).
+///
+/// `base_dir` is the directory that local relative plugin paths are resolved
+/// against (the target repository root).
+#[allow(dead_code)]
+pub(crate) fn resolve_plugin(
+    reference: &PluginRef,
+    marketplaces: &[crate::config::Marketplace],
+    cache: &crate::cache::CacheManager,
+    base_dir: &std::path::Path,
+    update: bool,
+) -> anyhow::Result<ResolvedPlugin> {
+    use anyhow::Context;
+
+    match reference {
+        PluginRef::Local { source } => {
+            let bundle_dir = resolve_local_plugin_dir(base_dir, source)?;
+            let resolved_commit = local_git_commit(&bundle_dir);
+            Ok(ResolvedPlugin::Bundle {
+                name: plugin_name_from_path(source),
+                bundle_dir,
+                resolved_commit,
+                origin: PluginOrigin::LocalPath,
+            })
+        }
+        PluginRef::Marketplace {
+            marketplace,
+            name,
+            r#ref,
+            ..
+        } => {
+            let entry = marketplaces
+                .iter()
+                .find(|m| &m.name == marketplace)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Marketplace '{marketplace}' is not registered. \
+                         Add it with: repoverlay marketplace add {marketplace} <url>"
+                    )
+                })?;
+            let url = entry.url.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("Marketplace '{marketplace}' has no url configured")
+            })?;
+
+            let (repo_dir, market_commit, origin) =
+                fetch_marketplace_repo(url, r#ref.as_deref(), cache, update)
+                    .with_context(|| format!("resolving marketplace '{marketplace}'"))?;
+
+            let manifest_path = repo_dir.join(".claude-plugin").join("marketplace.json");
+            let raw = std::fs::read_to_string(&manifest_path).with_context(|| {
+                format!(
+                    "Marketplace '{marketplace}' is missing {}",
+                    manifest_path.display()
+                )
+            })?;
+            let manifest: MarketplaceManifest = serde_json::from_str(&raw)
+                .with_context(|| format!("Invalid JSON in {}", manifest_path.display()))?;
+
+            let plugin_entry = manifest
+                .plugins
+                .iter()
+                .find(|p| &p.name == name)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Plugin '{name}' not found in marketplace '{marketplace}'")
+                })?;
+
+            let source_str = plugin_entry.source.as_str().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Plugin '{name}' in marketplace '{marketplace}' has a non-string source"
+                )
+            })?;
+
+            match classify_source(source_str) {
+                SourceKind::Subdir(sub) => {
+                    let bundle_dir = confined_subdir(&repo_dir, &sub)?;
+                    Ok(ResolvedPlugin::Bundle {
+                        name: name.clone(),
+                        bundle_dir,
+                        resolved_commit: market_commit,
+                        origin,
+                    })
+                }
+                SourceKind::GitUrl(git_url) => {
+                    if crate::github::GitHubSource::is_github_url(&git_url) {
+                        let source = crate::github::GitHubSource::parse(&git_url)?;
+                        let cached = cache.ensure_cached(&source, update)?;
+                        Ok(ResolvedPlugin::Bundle {
+                            name: name.clone(),
+                            bundle_dir: cached.path,
+                            resolved_commit: Some(cached.commit),
+                            origin: PluginOrigin::CachedGit,
+                        })
+                    } else {
+                        Ok(ResolvedPlugin::Delegate {
+                            name: name.clone(),
+                            source: git_url,
+                            reason: DelegateReason::NonGitSource,
+                        })
+                    }
+                }
+                SourceKind::NonGit => Ok(ResolvedPlugin::Delegate {
+                    name: name.clone(),
+                    source: source_str.to_string(),
+                    reason: DelegateReason::NonGitSource,
+                }),
+            }
+        }
+    }
+}
+
+/// Resolve a local plugin `source` path against `base_dir`.
+fn resolve_local_plugin_dir(
+    base_dir: &std::path::Path,
+    source: &std::path::Path,
+) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+
+    let candidate = if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        // Relative local plugins must stay within the repo (consistent with
+        // instruction-source validation).
+        return confined_subdir(base_dir, &source.to_string_lossy());
+    };
+
+    let canonical = candidate
+        .canonicalize()
+        .with_context(|| format!("Plugin path does not exist: {}", candidate.display()))?;
+    if !canonical.is_dir() {
+        anyhow::bail!("Plugin path is not a directory: {}", canonical.display());
+    }
+    Ok(canonical)
+}
+
+/// Derive a plugin name from a local path (the final component).
+fn plugin_name_from_path(source: &std::path::Path) -> String {
+    source.file_name().map_or_else(
+        || source.to_string_lossy().to_string(),
+        |n| n.to_string_lossy().to_string(),
+    )
+}
+
+/// Fetch the marketplace repo into a local directory, returning
+/// `(repo_dir, commit, origin)`.
+fn fetch_marketplace_repo(
+    url: &str,
+    ref_override: Option<&str>,
+    cache: &crate::cache::CacheManager,
+    update: bool,
+) -> anyhow::Result<(PathBuf, Option<String>, PluginOrigin)> {
+    if crate::github::GitHubSource::is_github_url(url) {
+        let source = crate::github::GitHubSource::parse(url)?.with_ref_override(ref_override)?;
+        let cached = cache.ensure_cached(&source, update)?;
+        return Ok((cached.path, Some(cached.commit), PluginOrigin::CachedGit));
+    }
+
+    // Local-path or file:// marketplace (used for fixtures and local development).
+    let local = url.strip_prefix("file://").unwrap_or(url);
+    let dir = std::path::Path::new(local);
+    if !dir.is_dir() {
+        anyhow::bail!("Marketplace path is not a directory: {}", dir.display());
+    }
+    let commit = local_git_commit(dir);
+    Ok((dir.to_path_buf(), commit, PluginOrigin::LocalPath))
+}
+
+/// Minimal `.claude-plugin/marketplace.json` schema.
+#[derive(Debug, serde::Deserialize)]
+struct MarketplaceManifest {
+    #[serde(default)]
+    plugins: Vec<MarketplaceEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct MarketplaceEntry {
+    name: String,
+    source: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +696,164 @@ mod tests {
     #[derive(Debug, serde::Serialize)]
     struct Wrap2 {
         plugins: Vec<PluginRef>,
+    }
+
+    // --- resolution + introspection ---
+
+    use crate::cache::CacheManager;
+    use crate::config::Marketplace;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Build a local marketplace fixture containing a single plugin entry whose
+    /// `source` is `source_value`. If `with_bundle` is true, also create the
+    /// `plugins/rust-dev` bundle dir with a `.mcp.json` and one skill.
+    fn fixture_marketplace(source_value: &str, with_bundle: bool) -> TempDir {
+        let dir = TempDir::new().unwrap();
+        let market = dir.path().join(".claude-plugin");
+        fs::create_dir_all(&market).unwrap();
+        let manifest = serde_json::json!({
+            "name": "playground",
+            "plugins": [ { "name": "rust-dev", "source": source_value } ]
+        });
+        fs::write(
+            market.join("marketplace.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        if with_bundle {
+            let bundle = dir.path().join("plugins").join("rust-dev");
+            fs::create_dir_all(&bundle).unwrap();
+            fs::write(
+                bundle.join(".mcp.json"),
+                r#"{"mcpServers":{"rust":{"command":"uvx"}}}"#,
+            )
+            .unwrap();
+            let skill = bundle.join("skills").join("formatting");
+            fs::create_dir_all(&skill).unwrap();
+            fs::write(skill.join("SKILL.md"), "# formatting").unwrap();
+        }
+        dir
+    }
+
+    fn registry(name: &str, url: &std::path::Path) -> Vec<Marketplace> {
+        vec![Marketplace {
+            name: name.to_string(),
+            url: Some(url.to_string_lossy().to_string()),
+        }]
+    }
+
+    fn market_ref() -> PluginRef {
+        PluginRef::Marketplace {
+            marketplace: "playground".to_string(),
+            name: "rust-dev".to_string(),
+            r#ref: None,
+            install: InstallMode::Managed,
+            scope: None,
+        }
+    }
+
+    #[test]
+    fn introspects_bundle_with_mcp_and_skills() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers":{"rust":{"command":"uvx"},"py":{"command":"python"}}}"#,
+        )
+        .unwrap();
+        let skill = dir.path().join("skills").join("fmt");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "# fmt").unwrap();
+
+        let bundle = PluginBundle::read(dir.path()).unwrap();
+        assert_eq!(bundle.mcp_servers.len(), 2);
+        assert!(bundle.mcp_servers.contains_key("rust"));
+        assert_eq!(bundle.skills, vec!["fmt".to_string()]);
+    }
+
+    #[test]
+    fn introspects_empty_bundle() {
+        let dir = TempDir::new().unwrap();
+        let bundle = PluginBundle::read(dir.path()).unwrap();
+        assert!(bundle.mcp_servers.is_empty());
+        assert!(bundle.skills.is_empty());
+        assert!(bundle.manifest.is_none());
+    }
+
+    #[test]
+    fn resolves_marketplace_plugin_subdir() {
+        let fixture = fixture_marketplace("./plugins/rust-dev", true);
+        let cache = CacheManager::new().unwrap();
+        let base = TempDir::new().unwrap();
+        let resolved = resolve_plugin(
+            &market_ref(),
+            &registry("playground", fixture.path()),
+            &cache,
+            base.path(),
+            false,
+        )
+        .unwrap();
+        match resolved {
+            ResolvedPlugin::Bundle {
+                name,
+                bundle_dir,
+                origin,
+                ..
+            } => {
+                assert_eq!(name, "rust-dev");
+                assert_eq!(origin, PluginOrigin::LocalPath);
+                let bundle = PluginBundle::read(&bundle_dir).unwrap();
+                assert!(bundle.mcp_servers.contains_key("rust"));
+                assert_eq!(bundle.skills, vec!["formatting".to_string()]);
+            }
+            other @ ResolvedPlugin::Delegate { .. } => panic!("expected Bundle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unregistered_marketplace_errors() {
+        let cache = CacheManager::new().unwrap();
+        let base = TempDir::new().unwrap();
+        let err = resolve_plugin(&market_ref(), &[], &cache, base.path(), false).unwrap_err();
+        assert!(format!("{err}").contains("not registered"));
+    }
+
+    #[test]
+    fn non_git_source_requires_delegate() {
+        let fixture = fixture_marketplace("npm:some-package", false);
+        let cache = CacheManager::new().unwrap();
+        let base = TempDir::new().unwrap();
+        let resolved = resolve_plugin(
+            &market_ref(),
+            &registry("playground", fixture.path()),
+            &cache,
+            base.path(),
+            false,
+        )
+        .unwrap();
+        match resolved {
+            ResolvedPlugin::Delegate { reason, source, .. } => {
+                assert_eq!(reason, DelegateReason::NonGitSource);
+                assert_eq!(source, "npm:some-package");
+            }
+            other @ ResolvedPlugin::Bundle { .. } => panic!("expected Delegate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_traversal_in_marketplace_source() {
+        let fixture = fixture_marketplace("../../etc", false);
+        let cache = CacheManager::new().unwrap();
+        let base = TempDir::new().unwrap();
+        let err = resolve_plugin(
+            &market_ref(),
+            &registry("playground", fixture.path()),
+            &cache,
+            base.path(),
+            false,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("must be a relative path"));
     }
 }
