@@ -90,6 +90,10 @@ export default defineConfig({
 							slug: "guides/restoring",
 						},
 						{
+							label: "Profiles",
+							slug: "guides/profiles",
+						},
+						{
 							label: "How It Works",
 							slug: "guides/how-it-works",
 						},
