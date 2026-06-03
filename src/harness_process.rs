@@ -98,7 +98,14 @@ impl HarnessProcess {
     }
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
-        Ok(self.child.try_wait()?)
+        // SAFETY: We call only `try_wait` on the raw child, which polls the OS for
+        // the direct harness process exit status without modifying wrapper state.
+        // This avoids process-wrap's `ProcessGroup::try_wait`, which waits for the
+        // entire process group and can block or lose the harness exit status when a
+        // same-group descendant is still alive.
+        #[allow(unsafe_code)]
+        let status = unsafe { self.child.inner_child_mut() }.try_wait()?;
+        Ok(status)
     }
 
     pub(crate) fn terminate(&mut self) {
@@ -143,6 +150,31 @@ mod tests {
     #[test]
     fn terminal_handoff_enabled_with_tty() {
         assert!(super::should_hand_off_terminal(true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn harness_process_reports_parent_exit_with_lingering_group_child() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5 & exit 7"]);
+
+        let mut process = HarnessProcess::spawn(command).expect("spawn process");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let status = loop {
+            if let Some(status) = process.try_wait().expect("wait process") {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "parent exit was blocked by lingering child"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+
+        process.terminate();
+
+        assert_eq!(status.code(), Some(7));
     }
 
     #[test]
