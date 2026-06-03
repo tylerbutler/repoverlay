@@ -196,4 +196,3 @@ fn exit_code_from_status(status: ExitStatus) -> i32 {
 
     1
 }
-
