@@ -3063,6 +3063,63 @@ fn source_help_displays() {
 }
 
 #[test]
+fn marketplace_add_list_remove_roundtrip() {
+    let ctx = SourceTestContext::new();
+
+    // add a marketplace by owner/repo shorthand
+    ctx.cmd()
+        .args(["marketplace", "add", "playground", "acme/plugins", "--yes"])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("playground"));
+
+    // list shows it with the expanded URL
+    ctx.cmd()
+        .args(["marketplace", "list"])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("playground"))
+        .stdout(predicate::str::contains("https://github.com/acme/plugins"));
+
+    // re-adding the same name with a different URL fails
+    ctx.cmd()
+        .args(["marketplace", "add", "playground", "other/repo", "--yes"])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already registered"));
+
+    // remove it
+    ctx.cmd()
+        .args(["marketplace", "remove", "playground"])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed"));
+
+    // list is now empty
+    ctx.cmd()
+        .args(["marketplace", "list"])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No marketplaces"));
+}
+
+#[test]
+fn marketplace_add_rejects_bare_owner() {
+    let ctx = SourceTestContext::new();
+    ctx.cmd()
+        .args(["marketplace", "add", "playground", "justanowner", "--yes"])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid marketplace URL"));
+}
+
+#[test]
 fn source_add_rejects_empty_url() {
     let ctx = SourceTestContext::new();
     // Empty URL should be rejected

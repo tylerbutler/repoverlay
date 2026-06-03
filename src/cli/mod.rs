@@ -26,6 +26,7 @@ pub(crate) use commands::create::{create_into_library, create_overlay_command};
 pub(crate) use commands::edit::{add_files_to_overlay, edit_overlay, remove_files_from_overlay};
 pub(crate) use commands::handle_remove;
 pub(crate) use commands::library::handle_library_command;
+pub(crate) use commands::marketplace::handle_marketplace_command;
 pub(crate) use commands::profile::handle_profile_command;
 pub(crate) use commands::source::handle_source_command;
 pub(crate) use commands::sync::{handle_sync, select_overlay_interactive};
@@ -528,6 +529,12 @@ enum Commands {
         command: SourceCommand,
     },
 
+    /// Manage plugin marketplaces
+    Marketplace {
+        #[command(subcommand)]
+        command: MarketplaceCommand,
+    },
+
     /// Manage repository profiles
     Profile {
         #[command(subcommand)]
@@ -580,6 +587,31 @@ pub(crate) enum SourceCommand {
     /// Remove an overlay source
     Remove {
         /// Name of the source to remove
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum MarketplaceCommand {
+    /// Register a plugin marketplace
+    Add {
+        /// Name for this marketplace (used in `marketplace/plugin` references)
+        name: String,
+
+        /// Marketplace git URL or GitHub shorthand (owner/repo)
+        url: String,
+
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// List registered marketplaces
+    List,
+
+    /// Remove a registered marketplace
+    Remove {
+        /// Name of the marketplace to remove
         name: String,
     },
 }
@@ -1080,6 +1112,9 @@ pub(crate) fn run() -> Result<()> {
         }
         Commands::Source { command } => {
             handle_source_command(command)?;
+        }
+        Commands::Marketplace { command } => {
+            handle_marketplace_command(command)?;
         }
         Commands::Profile { command } => {
             handle_profile_command(command)?;

@@ -396,6 +396,26 @@ pub(crate) fn validate_source_url(url: &str) -> std::result::Result<String, Stri
     }
 }
 
+/// Validate and normalize a marketplace URL string.
+///
+/// Unlike [`validate_source_url`], a marketplace must be a concrete git
+/// repository, so the bare-owner shorthand (which expands to a default overlay
+/// repo name) is rejected. Accepts:
+/// - Full git URLs (`https://...`, `ssh://...`, `git@...`)
+/// - GitHub shorthand (`owner/repo`) - expanded to `https://github.com/owner/repo`
+pub(crate) fn validate_marketplace_url(url: &str) -> std::result::Result<String, String> {
+    if is_git_url(url) {
+        Ok(url.to_string())
+    } else if is_github_shorthand(url) {
+        Ok(expand_github_shorthand(url))
+    } else {
+        Err(format!(
+            "Invalid marketplace URL: '{url}'. Expected a git URL (https://...) \
+             or GitHub shorthand (owner/repo)."
+        ))
+    }
+}
+
 /// Custom deserializer for optional source URLs.
 fn deserialize_optional_source_url<'de, D>(
     deserializer: D,
