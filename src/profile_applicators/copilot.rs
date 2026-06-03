@@ -4,9 +4,10 @@ use anyhow::{Context, Result};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+use crate::plugin::{InstallMode, PluginBundle, PluginRef, ResolvedPlugin, resolve_plugin};
 use crate::profile::{ProfileConfig, ProfileScope};
 use crate::profile_applicators::{AgentHarness, ProfileApplicator, ProfileContext};
-use crate::profile_plan::{ProfileAction, ProfilePlan};
+use crate::profile_plan::{ProfileAction, ProfilePlan, json_pointer};
 
 pub(crate) struct CopilotApplicator;
 
@@ -54,6 +55,52 @@ impl CopilotApplicator {
         command.args(extra_args);
         Ok(command)
     }
+
+    /// Decompose a resolved plugin bundle into Copilot placements, appending
+    /// skill-placement and skip actions and accumulating MCP servers for the
+    /// single Copilot `mcp.json` merge (Copilot keys servers under `servers`).
+    fn decompose_bundle(
+        bundle_dir: &Path,
+        plugin_name: &str,
+        actions: &mut Vec<ProfileAction>,
+        servers: &mut serde_json::Map<String, serde_json::Value>,
+        owned_paths: &mut Vec<String>,
+        harness_home: &Path,
+    ) -> Result<()> {
+        let bundle = PluginBundle::read(bundle_dir)?;
+
+        for skill in &bundle.skills {
+            actions.push(ProfileAction::PlacePluginDir {
+                source: bundle_dir.join("skills").join(skill),
+                target: harness_home.join("skills").join(skill),
+                scope: ProfileScope::User,
+            });
+        }
+
+        for (server_name, server) in &bundle.mcp_servers {
+            let pointer = json_pointer(&["servers", server_name]);
+            if owned_paths.contains(&pointer) {
+                anyhow::bail!(
+                    "MCP server '{server_name}' is provided by more than one plugin; \
+                     resolve the conflict before applying"
+                );
+            }
+            let resolved = crate::plugin::substitute_plugin_root(server, bundle_dir)?;
+            servers.insert(server_name.clone(), resolved);
+            owned_paths.push(pointer);
+        }
+
+        for capability in &bundle.unsupported_capabilities {
+            actions.push(ProfileAction::SkipCapability {
+                capability: format!("plugin:{plugin_name}:{capability}"),
+                reason: format!(
+                    "Copilot does not support '{capability}' from plugin '{plugin_name}'"
+                ),
+            });
+        }
+
+        Ok(())
+    }
 }
 
 impl ProfileApplicator for CopilotApplicator {
@@ -89,12 +136,63 @@ impl ProfileApplicator for CopilotApplicator {
             });
         }
 
-        // Plugin introspection (MCP servers, skills) lands in Task 6; until then,
-        // the Copilot applicator records plugins as skipped.
-        if !profile.plugins.is_empty() {
-            actions.push(ProfileAction::SkipCapability {
-                capability: "plugins".to_string(),
-                reason: "GitHub Copilot plugin introspection is not implemented yet".to_string(),
+        // Plugin introspection: resolve each plugin, decompose its bundle into
+        // Copilot's native `mcp.json` servers + skills, and skip what cannot map.
+        let mut servers = serde_json::Map::new();
+        let mut owned_paths = Vec::new();
+
+        for plugin in &profile.plugins {
+            if let PluginRef::Marketplace {
+                install: InstallMode::Delegate,
+                name,
+                ..
+            } = plugin
+            {
+                actions.push(ProfileAction::SkipCapability {
+                    capability: format!("plugin:{name}:delegate"),
+                    reason: "delegate plugins are a Claude-only feature; not applied for Copilot"
+                        .to_string(),
+                });
+                continue;
+            }
+
+            let resolved = resolve_plugin(
+                plugin,
+                &context.marketplaces,
+                &context.cache,
+                &context.target,
+                false,
+            )?;
+
+            match resolved {
+                ResolvedPlugin::Bundle {
+                    name, bundle_dir, ..
+                } => {
+                    Self::decompose_bundle(
+                        &bundle_dir,
+                        &name,
+                        &mut actions,
+                        &mut servers,
+                        &mut owned_paths,
+                        &context.harness_home,
+                    )?;
+                }
+                ResolvedPlugin::Delegate { name, .. } => {
+                    actions.push(ProfileAction::SkipCapability {
+                        capability: format!("plugin:{name}:delegate"),
+                        reason: "plugin source cannot be cached/introspected for Copilot"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+
+        if !servers.is_empty() {
+            actions.push(ProfileAction::MergeJson {
+                target: context.harness_home.join("mcp.json"),
+                value: serde_json::json!({ "servers": servers }),
+                scope: ProfileScope::User,
+                owned_paths,
             });
         }
 
@@ -117,6 +215,60 @@ mod tests {
     use super::*;
     use crate::profile::{InstructionConfig, ProfileConfig};
     use crate::profile_applicators::{ProfileApplicator, ProfileContext};
+
+    #[test]
+    fn copilot_introspects_plugin_mcp_into_servers_merge() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("repo");
+        std::fs::create_dir_all(&target).unwrap();
+        let bundle = target.join("rust-plugin");
+        std::fs::create_dir_all(bundle.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            bundle.join(".claude-plugin/plugin.json"),
+            r#"{"name":"rust"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            bundle.join(".mcp.json"),
+            r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]}}}"#,
+        )
+        .unwrap();
+
+        let profile = ProfileConfig {
+            plugins: vec![PluginRef::Local {
+                source: PathBuf::from("./rust-plugin"),
+            }],
+            ..ProfileConfig::default()
+        };
+        let context = ProfileContext {
+            profile_name: "rust-dev".to_string(),
+            target: target.clone(),
+            profile_asset_dir: target,
+            harness_home: temp.path().join("copilot-home"),
+            mode: crate::profile::ProfileMode::Persistent,
+            session_id: None,
+            marketplaces: Vec::new(),
+            cache: crate::cache::CacheManager::new().unwrap(),
+        };
+
+        let plan = CopilotApplicator.plan(&profile, &context).unwrap();
+        let (mtarget, value, owned) = plan
+            .actions
+            .iter()
+            .find_map(|a| match a {
+                ProfileAction::MergeJson {
+                    target,
+                    value,
+                    owned_paths,
+                    ..
+                } => Some((target, value, owned_paths)),
+                _ => None,
+            })
+            .expect("expected an mcp.json merge action");
+        assert!(mtarget.ends_with("copilot-home/mcp.json"));
+        assert_eq!(owned, &vec!["/servers/rust".to_string()]);
+        assert_eq!(value["servers"]["rust"]["command"], "uvx");
+    }
 
     #[test]
     fn copilot_plans_instruction_write() {

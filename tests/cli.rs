@@ -528,22 +528,21 @@ profiles =
 }
 
 #[test]
-#[ignore = "Task 6: re-enable once plugin .mcp.json introspection drives MergeJson"]
 fn copilot_profile_removes_generated_mcp_json_after_cleanup() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
     let mcp_json = copilot_home.path().join("mcp.json");
+    ctx.create_repo_file(
+        "plugins/rust/.mcp.json",
+        r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]}}}"#,
+    );
     ctx.write_repo_config(
         r"
 profiles =
   rust-dev =
-    mcps =
-      servers =
-        rust =
-          command = uvx
-          args =
-            = mcp-rust
+    plugins =
+      = ./plugins/rust
 ",
     );
 
@@ -569,7 +568,6 @@ profiles =
 }
 
 #[test]
-#[ignore = "Task 6: re-enable once plugin .mcp.json introspection drives MergeJson"]
 fn copilot_profile_restores_existing_mcp_json_after_cleanup() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
@@ -577,16 +575,16 @@ fn copilot_profile_restores_existing_mcp_json_after_cleanup() {
     let mcp_json = copilot_home.path().join("mcp.json");
     let original_mcp_json = r#"{"servers":{"existing":{"command":"keep"}}}"#;
     fs::write(&mcp_json, original_mcp_json).unwrap();
+    ctx.create_repo_file(
+        "plugins/rust/.mcp.json",
+        r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]}}}"#,
+    );
     ctx.write_repo_config(
         r"
 profiles =
   rust-dev =
-    mcps =
-      servers =
-        rust =
-          command = uvx
-          args =
-            = mcp-rust
+    plugins =
+      = ./plugins/rust
 ",
     );
 
@@ -948,22 +946,21 @@ profiles =
 }
 
 #[test]
-#[ignore = "Task 6: re-enable once plugin .mcp.json introspection drives MergeJson"]
 fn profile_remove_preserves_unrelated_mcp_changes() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
     let mcp_json = copilot_home.path().join("mcp.json");
+    ctx.create_repo_file(
+        "plugins/rust/.mcp.json",
+        r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]}}}"#,
+    );
     ctx.write_repo_config(
         r"
 profiles =
   rust-dev =
-    mcps =
-      servers =
-        rust =
-          command = uvx
-          args =
-            = mcp-rust
+    plugins =
+      = ./plugins/rust
 ",
     );
 
@@ -985,7 +982,7 @@ profiles =
 
     fs::write(
         &mcp_json,
-        r#"{"servers":{"rust":{"command":"uvx"},"other":{"command":"keep"}},"custom":true}"#,
+        r#"{"servers":{"rust":{"command":"uvx","args":["mcp-rust"]},"other":{"command":"keep"}},"custom":true}"#,
     )
     .unwrap();
 
@@ -1071,7 +1068,6 @@ profiles =
 }
 
 #[test]
-#[ignore = "Task 6: re-enable rollback coverage via a plugin-driven later-failing action"]
 fn profile_apply_rolls_back_overlay_when_later_action_fails() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
@@ -1085,16 +1081,18 @@ fn profile_apply_rolls_back_overlay_when_later_action_fails() {
     fs::create_dir_all(&overlay_path).unwrap();
     fs::write(overlay_path.join(".envrc"), "export PROFILE_OVERLAY=1").unwrap();
     fs::write(copilot_home.path().join("mcp.json"), "{invalid json").unwrap();
+    ctx.create_repo_file(
+        "plugins/rust/.mcp.json",
+        r#"{"mcpServers":{"rust":{"command":"uvx"}}}"#,
+    );
     ctx.write_repo_config(
         r"
 profiles =
   env-dev =
     overlays =
       = acme/app/dotenv
-    mcps =
-      servers =
-        rust =
-          command = uvx
+    plugins =
+      = ./plugins/rust
 ",
     );
 
@@ -1385,28 +1383,23 @@ profiles =
 }
 
 #[test]
-#[ignore = "Task 4/6: re-enable once generalized JSON ownership + plugin .mcp.json land"]
 fn profile_apply_rejects_conflicting_mcp_server_ownership() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file(
+        "plugins/rust/.mcp.json",
+        r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]}}}"#,
+    );
     ctx.write_repo_config(
         r"
 profiles =
   alpha =
-    mcps =
-      servers =
-        rust =
-          command = uvx
-          args =
-            = mcp-rust
+    plugins =
+      = ./plugins/rust
   beta =
-    mcps =
-      servers =
-        rust =
-          command = other
-          args =
-            = mcp-other
+    plugins =
+      = ./plugins/rust
 ",
     );
 
@@ -1468,28 +1461,27 @@ profiles =
 }
 
 #[test]
-#[ignore = "Task 4/6: re-enable once generalized JSON ownership + plugin .mcp.json land"]
 fn profile_apply_allows_disjoint_mcp_server_ownership() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file(
+        "plugins/rust/.mcp.json",
+        r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]}}}"#,
+    );
+    ctx.create_repo_file(
+        "plugins/other/.mcp.json",
+        r#"{"mcpServers":{"other":{"command":"other","args":["mcp-other"]}}}"#,
+    );
     ctx.write_repo_config(
         r"
 profiles =
   alpha =
-    mcps =
-      servers =
-        rust =
-          command = uvx
-          args =
-            = mcp-rust
+    plugins =
+      = ./plugins/rust
   beta =
-    mcps =
-      servers =
-        other =
-          command = other
-          args =
-            = mcp-other
+    plugins =
+      = ./plugins/other
 ",
     );
 
