@@ -6989,3 +6989,58 @@ fn apply_three_part_with_source_filter_resolves_repo_local_source() {
     assert!(ctx.file_exists(".editorconfig"));
     assert_eq!(ctx.read_file(".editorconfig"), "root = true");
 }
+
+#[test]
+fn plugin_new_scaffolds_manifest_and_mcp_stub() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["plugin", "new", "my-mcp"])
+        .current_dir(dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-mcp"));
+
+    let manifest_path = dir.path().join("my-mcp/.claude-plugin/plugin.json");
+    assert!(manifest_path.is_file(), "plugin.json was not created");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        manifest.get("name").and_then(|v| v.as_str()),
+        Some("my-mcp")
+    );
+
+    let mcp_path = dir.path().join("my-mcp/.mcp.json");
+    assert!(mcp_path.is_file(), ".mcp.json stub was not created");
+    let mcp: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&mcp_path).unwrap()).unwrap();
+    assert!(mcp.get("mcpServers").is_some(), "missing mcpServers key");
+}
+
+#[test]
+fn plugin_new_refuses_existing_directory() {
+    let dir = tempfile::TempDir::new().unwrap();
+    fs::create_dir(dir.path().join("my-mcp")).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["plugin", "new", "my-mcp"])
+        .current_dir(dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+}
+
+#[test]
+fn plugin_new_rejects_path_traversal_name() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["plugin", "new", "../escape"])
+        .current_dir(dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure();
+    assert!(!dir.path().parent().unwrap().join("escape").exists());
+}

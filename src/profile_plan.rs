@@ -9,8 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::profile::{
-    ProfileFileEntry, ProfileMode, ProfileState, SkippedCapability,
-    save_profile_state,
+    ProfileFileEntry, ProfileMode, ProfileState, SkippedCapability, save_profile_state,
 };
 use crate::profile_applicators::claude::ClaudeApplicator;
 use crate::profile_applicators::copilot::CopilotApplicator;
