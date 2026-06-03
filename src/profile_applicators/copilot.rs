@@ -138,6 +138,8 @@ mod tests {
             harness_home: temp.path().join("copilot-home"),
             mode: crate::profile::ProfileMode::Persistent,
             session_id: None,
+            marketplaces: Vec::new(),
+            cache: crate::cache::CacheManager::new().unwrap(),
         };
 
         let plan = CopilotApplicator.plan(&profile, &context).unwrap();
@@ -159,6 +161,8 @@ mod tests {
             harness_home: temp.path().join("copilot-home"),
             mode: crate::profile::ProfileMode::Persistent,
             session_id: None,
+            marketplaces: Vec::new(),
+            cache: crate::cache::CacheManager::new().unwrap(),
         };
 
         let unsafe_sources = vec![
@@ -212,6 +216,8 @@ mod tests {
             harness_home: temp.path().join("copilot-home"),
             mode: crate::profile::ProfileMode::Ephemeral,
             session_id: Some("session-1".to_string()),
+            marketplaces: Vec::new(),
+            cache: crate::cache::CacheManager::new().unwrap(),
         };
 
         let command = CopilotApplicator

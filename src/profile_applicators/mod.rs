@@ -1,28 +1,30 @@
 //! Profile applicators provide profile-specific integration behavior.
 #![allow(dead_code)]
 
+pub(crate) mod claude;
 pub(crate) mod copilot;
 
 use anyhow::Result;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::config::Marketplace;
 use crate::profile::{ProfileConfig, ProfileMode};
 use crate::profile_plan::ProfilePlan;
 
 // DESIGN NOTE (intentional, known): harness identity is currently threaded
-// around as `&str` "copilot" literals (see `copilot_applicator` and the
-// removable-root matches in `profile_plan.rs`) rather than dispatched through
-// this enum and the `harness()` trait method, and `ProfilePlan` carries
-// `profile_name`/`harness` copies that duplicate `ProfileContext`. This is
-// scaffolding for multi-harness support that only has one harness today.
-// Collapsing it into first-class typed dispatch (enum + trait methods owning
-// home-dir / removable-roots / JSON-merge key semantics) is a deliberate
-// follow-up, not an oversight — please don't re-flag the `"copilot"` literals or
-// the unused enum in isolation.
+// around as `&str` "copilot"/"claude" literals (see `applicator_for`,
+// `harness_home_for`, and the removable-root matches in `profile_plan.rs`)
+// rather than dispatched through this enum and the `harness()` trait method, and
+// `ProfilePlan` carries `profile_name`/`harness` copies that duplicate
+// `ProfileContext`. Collapsing it into first-class typed dispatch (enum + trait
+// methods owning home-dir / removable-roots / JSON-merge key semantics) is a
+// deliberate follow-up, not an oversight — please don't re-flag the harness
+// string literals in isolation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentHarness {
     Copilot,
+    Claude,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +35,10 @@ pub(crate) struct ProfileContext {
     pub(crate) harness_home: PathBuf,
     pub(crate) mode: ProfileMode,
     pub(crate) session_id: Option<String>,
+    /// Marketplace registry used to resolve `marketplace/plugin` references.
+    pub(crate) marketplaces: Vec<Marketplace>,
+    /// Cache used to resolve/clone plugin and marketplace git sources.
+    pub(crate) cache: crate::cache::CacheManager,
 }
 
 pub(crate) trait ProfileApplicator {

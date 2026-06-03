@@ -75,6 +75,7 @@ pub(crate) struct CachedRepoInfo {
 }
 
 /// Manager for the overlay cache.
+#[derive(Debug, Clone)]
 pub(crate) struct CacheManager {
     cache_dir: PathBuf,
 }

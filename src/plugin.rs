@@ -275,6 +275,10 @@ pub(crate) struct PluginBundle {
     pub(crate) mcp_servers: serde_json::Map<String, serde_json::Value>,
     /// Skill directory names found under `skills/`.
     pub(crate) skills: Vec<String>,
+    /// Bundle capabilities repoverlay cannot decompose into native harness
+    /// locations (e.g. `hooks`, `agents`, `commands`). Surfaced so applicators
+    /// can emit `SkipCapability` rather than silently dropping them.
+    pub(crate) unsupported_capabilities: Vec<String>,
 }
 
 impl PluginBundle {
@@ -329,15 +333,66 @@ impl PluginBundle {
             skills.sort();
         }
 
+        // Capabilities repoverlay does not decompose: surface them so the
+        // applicator can record a `SkipCapability` instead of dropping silently.
+        let mut unsupported_capabilities = Vec::new();
+        for capability in ["hooks", "agents", "commands"] {
+            if dir.join(capability).is_dir() {
+                unsupported_capabilities.push(capability.to_string());
+            }
+        }
+
         Ok(Self {
             manifest,
             mcp_servers,
             skills,
+            unsupported_capabilities,
         })
     }
 }
 
-/// Classification of a marketplace entry `source` string.
+/// The literal placeholder Claude plugins use to reference their own bundle root.
+const CLAUDE_PLUGIN_ROOT: &str = "${CLAUDE_PLUGIN_ROOT}";
+
+/// Recursively substitute `${CLAUDE_PLUGIN_ROOT}` with `bundle_dir` in every
+/// string value of `value`.
+///
+/// Object keys are left untouched. Fails if `bundle_dir` is not valid UTF-8,
+/// since the substituted path is embedded into JSON the harness must read back.
+pub(crate) fn substitute_plugin_root(
+    value: &serde_json::Value,
+    bundle_dir: &std::path::Path,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::Context;
+    let root = bundle_dir.to_str().with_context(|| {
+        format!(
+            "Plugin bundle path is not valid UTF-8 and cannot be embedded in JSON: {}",
+            bundle_dir.display()
+        )
+    })?;
+    Ok(substitute_plugin_root_str(value, root))
+}
+
+fn substitute_plugin_root_str(value: &serde_json::Value, root: &str) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => {
+            serde_json::Value::String(s.replace(CLAUDE_PLUGIN_ROOT, root))
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| substitute_plugin_root_str(item, root))
+                .collect(),
+        ),
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), substitute_plugin_root_str(v, root)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 enum SourceKind {
     /// A relative subdirectory within the marketplace repo.
     Subdir(String),

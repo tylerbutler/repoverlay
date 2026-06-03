@@ -12,6 +12,7 @@ use crate::profile::{
     ProfileFileEntry, ProfileMode, ProfileScope, ProfileState, SkippedCapability,
     save_profile_state,
 };
+use crate::profile_applicators::claude::ClaudeApplicator;
 use crate::profile_applicators::copilot::CopilotApplicator;
 use crate::profile_applicators::{ProfileApplicator, ProfileContext};
 
@@ -48,6 +49,18 @@ pub(crate) enum ProfileAction {
         capability: String,
         reason: String,
     },
+    /// Place a plugin's skill directory into a native harness location by
+    /// copying/symlinking the whole tree.
+    ///
+    /// Unlike [`ProfileAction::WriteFile`], the `source` lives in the resolved
+    /// plugin bundle (the cache), not the profile asset directory. Execution,
+    /// backup, and removal of this action land in the managed-plugin lifecycle
+    /// task; until then `preflight_plan` rejects plans that contain it.
+    PlacePluginDir {
+        source: PathBuf,
+        target: PathBuf,
+        scope: ProfileScope,
+    },
 }
 
 pub(crate) fn apply_profile(
@@ -63,7 +76,7 @@ pub(crate) fn apply_profile(
         target,
         mode,
         session_id,
-        CopilotApplicator::harness_home_from_env()?,
+        harness_home_for(harness)?,
     )
 }
 
@@ -95,7 +108,7 @@ fn apply_profile_with_harness_home(
         .profiles
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("Profile '{name}' not found"))?;
-    let applicator = copilot_applicator(harness)?;
+    let applicator = applicator_for(harness)?;
     let context = ProfileContext {
         profile_name: name.to_string(),
         target: target.to_path_buf(),
@@ -103,6 +116,8 @@ fn apply_profile_with_harness_home(
         harness_home,
         mode,
         session_id: session_id.clone(),
+        marketplaces: config.marketplaces.clone(),
+        cache: crate::cache::CacheManager::new()?,
     };
     let plan = applicator.plan(profile, &context)?;
     preflight_plan(&plan, &context.profile_asset_dir)?;
@@ -208,6 +223,14 @@ fn apply_profile_with_harness_home(
                 ProfileAction::SkipCapability { capability, reason } => {
                     eprintln!("Warning: skipped {capability}: {reason}");
                     state.skipped.push(SkippedCapability { capability, reason });
+                }
+                ProfileAction::PlacePluginDir { .. } => {
+                    // Preflight rejects plans containing this action, so reaching
+                    // it here indicates a logic error rather than user input.
+                    bail!(
+                        "Plugin directory placement is not implemented yet; \
+                         this plan should have been rejected during preflight"
+                    );
                 }
             }
         }
@@ -353,9 +376,10 @@ fn ensure_removable_profile_file(
     file: &ProfileFileEntry,
 ) -> Result<()> {
     let allowed_root = match (harness, file.scope) {
-        ("copilot", ProfileScope::User) => CopilotApplicator::harness_home_from_env()?
-            .join("instructions")
-            .join(name),
+        ("copilot", ProfileScope::User) => {
+            harness_home_for("copilot")?.join("instructions").join(name)
+        }
+        ("claude", ProfileScope::User) => harness_home_for("claude")?.join("skills"),
         (_, ProfileScope::Repo) => repo_target.to_path_buf(),
         _ => bail!("Unsupported harness '{harness}'"),
     };
@@ -414,6 +438,14 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
                 if reference.trim().is_empty() {
                     bail!("Profile overlay reference must not be empty");
                 }
+            }
+            ProfileAction::PlacePluginDir { target, .. } => {
+                // Skill-directory placement execution is deferred to the managed
+                // plugin lifecycle task; reject before any side effects run.
+                bail!(
+                    "Plugin directory placement (skills) is not implemented yet: {}",
+                    target.display()
+                );
             }
             ProfileAction::SkipCapability { .. } => {}
         }
@@ -799,7 +831,7 @@ fn restore_owned_json_paths(current: &mut Value, backup: &MergeJsonBackup, targe
 }
 
 /// Build an RFC 6901 JSON pointer from path segments, escaping `~` and `/`.
-fn json_pointer(segments: &[&str]) -> String {
+pub(crate) fn json_pointer(segments: &[&str]) -> String {
     let mut out = String::new();
     for segment in segments {
         out.push('/');
@@ -932,11 +964,22 @@ fn restore_write_file_backup(
 }
 
 fn ensure_removable_profile_json(harness: &str, file: &ProfileFileEntry) -> Result<()> {
-    if harness != "copilot" || file.scope != ProfileScope::User {
-        bail!("Unsupported profile JSON target for harness '{harness}'");
-    }
+    let allowed_target = match (harness, file.scope) {
+        ("copilot", ProfileScope::User) => harness_home_for("copilot")?.join("mcp.json"),
+        // Claude decomposes plugin MCP servers into the project `.mcp.json`,
+        // which lives at the repo root recorded as the JSON target itself.
+        ("claude", ProfileScope::Repo) => {
+            if file.target.file_name().and_then(|n| n.to_str()) == Some(".mcp.json") {
+                return Ok(());
+            }
+            bail!(
+                "Refusing to restore profile JSON outside managed location: {}",
+                file.target.display()
+            );
+        }
+        _ => bail!("Unsupported profile JSON target for harness '{harness}'"),
+    };
 
-    let allowed_target = CopilotApplicator::harness_home_from_env()?.join("mcp.json");
     if file.target != allowed_target {
         bail!(
             "Refusing to restore profile JSON outside managed location: {}",
@@ -1059,11 +1102,21 @@ fn ensure_regular_profile_source(source: &Path, profile_asset_dir: &Path) -> Res
 
 // String-based harness dispatch is an intentional placeholder; see the design
 // note on `AgentHarness` in `profile_applicators/mod.rs`.
-fn copilot_applicator(harness: &str) -> Result<CopilotApplicator> {
-    if harness == "copilot" {
-        Ok(CopilotApplicator)
-    } else {
-        bail!("Unsupported harness '{harness}'")
+fn applicator_for(harness: &str) -> Result<Box<dyn ProfileApplicator>> {
+    match harness {
+        "copilot" => Ok(Box::new(CopilotApplicator)),
+        "claude" => Ok(Box::new(ClaudeApplicator)),
+        _ => bail!("Unsupported harness '{harness}'"),
+    }
+}
+
+/// Resolve the harness home directory for a harness identity, honoring the
+/// per-harness `REPOVERLAY_*_HOME` override.
+pub(crate) fn harness_home_for(harness: &str) -> Result<PathBuf> {
+    match harness {
+        "copilot" => CopilotApplicator::harness_home_from_env(),
+        "claude" => ClaudeApplicator::harness_home_from_env(),
+        _ => bail!("Unsupported harness '{harness}'"),
     }
 }
 

@@ -105,6 +105,8 @@ pub(crate) fn handle_copilot_command(
             crate::profile_applicators::copilot::CopilotApplicator::harness_home_from_env()?,
         mode: ProfileMode::Ephemeral,
         session_id: state.session_id,
+        marketplaces: Vec::new(),
+        cache: crate::cache::CacheManager::new()?,
     };
     let applicator = crate::profile_applicators::copilot::CopilotApplicator;
     let mut command = applicator.command(&context, &extra_args)?;
