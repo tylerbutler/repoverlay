@@ -4,35 +4,52 @@ sidebar:
   order: 5
 ---
 
-A **profile** is a named, agent-centric configuration that composes overlays together with AI harness capabilities — MCP servers, instruction files, skills, and plugins — into a single loadable unit.
+A **profile** is a named, agent-centric configuration that composes overlays together with AI harness capabilities — instruction files and plugins — into a single loadable unit.
 
-Where an overlay describes *files to place in a repo*, a profile describes *intent*: "give me everything I need to do Rust development with Copilot." Applying a profile always happens for a specific agent harness (currently GitHub Copilot), and the harness decides where each capability is placed.
+Where an overlay describes *files to place in a repo*, a profile describes *intent*: "give me everything I need to do Rust development with this agent." Applying a profile always happens for a specific agent harness (currently GitHub Copilot and Claude Code), and the harness decides where each capability is placed.
 
 ## Profiles vs. overlays
 
 The key thing to understand is the difference between a **definition** and its **application**:
 
 - An **overlay** is a reusable, *repo-agnostic* definition — just a named bundle of files. It only becomes associated with a repo when you `apply` it, at which point the files land in that repo's working tree. So an overlay being "tied to a repo" is a property of the *applied instance*, not the overlay itself.
-- A **profile** is a *recipe* one layer up: it references overlays (ingredients) and adds harness capabilities. Like an overlay, it's a portable definition that you apply to a specific repo — but a profile's effects span two scopes.
+- A **profile** is a *recipe* one layer up: it references overlays (ingredients) and adds harness capabilities through plugins.
 
 | | Overlay | Profile |
 | --- | --- | --- |
 | Role | Ingredient (files) | Recipe (overlays + capabilities) |
 | Payload | A file tree applied to a repo | A composition of overlays + harness capabilities |
-| Scope of effect | Always **repo-scoped** (working tree) | Spans **repo-scoped** *and* **user/harness-scoped** |
-| Owns | Symlinks, git excludes, conflict handling | MCP servers, instructions, skills, plugins |
+| Owns | Symlinks, git excludes, conflict handling | Instructions, plugins (skills + MCP servers) |
 | Portable across harnesses? | N/A (files only) | Yes — placement lives in the harness applicator |
 
-Profiles *reference* overlays rather than replacing them. Repo-level instruction files such as `AGENTS.md` should still be shipped as overlay files; profile `instructions` are for harness/user-level files.
+Everything a profile applies lands **inside the target repo's working tree** (git-excluded, never committed). There is no user- or machine-global scope — a profile only ever touches the repo you apply it to.
+
+## Capabilities come from plugins
+
+Profiles do not define MCP servers or skills directly. Instead, those capabilities are bundled into **plugins** — the same Claude-style plugin format used by the Claude Code ecosystem. A plugin can ship:
+
+- **skills** — placed under `.claude/skills/` (Claude) or `.agents/skills/` (Copilot)
+- **MCP servers** — merged into the repo's `.mcp.json`
+- plugin metadata in `.claude-plugin/plugin.json`
+
+This keeps a single, portable bundling unit: the same plugin works whether it is enabled through Claude's native plugin machinery or placed by repoverlay for Copilot.
 
 ## Defining a profile
 
-Profiles live in your repoverlay CCL config under a `profiles` key, alongside `sources` and `library_path`:
+Profiles live in your repoverlay CCL config under a `profiles` key, alongside `sources` and `marketplaces`:
 
 - Global config: `~/.config/repoverlay/config.ccl`
 - Per-repo config: `.repoverlay/config.ccl`
 
 ```ccl
+marketplaces =
+  =
+    name = playground
+    url = obra/claude-plugins
+  =
+    name = vendor
+    url = https://example.com/vendor/market.git
+
 profiles =
   rust-dev =
     description = Rust development profile
@@ -44,32 +61,70 @@ profiles =
       =
         source = copilot-instructions.md
 
-    mcps =
-      servers =
-        rust-analyzer =
-          command = uvx
-          args =
-            = mcp-rust
-          env =
-            RUST_LOG = info
-
-    skills =
-      = market:rust-reviewer@playground
-
     plugins =
-      = market:rust-dev@playground
+      = playground/rust-dev
+      =
+        marketplace = vendor
+        name = cool
+        install = delegate
+        scope = local
 ```
 
-### Fields
+### Profile fields
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `description` | scalar | Optional user-facing text shown by `profile list` and `profile show`. |
 | `overlays` | list | Overlay references, resolved with the usual source/library semantics. |
-| `instructions` | list | Harness/user-level instruction files. Each entry has a `source` relative to the repo root. |
-| `mcps.servers` | map | MCP servers keyed by name. Each has `command`, optional `args`, and optional `env`. |
-| `skills` | list | Skill references. *(Accepted but skipped by the Copilot harness in v1.)* |
-| `plugins` | list | Plugin references. *(Accepted but skipped by the Copilot harness in v1.)* |
+| `instructions` | list | Harness instruction files. Each entry has a `source` relative to the repo root. |
+| `plugins` | list | Plugin references (see below). |
+
+### Marketplaces registry
+
+The top-level `marketplaces` key maps a short name to a marketplace git repository. Plugin references use these names. The `url` accepts a full git URL or GitHub `owner/repo` shorthand (expanded to `https://github.com/owner/repo`). Marketplace repositories are cached locally under `~/.cache/repoverlay/`, the same way overlay sources are.
+
+### Plugin references
+
+Each entry in `plugins` is one of:
+
+- **Marketplace shorthand** — `marketplace/plugin`, e.g. `playground/rust-dev`.
+- **Marketplace table** — for pinning a ref or choosing an install mode:
+
+  | Key | Description |
+  | --- | --- |
+  | `marketplace` | Marketplace name from the registry. |
+  | `name` | Plugin name within the marketplace. |
+  | `ref` | Optional git ref (tag/branch/commit) to pin. |
+  | `install` | `managed` (default) or `delegate`. |
+  | `scope` | Delegate only: `project` or `local`. |
+
+- **Local path** — a `source` table or a path starting with `.` or `/`, pointing at a plugin directory on disk.
+
+#### Managed vs. delegate
+
+| Install mode | Behavior |
+| --- | --- |
+| `managed` (default) | repoverlay caches the plugin bundle and places its skills/MCP servers into the repo itself. Works for both Copilot and Claude. |
+| `delegate` | repoverlay records the plugin in the harness's own enablement config and lets the harness load it. Currently meaningful for Claude. |
+
+For `delegate` plugins on Claude, the `scope` selects which settings file records the enablement:
+
+| Scope | File |
+| --- | --- |
+| `project` | `.claude/settings.json` |
+| `local` | `.claude/settings.local.json` |
+
+When `scope` is omitted, the default depends on how the profile is applied: persistent applies use `project`, and ephemeral sessions use `local`.
+
+## Authoring a plugin
+
+Scaffold a new local plugin with:
+
+```bash
+repoverlay plugin new my-plugin
+```
+
+This creates `my-plugin/.claude-plugin/plugin.json` and a `my-plugin/.mcp.json` stub. Add skills under `my-plugin/skills/` and MCP servers in `.mcp.json`, then reference it from a profile as a local path.
 
 ## Inspecting profiles
 
@@ -95,8 +150,9 @@ rust-dev
     - rust-tools
   Instructions:
     - copilot-instructions.md
-  MCP servers:
-    - rust-analyzer (uvx)
+  Plugins:
+    - playground/rust-dev (managed)
+    - vendor/cool (delegate, scope: local)
 ```
 
 ## Applying a profile
@@ -109,6 +165,7 @@ There are two ways to apply a profile. Choose based on whether you want the conf
 
 ```bash
 repoverlay profile apply rust-dev --harness copilot
+repoverlay profile apply rust-dev --harness claude
 ```
 
 Check what is currently applied:
@@ -128,50 +185,47 @@ Removal deletes the harness files and merged config entries the profile created,
 
 ### Ephemeral mode
 
-`repoverlay copilot --profile` applies the profile only for the lifetime of the launched Copilot process, then cleans up automatically:
+`repoverlay copilot --profile` (or `repoverlay claude --profile`) applies the profile only for the lifetime of the launched agent process, then cleans up automatically:
 
 ```bash
 repoverlay copilot --profile rust-dev
+repoverlay claude --profile rust-dev
 ```
 
 The flow is:
 
-1. Resolve and plan the profile for Copilot.
+1. Resolve and plan the profile for the harness.
 2. Apply it using session-scoped state.
-3. Launch the Copilot harness.
-4. Wait for Copilot to exit.
+3. Launch the agent harness.
+4. Wait for the agent to exit.
 5. Remove the session's profile effects.
-6. Exit with Copilot's exit code (unless cleanup fails).
+6. Exit with the agent's exit code (unless cleanup fails).
 
-Pass extra arguments straight through to Copilot after `--`:
+Pass extra arguments straight through to the agent after `--`:
 
 ```bash
 repoverlay copilot --profile rust-dev -- --help
 ```
 
+For Claude, managed plugin bundles are loaded directly via Claude's native `--plugin-dir` flag from the cache, so the ephemeral session does not place plugin files into the repo.
+
 :::note
 A profile that is already applied persistently (or already running an ephemeral session) cannot be launched ephemerally at the same time. Remove it first, or wait for the running session to finish. A lock file guards against concurrent sessions and is recovered automatically if a previous session was killed.
 :::
 
-## How the Copilot harness maps capabilities
+## How harnesses map capabilities
 
-Each capability in a profile is translated into a concrete action by the Copilot applicator:
+Each capability in a profile is translated into a concrete, **repo-local** action by the harness applicator:
 
-| Capability | What happens |
-| --- | --- |
-| `overlays` | Applied to the target repo using the normal overlay machinery (symlinks, git excludes, state). |
-| `mcps.servers` | Deep-merged into the harness `mcp.json` under a `servers` key. |
-| `instructions` | Each `source` (resolved relative to the repo root) is written to `instructions/<profile-name>/<file-name>`. |
-| `skills` / `plugins` | Skipped with a warning — Copilot placement is not defined in v1. |
+| Capability | Claude | Copilot |
+| --- | --- | --- |
+| `overlays` | Applied with the normal overlay machinery (symlinks, git excludes, state). | Same. |
+| plugin skills | `<repo>/.claude/skills/<skill>` | `<repo>/.agents/skills/<skill>` |
+| plugin MCP servers | Merged into `<repo>/.mcp.json` (`mcpServers` key). | Merged into `<repo>/.mcp.json` (`servers` key). |
+| delegate plugins | Recorded in `.claude/settings.json` / `.claude/settings.local.json`. | n/a |
+| `instructions` | n/a | Written into the `<repo>/AGENTS.md` managed region for the profile. |
 
-The harness home defaults to `~/.config/github-copilot/`, so:
-
-- MCP servers are written to `~/.config/github-copilot/mcp.json`
-- The `rust-dev` profile's `copilot-instructions.md` is written to `~/.config/github-copilot/instructions/rust-dev/copilot-instructions.md`
-
-:::tip
-You can override the harness home with the `REPOVERLAY_COPILOT_HOME` environment variable, which is useful for testing or isolated setups.
-:::
+Everything is placed inside the target repo and git-excluded; nothing is written to a user- or machine-global location.
 
 Instruction `source` paths must be relative and stay within the repo — paths that escape the directory (for example `../secret.md`) or absolute paths are rejected.
 
@@ -182,10 +236,9 @@ When a repo-local profile shares a name with a global profile, the global profil
 | Field type | Merge behavior |
 | --- | --- |
 | Scalars (`description`) | Repo-local value wins when set; otherwise the global value is kept. |
-| Maps (`mcps.servers`) | Repo-local entries merge into the global map; repo-local keys win on conflict. |
-| Lists (`overlays`, `instructions`, `skills`, `plugins`) | Repo-local list replaces the global list when non-empty; otherwise the global list is kept. |
+| Lists (`overlays`, `instructions`, `plugins`) | Repo-local list replaces the global list when non-empty; otherwise the global list is kept. |
 
-For example, given a global `rust-dev` profile with a `global` MCP server and overlay `global-rust`, and a repo-local `rust-dev` with a `repo` MCP server and overlay `repo-rust`, the merged profile keeps the global description, uses only the `repo-rust` overlay (list replacement), and exposes **both** MCP servers (map merge).
+The top-level `marketplaces` registry merges by name: repo-local entries win, and global-only marketplaces are kept.
 
 ## State and recovery
 
@@ -195,6 +248,6 @@ Profile state is tracked separately from overlay state:
 .repoverlay/profiles/<profile-name>.<harness>.ccl
 ```
 
-State records the applied profile, harness, a fingerprint, the overlays it applied, the files and merged config entries it owns, and any skipped capabilities. This is what lets `profile remove` (and ephemeral cleanup) undo exactly what a profile created.
+State records the applied profile, harness, a fingerprint, the overlays it applied, and the files and merged config entries it owns. This is what lets `profile remove` (and ephemeral cleanup) undo exactly what a profile created.
 
 If an ephemeral session is interrupted and cleanup fails, repoverlay reports the error and leaves enough session state behind to clean up later with `profile remove`.

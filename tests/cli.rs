@@ -275,6 +275,45 @@ profiles =
 }
 
 #[test]
+fn profile_show_renders_plugin_install_mode_and_scope() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    plugins =
+      = playground/rust-dev
+      =
+        marketplace = vendor
+        name = cool
+        install = delegate
+        scope = local
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "show",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Plugins:"))
+        .stdout(predicate::str::contains("playground/rust-dev (managed)"))
+        .stdout(predicate::str::contains(
+            "vendor/cool (delegate, scope: local)",
+        ))
+        .stdout(predicate::str::contains("MCP servers").not())
+        .stdout(predicate::str::contains("Skills:").not());
+}
+
+#[test]
 fn profile_show_uses_current_directory_as_default_target() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();

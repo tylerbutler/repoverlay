@@ -52,7 +52,7 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
                     &profile
                         .plugins
                         .iter()
-                        .map(std::string::ToString::to_string)
+                        .map(format_plugin_for_show)
                         .collect::<Vec<_>>(),
                 );
             }
@@ -110,5 +110,43 @@ fn print_list(label: &str, values: &[String]) {
     println!("  {label}:");
     for value in values {
         println!("    - {value}");
+    }
+}
+
+/// Render a plugin reference for `profile show`, annotating the install mode and
+/// (for delegate plugins) the enablement scope.
+fn format_plugin_for_show(plugin: &crate::plugin::PluginRef) -> String {
+    use crate::plugin::{InstallMode, PluginRef};
+    use crate::profile::DelegateScope;
+    use std::fmt::Write as _;
+
+    match plugin {
+        PluginRef::Local { source } => {
+            format!("{} (local, managed)", source.display())
+        }
+        PluginRef::Marketplace {
+            marketplace,
+            name,
+            r#ref,
+            install,
+            scope,
+        } => {
+            let mut out = format!("{marketplace}/{name}");
+            if let Some(r) = r#ref {
+                let _ = write!(out, "@{r}");
+            }
+            match install {
+                InstallMode::Managed => out.push_str(" (managed)"),
+                InstallMode::Delegate => {
+                    let scope = match scope {
+                        Some(DelegateScope::Project) => "project",
+                        Some(DelegateScope::Local) => "local",
+                        None => "default",
+                    };
+                    let _ = write!(out, " (delegate, scope: {scope})");
+                }
+            }
+            out
+        }
     }
 }
