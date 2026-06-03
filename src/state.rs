@@ -581,7 +581,7 @@ pub(crate) fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
 /// Creates a temporary file in the same directory as the target path,
 /// writes the content, then atomically renames it into place. This
 /// prevents corruption if the process is interrupted mid-write.
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {
     let dir = path
         .parent()
         .context("State file has no parent directory")?;

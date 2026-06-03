@@ -74,14 +74,7 @@ impl ProfileApplicator for CopilotApplicator {
         if !profile.mcps.servers.is_empty() {
             let mut servers = serde_json::Map::new();
             for (name, server) in &profile.mcps.servers {
-                servers.insert(
-                    name.clone(),
-                    json!({
-                        "command": server.command,
-                        "args": server.args,
-                        "env": server.env,
-                    }),
-                );
+                servers.insert(name.clone(), serde_json::to_value(server)?);
             }
             actions.push(ProfileAction::MergeJson {
                 target: context.harness_home.join("mcp.json"),

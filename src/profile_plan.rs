@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::profile::{
@@ -18,6 +17,9 @@ use crate::profile_applicators::{ProfileApplicator, ProfileContext};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ProfilePlan {
+    // `profile_name`/`harness` currently duplicate `ProfileContext`; this is part
+    // of the planned typed-harness work — see the design note on `AgentHarness`
+    // in `profile_applicators/mod.rs`.
     pub(crate) profile_name: String,
     pub(crate) harness: String,
     pub(crate) actions: Vec<ProfileAction>,
@@ -572,17 +574,13 @@ fn profile_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Result<P
         .join(format!("{name}.{harness}")))
 }
 
-fn merge_json_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
-    profile_backup_dir(repo_target, name, harness)
-}
-
 fn merge_json_backup_path(
     repo_target: &Path,
     name: &str,
     harness: &str,
     action_index: usize,
 ) -> Result<PathBuf> {
-    Ok(merge_json_backup_dir(repo_target, name, harness)?
+    Ok(profile_backup_dir(repo_target, name, harness)?
         .join(format!("merge-json-{action_index}.bak")))
 }
 
@@ -752,7 +750,7 @@ fn restore_merge_json_backup(
         fs::remove_file(&file.target)
             .with_context(|| format!("Failed to remove {}", file.target.display()))?;
     } else {
-        atomic_write(&file.target, &serde_json::to_string(&current)?)?;
+        crate::state::atomic_write(&file.target, &serde_json::to_string(&current)?)?;
     }
     if let Err(err) = fs::remove_file(&file.source) {
         eprintln!(
@@ -884,7 +882,7 @@ fn ensure_valid_merge_json_backup_source(
         );
     }
 
-    let backup_root = merge_json_backup_dir(repo_target, name, harness)?;
+    let backup_root = profile_backup_dir(repo_target, name, harness)?;
     if !source.starts_with(&backup_root) {
         bail!(
             "Refusing profile JSON backup outside managed location: {}",
@@ -976,6 +974,8 @@ fn ensure_regular_profile_source(source: &Path, profile_asset_dir: &Path) -> Res
     Ok(())
 }
 
+// String-based harness dispatch is an intentional placeholder; see the design
+// note on `AgentHarness` in `profile_applicators/mod.rs`.
 fn copilot_applicator(harness: &str) -> Result<CopilotApplicator> {
     if harness == "copilot" {
         Ok(CopilotApplicator)
@@ -1016,17 +1016,6 @@ fn reject_symlink_profile_target(target: &Path) -> Result<()> {
     }
 }
 
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
-    let dir = path
-        .parent()
-        .context("Profile JSON target has no parent directory")?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    tmp.write_all(content.as_bytes())?;
-    tmp.persist(path)
-        .context("Failed to atomically persist profile JSON")?;
-    Ok(())
-}
-
 fn merge_json_value(target: &Path, value: &Value) -> Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
@@ -1038,10 +1027,14 @@ fn merge_json_value(target: &Path, value: &Value) -> Result<()> {
         Value::Object(serde_json::Map::new())
     };
     merge_json_objects(&mut merged, value);
-    atomic_write(target, &serde_json::to_string_pretty(&merged)?)?;
+    crate::state::atomic_write(target, &serde_json::to_string_pretty(&merged)?)?;
     Ok(())
 }
 
+// NOTE: This intentionally does not reuse `json_merge::deep_merge`. That helper
+// deep-merges every key uniformly, but profile MCP merges need replace-semantics
+// for the `servers` subtree (see `merge_json_servers`), so `deep_merge` is not a
+// drop-in substitute here.
 fn merge_json_objects(base: &mut Value, overlay: &Value) {
     match (base, overlay) {
         (Value::Object(base_map), Value::Object(overlay_map)) => {

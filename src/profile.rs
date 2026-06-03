@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
@@ -183,17 +182,6 @@ pub(crate) fn validate_profile_state_component(component: &str) -> Result<()> {
     Ok(())
 }
 
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
-    let dir = path
-        .parent()
-        .context("Profile state file has no parent directory")?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    tmp.write_all(content.as_bytes())?;
-    tmp.persist(path)
-        .context("Failed to atomically persist profile state")?;
-    Ok(())
-}
-
 #[allow(dead_code)]
 pub(crate) fn save_profile_state(target: &Path, state: &ProfileState) -> Result<()> {
     let path = profile_state_path(target, &state.name, &state.harness)?;
@@ -201,7 +189,7 @@ pub(crate) fn save_profile_state(target: &Path, state: &ProfileState) -> Result<
         fs::create_dir_all(parent)?;
     }
     let content = sickle::to_string(state).context("Failed to serialize profile state")?;
-    atomic_write(&path, &content)
+    crate::state::atomic_write(&path, &content)
         .with_context(|| format!("Failed to write profile state: {}", path.display()))?;
     Ok(())
 }

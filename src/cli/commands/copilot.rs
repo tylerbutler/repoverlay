@@ -97,12 +97,6 @@ pub(crate) fn handle_copilot_command(
         Some(session_id),
     )?;
 
-    let config = crate::config::load_config(Some(&target))?;
-    config
-        .profiles
-        .get(&profile)
-        .context("Profile disappeared after apply")?;
-
     let context = crate::profile_applicators::ProfileContext {
         profile_name: profile,
         target: target.clone(),
@@ -174,6 +168,10 @@ fn wait_for_copilot_harness(
             .try_wait()
             .context("Failed to wait for Copilot harness")?
         {
+            // Not redundant with the top-of-loop check: this covers the race where
+            // an interrupt arrives between that check and `try_wait` returning the
+            // parent's exit, so the process group is still signaled before cleanup
+            // even if descendants outlived the parent.
             if crate::git::is_interrupted() && !forwarded_interrupt {
                 child.terminate();
             }

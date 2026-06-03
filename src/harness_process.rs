@@ -12,12 +12,6 @@ use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction
 #[cfg(unix)]
 use nix::unistd::{Pid, isatty, tcgetpgrp, tcsetpgrp};
 
-/// Decide whether terminal foreground ownership should be handed to the child.
-#[cfg(unix)]
-const fn should_hand_off_terminal(stdin_is_tty: bool) -> bool {
-    stdin_is_tty
-}
-
 #[cfg(unix)]
 pub(crate) struct TerminalForeground {
     fd: BorrowedFd<'static>,
@@ -31,7 +25,8 @@ impl TerminalForeground {
         // not close it and only borrows it while the process is alive.
         #[allow(unsafe_code)]
         let fd = unsafe { BorrowedFd::borrow_raw(nix::libc::STDIN_FILENO) };
-        if !should_hand_off_terminal(isatty(fd).unwrap_or(false)) {
+        // Only take terminal foreground ownership when stdin is a TTY.
+        if !isatty(fd).unwrap_or(false) {
             return None;
         }
 
@@ -96,6 +91,9 @@ impl HarnessProcess {
     pub(crate) fn process_group_id(&self) -> u32 {
         // On Unix, `spawn` always wraps the child with `ProcessGroup::leader()`, which
         // makes the child its own process-group leader, so its PGID equals its PID.
+        // Kept as a distinct method (rather than inlining `id()` at call sites) so
+        // terminal/signal code reads in PGID terms and stays correct if that
+        // invariant ever changes.
         self.id()
     }
 
@@ -140,18 +138,6 @@ mod tests {
 
         assert!(process.id() > 0);
         assert_eq!(process.process_group_id(), process.id());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn terminal_handoff_disabled_without_tty() {
-        assert!(!super::should_hand_off_terminal(false));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn terminal_handoff_enabled_with_tty() {
-        assert!(super::should_hand_off_terminal(true));
     }
 
     #[cfg(unix)]
