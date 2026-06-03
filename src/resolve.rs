@@ -1229,6 +1229,7 @@ mod tests {
                     }],
                     library_path: None,
                     profiles: std::collections::BTreeMap::new(),
+                    marketplaces: Vec::new(),
                 },
             )
             .unwrap();

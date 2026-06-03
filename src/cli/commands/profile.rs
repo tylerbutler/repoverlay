@@ -46,14 +46,16 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
                     .map(|entry| entry.source.clone())
                     .collect::<Vec<_>>(),
             );
-            if !profile.mcps.servers.is_empty() {
-                println!("  MCP servers:");
-                for (server, config) in &profile.mcps.servers {
-                    println!("    - {} ({})", server, config.command);
-                }
+            if !profile.plugins.is_empty() {
+                print_list(
+                    "Plugins",
+                    &profile
+                        .plugins
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect::<Vec<_>>(),
+                );
             }
-            print_list("Skills", &profile.skills);
-            print_list("Plugins", &profile.plugins);
             Ok(())
         }
         ProfileCommand::Apply {

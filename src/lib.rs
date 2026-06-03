@@ -16,6 +16,7 @@ mod json_merge;
 mod library;
 mod overlay_name;
 mod overlay_repo;
+mod plugin;
 mod profile;
 mod profile_applicators;
 mod profile_plan;

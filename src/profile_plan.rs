@@ -1083,8 +1083,7 @@ fn simple_profile_fingerprint(profile: &crate::profile::ProfileConfig) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{InstructionConfig, McpConfig, McpServerConfig, ProfileConfig};
-    use std::collections::BTreeMap;
+    use crate::profile::{InstructionConfig, ProfileConfig};
 
     fn write_config(target: &Path, content: &str) {
         let config_dir = target.join(".repoverlay");
@@ -1467,16 +1466,13 @@ profiles =
             instructions: vec![InstructionConfig {
                 source: "copilot-instructions.md".to_string(),
             }],
-            mcps: McpConfig {
-                servers: BTreeMap::from([(
-                    "rust".to_string(),
-                    McpServerConfig {
-                        command: "uvx".to_string(),
-                        args: vec!["mcp-rust".to_string()],
-                        env: BTreeMap::new(),
-                    },
-                )]),
-            },
+            plugins: vec![crate::plugin::PluginRef::Marketplace {
+                marketplace: "playground".to_string(),
+                name: "rust-dev".to_string(),
+                r#ref: None,
+                install: crate::plugin::InstallMode::Managed,
+                scope: None,
+            }],
             ..ProfileConfig::default()
         };
 

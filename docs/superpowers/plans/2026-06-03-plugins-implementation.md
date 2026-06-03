@@ -212,9 +212,18 @@ create `src/profile_applicators/claude.rs`; `src/profile_plan.rs` (plan actions)
 - [ ] **Step 2:** Implement: resolve each plugin via `src/plugin.rs`, read the bundle, map
   `.mcp.json` servers into the existing `mcp.json` merge, place `skills/`, skip the rest.
 
-- [ ] **Step 3:** `just test`; `just lint`.
+- [ ] **Step 3:** Re-enable the 6 CLI tests `#[ignore]`d in Task 1 by rewriting them to drive
+  `MergeJson` through a local plugin fixture (a bundle dir with a `.mcp.json`) instead of the
+  removed `mcps` config surface: `copilot_profile_removes_generated_mcp_json_after_cleanup`,
+  `copilot_profile_restores_existing_mcp_json_after_cleanup`,
+  `profile_remove_preserves_unrelated_mcp_changes`,
+  `profile_apply_rolls_back_overlay_when_later_action_fails` (later-failing action now comes
+  from a plugin merge into a pre-existing invalid `mcp.json`),
+  `profile_apply_rejects_conflicting_mcp_server_ownership`,
+  `profile_apply_allows_disjoint_mcp_server_ownership` (last two depend on Task 4's
+  generalized ownership).
 
-## Task 7: Managed-plugin lifecycle + state (apply / remove / update)
+- [ ] **Step 4:** `just test`; `just lint`.
 
 **Files:** `src/profile_plan.rs` (apply/remove orchestration, `apply_profile*`,
 `remove_profile*`), `src/profile.rs` (`ProfileState` plugin records), `src/update.rs` and/or

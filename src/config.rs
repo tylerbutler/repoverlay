@@ -23,6 +23,9 @@ pub(crate) struct RepoverlayConfig {
     /// Named profile definitions.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub(crate) profiles: std::collections::BTreeMap<String, crate::profile::ProfileConfig>,
+    /// Named plugin marketplaces (checked by name when resolving plugin references).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) marketplaces: Vec<Marketplace>,
 }
 
 impl RepoverlayConfig {
@@ -157,6 +160,27 @@ impl Source {
             ),
         }
     }
+}
+
+/// A named plugin marketplace.
+///
+/// Mirrors [`Source`]: a marketplace is a git repository (referenced by full URL
+/// or `owner/repo` GitHub shorthand) that contains a `.claude-plugin/marketplace.json`
+/// listing the plugins it provides. Plugin references in a profile use the
+/// `marketplace/plugin` shorthand, where `marketplace` is the `name` registered here.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub(crate) struct Marketplace {
+    /// Name for this marketplace (used in `marketplace/plugin` references).
+    pub(crate) name: String,
+    /// Git URL of the marketplace repository.
+    /// Accepts full URLs or GitHub shorthand (`owner/repo`), expanded during
+    /// deserialization to `https://github.com/owner/repo`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_source_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) url: Option<String>,
 }
 
 /// Default overlay repository name for the one-part shorthand syntax.
@@ -490,6 +514,19 @@ pub(crate) fn merge_repo_config(
     merged_sources.extend(global.sources);
     global.sources = merged_sources;
 
+    // Marketplaces merge by name: a repo-local entry overrides a global entry
+    // with the same name; remaining global entries are appended.
+    let mut merged_marketplaces = repo_config.marketplaces;
+    for global_marketplace in global.marketplaces {
+        if !merged_marketplaces
+            .iter()
+            .any(|m| m.name == global_marketplace.name)
+        {
+            merged_marketplaces.push(global_marketplace);
+        }
+    }
+    global.marketplaces = merged_marketplaces;
+
     if repo_config.library_path.is_some() {
         global.library_path = repo_config.library_path;
     }
@@ -598,6 +635,88 @@ mod tests {
     }
 
     #[test]
+    fn ignores_removed_mcps_and_skills_keys() {
+        // `mcps` and `skills` were removed from the profile schema in favor of
+        // plugins. Because `ProfileConfig` does not deny unknown fields, leftover
+        // keys parse without error and have no effect (clean transitional behavior
+        // for the unreleased profiles feature).
+        let ccl = r"
+profiles =
+  legacy =
+    overlays =
+      = base
+    mcps =
+      servers =
+        rust =
+          command = uvx
+    skills =
+      = old-skill
+";
+        let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
+        let profile = config.profiles.get("legacy").unwrap();
+        assert_eq!(profile.overlays, vec!["base"]);
+        assert!(profile.plugins.is_empty());
+    }
+
+    #[test]
+    fn parses_marketplaces_registry_with_shorthand() {
+        let ccl = r"
+marketplaces =
+  =
+    name = playground
+    url = obra/claude-plugins
+  =
+    name = vendor
+    url = https://example.com/vendor/market.git
+";
+        let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
+        assert_eq!(config.marketplaces.len(), 2);
+        assert_eq!(config.marketplaces[0].name, "playground");
+        assert_eq!(
+            config.marketplaces[0].url.as_deref(),
+            Some("https://github.com/obra/claude-plugins")
+        );
+        assert_eq!(
+            config.marketplaces[1].url.as_deref(),
+            Some("https://example.com/vendor/market.git")
+        );
+    }
+
+    #[test]
+    fn repo_marketplace_overrides_global_by_name() {
+        let global = RepoverlayConfig {
+            marketplaces: vec![
+                Marketplace {
+                    name: "playground".to_string(),
+                    url: Some("https://github.com/global/playground".to_string()),
+                },
+                Marketplace {
+                    name: "global-only".to_string(),
+                    url: Some("https://github.com/global/only".to_string()),
+                },
+            ],
+            ..RepoverlayConfig::default()
+        };
+        let repo = RepoverlayConfig {
+            marketplaces: vec![Marketplace {
+                name: "playground".to_string(),
+                url: Some("https://github.com/repo/playground".to_string()),
+            }],
+            ..RepoverlayConfig::default()
+        };
+
+        let merged = merge_repo_config(global, repo);
+        assert_eq!(merged.marketplaces.len(), 2);
+        // Repo-local entry wins for the shared name and comes first.
+        assert_eq!(merged.marketplaces[0].name, "playground");
+        assert_eq!(
+            merged.marketplaces[0].url.as_deref(),
+            Some("https://github.com/repo/playground")
+        );
+        assert_eq!(merged.marketplaces[1].name, "global-only");
+    }
+
+    #[test]
     fn test_load_repo_config_valid() {
         let temp = TempDir::new().unwrap();
         let config_dir = temp.path().join(".repoverlay");
@@ -632,10 +751,8 @@ profiles =
   rust-dev =
     overlays =
       = repo-rust
-    mcps =
-      servers =
-        repo =
-          command = repo-mcp
+    plugins =
+      = playground/repo-plugin
 ";
         fs::write(repo_config_dir.join("config.ccl"), repo_ccl).unwrap();
 
@@ -648,18 +765,13 @@ profiles =
                     instructions: vec![crate::profile::InstructionConfig {
                         source: "global.md".to_string(),
                     }],
-                    mcps: crate::profile::McpConfig {
-                        servers: std::collections::BTreeMap::from([(
-                            "global".to_string(),
-                            crate::profile::McpServerConfig {
-                                command: "global-mcp".to_string(),
-                                args: Vec::new(),
-                                env: std::collections::BTreeMap::new(),
-                            },
-                        )]),
-                    },
-                    skills: vec!["global-skill".to_string()],
-                    plugins: vec!["global-plugin".to_string()],
+                    plugins: vec![crate::plugin::PluginRef::Marketplace {
+                        marketplace: "playground".to_string(),
+                        name: "global-plugin".to_string(),
+                        r#ref: None,
+                        install: crate::plugin::InstallMode::Managed,
+                        scope: None,
+                    }],
                 },
             )]),
             ..RepoverlayConfig::default()
@@ -670,11 +782,18 @@ profiles =
 
         assert_eq!(profile.description.as_deref(), Some("Global Rust"));
         assert_eq!(profile.overlays, vec!["repo-rust"]);
-        assert!(profile.mcps.servers.contains_key("global"));
-        assert!(profile.mcps.servers.contains_key("repo"));
         assert_eq!(profile.instructions[0].source, "global.md");
-        assert_eq!(profile.skills, vec!["global-skill"]);
-        assert_eq!(profile.plugins, vec!["global-plugin"]);
+        // Plugins follow the list-replace rule: the repo-local list wins.
+        assert_eq!(
+            profile.plugins,
+            vec![crate::plugin::PluginRef::Marketplace {
+                marketplace: "playground".to_string(),
+                name: "repo-plugin".to_string(),
+                r#ref: None,
+                install: crate::plugin::InstallMode::Managed,
+                scope: None,
+            }]
+        );
     }
 
     #[test]
@@ -867,6 +986,7 @@ sources =
             ],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let ccl = sickle::to_string(&config).unwrap();
@@ -1019,6 +1139,7 @@ sources =
             }],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_default_overlay_repo_config();
@@ -1033,6 +1154,7 @@ sources =
             sources: vec![],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_default_overlay_repo_config();
@@ -1051,6 +1173,7 @@ sources =
             }],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(None);
@@ -1075,6 +1198,7 @@ sources =
             ],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(Some("secondary"));
@@ -1092,6 +1216,7 @@ sources =
             }],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(Some("nonexistent"));
@@ -1323,6 +1448,7 @@ sources =
             }],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         save_repo_config(temp.path(), &config).unwrap();
@@ -1414,6 +1540,7 @@ sources =
             }],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let ccl = generate_sources_config_ccl(&config);
@@ -1448,6 +1575,7 @@ sources =
             ],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let ccl = generate_sources_config_ccl(&config);
@@ -1588,6 +1716,7 @@ sources =
             }],
             library_path: None,
             profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         save_repo_config(temp.path(), &config).unwrap();

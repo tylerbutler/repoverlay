@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
-use serde_json::json;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
@@ -71,18 +70,6 @@ impl ProfileApplicator for CopilotApplicator {
             });
         }
 
-        if !profile.mcps.servers.is_empty() {
-            let mut servers = serde_json::Map::new();
-            for (name, server) in &profile.mcps.servers {
-                servers.insert(name.clone(), serde_json::to_value(server)?);
-            }
-            actions.push(ProfileAction::MergeJson {
-                target: context.harness_home.join("mcp.json"),
-                value: json!({ "servers": servers }),
-                scope: ProfileScope::User,
-            });
-        }
-
         for instruction in &profile.instructions {
             let source_rel = Path::new(&instruction.source);
             validate_instruction_source(source_rel)?;
@@ -102,16 +89,12 @@ impl ProfileApplicator for CopilotApplicator {
             });
         }
 
-        if !profile.skills.is_empty() {
-            actions.push(ProfileAction::SkipCapability {
-                capability: "skills".to_string(),
-                reason: "GitHub Copilot skill placement is not defined in v1".to_string(),
-            });
-        }
+        // Plugin introspection (MCP servers, skills) lands in Task 6; until then,
+        // the Copilot applicator records plugins as skipped.
         if !profile.plugins.is_empty() {
             actions.push(ProfileAction::SkipCapability {
                 capability: "plugins".to_string(),
-                reason: "GitHub Copilot plugin placement is not defined in v1".to_string(),
+                reason: "GitHub Copilot plugin introspection is not implemented yet".to_string(),
             });
         }
 
@@ -132,12 +115,11 @@ impl ProfileApplicator for CopilotApplicator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{InstructionConfig, McpConfig, McpServerConfig, ProfileConfig};
+    use crate::profile::{InstructionConfig, ProfileConfig};
     use crate::profile_applicators::{ProfileApplicator, ProfileContext};
-    use std::collections::BTreeMap;
 
     #[test]
-    fn copilot_plans_mcp_merge_and_instruction_write() {
+    fn copilot_plans_instruction_write() {
         let temp = tempfile::TempDir::new().unwrap();
         let source_dir = temp.path().join("profile-assets");
         std::fs::create_dir_all(&source_dir).unwrap();
@@ -147,16 +129,6 @@ mod tests {
             instructions: vec![InstructionConfig {
                 source: "copilot-instructions.md".to_string(),
             }],
-            mcps: McpConfig {
-                servers: BTreeMap::from([(
-                    "rust".to_string(),
-                    McpServerConfig {
-                        command: "uvx".to_string(),
-                        args: vec!["mcp-rust".to_string()],
-                        env: BTreeMap::new(),
-                    },
-                )]),
-            },
             ..ProfileConfig::default()
         };
         let context = ProfileContext {
@@ -169,11 +141,6 @@ mod tests {
         };
 
         let plan = CopilotApplicator.plan(&profile, &context).unwrap();
-        assert!(plan.actions.iter().any(|action| matches!(
-            action,
-            crate::profile_plan::ProfileAction::MergeJson { target, .. }
-                if target.ends_with("mcp.json")
-        )));
         assert!(plan.actions.iter().any(|action| matches!(
             action,
             crate::profile_plan::ProfileAction::WriteFile { target, .. }
