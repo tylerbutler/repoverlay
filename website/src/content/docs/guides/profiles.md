@@ -118,13 +118,33 @@ When `scope` is omitted, the default depends on how the profile is applied: pers
 
 ## Authoring a plugin
 
-Scaffold a new local plugin with:
+A plugin is just a directory with a `.claude-plugin/plugin.json` manifest plus the
+capabilities it ships. To create one by hand:
 
 ```bash
-repoverlay plugin new my-plugin
+mkdir -p my-plugin/.claude-plugin my-plugin/skills
 ```
 
-This creates `my-plugin/.claude-plugin/plugin.json` and a `my-plugin/.mcp.json` stub. Add skills under `my-plugin/skills/` and MCP servers in `.mcp.json`, then reference it from a profile as a local path.
+```json
+// my-plugin/.claude-plugin/plugin.json
+{
+  "name": "my-plugin",
+  "version": "0.1.0",
+  "description": "What this plugin provides"
+}
+```
+
+```json
+// my-plugin/.mcp.json (optional — only if the plugin ships MCP servers)
+{
+  "mcpServers": {
+    "example": { "command": "uvx", "args": ["example-mcp"] }
+  }
+}
+```
+
+Add skills under `my-plugin/skills/<skill>/SKILL.md`, then reference the plugin from a
+profile as a local path (`= ./my-plugin`).
 
 ## Inspecting profiles
 

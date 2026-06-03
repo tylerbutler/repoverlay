@@ -12,6 +12,11 @@
 > the delegate `scope` is now just `project` (`.claude/settings.json`) or `local`
 > (`.claude/settings.local.json`). References to a `user` scope or `~/.claude` below have
 > been updated accordingly.
+>
+> **Revision (2026-06-03):** the `repoverlay plugin new` scaffolder (originally Task 10)
+> was dropped. Authoring a plugin is just creating a directory with a
+> `.claude-plugin/plugin.json` manifest, documented by example in the profiles guide; a
+> CLI scaffolder added command surface for little benefit and risked plugin-format drift.
 
 ## Summary
 

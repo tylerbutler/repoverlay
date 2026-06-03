@@ -7,7 +7,6 @@ pub(crate) mod edit;
 pub(crate) mod library;
 pub(crate) mod marketplace;
 pub(crate) mod r#move;
-pub(crate) mod plugin;
 pub(crate) mod profile;
 pub(crate) mod source;
 pub(crate) mod sync;
