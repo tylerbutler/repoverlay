@@ -60,6 +60,15 @@ pub(crate) enum ProfileAction {
         capability: String,
         reason: String,
     },
+    /// Insert or replace a profile-owned managed region inside a shared markdown
+    /// file (e.g. `<repo>/AGENTS.md`). All of a profile's instruction sources are
+    /// concatenated into a single marker-delimited block keyed by `marker_id`,
+    /// coexisting with user content and other profiles' regions.
+    WriteManagedRegion {
+        sources: Vec<PathBuf>,
+        target: PathBuf,
+        marker_id: String,
+    },
     /// Place a plugin's skill directory into a native harness location by
     /// copying/symlinking the whole tree.
     ///
@@ -244,6 +253,64 @@ fn apply_profile_with_harness_home(
                     eprintln!("Warning: skipped {capability}: {reason}");
                     state.skipped.push(SkippedCapability { capability, reason });
                 }
+                ProfileAction::WriteManagedRegion {
+                    sources,
+                    target: region_target,
+                    marker_id,
+                } => {
+                    crate::profile::validate_profile_marker_component(&marker_id)?;
+                    reject_symlink_profile_target(&region_target)?;
+                    let mut bodies = Vec::with_capacity(sources.len());
+                    for source in &sources {
+                        let content = fs::read_to_string(source).with_context(|| {
+                            format!("Failed to read instruction source {}", source.display())
+                        })?;
+                        bodies.push(content.trim_end_matches('\n').to_string());
+                    }
+                    let body = bodies.join("\n\n");
+                    if body.lines().any(is_reserved_marker_line) {
+                        bail!(
+                            "Instruction content for profile '{marker_id}' contains a reserved \
+                             repoverlay managed-region marker line; remove it before applying"
+                        );
+                    }
+                    // Removal strips this profile's block from the live file rather
+                    // than restoring a snapshot, so other profiles' regions and user
+                    // edits survive; we only record whether we created the file, to
+                    // decide deletion on empty during removal.
+                    let (current, existed) = match fs::read_to_string(&region_target) {
+                        Ok(content) => (content, true),
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            (String::new(), false)
+                        }
+                        Err(err) => {
+                            return Err(err).with_context(|| {
+                                format!(
+                                    "Failed to read managed-region target {}",
+                                    region_target.display()
+                                )
+                            });
+                        }
+                    };
+                    let updated = upsert_managed_region(&current, &marker_id, &body);
+                    if let Some(parent) = region_target.parent() {
+                        fs::create_dir_all(parent).with_context(|| {
+                            format!(
+                                "Failed to create parent directory for {}",
+                                region_target.display()
+                            )
+                        })?;
+                    }
+                    crate::state::atomic_write(&region_target, &updated)?;
+                    state.files.push(ProfileFileEntry {
+                        source: region_target.clone(),
+                        target: region_target,
+                        scope: ProfileScope::Repo,
+                        action: "managed-region".to_string(),
+                        backup: None,
+                        existed,
+                    });
+                }
                 ProfileAction::PlacePluginDir {
                     source,
                     target: dir_target,
@@ -343,6 +410,9 @@ fn remove_profile_inner(name: &str, harness: &str, target: &Path) -> Result<()> 
             }
             "merge-json" => {
                 restore_merge_json_backup(name, harness, target, file)?;
+            }
+            "managed-region" => {
+                restore_managed_region(name, harness, target, file)?;
             }
             "place-plugin-dir" => {
                 restore_placed_plugin_dir(name, harness, target, file)?;
@@ -476,6 +546,23 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
             ProfileAction::MergeJson { target, .. } => {
                 if target.as_os_str().is_empty() {
                     bail!("Profile JSON target path must not be empty");
+                }
+                reject_duplicate_profile_target(&mut seen_targets, target)?;
+            }
+            ProfileAction::WriteManagedRegion {
+                sources,
+                target,
+                marker_id,
+            } => {
+                crate::profile::validate_profile_marker_component(marker_id)?;
+                if target.as_os_str().is_empty() {
+                    bail!("Profile managed-region target path must not be empty");
+                }
+                if sources.is_empty() {
+                    bail!("Profile managed-region must have at least one source");
+                }
+                for source in sources {
+                    ensure_regular_profile_source(source, profile_asset_dir)?;
                 }
                 reject_duplicate_profile_target(&mut seen_targets, target)?;
             }
@@ -910,11 +997,62 @@ fn restore_merge_json_backup(
     Ok(())
 }
 
-/// Reverse a `merge-json` action using its pointer-keyed backup.
+/// Validate that a managed-region target is the one allowed shared file for the
+/// harness (`<repo>/AGENTS.md` for Copilot), refusing to touch anything else.
+fn ensure_removable_managed_region(
+    harness: &str,
+    repo_target: &Path,
+    file: &ProfileFileEntry,
+) -> Result<()> {
+    let allowed = match harness {
+        "copilot" => repo_target.join("AGENTS.md"),
+        _ => bail!("Managed regions are only supported for the copilot harness"),
+    };
+    if file.target != allowed {
+        bail!(
+            "Refusing to modify managed region outside the allowed path: {}",
+            file.target.display()
+        );
+    }
+    Ok(())
+}
+
+/// Reverse a `managed-region` action by stripping this profile's marker block.
 ///
-/// For each owned pointer: restore the prior value if one existed; otherwise
-/// remove the key, but only if its current value still equals what we wrote
-/// (a user edit since apply is left in place, with a warning).
+/// Other profiles' regions and user content are preserved. If the file becomes
+/// empty and the profile created it, the file is removed; otherwise it is
+/// rewritten with the block stripped.
+fn restore_managed_region(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    file: &ProfileFileEntry,
+) -> Result<()> {
+    ensure_removable_managed_region(harness, repo_target, file)?;
+    reject_symlink_profile_target(&file.target)?;
+
+    let current = match fs::read_to_string(&file.target) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to read managed-region target during removal: {}",
+                    file.target.display()
+                )
+            });
+        }
+    };
+
+    let stripped = strip_managed_region(&current, name);
+    if stripped.trim().is_empty() && !file.existed {
+        fs::remove_file(&file.target)
+            .with_context(|| format!("Failed to remove {}", file.target.display()))?;
+    } else {
+        crate::state::atomic_write(&file.target, &stripped)?;
+    }
+    Ok(())
+}
 ///
 /// Pointers in `protected` are left untouched: another applied profile still
 /// owns them (e.g. a shared `extraKnownMarketplaces` registration), so removing
@@ -965,6 +1103,112 @@ pub(crate) fn json_pointer(segments: &[&str]) -> String {
         out.push_str(&segment.replace('~', "~0").replace('/', "~1"));
     }
     out
+}
+
+/// The begin/end marker lines that delimit a profile's managed region.
+fn region_markers(marker_id: &str) -> (String, String) {
+    (
+        format!("<!-- repoverlay:profile:{marker_id}:begin -->"),
+        format!("<!-- repoverlay:profile:{marker_id}:end -->"),
+    )
+}
+
+/// Whether a line is a reserved repoverlay managed-region marker (begin or end
+/// for any profile). Such lines must never appear inside instruction content, or
+/// they could split or hijack another profile's block.
+fn is_reserved_marker_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("<!-- repoverlay:profile:")
+        && (trimmed.ends_with(":begin -->") || trimmed.ends_with(":end -->"))
+}
+
+/// Join lines with `\n` and ensure a single trailing newline (empty stays empty).
+fn join_lines(lines: &[String]) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// Collapse consecutive blank lines and trim leading/trailing blank lines.
+fn tidy_blank_lines(lines: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in lines {
+        let blank = line.trim().is_empty();
+        if blank && out.last().is_none_or(|last| last.trim().is_empty()) {
+            continue;
+        }
+        out.push(line);
+    }
+    while out.last().is_some_and(|last| last.trim().is_empty()) {
+        out.pop();
+    }
+    out
+}
+
+/// Insert or replace the managed region for `marker_id` in `content`.
+///
+/// If a region for this id already exists it is replaced in place; otherwise the
+/// block is appended after a blank separator, preserving all existing content.
+fn upsert_managed_region(content: &str, marker_id: &str, body: &str) -> String {
+    let (begin, end) = region_markers(marker_id);
+    let block = if body.is_empty() {
+        format!("{begin}\n{end}")
+    } else {
+        format!("{begin}\n{body}\n{end}")
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let begin_idx = lines.iter().position(|line| *line == begin);
+    let end_idx = begin_idx.and_then(|b| {
+        lines[b + 1..]
+            .iter()
+            .position(|line| *line == end)
+            .map(|i| i + b + 1)
+    });
+
+    if let (Some(begin_idx), Some(end_idx)) = (begin_idx, end_idx) {
+        let mut out: Vec<String> = lines[..begin_idx]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        out.extend(block.lines().map(str::to_string));
+        out.extend(lines[end_idx + 1..].iter().map(|s| (*s).to_string()));
+        return join_lines(&out);
+    }
+
+    let mut out: Vec<String> = lines.iter().map(|s| (*s).to_string()).collect();
+    if out.last().is_some_and(|last| !last.trim().is_empty()) {
+        out.push(String::new());
+    }
+    out.extend(block.lines().map(str::to_string));
+    join_lines(&out)
+}
+
+/// Remove the managed region for `marker_id` from `content`, tidying the blank
+/// lines left behind. Other content (user text, other profiles' regions) is kept.
+fn strip_managed_region(content: &str, marker_id: &str) -> String {
+    let (begin, end) = region_markers(marker_id);
+    let lines: Vec<&str> = content.lines().collect();
+    let begin_idx = lines.iter().position(|line| *line == begin);
+    let end_idx = begin_idx.and_then(|b| {
+        lines[b + 1..]
+            .iter()
+            .position(|line| *line == end)
+            .map(|i| i + b + 1)
+    });
+
+    if let (Some(begin_idx), Some(end_idx)) = (begin_idx, end_idx) {
+        let mut out: Vec<String> = lines[..begin_idx]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        out.extend(lines[end_idx + 1..].iter().map(|s| (*s).to_string()));
+        return join_lines(&tidy_blank_lines(out));
+    }
+
+    join_lines(&lines.iter().map(|s| (*s).to_string()).collect::<Vec<_>>())
 }
 
 /// Split a JSON pointer into its unescaped tokens.
@@ -1568,6 +1812,95 @@ mod tests {
     use super::*;
     use crate::profile::{InstructionConfig, ProfileConfig};
 
+    #[test]
+    fn upsert_managed_region_into_empty_creates_block() {
+        let out = upsert_managed_region("", "rust-dev", "Be concise.");
+        assert_eq!(
+            out,
+            "<!-- repoverlay:profile:rust-dev:begin -->\nBe concise.\n<!-- repoverlay:profile:rust-dev:end -->\n"
+        );
+    }
+
+    #[test]
+    fn upsert_managed_region_appends_after_user_content() {
+        let out = upsert_managed_region("User notes\n", "rust-dev", "Body");
+        assert_eq!(
+            out,
+            "User notes\n\n<!-- repoverlay:profile:rust-dev:begin -->\nBody\n<!-- repoverlay:profile:rust-dev:end -->\n"
+        );
+    }
+
+    #[test]
+    fn upsert_managed_region_replaces_existing_block_in_place() {
+        let initial = upsert_managed_region("Top\n", "rust-dev", "Old");
+        let updated = upsert_managed_region(&initial, "rust-dev", "New");
+        assert!(updated.contains("New"));
+        assert!(!updated.contains("Old"));
+        assert!(updated.starts_with("Top\n"));
+        assert_eq!(updated.matches("rust-dev:begin").count(), 1);
+    }
+
+    #[test]
+    fn upsert_managed_region_preserves_other_profiles() {
+        let mut content = upsert_managed_region("", "alpha", "A body");
+        content = upsert_managed_region(&content, "beta", "B body");
+        assert!(content.contains("alpha:begin"));
+        assert!(content.contains("beta:begin"));
+        let replaced = upsert_managed_region(&content, "alpha", "A2");
+        assert!(replaced.contains("A2"));
+        assert!(replaced.contains("B body"));
+    }
+
+    #[test]
+    fn strip_managed_region_removes_only_target_block() {
+        let mut content = upsert_managed_region("Header\n", "alpha", "A");
+        content = upsert_managed_region(&content, "beta", "B");
+        let stripped = strip_managed_region(&content, "alpha");
+        assert!(!stripped.contains("alpha:begin"));
+        assert!(stripped.contains("beta:begin"));
+        assert!(stripped.starts_with("Header\n"));
+    }
+
+    #[test]
+    fn strip_managed_region_of_created_only_file_is_empty() {
+        let content = upsert_managed_region("", "rust-dev", "Body");
+        assert_eq!(strip_managed_region(&content, "rust-dev"), "");
+    }
+
+    #[test]
+    fn strip_managed_region_without_block_is_unchanged() {
+        assert_eq!(
+            strip_managed_region("Just user text\n", "rust-dev"),
+            "Just user text\n"
+        );
+    }
+
+    #[test]
+    fn is_reserved_marker_line_detects_markers() {
+        assert!(is_reserved_marker_line(
+            "<!-- repoverlay:profile:beta:begin -->"
+        ));
+        assert!(is_reserved_marker_line(
+            "  <!-- repoverlay:profile:beta:end -->  "
+        ));
+        assert!(!is_reserved_marker_line("just some text"));
+        assert!(!is_reserved_marker_line("<!-- repoverlay:other -->"));
+    }
+
+    #[test]
+    fn strip_ignores_end_marker_appearing_before_begin() {
+        // A stray end marker before the real block must not derail stripping.
+        let content = format!(
+            "<!-- repoverlay:profile:rust-dev:end -->\n{}",
+            upsert_managed_region("", "rust-dev", "Body")
+        );
+        let stripped = strip_managed_region(&content, "rust-dev");
+        assert!(!stripped.contains("Body"));
+        assert!(!stripped.contains("rust-dev:begin"));
+        // The stray pre-begin end marker is left untouched.
+        assert!(stripped.contains("rust-dev:end"));
+    }
+
     fn write_config(target: &Path, content: &str) {
         let config_dir = target.join(".repoverlay");
         fs::create_dir_all(&config_dir).unwrap();
@@ -1783,7 +2116,7 @@ profiles =
     }
 
     #[test]
-    fn apply_profile_rejects_duplicate_instruction_targets() {
+    fn apply_profile_merges_multiple_instructions_into_one_region() {
         let temp = tempfile::TempDir::new().unwrap();
         let copilot_home = tempfile::TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join("a")).unwrap();
@@ -1803,7 +2136,7 @@ profiles =
 ",
         );
 
-        let err = apply_profile_with_harness_home(
+        apply_profile_with_harness_home(
             "rust-dev",
             "copilot",
             temp.path(),
@@ -1811,24 +2144,13 @@ profiles =
             None,
             copilot_home.path().to_path_buf(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(
-            err.to_string().contains("duplicate profile target"),
-            "unexpected error: {err}"
-        );
-        assert!(
-            !copilot_home
-                .path()
-                .join("instructions/rust-dev/instructions.md")
-                .exists()
-        );
-        assert!(
-            !temp
-                .path()
-                .join(".repoverlay/profiles/rust-dev.copilot.ccl")
-                .exists()
-        );
+        // Both same-basename instructions land in the single AGENTS.md region.
+        let agents = fs::read_to_string(temp.path().join("AGENTS.md")).unwrap();
+        assert!(agents.contains("first"));
+        assert!(agents.contains("second"));
+        assert_eq!(agents.matches("rust-dev:begin").count(), 1);
     }
 
     #[test]

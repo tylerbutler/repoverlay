@@ -148,6 +148,25 @@ pub(crate) fn validate_profile_state_component(component: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate that a profile name is safe to embed in `AGENTS.md` managed-region
+/// markers. Markers are line-delimited HTML comments, so the name must not
+/// contain whitespace or characters that could break out of the comment or the
+/// marker grammar. Restricting to `[A-Za-z0-9._-]` keeps markers parseable and
+/// injection-safe.
+pub(crate) fn validate_profile_marker_component(component: &str) -> Result<()> {
+    validate_profile_state_component(component)?;
+    if !component
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        bail!(
+            "Profile name {component:?} contains characters that cannot be used in an \
+             AGENTS.md managed region; allowed characters are letters, digits, '.', '_' and '-'"
+        );
+    }
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub(crate) fn save_profile_state(target: &Path, state: &ProfileState) -> Result<()> {
     let path = profile_state_path(target, &state.name, &state.harness)?;

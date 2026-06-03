@@ -117,22 +117,17 @@ impl ProfileApplicator for CopilotApplicator {
             });
         }
 
+        let mut instruction_sources = Vec::new();
         for instruction in &profile.instructions {
             let source_rel = Path::new(&instruction.source);
             validate_instruction_source(source_rel)?;
-            let source = context.profile_asset_dir.join(source_rel);
-            let file_name = source
-                .file_name()
-                .map(std::ffi::OsStr::to_owned)
-                .context("Instruction source has no file name")?;
-            actions.push(ProfileAction::WriteFile {
-                source,
-                target: context
-                    .harness_home
-                    .join("instructions")
-                    .join(&context.profile_name)
-                    .join(file_name),
-                scope: ProfileScope::User,
+            instruction_sources.push(context.profile_asset_dir.join(source_rel));
+        }
+        if !instruction_sources.is_empty() {
+            actions.push(ProfileAction::WriteManagedRegion {
+                sources: instruction_sources,
+                target: context.target.join("AGENTS.md"),
+                marker_id: context.profile_name.clone(),
             });
         }
 
@@ -306,8 +301,8 @@ mod tests {
         let plan = CopilotApplicator.plan(&profile, &context).unwrap();
         assert!(plan.actions.iter().any(|action| matches!(
             action,
-            crate::profile_plan::ProfileAction::WriteFile { target, .. }
-                if target.ends_with("instructions/rust-dev/copilot-instructions.md")
+            crate::profile_plan::ProfileAction::WriteManagedRegion { target, marker_id, .. }
+                if target.ends_with("AGENTS.md") && marker_id == "rust-dev"
         )));
     }
 

@@ -331,12 +331,11 @@ profiles =
         .success()
         .stdout(predicate::str::contains("Applied profile rust-dev"));
 
-    assert!(
-        copilot_home
-            .path()
-            .join("instructions/rust-dev/copilot-instructions.md")
-            .exists()
-    );
+    let agents = ctx.repo_path().join("AGENTS.md");
+    let contents = fs::read_to_string(&agents).unwrap();
+    assert!(contents.contains("<!-- repoverlay:profile:rust-dev:begin -->"));
+    assert!(contents.contains("Use Rust 2024."));
+    assert!(contents.contains("<!-- repoverlay:profile:rust-dev:end -->"));
     assert!(
         ctx.repo_path()
             .join(".repoverlay/profiles/rust-dev.copilot.ccl")
@@ -664,10 +663,8 @@ profiles =
 
     assert!(marker.exists());
     assert!(
-        !copilot_home
-            .path()
-            .join("instructions/rust-dev/copilot-instructions.md")
-            .exists()
+        !ctx.repo_path().join("AGENTS.md").exists(),
+        "AGENTS.md created for the ephemeral session should be removed after cleanup"
     );
     assert!(
         !ctx.repo_path()
@@ -681,9 +678,7 @@ fn copilot_profile_cleans_up_when_harness_spawn_fails() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    let instruction_file = copilot_home
-        .path()
-        .join("instructions/rust-dev/copilot-instructions.md");
+    let instruction_file = ctx.repo_path().join("AGENTS.md");
     let state_file = ctx
         .repo_path()
         .join(".repoverlay/profiles/rust-dev.copilot.ccl");
@@ -727,9 +722,7 @@ fn copilot_profile_cleans_up_after_wrapper_sigint() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    let instruction_file = copilot_home
-        .path()
-        .join("instructions/rust-dev/copilot-instructions.md");
+    let instruction_file = ctx.repo_path().join("AGENTS.md");
     let harness_ready = ctx.repo_path().join("copilot-ready.txt");
     let state_file = ctx
         .repo_path()
@@ -926,12 +919,7 @@ profiles =
         .assert()
         .code(7);
 
-    assert!(
-        !copilot_home
-            .path()
-            .join("instructions/rust-dev/copilot-instructions.md")
-            .exists()
-    );
+    assert!(!ctx.repo_path().join("AGENTS.md").exists());
     assert!(
         !ctx.repo_path()
             .join(".repoverlay/profiles/rust-dev.copilot.ccl")
@@ -997,12 +985,7 @@ profiles =
             .join(".repoverlay/profiles/rust-dev.copilot.ccl")
             .exists()
     );
-    assert!(
-        copilot_home
-            .path()
-            .join("instructions/rust-dev/copilot-instructions.md")
-            .exists()
-    );
+    assert!(ctx.repo_path().join("AGENTS.md").exists());
 }
 
 #[test]
@@ -1158,12 +1141,7 @@ profiles =
         .success()
         .stdout(predicate::str::contains("Removed profile rust-dev"));
 
-    assert!(
-        !copilot_home
-            .path()
-            .join("instructions/rust-dev/copilot-instructions.md")
-            .exists()
-    );
+    assert!(!ctx.repo_path().join("AGENTS.md").exists());
     assert!(
         !ctx.repo_path()
             .join(".repoverlay/profiles/rust-dev.copilot.ccl")
@@ -1176,11 +1154,8 @@ fn profile_remove_restores_existing_instruction_target() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    let instruction_target = copilot_home
-        .path()
-        .join("instructions/rust-dev/copilot-instructions.md");
-    fs::create_dir_all(instruction_target.parent().unwrap()).unwrap();
-    fs::write(&instruction_target, "original").unwrap();
+    let agents = ctx.repo_path().join("AGENTS.md");
+    fs::write(&agents, "# Existing user notes\n").unwrap();
     ctx.create_repo_file("copilot-instructions.md", "profile");
     ctx.write_repo_config(
         r"
@@ -1207,7 +1182,10 @@ profiles =
         .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
         .assert()
         .success();
-    assert_eq!(fs::read_to_string(&instruction_target).unwrap(), "profile");
+    let applied = fs::read_to_string(&agents).unwrap();
+    assert!(applied.contains("# Existing user notes"));
+    assert!(applied.contains("<!-- repoverlay:profile:rust-dev:begin -->"));
+    assert!(applied.contains("profile"));
 
     cargo_bin_cmd!("repoverlay")
         .args([
@@ -1225,7 +1203,77 @@ profiles =
         .assert()
         .success();
 
-    assert_eq!(fs::read_to_string(instruction_target).unwrap(), "original");
+    assert_eq!(
+        fs::read_to_string(agents).unwrap(),
+        "# Existing user notes\n"
+    );
+}
+
+#[test]
+fn profile_remove_keeps_other_profile_agents_region() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let agents = ctx.repo_path().join("AGENTS.md");
+    ctx.create_repo_file("alpha.md", "Alpha guidance.");
+    ctx.create_repo_file("beta.md", "Beta guidance.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  alpha =
+    instructions =
+      =
+        source = alpha.md
+  beta =
+    instructions =
+      =
+        source = beta.md
+",
+    );
+
+    for profile in ["alpha", "beta"] {
+        cargo_bin_cmd!("repoverlay")
+            .args([
+                "profile",
+                "apply",
+                profile,
+                "--harness",
+                "copilot",
+                "--target",
+                ctx.repo_path().to_str().unwrap(),
+            ])
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+            .assert()
+            .success();
+    }
+
+    let both = fs::read_to_string(&agents).unwrap();
+    assert!(both.contains("Alpha guidance."));
+    assert!(both.contains("Beta guidance."));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "alpha",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let after = fs::read_to_string(&agents).unwrap();
+    assert!(!after.contains("alpha:begin"));
+    assert!(!after.contains("Alpha guidance."));
+    assert!(after.contains("<!-- repoverlay:profile:beta:begin -->"));
+    assert!(after.contains("Beta guidance."));
 }
 
 #[test]
@@ -1829,9 +1877,7 @@ profiles =
         .repo_path()
         .join(".repoverlay/profiles/rust-dev.copilot.ccl");
     let original_state = fs::read_to_string(&state_file).unwrap();
-    let instruction_target = copilot_home
-        .path()
-        .join("instructions/rust-dev/copilot-instructions.md");
+    let instruction_target = ctx.repo_path().join("AGENTS.md");
 
     // Simulate an active ephemeral session holding the profile lock.
     let lock_file = ctx
@@ -1897,9 +1943,7 @@ profiles =
     let state_file = ctx
         .repo_path()
         .join(".repoverlay/profiles/rust-dev.copilot.ccl");
-    let instruction_target = copilot_home
-        .path()
-        .join("instructions/rust-dev/copilot-instructions.md");
+    let instruction_target = ctx.repo_path().join("AGENTS.md");
     assert!(state_file.exists());
     assert!(instruction_target.exists());
 
@@ -1996,11 +2040,8 @@ profiles =
 ",
     );
 
-    // Pre-create the managed instruction target as a symlink to an outside file.
-    let instruction_target = copilot_home
-        .path()
-        .join("instructions/rust-dev/copilot-instructions.md");
-    fs::create_dir_all(instruction_target.parent().unwrap()).unwrap();
+    // Pre-create the managed AGENTS.md as a symlink to an outside file.
+    let instruction_target = ctx.repo_path().join("AGENTS.md");
     std::os::unix::fs::symlink(&outside_file, &instruction_target).unwrap();
 
     cargo_bin_cmd!("repoverlay")
