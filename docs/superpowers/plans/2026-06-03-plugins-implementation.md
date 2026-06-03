@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps
-> use checkbox (`- [ ]`) syntax for tracking.
+> use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Implement first-class, cached, introspectable plugins for profiles per
 [2026-06-03-plugins-design.md](../specs/2026-06-03-plugins-design.md): add a named
@@ -79,7 +79,7 @@ Test env overrides to reuse/add:
 **Files:** Modify `src/config.rs` (around 14–26, 95–111, profile tests 660–678), modify
 `src/profile.rs` (13–85), create `src/plugin.rs` (types only).
 
-- [ ] **Step 1: Failing tests** — In `src/plugin.rs`, add tests:
+- [x] **Step 1: Failing tests** — In `src/plugin.rs`, add tests:
   - Parse a `PluginRef` from CCL shorthand `playground/rust-dev` → `{ marketplace:
     "playground", name: "rust-dev", install: Managed, ref: None, scope: None }`.
   - Parse `./plugins/local-mcp` → `PluginRef::Local { source }`.
@@ -90,7 +90,7 @@ Test env overrides to reuse/add:
   `owner/repo` shorthand expands to `https://github.com/owner/repo`); a repo-local
   marketplace with the same `name` overrides the global `url`.
 
-- [ ] **Step 2: Implement types** —
+- [x] **Step 2: Implement types** —
   - `src/plugin.rs`: define `PluginRef` as an enum or struct-with-kind. Recommended:
     ```rust
     pub(crate) enum PluginRef {
@@ -109,35 +109,35 @@ Test env overrides to reuse/add:
     replace `plugins: Vec<String>` with `plugins: Vec<PluginRef>`; update
     `merge_profile_config` (plugins follow the list-replace rule).
 
-- [ ] **Step 3:** Update all references that read `profile.mcps`/`profile.skills` (compiler
+- [x] **Step 3:** Update all references that read `profile.mcps`/`profile.skills` (compiler
   will flag them): `src/profile_applicators/copilot.rs` (MCP merge + skip blocks),
   `src/cli/commands/profile.rs:49–56`, and existing profile/config tests. Temporarily make
   Copilot skip plugins until Task 6.
 
-- [ ] **Step 4:** `just test` (parsing/merge tests pass); `just lint`.
+- [x] **Step 4:** `just test` (parsing/merge tests pass); `just lint`.
 
 ## Task 2: `marketplace` CLI command group
 
 **Files:** Create `src/cli/commands/marketplace.rs`; modify `src/cli/mod.rs` (add
 `MarketplaceCommand` near `SourceCommand` ~566 and dispatch), `src/cli/commands/mod.rs`.
 
-- [ ] **Step 1: Failing integration test** in `tests/cli.rs`: `repoverlay marketplace add
+- [x] **Step 1: Failing integration test** in `tests/cli.rs`: `repoverlay marketplace add
   playground owner/repo` writes the registry to config; `marketplace list` prints it;
   re-adding the same name with a different URL fails; `marketplace remove` deletes it.
 
-- [ ] **Step 2:** Implement `handle_marketplace_command` mirroring `handle_source_command`
+- [x] **Step 2:** Implement `handle_marketplace_command` mirroring `handle_source_command`
   (`src/cli/commands/source.rs`): load config, validate URL scheme via existing validation,
   reject name re-registration with a conflicting URL, save config. Add a confirmation prompt
   for `add` (skippable with a `--yes` flag / non-interactive), per spec security.
 
-- [ ] **Step 3:** `just test`; `just lint`.
+- [x] **Step 3:** `just test`; `just lint`.
 
 ## Task 3: Plugin reference resolution + caching + introspection
 
 **Files:** `src/plugin.rs` (resolution + introspection); reuse `src/cache.rs`
 `ensure_cached` (98–146) and `src/github.rs` `GitHubSource` (12–33).
 
-- [ ] **Step 1: Failing tests** (use a local git fixture marketplace):
+- [x] **Step 1: Failing tests** (use a local git fixture marketplace):
   - Resolve `playground/rust-dev` against a registry → cache the marketplace repo → read
     `.claude-plugin/marketplace.json` → locate plugin `rust-dev` → resolve its `source`
     (subdir) → return a `ResolvedPlugin { bundle_dir, resolved_commit }`.
@@ -147,7 +147,7 @@ Test env overrides to reuse/add:
   - Non-git `marketplace.json` source (e.g. `npm:`) → `ResolvedPlugin` flagged
     `requires_delegate = true` (no bundle_dir).
 
-- [ ] **Step 2:** Implement in `src/plugin.rs`:
+- [x] **Step 2:** Implement in `src/plugin.rs`:
   - `resolve_plugin(reference, registry, cache, update) -> Result<ResolvedPlugin>`.
   - Map a marketplace `url` + optional plugin subpath into a `GitHubSource` and call
     `CacheManager::ensure_cached`; resolve plugin `source` from `marketplace.json` (subdir →
@@ -157,31 +157,31 @@ Test env overrides to reuse/add:
   - Validate local paths against traversal (mirror `validate_instruction_source` in
     `copilot.rs:14`).
 
-- [ ] **Step 3:** `just test`; `just lint`.
+- [x] **Step 3:** `just test`; `just lint`.
 
 ## Task 4: Generalize MergeJson ownership to JSON-pointer paths
 
 **Files:** `src/profile_plan.rs` (MergeJson handling + `check_mcp_ownership_conflicts`),
 possibly `src/json_merge.rs` (`deep_merge` 29, `merge_json_files` 99).
 
-- [ ] **Step 1: Failing tests:** applying a `MergeJson` records the exact JSON-pointer paths
+- [x] **Step 1: Failing tests:** applying a `MergeJson` records the exact JSON-pointer paths
   it created/changed plus prior values; an unmerge restores a prior value when the key
   pre-existed, removes the key when it was absent **and** the current value still equals what
   was written, and warns/leaves it when the current value differs.
 
-- [ ] **Step 2:** Generalize the existing MCP-specific ownership/backup logic so a
+- [x] **Step 2:** Generalize the existing MCP-specific ownership/backup logic so a
   `MergeJson` action carries (or the apply step computes) a set of owned JSON-pointer paths,
   stored in `ProfileState`. Implement conflict-aware unmerge. Keep the existing Copilot
   `mcp.json` behavior working (servers under `/servers/<name>`).
 
-- [ ] **Step 3:** `just test` (existing Copilot MCP tests still pass); `just lint`.
+- [x] **Step 3:** `just test` (existing Copilot MCP tests still pass); `just lint`.
 
 ## Task 5: Claude applicator (persistent bundle decomposition)
 
 **Files:** `src/profile_applicators/mod.rs` (add `AgentHarness::Claude`, register),
 create `src/profile_applicators/claude.rs`; `src/profile_plan.rs` (plan actions).
 
-- [ ] **Step 1: Failing tests:** the Claude applicator, given a profile with one managed
+- [x] **Step 1: Failing tests:** the Claude applicator, given a profile with one managed
   `marketplace/plugin`, plans **decomposition** actions: each `skills/<skill>` →
   `<claude-home>/skills/<skill>` (symlink/copy, recorded like overlay file entries), and each
   `.mcp.json` server → a `MergeJson` into the project `.mcp.json` (`/mcpServers/<name>`) with
@@ -191,28 +191,28 @@ create `src/profile_applicators/claude.rs`; `src/profile_plan.rs` (plan actions)
   Plugins with `install = delegate` plan a settings `MergeJson` instead (Task 8 fills
   behavior; here just route).
 
-- [ ] **Step 2:** Implement `ClaudeApplicator` mirroring `CopilotApplicator`
+- [x] **Step 2:** Implement `ClaudeApplicator` mirroring `CopilotApplicator`
   (`copilot.rs`): `harness()`, `plan()`, `command()`, `harness_home_from_env`. Decompose the
   resolved bundle (shared `src/plugin.rs` introspection) into skill placements + `.mcp.json`
   merges, resolving `${CLAUDE_PLUGIN_ROOT}` to the cache path. Register both applicators behind
   the `AgentHarness` dispatch (collapse the `"copilot"` literal per the design note in
   `mod.rs:13`).
 
-- [ ] **Step 3:** `just test`; `just lint`.
+- [x] **Step 3:** `just test`; `just lint`.
 
 ## Task 6: Copilot applicator plugin introspection
 
 **Files:** `src/profile_applicators/copilot.rs`.
 
-- [ ] **Step 1: Failing tests:** given a profile with a managed/local plugin whose bundle has
+- [x] **Step 1: Failing tests:** given a profile with a managed/local plugin whose bundle has
   a `.mcp.json`, the Copilot applicator plans a `MergeJson` into `mcp.json` for those servers
   and a skills placement for `skills/`; it `SkipCapability`s hooks/agents and delegate
   plugins with a warning.
 
-- [ ] **Step 2:** Implement: resolve each plugin via `src/plugin.rs`, read the bundle, map
+- [x] **Step 2:** Implement: resolve each plugin via `src/plugin.rs`, read the bundle, map
   `.mcp.json` servers into the existing `mcp.json` merge, place `skills/`, skip the rest.
 
-- [ ] **Step 3:** Re-enable the 6 CLI tests `#[ignore]`d in Task 1 by rewriting them to drive
+- [x] **Step 3:** Re-enable the 6 CLI tests `#[ignore]`d in Task 1 by rewriting them to drive
   `MergeJson` through a local plugin fixture (a bundle dir with a `.mcp.json`) instead of the
   removed `mcps` config surface: `copilot_profile_removes_generated_mcp_json_after_cleanup`,
   `copilot_profile_restores_existing_mcp_json_after_cleanup`,
@@ -223,31 +223,31 @@ create `src/profile_applicators/claude.rs`; `src/profile_plan.rs` (plan actions)
   `profile_apply_allows_disjoint_mcp_server_ownership` (last two depend on Task 4's
   generalized ownership).
 
-- [ ] **Step 4:** `just test`; `just lint`.
+- [x] **Step 4:** `just test`; `just lint`.
 
 **Files:** `src/profile_plan.rs` (apply/remove orchestration, `apply_profile*`,
 `remove_profile*`), `src/profile.rs` (`ProfileState` plugin records), `src/update.rs` and/or
 `src/cli/commands/cache.rs`.
 
-- [ ] **Step 1: Failing integration tests** (`tests/cli.rs`): `profile apply rust-dev
+- [x] **Step 1: Failing integration tests** (`tests/cli.rs`): `profile apply rust-dev
   --harness claude` caches + places a managed plugin and records `resolved_commit` + placed
   files in state; `profile remove` deletes the placement and cleans empty dirs; re-applying a
   changed source via `repoverlay update` re-places it. Use local fixture marketplaces and
   `REPOVERLAY_CLAUDE_HOME`.
 
-- [ ] **Step 2:** Wire plugin placement into the existing plan apply loop (mirror
+- [x] **Step 2:** Wire plugin placement into the existing plan apply loop (mirror
   `ApplyOverlay` handling in `profile_plan.rs:122`), record `placed`/`resolved_commit`/
   `owned_settings` in `ProfileState`, and implement removal that reverses both placements and
   generalized MergeJson ownership. Add cache refcounting consistent with overlay cache
   semantics. Extend `update` to re-resolve managed plugins.
 
-- [ ] **Step 3:** `just test`; `just lint`.
+- [x] **Step 3:** `just test`; `just lint`.
 
 ## Task 8: Delegate-to-Claude fallback
 
 **Files:** `src/profile_applicators/claude.rs`, `src/profile_plan.rs`.
 
-- [ ] **Step 1: Failing tests:** a plugin with `install = delegate` (or a non-git
+- [x] **Step 1: Failing tests:** a plugin with `install = delegate` (or a non-git
   marketplace source) plans a `MergeJson` into the scoped Claude settings file
   (`user`→`~/.claude/settings.json`, `project`→`.claude/settings.json`,
   `local`→`.claude/settings.local.json`) writing the known-marketplace entry and
@@ -255,65 +255,65 @@ create `src/profile_applicators/claude.rs`; `src/profile_plan.rs` (plan actions)
   persistent default `project`; marketplace refcounting avoids unregistering a shared
   marketplace; a name→different-URL conflict fails.
 
-- [ ] **Step 2:** Implement delegate planning + scope→file mapping + the trust checks. Reuse
+- [x] **Step 2:** Implement delegate planning + scope→file mapping + the trust checks. Reuse
   the generalized JSON ownership (Task 4) for clean removal.
 
-- [ ] **Step 3:** `just test`; `just lint`.
+- [x] **Step 3:** `just test`; `just lint`.
 
 ## Task 9: `repoverlay claude --profile <name>` ephemeral execution
 
 **Files:** Create `src/cli/commands/claude.rs` (mirror `copilot.rs`); `src/cli/mod.rs`
 (add `Claude` command + dispatch), `src/cli/commands/mod.rs`.
 
-- [ ] **Step 1: Failing integration test:** `repoverlay claude --profile rust-dev` resolves
+- [x] **Step 1: Failing integration test:** `repoverlay claude --profile rust-dev` resolves
   and caches the profile's plugins, then launches the (overridden) Claude command with a
   `--plugin-dir <cache-path>` flag for each cached bundle (full native load, no on-disk
   placement to clean up), and returns the harness exit code; extra args pass through after
   `--`. Lock-file guarding matches the Copilot flow.
 
-- [ ] **Step 2:** Implement `handle_claude_command` mirroring `handle_copilot_command`
+- [x] **Step 2:** Implement `handle_claude_command` mirroring `handle_copilot_command`
   (`copilot.rs:22`): ensure each plugin is cached (reuse `src/plugin.rs` resolution), build the
   `--plugin-dir` args, launch via the Claude command, and propagate the exit code with the
   `wait_for_*`/exit-code helpers. (Delegate-only plugins still go through apply/remove.)
 
-- [ ] **Step 3:** `just test`; `just lint`.
+- [x] **Step 3:** `just test`; `just lint`.
 
 ## Task 10: `repoverlay plugin new <name>` scaffolder
 
 **Files:** Create `src/cli/commands/plugin.rs`; `src/cli/mod.rs` (`PluginCommand`),
 `src/cli/commands/mod.rs`.
 
-- [ ] **Step 1: Failing test:** `repoverlay plugin new my-mcp` creates
+- [x] **Step 1: Failing test:** `repoverlay plugin new my-mcp` creates
   `my-mcp/.claude-plugin/plugin.json` (valid manifest) and a stub `my-mcp/.mcp.json`; refuses
   to overwrite an existing directory; validates the name against traversal.
 
-- [ ] **Step 2:** Implement the scaffolder writing the manifest + stub `.mcp.json`.
+- [x] **Step 2:** Implement the scaffolder writing the manifest + stub `.mcp.json`.
 
-- [ ] **Step 3:** `just test`; `just lint`.
+- [x] **Step 3:** `just test`; `just lint`.
 
 ## Task 11: `profile show` rendering + docs
 
 **Files:** `src/cli/commands/profile.rs` (`show`, `print_list` 104), website guide.
 
-- [ ] **Step 1: Failing test:** `profile show` prints a `Plugins` section listing each
+- [x] **Step 1: Failing test:** `profile show` prints a `Plugins` section listing each
   reference as `marketplace/name` (or local path), `install` mode, and resolved commit
   (managed) or `scope` (delegate); no `MCP servers`/`Skills` sections remain.
 
-- [ ] **Step 2:** Implement rendering. Update
+- [x] **Step 2:** Implement rendering. Update
   `website/src/content/docs/guides/profiles.md` to the plugin-only model: remove
   `mcps`/`skills` field rows, document the `marketplaces` registry, `marketplace/plugin`
   references, managed vs delegate, scopes, and the Claude harness mapping table. Add a
   `changie new` entry **only if** profiles ship in the same release as a user-facing feature
   (per repo policy, skip changelog for unreleased-only plumbing).
 
-- [ ] **Step 3:** `just check` (format + lint + full test suite).
+- [x] **Step 3:** `just check` (format + lint + full test suite).
 
 ---
 
 ## Final verification
 
-- [ ] `just check` passes.
-- [ ] Spec "Validation spike (resolved)" section reflects the spike outcome (done).
-- [ ] `repoverlay marketplace add`, `profile apply/show/remove --harness claude`,
+- [x] `just check` passes.
+- [x] Spec "Validation spike (resolved)" section reflects the spike outcome (done).
+- [x] `repoverlay marketplace add`, `profile apply/show/remove --harness claude`,
   `claude --profile`, and `plugin new` exercised end-to-end against a local fixture
   marketplace.
