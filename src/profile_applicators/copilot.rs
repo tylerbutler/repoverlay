@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::plugin::{InstallMode, PluginBundle, PluginRef, ResolvedPlugin, resolve_plugin};
-use crate::profile::{ProfileConfig, ProfileScope};
+use crate::profile::ProfileConfig;
 use crate::profile_applicators::{AgentHarness, ProfileApplicator, ProfileContext};
 use crate::profile_plan::{ProfileAction, ProfilePlan, json_pointer};
 
@@ -73,7 +73,6 @@ impl CopilotApplicator {
             actions.push(ProfileAction::PlacePluginDir {
                 source: bundle_dir.join("skills").join(skill),
                 target: repo_target.join(".agents").join("skills").join(skill),
-                scope: ProfileScope::Repo,
             });
         }
 
@@ -194,7 +193,6 @@ impl ProfileApplicator for CopilotApplicator {
             actions.push(ProfileAction::MergeJson {
                 target: context.target.join(".mcp.json"),
                 value: serde_json::json!({ "servers": servers }),
-                scope: ProfileScope::Repo,
                 owned_paths,
             });
         }

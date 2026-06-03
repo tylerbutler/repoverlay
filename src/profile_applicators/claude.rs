@@ -6,13 +6,14 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::plugin::{InstallMode, PluginBundle, PluginRef, ResolvedPlugin, resolve_plugin};
-use crate::profile::{DelegateScope, ProfileConfig, ProfileMode, ProfileScope};
+use crate::profile::{DelegateScope, ProfileConfig, ProfileMode};
 use crate::profile_applicators::{AgentHarness, ProfileApplicator, ProfileContext};
 use crate::profile_plan::{ProfileAction, ProfilePlan, json_pointer};
 
 pub(crate) struct ClaudeApplicator;
 
 /// Accumulated `settings.json` entries for one delegate scope/file.
+#[derive(Default)]
 struct DelegateSettings {
     /// `"<plugin>@<marketplace>" = true` enablement keys.
     enabled: serde_json::Map<String, serde_json::Value>,
@@ -20,19 +21,6 @@ struct DelegateSettings {
     marketplaces: serde_json::Map<String, serde_json::Value>,
     /// RFC 6901 pointers this merge owns (for conflict-aware removal).
     owned_paths: Vec<String>,
-    /// Profile scope used for the resulting `MergeJson` action.
-    scope: ProfileScope,
-}
-
-impl Default for DelegateSettings {
-    fn default() -> Self {
-        Self {
-            enabled: serde_json::Map::new(),
-            marketplaces: serde_json::Map::new(),
-            owned_paths: Vec::new(),
-            scope: ProfileScope::Repo,
-        }
-    }
 }
 
 fn validate_instruction_source(source: &Path) -> Result<()> {
@@ -90,21 +78,11 @@ impl ClaudeApplicator {
         }
     }
 
-    /// Resolve a delegate scope to its settings file and the [`ProfileScope`]
-    /// used for the resulting `MergeJson` action.
-    fn delegate_settings_target(
-        scope: DelegateScope,
-        context: &ProfileContext,
-    ) -> (PathBuf, ProfileScope) {
+    /// Resolve a delegate scope to its settings file.
+    fn delegate_settings_target(scope: DelegateScope, context: &ProfileContext) -> PathBuf {
         match scope {
-            DelegateScope::Project => (
-                context.target.join(".claude").join("settings.json"),
-                ProfileScope::Repo,
-            ),
-            DelegateScope::Local => (
-                context.target.join(".claude").join("settings.local.json"),
-                ProfileScope::Repo,
-            ),
+            DelegateScope::Project => context.target.join(".claude").join("settings.json"),
+            DelegateScope::Local => context.target.join(".claude").join("settings.local.json"),
         }
     }
 
@@ -131,9 +109,8 @@ impl ClaudeApplicator {
             })?;
 
         let scope = scope.unwrap_or_else(|| Self::default_delegate_scope(context.mode));
-        let (settings_path, action_scope) = Self::delegate_settings_target(scope, context);
+        let settings_path = Self::delegate_settings_target(scope, context);
         let entry = delegates.entry(settings_path).or_default();
-        entry.scope = action_scope;
 
         let enabled_key = format!("{name}@{marketplace}");
         let enabled_pointer = json_pointer(&["enabledPlugins", &enabled_key]);
@@ -184,7 +161,6 @@ impl ClaudeApplicator {
             actions.push(ProfileAction::PlacePluginDir {
                 source: bundle_dir.join("skills").join(skill),
                 target: repo_target.join(".claude").join("skills").join(skill),
-                scope: ProfileScope::Repo,
             });
         }
 
@@ -316,7 +292,6 @@ impl ProfileApplicator for ClaudeApplicator {
             actions.push(ProfileAction::MergeJson {
                 target: context.target.join(".mcp.json"),
                 value: serde_json::json!({ "mcpServers": mcp_servers }),
-                scope: ProfileScope::Repo,
                 owned_paths,
             });
         }
@@ -328,7 +303,6 @@ impl ProfileApplicator for ClaudeApplicator {
                     "enabledPlugins": settings.enabled,
                     "extraKnownMarketplaces": settings.marketplaces,
                 }),
-                scope: settings.scope,
                 owned_paths: settings.owned_paths,
             });
         }

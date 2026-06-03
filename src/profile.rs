@@ -241,7 +241,6 @@ pub(crate) struct ProfilePluginEntry {
 pub(crate) struct ProfileFileEntry {
     pub(crate) source: PathBuf,
     pub(crate) target: PathBuf,
-    pub(crate) scope: ProfileScope,
     pub(crate) action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) backup: Option<PathBuf>,
@@ -249,19 +248,11 @@ pub(crate) struct ProfileFileEntry {
     pub(crate) existed: bool,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-#[allow(dead_code)]
-pub(crate) enum ProfileScope {
-    Repo,
-    User,
-}
-
 /// Settings scope for the delegate-to-Claude plugin fallback.
 ///
 /// Selects which repo-local Claude `settings.json` file receives the
-/// `enabledPlugins` / `extraKnownMarketplaces` entries. Distinct from
-/// [`ProfileScope`] because the delegate path needs a project/local split.
+/// `enabledPlugins` / `extraKnownMarketplaces` entries. All profile artifacts
+/// are repo-local; this only distinguishes the project/local settings split.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 #[allow(dead_code)]

@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::profile::{
-    ProfileFileEntry, ProfileMode, ProfileScope, ProfileState, SkippedCapability,
+    ProfileFileEntry, ProfileMode, ProfileState, SkippedCapability,
     save_profile_state,
 };
 use crate::profile_applicators::claude::ClaudeApplicator;
@@ -45,12 +45,10 @@ pub(crate) enum ProfileAction {
     WriteFile {
         source: PathBuf,
         target: PathBuf,
-        scope: ProfileScope,
     },
     MergeJson {
         target: PathBuf,
         value: Value,
-        scope: ProfileScope,
         /// RFC 6901 JSON-pointer paths this merge owns (e.g. `/servers/rust`).
         /// Ownership is tracked per-pointer for conflict detection and clean
         /// removal; each owned pointer's value is replaced wholesale.
@@ -79,7 +77,6 @@ pub(crate) enum ProfileAction {
     PlacePluginDir {
         source: PathBuf,
         target: PathBuf,
-        scope: ProfileScope,
     },
 }
 
@@ -162,7 +159,6 @@ fn apply_profile_with_harness_home(
             .collect(),
     };
 
-    let mut rollbacks = Vec::new();
     let mut dir_rollbacks: Vec<DirRollback> = Vec::new();
     let apply_result = (|| -> Result<()> {
         for (action_index, action) in plan.actions.into_iter().enumerate() {
@@ -199,11 +195,7 @@ fn apply_profile_with_harness_home(
                 ProfileAction::WriteFile {
                     source,
                     target: file_target,
-                    scope,
                 } => {
-                    if scope == ProfileScope::User {
-                        rollbacks.push(capture_file_rollback(&file_target)?);
-                    }
                     let (backup, existed) = capture_write_file_backup(
                         name,
                         harness,
@@ -215,7 +207,6 @@ fn apply_profile_with_harness_home(
                     state.files.push(ProfileFileEntry {
                         source,
                         target: file_target,
-                        scope,
                         action: "write-file".to_string(),
                         backup,
                         existed,
@@ -224,12 +215,8 @@ fn apply_profile_with_harness_home(
                 ProfileAction::MergeJson {
                     target: json_target,
                     value,
-                    scope,
                     owned_paths,
                 } => {
-                    if scope == ProfileScope::User {
-                        rollbacks.push(capture_file_rollback(&json_target)?);
-                    }
                     let backup_source = capture_merge_json_backup(
                         name,
                         harness,
@@ -243,7 +230,6 @@ fn apply_profile_with_harness_home(
                     state.files.push(ProfileFileEntry {
                         source: backup_source,
                         target: json_target,
-                        scope,
                         action: "merge-json".to_string(),
                         backup: None,
                         existed: false,
@@ -305,7 +291,6 @@ fn apply_profile_with_harness_home(
                     state.files.push(ProfileFileEntry {
                         source: region_target.clone(),
                         target: region_target,
-                        scope: ProfileScope::Repo,
                         action: "managed-region".to_string(),
                         backup: None,
                         existed,
@@ -314,7 +299,6 @@ fn apply_profile_with_harness_home(
                 ProfileAction::PlacePluginDir {
                     source,
                     target: dir_target,
-                    scope,
                 } => {
                     let (backup, existed) = place_plugin_dir(
                         name,
@@ -332,7 +316,6 @@ fn apply_profile_with_harness_home(
                     state.files.push(ProfileFileEntry {
                         source,
                         target: dir_target,
-                        scope,
                         action: "place-plugin-dir".to_string(),
                         backup,
                         existed,
@@ -350,9 +333,6 @@ fn apply_profile_with_harness_home(
         })?;
         rollback_applied_overlays(target, &state.overlays).with_context(|| {
             format!("Profile apply failed ({err}); failed to roll back applied overlays")
-        })?;
-        rollback_user_file_changes(&rollbacks).with_context(|| {
-            format!("Profile apply failed ({err}); failed to roll back user config changes")
         })?;
         return Err(err);
     }
@@ -485,17 +465,13 @@ pub(crate) fn list_profile_states(target: &Path) -> Result<Vec<ProfileState>> {
 }
 
 fn ensure_removable_profile_file(
-    name: &str,
+    _name: &str,
     harness: &str,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
-    let allowed_root = match (harness, file.scope) {
-        ("copilot", ProfileScope::User) => {
-            harness_home_for("copilot")?.join("instructions").join(name)
-        }
-        ("claude", ProfileScope::User) => harness_home_for("claude")?.join("skills"),
-        (_, ProfileScope::Repo) => repo_target.to_path_buf(),
+    let allowed_root = match harness {
+        "copilot" | "claude" => repo_target.to_path_buf(),
         _ => bail!("Unsupported harness '{harness}'"),
     };
 
@@ -719,58 +695,6 @@ fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path, harness: &st
                             state.name
                         );
                     }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
-struct FileRollback {
-    path: PathBuf,
-    prior_bytes: Option<Vec<u8>>,
-}
-
-fn capture_file_rollback(path: &Path) -> Result<FileRollback> {
-    let prior_bytes = match fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!(
-                    "Failed to capture existing user config before modifying {}",
-                    path.display()
-                )
-            });
-        }
-    };
-
-    Ok(FileRollback {
-        path: path.to_path_buf(),
-        prior_bytes,
-    })
-}
-
-fn rollback_user_file_changes(rollbacks: &[FileRollback]) -> Result<()> {
-    for rollback in rollbacks.iter().rev() {
-        match &rollback.prior_bytes {
-            Some(bytes) => {
-                if let Some(parent) = rollback.path.parent() {
-                    fs::create_dir_all(parent).with_context(|| {
-                        format!(
-                            "Failed to recreate parent directory for {}",
-                            rollback.path.display()
-                        )
-                    })?;
-                }
-                fs::write(&rollback.path, bytes)
-                    .with_context(|| format!("Failed to restore {}", rollback.path.display()))?;
-            }
-            None => {
-                if rollback.path.exists() {
-                    fs::remove_file(&rollback.path)
-                        .with_context(|| format!("Failed to remove {}", rollback.path.display()))?;
                 }
             }
         }
@@ -1603,7 +1527,7 @@ fn ensure_removable_profile_json(
         _ => bail!("Unsupported profile JSON target for harness '{harness}'"),
     };
 
-    if file.scope != ProfileScope::Repo || !allowed.contains(&file.target) {
+    if !allowed.contains(&file.target) {
         bail!(
             "Refusing to restore profile JSON outside managed location: {}",
             file.target.display()
@@ -1939,7 +1863,8 @@ profiles =
     #[test]
     fn remove_profile_rejects_write_file_target_outside_harness_home() {
         let temp = tempfile::TempDir::new().unwrap();
-        let outside = temp.path().join("outside.md");
+        let outside_dir = tempfile::TempDir::new().unwrap();
+        let outside = outside_dir.path().join("outside.md");
         fs::write(&outside, "keep me").unwrap();
         crate::profile::save_profile_state(
             temp.path(),
@@ -1954,7 +1879,6 @@ profiles =
                 files: vec![ProfileFileEntry {
                     source: PathBuf::from("<test>"),
                     target: outside.clone(),
-                    scope: ProfileScope::User,
                     action: "write-file".to_string(),
                     backup: None,
                     existed: false,
@@ -1985,13 +1909,11 @@ profiles =
                 ProfileAction::MergeJson {
                     target: target.clone(),
                     value: serde_json::json!({ "servers": { "rust": { "command": "uvx" } } }),
-                    scope: ProfileScope::User,
                     owned_paths: vec!["/servers/rust".to_string()],
                 },
                 ProfileAction::WriteFile {
                     source: temp.path().join("missing.md"),
                     target: temp.path().join("instructions/rust-dev/missing.md"),
-                    scope: ProfileScope::User,
                 },
             ],
             plugins: Vec::new(),
@@ -2022,7 +1944,6 @@ profiles =
                 target: temp
                     .path()
                     .join("instructions/rust-dev/copilot-instructions.md"),
-                scope: ProfileScope::User,
             }],
             plugins: Vec::new(),
         };
@@ -2166,7 +2087,6 @@ profiles =
                 ProfileAction::MergeJson {
                     target: PathBuf::new(),
                     value: serde_json::json!({}),
-                    scope: ProfileScope::User,
                     owned_paths: Vec::new(),
                 },
             ],
