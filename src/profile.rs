@@ -188,6 +188,40 @@ pub(crate) fn load_profile_state(target: &Path, name: &str, harness: &str) -> Re
         .with_context(|| format!("Failed to parse profile state: {}", path.display()))
 }
 
+/// Load every applied profile state recorded under `<target>/.repoverlay/profiles/`.
+///
+/// State files are read and deserialized rather than parsed from their
+/// filenames, because profile names may legally contain `.`. A file that fails
+/// to parse is skipped (with the error returned alongside its path) so a single
+/// corrupt state file does not abort bulk operations such as `update`.
+#[allow(dead_code)]
+pub(crate) fn list_applied_profile_states(target: &Path) -> Result<Vec<ProfileState>> {
+    let dir = target.join(crate::state::STATE_DIR).join(PROFILES_DIR);
+    if !dir.try_exists().unwrap_or(false) {
+        return Ok(Vec::new());
+    }
+    let mut states = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("Failed to read {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("ccl") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read profile state: {}", path.display()))?;
+        match sickle::from_str::<ProfileState>(&content) {
+            Ok(state) => states.push(state),
+            Err(err) => {
+                eprintln!(
+                    "  ? skipping unreadable profile state {}: {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+    states.sort_by(|a, b| (a.name.as_str(), a.harness.as_str()).cmp(&(&b.name, &b.harness)));
+    Ok(states)
+}
+
 #[allow(dead_code)]
 pub(crate) fn remove_profile_state(target: &Path, name: &str, harness: &str) -> Result<()> {
     let path = profile_state_path(target, name, harness)?;

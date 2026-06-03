@@ -183,6 +183,10 @@ repoverlay profile remove rust-dev --harness copilot
 
 Removal deletes the harness files and merged config entries the profile created, and removes overlays **only** if this profile applied them and no other applied profile still references them.
 
+#### Keeping managed plugins up to date
+
+Managed plugins are pinned to the commit they resolved to at apply time (recorded in profile state). Running `repoverlay update` (with no overlay name filter) re-resolves the managed plugins of every persistently-applied profile, and re-applies a profile when any of its plugin sources changed. Delegate plugins and plugins pinned to a fixed `ref` are left untouched. Use `repoverlay update --dry-run` to preview which profiles would be re-applied.
+
 ### Ephemeral mode
 
 `repoverlay copilot --profile` (or `repoverlay claude --profile`) applies the profile only for the lifetime of the launched agent process, then cleans up automatically:

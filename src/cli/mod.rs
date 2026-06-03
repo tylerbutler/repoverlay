@@ -961,7 +961,24 @@ pub(crate) fn run() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
-            update_overlays(&target, name, dry_run, conflict_strategy, merge)?;
+            // Profile plugin re-resolution only runs for a full `update` (no
+            // overlay name filter); a name filter scopes the command to one
+            // overlay and should not silently churn applied profiles.
+            let profiles_checked = if name.is_none() {
+                crate::profile_plan::update_profile_plugins(&target, dry_run)?
+            } else {
+                0
+            };
+            let overlays_dir = target.join(crate::STATE_DIR).join(crate::OVERLAYS_DIR);
+            let have_overlays = overlays_dir.exists()
+                && !crate::list_applied_overlays(&target)
+                    .unwrap_or_default()
+                    .is_empty();
+            if name.is_some() || have_overlays {
+                update_overlays(&target, name, dry_run, conflict_strategy, merge)?;
+            } else if profiles_checked == 0 {
+                bail!("No overlays are currently applied in: {}", target.display());
+            }
         }
         Commands::Create {
             name,

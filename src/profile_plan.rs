@@ -345,6 +345,145 @@ fn apply_profile_with_harness_home(
     Ok(state)
 }
 
+/// Re-resolve managed plugins for every persistently-applied profile and
+/// re-apply any profile whose managed plugin sources changed.
+///
+/// Returns the number of applied (persistent) profiles inspected, so the
+/// `update` command can distinguish "nothing is applied" from "profiles were
+/// checked and are up to date".
+///
+/// Each profile is processed independently: managed plugins are re-resolved
+/// with `update = true` (refreshing the local cache to the latest source), and
+/// only when every managed plugin for a profile resolves cleanly *and* at least
+/// one resolved commit differs from the recorded one is the profile re-applied
+/// (`remove` then `apply`). Resolution failures (for example a marketplace that
+/// is no longer registered) are reported and that profile is left untouched, so
+/// `update` never tears down a profile it cannot reconstruct.
+pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usize> {
+    use crate::plugin::{InstallMode, PluginRef, ResolvedPlugin, resolve_plugin};
+
+    // Match the canonical target used by `profile apply`/`remove`, so the
+    // managed-skills-root placement guard sees the same path it recorded.
+    let target = crate::resolve::canonicalize_path(target, "Target directory")?;
+    let target = target.as_path();
+
+    let states = crate::profile::list_applied_profile_states(target)?;
+    let persistent: Vec<_> = states
+        .into_iter()
+        .filter(|s| s.mode == ProfileMode::Persistent)
+        .collect();
+    if persistent.is_empty() {
+        return Ok(0);
+    }
+
+    let config = crate::config::load_config(Some(target))?;
+    let cache = crate::cache::CacheManager::new()?;
+    let inspected = persistent.len();
+
+    for state in persistent {
+        let Some(profile) = config.profiles.get(&state.name) else {
+            println!(
+                "  ? profile '{}' ({}) is no longer in config; skipping plugin update",
+                state.name, state.harness
+            );
+            continue;
+        };
+
+        let mut changed = false;
+        let mut failed = false;
+        for plugin in &profile.plugins {
+            // Delegate plugins place nothing on disk, so there is nothing to
+            // re-place; their enablement is recorded in harness settings.
+            if matches!(
+                plugin,
+                PluginRef::Marketplace {
+                    install: InstallMode::Delegate,
+                    ..
+                }
+            ) {
+                continue;
+            }
+
+            let reference = plugin.to_string();
+            match resolve_plugin(plugin, &config.marketplaces, &cache, target, true) {
+                Ok(resolved) => {
+                    let new_commit = match resolved {
+                        ResolvedPlugin::Bundle {
+                            resolved_commit, ..
+                        } => resolved_commit,
+                        ResolvedPlugin::Delegate { .. } => None,
+                    };
+                    let recorded = state
+                        .plugins
+                        .iter()
+                        .find(|p| p.reference == reference)
+                        .and_then(|p| p.resolved_commit.clone());
+                    if new_commit.is_some() && new_commit != recorded {
+                        changed = true;
+                        println!(
+                            "  ↑ {} ({}) plugin {reference} changed",
+                            state.name, state.harness
+                        );
+                    }
+                }
+                Err(err) => {
+                    failed = true;
+                    eprintln!(
+                        "  ! {} ({}) plugin {reference} could not be re-resolved: {err}",
+                        state.name, state.harness
+                    );
+                }
+            }
+        }
+
+        if failed {
+            eprintln!(
+                "  ! skipping re-apply of '{}' ({}) due to resolution errors",
+                state.name, state.harness
+            );
+            continue;
+        }
+        if !changed {
+            println!(
+                "  {} ({}) plugins are up to date",
+                state.name, state.harness
+            );
+            continue;
+        }
+        if dry_run {
+            println!(
+                "  (dry run) '{}' ({}) would be re-applied",
+                state.name, state.harness
+            );
+            continue;
+        }
+
+        remove_profile(&state.name, &state.harness, target).with_context(|| {
+            format!(
+                "Failed to remove '{}' ({}) before re-applying updated plugins",
+                state.name, state.harness
+            )
+        })?;
+        apply_profile(
+            &state.name,
+            &state.harness,
+            target,
+            ProfileMode::Persistent,
+            None,
+        )
+        .with_context(|| {
+            format!(
+                "'{}' ({}) was removed but could not be re-applied with updated plugins; \
+                 re-apply it manually with `repoverlay profile apply`",
+                state.name, state.harness
+            )
+        })?;
+        println!("  ✓ re-applied '{}' ({})", state.name, state.harness);
+    }
+
+    Ok(inspected)
+}
+
 pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result<()> {
     crate::profile::validate_profile_state_component(name)?;
     crate::profile::validate_profile_state_component(harness)?;

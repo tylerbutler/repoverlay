@@ -7248,3 +7248,88 @@ profiles =
 
     assert!(!state_file.exists());
 }
+
+/// Helper: stage everything and create a commit in `repo`, returning the new HEAD sha.
+fn git_commit_all(repo: &std::path::Path, message: &str) -> String {
+    for args in [
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test"],
+        vec!["add", "-A"],
+        vec!["commit", "-q", "-m", message],
+    ] {
+        let out = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(repo)
+            .output()
+            .expect("git command failed to spawn");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo)
+        .output()
+        .expect("git rev-parse failed");
+    String::from_utf8(head.stdout).unwrap().trim().to_string()
+}
+
+/// `repoverlay update` re-resolves an applied profile's managed plugin and
+/// re-places it when the source changed, even when no overlays are applied.
+#[test]
+fn update_reresolves_and_replaces_changed_profile_plugin() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let placed = ctx.repo_path().join(".agents/skills/fmt/SKILL.md");
+
+    ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# v1");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    plugins =
+      = ./plugins/rust
+",
+    );
+    git_commit_all(ctx.repo_path(), "init");
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert_eq!(fs::read_to_string(&placed).unwrap(), "# v1");
+
+    // Change the plugin source and commit so the local git HEAD moves.
+    ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# v2");
+    git_commit_all(ctx.repo_path(), "bump skill");
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["update", "--target", ctx.repo_path().to_str().unwrap()])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&placed).unwrap(),
+        "# v2",
+        "update should re-place the changed plugin skill"
+    );
+}
