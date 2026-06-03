@@ -345,6 +345,134 @@ profiles =
 }
 
 #[test]
+fn profile_apply_places_plugin_skill_and_records_provenance() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# fmt skill");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    plugins =
+      = ./plugins/rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let placed = copilot_home.path().join("skills/fmt/SKILL.md");
+    assert!(placed.exists(), "skill should be placed under copilot home");
+    assert_eq!(fs::read_to_string(&placed).unwrap(), "# fmt skill");
+
+    let state = fs::read_to_string(
+        ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl"),
+    )
+    .unwrap();
+    assert!(
+        state.contains("./plugins/rust"),
+        "state should record plugin provenance: {state}"
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(
+        !copilot_home.path().join("skills/fmt").exists(),
+        "skill placement should be removed on profile remove"
+    );
+}
+
+#[test]
+fn profile_remove_restores_displaced_plugin_skill() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    // Pre-existing user content at the placement target must be restored on remove.
+    let user_skill = copilot_home.path().join("skills/fmt/SKILL.md");
+    fs::create_dir_all(user_skill.parent().unwrap()).unwrap();
+    fs::write(&user_skill, "# user's own fmt").unwrap();
+
+    ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# plugin fmt");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    plugins =
+      = ./plugins/rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert_eq!(fs::read_to_string(&user_skill).unwrap(), "# plugin fmt");
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&user_skill).unwrap(),
+        "# user's own fmt",
+        "pre-existing user content should be restored"
+    );
+}
+
+#[test]
 fn copilot_profile_runs_command_and_cleans_up() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();

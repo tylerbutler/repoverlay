@@ -140,6 +140,7 @@ impl ProfileApplicator for CopilotApplicator {
         // Copilot's native `mcp.json` servers + skills, and skip what cannot map.
         let mut servers = serde_json::Map::new();
         let mut owned_paths = Vec::new();
+        let mut plugins = Vec::new();
 
         for plugin in &profile.plugins {
             if let PluginRef::Marketplace {
@@ -166,8 +167,15 @@ impl ProfileApplicator for CopilotApplicator {
 
             match resolved {
                 ResolvedPlugin::Bundle {
-                    name, bundle_dir, ..
+                    name,
+                    bundle_dir,
+                    resolved_commit,
+                    ..
                 } => {
+                    plugins.push(crate::profile_plan::PluginProvenance {
+                        reference: plugin.to_string(),
+                        resolved_commit,
+                    });
                     Self::decompose_bundle(
                         &bundle_dir,
                         &name,
@@ -200,6 +208,7 @@ impl ProfileApplicator for CopilotApplicator {
             profile_name: context.profile_name.clone(),
             harness: "copilot".to_string(),
             actions,
+            plugins,
         })
     }
 

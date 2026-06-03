@@ -203,6 +203,18 @@ pub(crate) struct ProfileState {
     pub(crate) files: Vec<ProfileFileEntry>,
     #[serde(default)]
     pub(crate) skipped: Vec<SkippedCapability>,
+    #[serde(default)]
+    pub(crate) plugins: Vec<ProfilePluginEntry>,
+}
+
+/// Provenance for a managed plugin that was resolved, cached, and decomposed
+/// into native harness placements during apply.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct ProfilePluginEntry {
+    pub(crate) reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resolved_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -329,6 +341,7 @@ profiles =
             overlays: vec!["rust-base".to_string()],
             files: Vec::new(),
             skipped: Vec::new(),
+            plugins: Vec::new(),
         };
 
         save_profile_state(temp.path(), &state).unwrap();
@@ -351,6 +364,7 @@ profiles =
             overlays: Vec::new(),
             files: Vec::new(),
             skipped: Vec::new(),
+            plugins: Vec::new(),
         };
 
         save_profile_state(temp.path(), &state).unwrap();

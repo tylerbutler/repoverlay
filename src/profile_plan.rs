@@ -24,6 +24,17 @@ pub(crate) struct ProfilePlan {
     pub(crate) profile_name: String,
     pub(crate) harness: String,
     pub(crate) actions: Vec<ProfileAction>,
+    /// Provenance for each managed (resolved-and-cached) plugin, recorded into
+    /// `ProfileState` so removal/`show`/`update` can reason about what was placed.
+    pub(crate) plugins: Vec<PluginProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginProvenance {
+    /// Human-readable reference (`marketplace/name` or local path) for display.
+    pub(crate) reference: String,
+    /// Resolved git commit of the bundle, when backed by a git repo.
+    pub(crate) resolved_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,9 +143,18 @@ fn apply_profile_with_harness_home(
         overlays: Vec::new(),
         files: Vec::new(),
         skipped: Vec::new(),
+        plugins: plan
+            .plugins
+            .iter()
+            .map(|p| crate::profile::ProfilePluginEntry {
+                reference: p.reference.clone(),
+                resolved_commit: p.resolved_commit.clone(),
+            })
+            .collect(),
     };
 
     let mut rollbacks = Vec::new();
+    let mut dir_rollbacks: Vec<DirRollback> = Vec::new();
     let apply_result = (|| -> Result<()> {
         for (action_index, action) in plan.actions.into_iter().enumerate() {
             match action {
@@ -224,13 +244,32 @@ fn apply_profile_with_harness_home(
                     eprintln!("Warning: skipped {capability}: {reason}");
                     state.skipped.push(SkippedCapability { capability, reason });
                 }
-                ProfileAction::PlacePluginDir { .. } => {
-                    // Preflight rejects plans containing this action, so reaching
-                    // it here indicates a logic error rather than user input.
-                    bail!(
-                        "Plugin directory placement is not implemented yet; \
-                         this plan should have been rejected during preflight"
-                    );
+                ProfileAction::PlacePluginDir {
+                    source,
+                    target: dir_target,
+                    scope,
+                } => {
+                    let (backup, existed) = place_plugin_dir(
+                        name,
+                        harness,
+                        target,
+                        &source,
+                        &dir_target,
+                        action_index,
+                    )?;
+                    dir_rollbacks.push(DirRollback {
+                        target: dir_target.clone(),
+                        backup: backup.clone(),
+                        existed,
+                    });
+                    state.files.push(ProfileFileEntry {
+                        source,
+                        target: dir_target,
+                        scope,
+                        action: "place-plugin-dir".to_string(),
+                        backup,
+                        existed,
+                    });
                 }
             }
         }
@@ -239,6 +278,9 @@ fn apply_profile_with_harness_home(
     })();
 
     if let Err(err) = apply_result {
+        rollback_placed_dirs(&dir_rollbacks).with_context(|| {
+            format!("Profile apply failed ({err}); failed to roll back plugin placements")
+        })?;
         rollback_applied_overlays(target, &state.overlays).with_context(|| {
             format!("Profile apply failed ({err}); failed to roll back applied overlays")
         })?;
@@ -301,6 +343,9 @@ fn remove_profile_inner(name: &str, harness: &str, target: &Path) -> Result<()> 
             }
             "merge-json" => {
                 restore_merge_json_backup(name, harness, target, file)?;
+            }
+            "place-plugin-dir" => {
+                restore_placed_plugin_dir(name, harness, target, file)?;
             }
             _ => {}
         }
@@ -439,13 +484,18 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
                     bail!("Profile overlay reference must not be empty");
                 }
             }
-            ProfileAction::PlacePluginDir { target, .. } => {
-                // Skill-directory placement execution is deferred to the managed
-                // plugin lifecycle task; reject before any side effects run.
-                bail!(
-                    "Plugin directory placement (skills) is not implemented yet: {}",
-                    target.display()
-                );
+            ProfileAction::PlacePluginDir { source, target, .. } => {
+                if target.as_os_str().is_empty() {
+                    bail!("Profile plugin directory target must not be empty");
+                }
+                // The placed directory must be exactly `<skills-root>/<name>` with a
+                // single, traversal-free final component; everything else is rejected
+                // before any filesystem mutation runs.
+                validate_plugin_dir_target(target)?;
+                if !source.exists() {
+                    bail!("Plugin skill source does not exist: {}", source.display());
+                }
+                reject_duplicate_profile_target(&mut seen_targets, target)?;
             }
             ProfileAction::SkipCapability { .. } => {}
         }
@@ -963,6 +1013,247 @@ fn restore_write_file_backup(
     Ok(())
 }
 
+/// Rollback record for a plugin directory placed during apply, used to reverse
+/// the placement if a later action fails before state is persisted.
+#[derive(Debug)]
+struct DirRollback {
+    target: PathBuf,
+    backup: Option<PathBuf>,
+    existed: bool,
+}
+
+/// The managed root under which a harness's plugin skill directories live.
+fn managed_skills_root(harness: &str) -> Result<PathBuf> {
+    Ok(harness_home_for(harness)?.join("skills"))
+}
+
+/// Lexically validate that a plugin-directory target's final component is a
+/// single, traversal-free name. The harness-specific root check happens at
+/// placement/removal time via [`ensure_plugin_dir_under_skills_root`].
+fn validate_plugin_dir_target(target: &Path) -> Result<()> {
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("Plugin directory target has no final component")?;
+    if name.is_empty() || name == "." || name == ".." {
+        bail!("Invalid plugin directory name: {name:?}");
+    }
+    if name.contains('/') || name.contains('\\') {
+        bail!("Plugin directory name must be a single path component: {name:?}");
+    }
+    if target
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        bail!(
+            "Refusing plugin directory target with parent traversal: {}",
+            target.display()
+        );
+    }
+    Ok(())
+}
+
+/// Verify a plugin-directory target is exactly `<skills-root>/<single-component>`
+/// for the given harness, rejecting anything outside the managed skills root.
+fn ensure_plugin_dir_under_skills_root(harness: &str, target: &Path) -> Result<()> {
+    validate_plugin_dir_target(target)?;
+    let skills_root = managed_skills_root(harness)?;
+    let parent = target
+        .parent()
+        .context("Plugin directory target has no parent")?;
+    if parent != skills_root {
+        bail!(
+            "Refusing plugin directory placement outside managed skills root: {}",
+            target.display()
+        );
+    }
+    Ok(())
+}
+
+/// Recursively copy `src` into `dst`, bailing if any entry is a symlink.
+///
+/// Plugin bundles ship plain markdown/script trees; rejecting symlinks prevents
+/// a malicious or compromised bundle from escaping the placement target.
+fn copy_tree_no_symlinks(src: &Path, dst: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(src)
+        .with_context(|| format!("Failed to inspect plugin source: {}", src.display()))?;
+    if meta.file_type().is_symlink() {
+        bail!(
+            "Refusing to copy plugin path containing a symlink: {}",
+            src.display()
+        );
+    }
+    if meta.is_dir() {
+        fs::create_dir_all(dst)
+            .with_context(|| format!("Failed to create directory {}", dst.display()))?;
+        for entry in fs::read_dir(src)
+            .with_context(|| format!("Failed to read plugin directory {}", src.display()))?
+        {
+            let entry = entry?;
+            copy_tree_no_symlinks(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+        }
+        fs::copy(src, dst)
+            .with_context(|| format!("Failed to copy {} to {}", src.display(), dst.display()))?;
+    }
+    Ok(())
+}
+
+/// Recursively copy `src` to `dst`, recreating symlinks as symlinks.
+///
+/// Used only to back up (and later restore) pre-existing *user* content that the
+/// placement is about to displace, so symlinks are preserved rather than rejected.
+fn copy_tree_preserve(src: &Path, dst: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(src)
+        .with_context(|| format!("Failed to inspect {}", src.display()))?;
+    if meta.file_type().is_symlink() {
+        let link_target = fs::read_link(src)
+            .with_context(|| format!("Failed to read symlink {}", src.display()))?;
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        std::os::unix::fs::symlink(&link_target, dst)
+            .with_context(|| format!("Failed to recreate symlink {}", dst.display()))?;
+    } else if meta.is_dir() {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            copy_tree_preserve(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(src, dst)
+            .with_context(|| format!("Failed to copy {} to {}", src.display(), dst.display()))?;
+    }
+    Ok(())
+}
+
+/// Remove a path whether it is a file, directory tree, or symlink.
+fn remove_path(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => fs::remove_dir_all(path)
+            .with_context(|| format!("Failed to remove directory {}", path.display())),
+        Ok(_) => {
+            fs::remove_file(path).with_context(|| format!("Failed to remove {}", path.display()))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("Failed to inspect {}", path.display())),
+    }
+}
+
+/// Move `from` to `to`, falling back to a symlink-preserving copy when a plain
+/// rename fails (e.g. across filesystems).
+fn move_path(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
+    if fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    copy_tree_preserve(from, to)?;
+    remove_path(from)
+}
+
+/// Place a plugin skill directory at `dir_target`, backing up any pre-existing
+/// content. Returns `(backup, existed)`.
+fn place_plugin_dir(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    source: &Path,
+    dir_target: &Path,
+    action_index: usize,
+) -> Result<(Option<PathBuf>, bool)> {
+    ensure_plugin_dir_under_skills_root(harness, dir_target)?;
+    reject_symlink_profile_target(dir_target)?;
+
+    let mut backup = None;
+    let existed = dir_target.exists();
+    if existed {
+        let backup_path = profile_backup_dir(repo_target, name, harness)?
+            .join(format!("place-plugin-dir-{action_index}.bak"));
+        if backup_path.exists() {
+            bail!(
+                "Plugin directory backup already exists; refusing to overwrite: {}",
+                backup_path.display()
+            );
+        }
+        move_path(dir_target, &backup_path).with_context(|| {
+            format!(
+                "Failed to back up existing plugin directory {}",
+                dir_target.display()
+            )
+        })?;
+        backup = Some(backup_path);
+    }
+
+    copy_tree_no_symlinks(source, dir_target).with_context(|| {
+        format!(
+            "Failed to place plugin directory {} -> {}",
+            source.display(),
+            dir_target.display()
+        )
+    })?;
+    Ok((backup, existed))
+}
+
+/// Reverse plugin directory placements after a failed apply, in reverse order.
+fn rollback_placed_dirs(dirs: &[DirRollback]) -> Result<()> {
+    for placement in dirs.iter().rev() {
+        remove_path(&placement.target).with_context(|| {
+            format!(
+                "Failed to roll back plugin placement {}",
+                placement.target.display()
+            )
+        })?;
+        if placement.existed
+            && let Some(backup) = &placement.backup
+        {
+            move_path(backup, &placement.target).with_context(|| {
+                format!(
+                    "Failed to restore displaced content for {}",
+                    placement.target.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove a placed plugin directory and restore any backed-up prior content.
+fn restore_placed_plugin_dir(
+    _name: &str,
+    harness: &str,
+    _repo_target: &Path,
+    file: &ProfileFileEntry,
+) -> Result<()> {
+    ensure_plugin_dir_under_skills_root(harness, &file.target)?;
+    remove_path(&file.target)?;
+    if file.existed {
+        if let Some(backup) = &file.backup {
+            move_path(backup, &file.target).with_context(|| {
+                format!(
+                    "Failed to restore displaced content for {}",
+                    file.target.display()
+                )
+            })?;
+        } else {
+            bail!(
+                "Plugin directory {} was recorded as existing but has no backup",
+                file.target.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn ensure_removable_profile_json(harness: &str, file: &ProfileFileEntry) -> Result<()> {
     let allowed_target = match (harness, file.scope) {
         ("copilot", ProfileScope::User) => harness_home_for("copilot")?.join("mcp.json"),
@@ -1248,6 +1539,7 @@ profiles =
                     existed: false,
                 }],
                 skipped: Vec::new(),
+                plugins: Vec::new(),
             },
         )
         .unwrap();
@@ -1281,6 +1573,7 @@ profiles =
                     scope: ProfileScope::User,
                 },
             ],
+            plugins: Vec::new(),
         };
 
         let err = preflight_plan(&plan, temp.path()).unwrap_err();
@@ -1310,6 +1603,7 @@ profiles =
                     .join("instructions/rust-dev/copilot-instructions.md"),
                 scope: ProfileScope::User,
             }],
+            plugins: Vec::new(),
         };
 
         let err = preflight_plan(&plan, temp.path()).unwrap_err();
@@ -1466,6 +1760,7 @@ profiles =
                     owned_paths: Vec::new(),
                 },
             ],
+            plugins: Vec::new(),
         };
 
         let err = preflight_plan(&plan, temp.path()).unwrap_err();
