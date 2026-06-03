@@ -10,12 +10,18 @@ Where an overlay describes *files to place in a repo*, a profile describes *inte
 
 ## Profiles vs. overlays
 
-| | Overlays | Profiles |
+The key thing to understand is the difference between a **definition** and its **application**:
+
+- An **overlay** is a reusable, *repo-agnostic* definition — just a named bundle of files. It only becomes associated with a repo when you `apply` it, at which point the files land in that repo's working tree. So an overlay being "tied to a repo" is a property of the *applied instance*, not the overlay itself.
+- A **profile** is a *recipe* one layer up: it references overlays (ingredients) and adds harness capabilities. Like an overlay, it's a portable definition that you apply to a specific repo — but a profile's effects span two scopes.
+
+| | Overlay | Profile |
 | --- | --- | --- |
-| Unit | A file tree applied to a repo | A composition of overlays + harness capabilities |
-| Scope | Repo-local files | Repo-local files **and** harness/user-level config |
+| Role | Ingredient (files) | Recipe (overlays + capabilities) |
+| Payload | A file tree applied to a repo | A composition of overlays + harness capabilities |
+| Scope of effect | Always **repo-scoped** (working tree) | Spans **repo-scoped** *and* **user/harness-scoped** |
 | Owns | Symlinks, git excludes, conflict handling | MCP servers, instructions, skills, plugins |
-| Portable across harnesses? | N/A | Yes — placement lives in the harness applicator |
+| Portable across harnesses? | N/A (files only) | Yes — placement lives in the harness applicator |
 
 Profiles *reference* overlays rather than replacing them. Repo-level instruction files such as `AGENTS.md` should still be shipped as overlay files; profile `instructions` are for harness/user-level files.
 

@@ -31,12 +31,29 @@ Overlay config files into git repositories without committing them. Files are sy
 
 ## Concepts
 
-repoverlay manages five kinds of objects:
+### Definitions vs. application
 
-- **Overlay** — a set of config files applied to a repo. Lifecycle: `create` → `apply` → `update` → `remove`.
+The key distinction in repoverlay is between a **definition** (a reusable, repo-agnostic thing) and its **application** (what happens when you bind that definition to a specific repo).
+
+An **overlay** is a *definition*: a named bundle of config files. Nothing about an overlay is tied to a repo — `rust-base` is just "these files." It only becomes repo-associated when you `apply` it, at which point the files land in *that* repo's working tree and are excluded via `.git/info/exclude`. So "overlays are associated with a repo" is only true of the **applied instance**, not the overlay itself.
+
+A **profile** is a *recipe* one layer up: it composes overlays **and** adds AI-harness capabilities (MCP servers, skills, plugins, harness/user-level instructions). Like overlays, a profile is a portable definition that gets applied to a specific repo — but its effects span two scopes:
+
+| | Payload | Scope of effect when applied |
+| --- | --- | --- |
+| **Overlay** | files only | always **repo-scoped** (working tree) |
+| **Profile** | overlays **+** capabilities | spans **repo-scoped** *and* **user/harness-scoped** |
+
+In short: an **overlay** is an *ingredient* (repo-facing, files only), a **profile** is a *recipe* (harness-facing) that lists overlays plus the capabilities to turn on. A profile *references* overlays rather than replacing them.
+
+### Object reference
+
+repoverlay manages these kinds of objects:
+
+- **Overlay** — a reusable, repo-agnostic bundle of config files. Becomes repo-associated only when applied. Lifecycle: `create` → `apply` → `update` → `remove`.
+- **Profile** — a recipe that composes overlays with AI harness capabilities (MCP servers, skills, plugins, harness/user-level instruction files). Applied persistently with `profile apply` or ephemerally with harness commands such as `repoverlay copilot --profile rust-dev`.
 - **Source** — a configured location (GitHub repo or local directory) to find overlays. Lifecycle: `source add` → `source list` → `source remove`.
 - **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
-- **Profile** — a named AI harness configuration that can declare overlays, MCP servers, skills, plugins, and harness/user-level instruction files. Profiles can be applied persistently with `profile apply` or ephemerally with harness commands such as `repoverlay copilot --profile rust-dev`.
 - **File** — an individual file within an overlay. Managed via `edit` and `sync`.
 
 ## Installation
