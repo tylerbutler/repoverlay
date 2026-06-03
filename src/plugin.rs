@@ -402,6 +402,70 @@ enum SourceKind {
     NonGit,
 }
 
+/// Normalize a marketplace plugin `source` field into a source string plus an
+/// optional git ref override.
+///
+/// The Claude marketplace schema allows `source` to be either a plain string
+/// (a relative subdir or a git URL) or an object with a `source` discriminator,
+/// e.g. `{ "source": "github", "repo": "owner/repo" }` or
+/// `{ "source": "url", "url": "https://...", "ref": "dev" }`.
+fn extract_marketplace_source(
+    name: &str,
+    marketplace: &str,
+    value: &serde_json::Value,
+) -> anyhow::Result<(String, Option<String>)> {
+    use serde_json::Value;
+
+    match value {
+        Value::String(s) => Ok((s.clone(), None)),
+        Value::Object(map) => {
+            let git_ref = map.get("ref").and_then(Value::as_str).map(str::to_string);
+            let kind = map.get("source").and_then(Value::as_str);
+            let source = match kind {
+                Some("github") => {
+                    let repo = map.get("repo").and_then(Value::as_str).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Plugin '{name}' in marketplace '{marketplace}' has a github source \
+                             without a 'repo' field"
+                        )
+                    })?;
+                    format!("https://github.com/{repo}")
+                }
+                Some("git" | "url") => map
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Plugin '{name}' in marketplace '{marketplace}' has a git source \
+                             without a 'url' field"
+                        )
+                    })?
+                    .to_string(),
+                // Unknown/absent discriminator: accept any url/repo/path we find.
+                _ => {
+                    if let Some(url) = map.get("url").and_then(Value::as_str) {
+                        url.to_string()
+                    } else if let Some(repo) = map.get("repo").and_then(Value::as_str) {
+                        format!("https://github.com/{repo}")
+                    } else if let Some(path) = map.get("path").and_then(Value::as_str) {
+                        path.to_string()
+                    } else {
+                        anyhow::bail!(
+                            "Plugin '{name}' in marketplace '{marketplace}' has an unsupported \
+                             source object (expected 'url', 'repo', or 'path')"
+                        );
+                    }
+                }
+            };
+            Ok((source, git_ref))
+        }
+        _ => anyhow::bail!(
+            "Plugin '{name}' in marketplace '{marketplace}' has an unsupported source \
+             (expected a string or object)"
+        ),
+    }
+}
+
 /// Classify a marketplace entry `source` string.
 fn classify_source(source: &str) -> SourceKind {
     if source.contains("://") || source.starts_with("git@") {
@@ -542,13 +606,10 @@ pub(crate) fn resolve_plugin(
                     anyhow::anyhow!("Plugin '{name}' not found in marketplace '{marketplace}'")
                 })?;
 
-            let source_str = plugin_entry.source.as_str().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Plugin '{name}' in marketplace '{marketplace}' has a non-string source"
-                )
-            })?;
+            let (source_str, source_ref) =
+                extract_marketplace_source(name, marketplace, &plugin_entry.source)?;
 
-            match classify_source(source_str) {
+            match classify_source(&source_str) {
                 SourceKind::Subdir(sub) => {
                     let bundle_dir = confined_subdir(&repo_dir, &sub)?;
                     Ok(ResolvedPlugin::Bundle {
@@ -560,7 +621,8 @@ pub(crate) fn resolve_plugin(
                 }
                 SourceKind::GitUrl(git_url) => {
                     if crate::github::GitHubSource::is_github_url(&git_url) {
-                        let source = crate::github::GitHubSource::parse(&git_url)?;
+                        let source = crate::github::GitHubSource::parse(&git_url)?
+                            .with_ref_override(source_ref.as_deref())?;
                         let cached = cache.ensure_cached(&source, update)?;
                         Ok(ResolvedPlugin::Bundle {
                             name: name.clone(),
@@ -578,7 +640,7 @@ pub(crate) fn resolve_plugin(
                 }
                 SourceKind::NonGit => Ok(ResolvedPlugin::Delegate {
                     name: name.clone(),
-                    source: source_str.to_string(),
+                    source: source_str,
                     reason: DelegateReason::NonGitSource,
                 }),
             }
@@ -763,7 +825,7 @@ mod tests {
     /// Build a local marketplace fixture containing a single plugin entry whose
     /// `source` is `source_value`. If `with_bundle` is true, also create the
     /// `plugins/rust-dev` bundle dir with a `.mcp.json` and one skill.
-    fn fixture_marketplace(source_value: &str, with_bundle: bool) -> TempDir {
+    fn fixture_marketplace(source_value: &serde_json::Value, with_bundle: bool) -> TempDir {
         let dir = TempDir::new().unwrap();
         let market = dir.path().join(".claude-plugin");
         fs::create_dir_all(&market).unwrap();
@@ -838,7 +900,7 @@ mod tests {
 
     #[test]
     fn resolves_marketplace_plugin_subdir() {
-        let fixture = fixture_marketplace("./plugins/rust-dev", true);
+        let fixture = fixture_marketplace(&serde_json::json!("./plugins/rust-dev"), true);
         let cache = CacheManager::new().unwrap();
         let base = TempDir::new().unwrap();
         let resolved = resolve_plugin(
@@ -876,7 +938,7 @@ mod tests {
 
     #[test]
     fn non_git_source_requires_delegate() {
-        let fixture = fixture_marketplace("npm:some-package", false);
+        let fixture = fixture_marketplace(&serde_json::json!("npm:some-package"), false);
         let cache = CacheManager::new().unwrap();
         let base = TempDir::new().unwrap();
         let resolved = resolve_plugin(
@@ -898,7 +960,7 @@ mod tests {
 
     #[test]
     fn rejects_traversal_in_marketplace_source() {
-        let fixture = fixture_marketplace("../../etc", false);
+        let fixture = fixture_marketplace(&serde_json::json!("../../etc"), false);
         let cache = CacheManager::new().unwrap();
         let base = TempDir::new().unwrap();
         let err = resolve_plugin(
@@ -910,5 +972,89 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err}").contains("must be a relative path"));
+    }
+
+    #[test]
+    fn extract_string_source() {
+        let (source, git_ref) =
+            extract_marketplace_source("p", "m", &serde_json::json!("./plugins/foo")).unwrap();
+        assert_eq!(source, "./plugins/foo");
+        assert_eq!(git_ref, None);
+    }
+
+    #[test]
+    fn extract_url_object_source() {
+        let (source, git_ref) = extract_marketplace_source(
+            "p",
+            "m",
+            &serde_json::json!({"source": "url", "url": "https://github.com/obra/superpowers.git"}),
+        )
+        .unwrap();
+        assert_eq!(source, "https://github.com/obra/superpowers.git");
+        assert_eq!(git_ref, None);
+    }
+
+    #[test]
+    fn extract_url_object_source_with_ref() {
+        let (source, git_ref) = extract_marketplace_source(
+            "p",
+            "m",
+            &serde_json::json!({"source": "url", "url": "https://github.com/obra/superpowers.git", "ref": "dev"}),
+        )
+        .unwrap();
+        assert_eq!(source, "https://github.com/obra/superpowers.git");
+        assert_eq!(git_ref.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn extract_github_object_source() {
+        let (source, git_ref) = extract_marketplace_source(
+            "p",
+            "m",
+            &serde_json::json!({"source": "github", "repo": "obra/superpowers"}),
+        )
+        .unwrap();
+        assert_eq!(source, "https://github.com/obra/superpowers");
+        assert_eq!(git_ref, None);
+    }
+
+    #[test]
+    fn extract_object_source_missing_field_errors() {
+        let err = extract_marketplace_source("p", "m", &serde_json::json!({"source": "github"}))
+            .unwrap_err();
+        assert!(format!("{err}").contains("repo"));
+    }
+
+    #[test]
+    fn extract_non_string_non_object_source_errors() {
+        let err = extract_marketplace_source("p", "m", &serde_json::json!(42)).unwrap_err();
+        assert!(format!("{err}").contains("unsupported source"));
+    }
+
+    #[test]
+    fn object_url_source_threads_through_to_delegate() {
+        // A non-git object source resolves to a Delegate, proving the object
+        // form is normalized and threaded through resolve_plugin.
+        let fixture = fixture_marketplace(
+            &serde_json::json!({"source": "url", "url": "npm:some-package"}),
+            false,
+        );
+        let cache = CacheManager::new().unwrap();
+        let base = TempDir::new().unwrap();
+        let resolved = resolve_plugin(
+            &market_ref(),
+            &registry("playground", fixture.path()),
+            &cache,
+            base.path(),
+            false,
+        )
+        .unwrap();
+        match resolved {
+            ResolvedPlugin::Delegate { reason, source, .. } => {
+                assert_eq!(reason, DelegateReason::NonGitSource);
+                assert_eq!(source, "npm:some-package");
+            }
+            other @ ResolvedPlugin::Bundle { .. } => panic!("expected Delegate, got {other:?}"),
+        }
     }
 }
