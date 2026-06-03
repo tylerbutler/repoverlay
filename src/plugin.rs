@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::profile::ProfileScope;
+use crate::profile::DelegateScope;
 
 /// How repoverlay installs a marketplace plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -39,7 +39,7 @@ pub(crate) enum PluginRef {
         /// How the plugin is installed.
         install: InstallMode,
         /// Optional scope override for delegate enablement.
-        scope: Option<ProfileScope>,
+        scope: Option<DelegateScope>,
     },
     /// A plugin shipped as a local directory (path starting with `.` or `/`).
     Local {
@@ -133,7 +133,7 @@ impl<'de> Deserialize<'de> for PluginRef {
                 let mut name: Option<String> = None;
                 let mut r#ref: Option<String> = None;
                 let mut install: Option<InstallMode> = None;
-                let mut scope: Option<ProfileScope> = None;
+                let mut scope: Option<DelegateScope> = None;
                 let mut source: Option<PathBuf> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn parses_expanded_table() {
-        let ccl = "plugins =\n  =\n    marketplace = vendor\n    name = cool\n    ref = v1.2.0\n    install = delegate\n    scope = user\n";
+        let ccl = "plugins =\n  =\n    marketplace = vendor\n    name = cool\n    ref = v1.2.0\n    install = delegate\n    scope = project\n";
         let plugins = parse(ccl);
         assert_eq!(
             plugins,
@@ -707,7 +707,7 @@ mod tests {
                 name: "cool".to_string(),
                 r#ref: Some("v1.2.0".to_string()),
                 install: InstallMode::Delegate,
-                scope: Some(ProfileScope::User),
+                scope: Some(DelegateScope::Project),
             }]
         );
     }

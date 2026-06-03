@@ -518,9 +518,49 @@ fn reject_duplicate_profile_target(
 /// Returns `None` if the backup metadata cannot be read or parsed, in which case
 /// callers should fall back to conservative same-target locking.
 fn owned_json_pointers(file: &ProfileFileEntry) -> Option<BTreeSet<String>> {
+    Some(owned_json_backup(file)?.paths.keys().cloned().collect())
+}
+
+/// Read the full pointer-keyed merge backup for an applied `merge-json` file.
+fn owned_json_backup(file: &ProfileFileEntry) -> Option<MergeJsonBackup> {
     let content = fs::read_to_string(&file.source).ok()?;
-    let backup: MergeJsonBackup = serde_json::from_str(&content).ok()?;
-    Some(backup.paths.keys().cloned().collect())
+    serde_json::from_str(&content).ok()
+}
+
+/// Whether `pointer` addresses an `extraKnownMarketplaces` registration entry,
+/// which is shared (reference-counted) across profiles rather than exclusively
+/// owned by one.
+fn is_shared_marketplace_pointer(pointer: &str) -> bool {
+    pointer.starts_with("/extraKnownMarketplaces/")
+}
+
+/// Gather the JSON pointers still owned by other applied profiles for the same
+/// harness and JSON target. Removing the profile named `name` must not delete
+/// these (they remain in use by another profile).
+fn protected_json_pointers(
+    name: &str,
+    harness: &str,
+    repo_target: &Path,
+    json_target: &Path,
+) -> BTreeSet<String> {
+    let mut protected = BTreeSet::new();
+    let Ok(states) = list_profile_states(repo_target) else {
+        return protected;
+    };
+    for state in states {
+        if state.name == name || state.harness != harness {
+            continue;
+        }
+        for file in &state.files {
+            if file.action != "merge-json" || file.target != *json_target {
+                continue;
+            }
+            if let Some(owned) = owned_json_pointers(file) {
+                protected.extend(owned);
+            }
+        }
+    }
+    protected
 }
 
 /// Reject applying a profile whose planned JSON merge would manage JSON-pointer
@@ -534,6 +574,7 @@ fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path, harness: &st
     for action in &plan.actions {
         let ProfileAction::MergeJson {
             target: json_target,
+            value: planned_value,
             owned_paths,
             ..
         } = action
@@ -549,9 +590,25 @@ fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path, harness: &st
                 if file.action != "merge-json" || file.target != *json_target {
                     continue;
                 }
-                match owned_json_pointers(file) {
-                    Some(owned) => {
-                        let mut overlap: Vec<&String> = planned_keys.intersection(&owned).collect();
+                match owned_json_backup(file) {
+                    Some(backup) => {
+                        let owned: BTreeSet<String> = backup.paths.keys().cloned().collect();
+                        // `extraKnownMarketplaces` entries are shareable across
+                        // profiles (reference-counted) — but only when both
+                        // profiles register the SAME source. A same-named
+                        // marketplace pointing at a different value is a genuine
+                        // conflict.
+                        let mut overlap: Vec<&String> = planned_keys
+                            .intersection(&owned)
+                            .filter(|key| {
+                                if is_shared_marketplace_pointer(key) {
+                                    planned_value.pointer(key)
+                                        != backup.paths.get(*key).map(|e| &e.written)
+                                } else {
+                                    true
+                                }
+                            })
+                            .collect();
                         overlap.sort();
                         if !overlap.is_empty() {
                             let keys = overlap
@@ -808,7 +865,7 @@ fn restore_merge_json_backup(
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
-    ensure_removable_profile_json(harness, file)?;
+    ensure_removable_profile_json(harness, repo_target, file)?;
 
     ensure_valid_merge_json_backup_source(name, harness, repo_target, &file.source)?;
     let backup_content = fs::read_to_string(&file.source).with_context(|| {
@@ -835,7 +892,8 @@ fn restore_merge_json_backup(
             file.target.display()
         )
     })?;
-    restore_owned_json_paths(&mut current, &backup, &file.target);
+    let protected = protected_json_pointers(name, harness, repo_target, &file.target);
+    restore_owned_json_paths(&mut current, &backup, &file.target, &protected);
     prune_empty_objects(&mut current);
     if is_empty_profile_json(&current) {
         fs::remove_file(&file.target)
@@ -857,9 +915,28 @@ fn restore_merge_json_backup(
 /// For each owned pointer: restore the prior value if one existed; otherwise
 /// remove the key, but only if its current value still equals what we wrote
 /// (a user edit since apply is left in place, with a warning).
-fn restore_owned_json_paths(current: &mut Value, backup: &MergeJsonBackup, target: &Path) {
+///
+/// Pointers in `protected` are left untouched: another applied profile still
+/// owns them (e.g. a shared `extraKnownMarketplaces` registration), so removing
+/// this profile must not unregister them.
+///
+/// Shared marketplace pointers are special-cased: they are remove-when-last-owner
+/// and never restore a captured `prior`. When the first profile to register a
+/// marketplace records `existed=false`, a later profile sharing it records
+/// `existed=true, prior=<managed value>`. Restoring that managed `prior` would
+/// orphan the registration once the last owner is removed in apply order, so we
+/// instead delete the key whenever it still holds the value we wrote.
+fn restore_owned_json_paths(
+    current: &mut Value,
+    backup: &MergeJsonBackup,
+    target: &Path,
+    protected: &BTreeSet<String>,
+) {
     for (pointer, entry) in &backup.paths {
-        if entry.existed {
+        if protected.contains(pointer) {
+            continue;
+        }
+        if entry.existed && !is_shared_marketplace_pointer(pointer) {
             let prior = entry.prior.clone().unwrap_or(Value::Null);
             set_json_pointer(current, pointer, prior);
         } else {
@@ -1023,8 +1100,15 @@ struct DirRollback {
 }
 
 /// The managed root under which a harness's plugin skill directories live.
-fn managed_skills_root(harness: &str) -> Result<PathBuf> {
-    Ok(harness_home_for(harness)?.join("skills"))
+///
+/// Repo-local: Claude uses `<repo>/.claude/skills`, Copilot uses
+/// `<repo>/.agents/skills`.
+fn managed_skills_root(harness: &str, repo_target: &Path) -> Result<PathBuf> {
+    match harness {
+        "claude" => Ok(repo_target.join(".claude").join("skills")),
+        "copilot" => Ok(repo_target.join(".agents").join("skills")),
+        _ => bail!("Unsupported harness '{harness}'"),
+    }
 }
 
 /// Lexically validate that a plugin-directory target's final component is a
@@ -1055,9 +1139,13 @@ fn validate_plugin_dir_target(target: &Path) -> Result<()> {
 
 /// Verify a plugin-directory target is exactly `<skills-root>/<single-component>`
 /// for the given harness, rejecting anything outside the managed skills root.
-fn ensure_plugin_dir_under_skills_root(harness: &str, target: &Path) -> Result<()> {
+fn ensure_plugin_dir_under_skills_root(
+    harness: &str,
+    repo_target: &Path,
+    target: &Path,
+) -> Result<()> {
     validate_plugin_dir_target(target)?;
-    let skills_root = managed_skills_root(harness)?;
+    let skills_root = managed_skills_root(harness, repo_target)?;
     let parent = target
         .parent()
         .context("Plugin directory target has no parent")?;
@@ -1171,7 +1259,7 @@ fn place_plugin_dir(
     dir_target: &Path,
     action_index: usize,
 ) -> Result<(Option<PathBuf>, bool)> {
-    ensure_plugin_dir_under_skills_root(harness, dir_target)?;
+    ensure_plugin_dir_under_skills_root(harness, repo_target, dir_target)?;
     reject_symlink_profile_target(dir_target)?;
 
     let mut backup = None;
@@ -1231,10 +1319,10 @@ fn rollback_placed_dirs(dirs: &[DirRollback]) -> Result<()> {
 fn restore_placed_plugin_dir(
     _name: &str,
     harness: &str,
-    _repo_target: &Path,
+    repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
-    ensure_plugin_dir_under_skills_root(harness, &file.target)?;
+    ensure_plugin_dir_under_skills_root(harness, repo_target, &file.target)?;
     remove_path(&file.target)?;
     if file.existed {
         if let Some(backup) = &file.backup {
@@ -1254,24 +1342,24 @@ fn restore_placed_plugin_dir(
     Ok(())
 }
 
-fn ensure_removable_profile_json(harness: &str, file: &ProfileFileEntry) -> Result<()> {
-    let allowed_target = match (harness, file.scope) {
-        ("copilot", ProfileScope::User) => harness_home_for("copilot")?.join("mcp.json"),
-        // Claude decomposes plugin MCP servers into the project `.mcp.json`,
-        // which lives at the repo root recorded as the JSON target itself.
-        ("claude", ProfileScope::Repo) => {
-            if file.target.file_name().and_then(|n| n.to_str()) == Some(".mcp.json") {
-                return Ok(());
-            }
-            bail!(
-                "Refusing to restore profile JSON outside managed location: {}",
-                file.target.display()
-            );
-        }
+fn ensure_removable_profile_json(
+    harness: &str,
+    repo_target: &Path,
+    file: &ProfileFileEntry,
+) -> Result<()> {
+    // Plugin MCP servers and Claude delegate settings are decomposed into
+    // repo-local files; only those exact paths may be restored.
+    let allowed: &[PathBuf] = &match harness {
+        "claude" => vec![
+            repo_target.join(".mcp.json"),
+            repo_target.join(".claude").join("settings.json"),
+            repo_target.join(".claude").join("settings.local.json"),
+        ],
+        "copilot" => vec![repo_target.join(".mcp.json")],
         _ => bail!("Unsupported profile JSON target for harness '{harness}'"),
     };
 
-    if file.target != allowed_target {
+    if file.scope != ProfileScope::Repo || !allowed.contains(&file.target) {
         bail!(
             "Refusing to restore profile JSON outside managed location: {}",
             file.target.display()
@@ -1862,7 +1950,12 @@ profiles =
         let backup =
             MergeJsonBackup::from_existing(&value, Some(&existing), &["/servers/rust".to_string()]);
         let mut current = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
-        restore_owned_json_paths(&mut current, &backup, Path::new("mcp.json"));
+        restore_owned_json_paths(
+            &mut current,
+            &backup,
+            Path::new("mcp.json"),
+            &BTreeSet::new(),
+        );
         prune_empty_objects(&mut current);
         assert_eq!(current["servers"]["rust"]["command"], "old");
     }
@@ -1872,7 +1965,12 @@ profiles =
         let value = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
         let backup = MergeJsonBackup::from_existing(&value, None, &["/servers/rust".to_string()]);
         let mut current = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
-        restore_owned_json_paths(&mut current, &backup, Path::new("mcp.json"));
+        restore_owned_json_paths(
+            &mut current,
+            &backup,
+            Path::new("mcp.json"),
+            &BTreeSet::new(),
+        );
         prune_empty_objects(&mut current);
         // The whole empty container is pruned away.
         assert!(current.get("servers").is_none());
@@ -1885,7 +1983,12 @@ profiles =
         let backup = MergeJsonBackup::from_existing(&value, None, &["/servers/rust".to_string()]);
         let mut current =
             serde_json::json!({ "servers": { "rust": { "command": "user-edited" } } });
-        restore_owned_json_paths(&mut current, &backup, Path::new("mcp.json"));
+        restore_owned_json_paths(
+            &mut current,
+            &backup,
+            Path::new("mcp.json"),
+            &BTreeSet::new(),
+        );
         prune_empty_objects(&mut current);
         assert_eq!(current["servers"]["rust"]["command"], "user-edited");
     }

@@ -1,15 +1,39 @@
 #![allow(dead_code)]
 
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::plugin::{InstallMode, PluginBundle, PluginRef, ResolvedPlugin, resolve_plugin};
-use crate::profile::{ProfileConfig, ProfileScope};
+use crate::profile::{DelegateScope, ProfileConfig, ProfileMode, ProfileScope};
 use crate::profile_applicators::{AgentHarness, ProfileApplicator, ProfileContext};
 use crate::profile_plan::{ProfileAction, ProfilePlan, json_pointer};
 
 pub(crate) struct ClaudeApplicator;
+
+/// Accumulated `settings.json` entries for one delegate scope/file.
+struct DelegateSettings {
+    /// `"<plugin>@<marketplace>" = true` enablement keys.
+    enabled: serde_json::Map<String, serde_json::Value>,
+    /// `<marketplace>` registration entries.
+    marketplaces: serde_json::Map<String, serde_json::Value>,
+    /// RFC 6901 pointers this merge owns (for conflict-aware removal).
+    owned_paths: Vec<String>,
+    /// Profile scope used for the resulting `MergeJson` action.
+    scope: ProfileScope,
+}
+
+impl Default for DelegateSettings {
+    fn default() -> Self {
+        Self {
+            enabled: serde_json::Map::new(),
+            marketplaces: serde_json::Map::new(),
+            owned_paths: Vec::new(),
+            scope: ProfileScope::Repo,
+        }
+    }
+}
 
 fn validate_instruction_source(source: &Path) -> Result<()> {
     for component in source.components() {
@@ -54,6 +78,95 @@ impl ClaudeApplicator {
         Ok(command)
     }
 
+    /// Default delegate settings scope when a plugin does not set one.
+    ///
+    /// Persistent profiles default to `project` (team-shareable, committed);
+    /// ephemeral sessions default to `local` so a transient session never
+    /// dirties the tracked `.claude/settings.json`.
+    const fn default_delegate_scope(mode: ProfileMode) -> DelegateScope {
+        match mode {
+            ProfileMode::Persistent => DelegateScope::Project,
+            ProfileMode::Ephemeral => DelegateScope::Local,
+        }
+    }
+
+    /// Resolve a delegate scope to its settings file and the [`ProfileScope`]
+    /// used for the resulting `MergeJson` action.
+    fn delegate_settings_target(
+        scope: DelegateScope,
+        context: &ProfileContext,
+    ) -> (PathBuf, ProfileScope) {
+        match scope {
+            DelegateScope::Project => (
+                context.target.join(".claude").join("settings.json"),
+                ProfileScope::Repo,
+            ),
+            DelegateScope::Local => (
+                context.target.join(".claude").join("settings.local.json"),
+                ProfileScope::Repo,
+            ),
+        }
+    }
+
+    /// Accumulate a delegate plugin's `enabledPlugins` + `extraKnownMarketplaces`
+    /// entries into the per-scope settings map, deduplicating a shared
+    /// marketplace and rejecting a marketplace name that maps to two sources.
+    fn accumulate_delegate(
+        delegates: &mut BTreeMap<PathBuf, DelegateSettings>,
+        marketplace: &str,
+        name: &str,
+        scope: Option<DelegateScope>,
+        context: &ProfileContext,
+    ) -> Result<()> {
+        let url = context
+            .marketplaces
+            .iter()
+            .find(|m| m.name == marketplace)
+            .and_then(|m| m.url.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "delegate plugin '{name}' references marketplace '{marketplace}' \
+                     with no registered URL"
+                )
+            })?;
+
+        let scope = scope.unwrap_or_else(|| Self::default_delegate_scope(context.mode));
+        let (settings_path, action_scope) = Self::delegate_settings_target(scope, context);
+        let entry = delegates.entry(settings_path).or_default();
+        entry.scope = action_scope;
+
+        let enabled_key = format!("{name}@{marketplace}");
+        let enabled_pointer = json_pointer(&["enabledPlugins", &enabled_key]);
+        if entry
+            .enabled
+            .insert(enabled_key, serde_json::Value::Bool(true))
+            .is_none()
+        {
+            entry.owned_paths.push(enabled_pointer);
+        }
+
+        let marketplace_value = serde_json::json!({
+            "source": { "source": "git", "url": url }
+        });
+        let marketplace_pointer = json_pointer(&["extraKnownMarketplaces", marketplace]);
+        match entry.marketplaces.get(marketplace) {
+            Some(existing) if *existing != marketplace_value => {
+                anyhow::bail!(
+                    "marketplace '{marketplace}' maps to conflicting sources within the \
+                     profile; resolve the conflict before applying"
+                );
+            }
+            Some(_) => {}
+            None => {
+                entry
+                    .marketplaces
+                    .insert(marketplace.to_string(), marketplace_value);
+                entry.owned_paths.push(marketplace_pointer);
+            }
+        }
+        Ok(())
+    }
+
     /// Decompose a resolved plugin bundle into native Claude placements,
     /// appending skill-placement and skip actions and accumulating MCP servers
     /// for the single project `.mcp.json` merge.
@@ -63,15 +176,15 @@ impl ClaudeApplicator {
         actions: &mut Vec<ProfileAction>,
         mcp_servers: &mut serde_json::Map<String, serde_json::Value>,
         owned_paths: &mut Vec<String>,
-        harness_home: &Path,
+        repo_target: &Path,
     ) -> Result<()> {
         let bundle = PluginBundle::read(bundle_dir)?;
 
         for skill in &bundle.skills {
             actions.push(ProfileAction::PlacePluginDir {
                 source: bundle_dir.join("skills").join(skill),
-                target: harness_home.join("skills").join(skill),
-                scope: ProfileScope::User,
+                target: repo_target.join(".claude").join("skills").join(skill),
+                scope: ProfileScope::Repo,
             });
         }
 
@@ -131,20 +244,20 @@ impl ProfileApplicator for ClaudeApplicator {
         let mut mcp_servers = serde_json::Map::new();
         let mut owned_paths = Vec::new();
         let mut plugins = Vec::new();
+        let mut delegates: BTreeMap<PathBuf, DelegateSettings> = BTreeMap::new();
 
         for plugin in &profile.plugins {
-            // Delegate plugins are enabled through Claude settings (Task 8); do
-            // not resolve or cache them here.
+            // Delegate plugins are enabled through Claude settings rather than
+            // cached/introspected; do not resolve them.
             if let PluginRef::Marketplace {
                 install: InstallMode::Delegate,
+                marketplace,
                 name,
+                scope,
                 ..
             } = plugin
             {
-                actions.push(ProfileAction::SkipCapability {
-                    capability: format!("plugin:{name}:delegate"),
-                    reason: "delegate plugin enablement is deferred".to_string(),
-                });
+                Self::accumulate_delegate(&mut delegates, marketplace, name, *scope, context)?;
                 continue;
             }
 
@@ -173,16 +286,28 @@ impl ProfileApplicator for ClaudeApplicator {
                         &mut actions,
                         &mut mcp_servers,
                         &mut owned_paths,
-                        &context.harness_home,
+                        &context.target,
                     )?;
                 }
-                ResolvedPlugin::Delegate { name, .. } => {
-                    actions.push(ProfileAction::SkipCapability {
-                        capability: format!("plugin:{name}:delegate"),
-                        reason: "plugin source cannot be cached/introspected; enablement is \
-                                 deferred to the harness"
-                            .to_string(),
-                    });
+                // The source could not be cached/introspected, so fall back to
+                // Claude's native enablement via scoped settings (same as an
+                // explicit `install = delegate`).
+                ResolvedPlugin::Delegate { .. } => {
+                    if let PluginRef::Marketplace {
+                        marketplace,
+                        name,
+                        scope,
+                        ..
+                    } = plugin
+                    {
+                        Self::accumulate_delegate(
+                            &mut delegates,
+                            marketplace,
+                            name,
+                            *scope,
+                            context,
+                        )?;
+                    }
                 }
             }
         }
@@ -193,6 +318,18 @@ impl ProfileApplicator for ClaudeApplicator {
                 value: serde_json::json!({ "mcpServers": mcp_servers }),
                 scope: ProfileScope::Repo,
                 owned_paths,
+            });
+        }
+
+        for (settings_path, settings) in delegates {
+            actions.push(ProfileAction::MergeJson {
+                target: settings_path,
+                value: serde_json::json!({
+                    "enabledPlugins": settings.enabled,
+                    "extraKnownMarketplaces": settings.marketplaces,
+                }),
+                scope: settings.scope,
+                owned_paths: settings.owned_paths,
             });
         }
 
@@ -349,5 +486,127 @@ mod tests {
             ProfileAction::SkipCapability { capability, .. }
                 if capability == "plugin:hooky:hooks"
         )));
+    }
+
+    fn delegate_plugin(scope: Option<DelegateScope>) -> PluginRef {
+        PluginRef::Marketplace {
+            marketplace: "vendor".to_string(),
+            name: "cool".to_string(),
+            r#ref: None,
+            install: InstallMode::Delegate,
+            scope,
+        }
+    }
+
+    fn context_with_marketplace(target: &Path, mode: ProfileMode) -> ProfileContext {
+        ProfileContext {
+            profile_name: "rust-dev".to_string(),
+            target: target.to_path_buf(),
+            profile_asset_dir: target.to_path_buf(),
+            harness_home: target.join("claude-home"),
+            mode,
+            session_id: None,
+            marketplaces: vec![Marketplace {
+                name: "vendor".to_string(),
+                url: Some("https://github.com/vendor/market".to_string()),
+            }],
+            cache: CacheManager::new().unwrap(),
+        }
+    }
+
+    fn find_merge<'a>(
+        plan: &'a ProfilePlan,
+        file_name: &str,
+    ) -> (&'a Path, &'a serde_json::Value, &'a Vec<String>) {
+        plan.actions
+            .iter()
+            .find_map(|a| match a {
+                ProfileAction::MergeJson {
+                    target,
+                    value,
+                    owned_paths,
+                    ..
+                } if target.ends_with(file_name) => Some((target.as_path(), value, owned_paths)),
+                _ => None,
+            })
+            .expect("expected a settings merge action")
+    }
+
+    #[test]
+    fn delegate_plugin_writes_project_settings_by_default_when_persistent() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path();
+        let profile = ProfileConfig {
+            plugins: vec![delegate_plugin(None)],
+            ..ProfileConfig::default()
+        };
+        let context = context_with_marketplace(target, ProfileMode::Persistent);
+
+        let plan = ClaudeApplicator.plan(&profile, &context).unwrap();
+        let (path, value, owned) = find_merge(&plan, ".claude/settings.json");
+        assert!(path.starts_with(target));
+        assert_eq!(value["enabledPlugins"]["cool@vendor"], true);
+        assert_eq!(
+            value["extraKnownMarketplaces"]["vendor"]["source"]["url"],
+            "https://github.com/vendor/market"
+        );
+        assert!(owned.contains(&"/enabledPlugins/cool@vendor".to_string()));
+        assert!(owned.contains(&"/extraKnownMarketplaces/vendor".to_string()));
+    }
+
+    #[test]
+    fn delegate_plugin_writes_local_settings_when_ephemeral() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let profile = ProfileConfig {
+            plugins: vec![delegate_plugin(None)],
+            ..ProfileConfig::default()
+        };
+        let context = context_with_marketplace(temp.path(), ProfileMode::Ephemeral);
+
+        let plan = ClaudeApplicator.plan(&profile, &context).unwrap();
+        find_merge(&plan, ".claude/settings.local.json");
+    }
+
+    #[test]
+    fn delegate_plugins_sharing_marketplace_dedupe_registration() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let other = PluginRef::Marketplace {
+            marketplace: "vendor".to_string(),
+            name: "other".to_string(),
+            r#ref: None,
+            install: InstallMode::Delegate,
+            scope: None,
+        };
+        let profile = ProfileConfig {
+            plugins: vec![delegate_plugin(None), other],
+            ..ProfileConfig::default()
+        };
+        let context = context_with_marketplace(temp.path(), ProfileMode::Persistent);
+
+        let plan = ClaudeApplicator.plan(&profile, &context).unwrap();
+        let (_, value, owned) = find_merge(&plan, ".claude/settings.json");
+        assert_eq!(value["enabledPlugins"]["cool@vendor"], true);
+        assert_eq!(value["enabledPlugins"]["other@vendor"], true);
+        assert_eq!(
+            owned
+                .iter()
+                .filter(|p| p.as_str() == "/extraKnownMarketplaces/vendor")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn delegate_plugin_without_registered_marketplace_fails() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let profile = ProfileConfig {
+            plugins: vec![delegate_plugin(None)],
+            ..ProfileConfig::default()
+        };
+        let mut context = context_with_marketplace(temp.path(), ProfileMode::Persistent);
+        context.marketplaces.clear();
+
+        let err = ClaudeApplicator.plan(&profile, &context).unwrap_err();
+        assert!(format!("{err}").contains("no registered URL"));
     }
 }

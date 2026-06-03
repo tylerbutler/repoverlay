@@ -65,15 +65,15 @@ impl CopilotApplicator {
         actions: &mut Vec<ProfileAction>,
         servers: &mut serde_json::Map<String, serde_json::Value>,
         owned_paths: &mut Vec<String>,
-        harness_home: &Path,
+        repo_target: &Path,
     ) -> Result<()> {
         let bundle = PluginBundle::read(bundle_dir)?;
 
         for skill in &bundle.skills {
             actions.push(ProfileAction::PlacePluginDir {
                 source: bundle_dir.join("skills").join(skill),
-                target: harness_home.join("skills").join(skill),
-                scope: ProfileScope::User,
+                target: repo_target.join(".agents").join("skills").join(skill),
+                scope: ProfileScope::Repo,
             });
         }
 
@@ -182,7 +182,7 @@ impl ProfileApplicator for CopilotApplicator {
                         &mut actions,
                         &mut servers,
                         &mut owned_paths,
-                        &context.harness_home,
+                        &context.target,
                     )?;
                 }
                 ResolvedPlugin::Delegate { name, .. } => {
@@ -197,9 +197,9 @@ impl ProfileApplicator for CopilotApplicator {
 
         if !servers.is_empty() {
             actions.push(ProfileAction::MergeJson {
-                target: context.harness_home.join("mcp.json"),
+                target: context.target.join(".mcp.json"),
                 value: serde_json::json!({ "servers": servers }),
-                scope: ProfileScope::User,
+                scope: ProfileScope::Repo,
                 owned_paths,
             });
         }
@@ -274,7 +274,7 @@ mod tests {
                 _ => None,
             })
             .expect("expected an mcp.json merge action");
-        assert!(mtarget.ends_with("copilot-home/mcp.json"));
+        assert!(mtarget.ends_with(".mcp.json"));
         assert_eq!(owned, &vec!["/servers/rust".to_string()]);
         assert_eq!(value["servers"]["rust"]["command"], "uvx");
     }

@@ -375,8 +375,8 @@ profiles =
         .assert()
         .success();
 
-    let placed = copilot_home.path().join("skills/fmt/SKILL.md");
-    assert!(placed.exists(), "skill should be placed under copilot home");
+    let placed = ctx.repo_path().join(".agents/skills/fmt/SKILL.md");
+    assert!(placed.exists(), "skill should be placed under repo .agents");
     assert_eq!(fs::read_to_string(&placed).unwrap(), "# fmt skill");
 
     let state = fs::read_to_string(
@@ -406,7 +406,7 @@ profiles =
         .success();
 
     assert!(
-        !copilot_home.path().join("skills/fmt").exists(),
+        !ctx.repo_path().join(".agents/skills/fmt").exists(),
         "skill placement should be removed on profile remove"
     );
 }
@@ -416,8 +416,8 @@ fn profile_remove_restores_displaced_plugin_skill() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    // Pre-existing user content at the placement target must be restored on remove.
-    let user_skill = copilot_home.path().join("skills/fmt/SKILL.md");
+    // Pre-existing content at the placement target must be restored on remove.
+    let user_skill = ctx.repo_path().join(".agents/skills/fmt/SKILL.md");
     fs::create_dir_all(user_skill.parent().unwrap()).unwrap();
     fs::write(&user_skill, "# user's own fmt").unwrap();
 
@@ -469,6 +469,161 @@ profiles =
         fs::read_to_string(&user_skill).unwrap(),
         "# user's own fmt",
         "pre-existing user content should be restored"
+    );
+}
+
+#[test]
+fn profile_apply_delegate_plugin_writes_and_cleans_claude_settings() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let settings = ctx.repo_path().join(".claude/settings.json");
+    ctx.write_repo_config(
+        r"
+marketplaces =
+  =
+    name = vendor
+    url = https://example.com/vendor/market.git
+profiles =
+  rust-dev =
+    plugins =
+      =
+        marketplace = vendor
+        name = cool
+        install = delegate
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(written["enabledPlugins"]["cool@vendor"], true);
+    assert_eq!(
+        written["extraKnownMarketplaces"]["vendor"]["source"]["url"],
+        "https://example.com/vendor/market.git"
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(
+        !settings.exists(),
+        "settings.json should be removed once empty after cleanup"
+    );
+}
+
+#[test]
+fn profile_remove_keeps_marketplace_shared_by_another_profile() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let settings = ctx.repo_path().join(".claude/settings.json");
+    ctx.write_repo_config(
+        r"
+marketplaces =
+  =
+    name = vendor
+    url = https://example.com/vendor/market.git
+profiles =
+  alpha =
+    plugins =
+      =
+        marketplace = vendor
+        name = cool
+        install = delegate
+  beta =
+    plugins =
+      =
+        marketplace = vendor
+        name = other
+        install = delegate
+",
+    );
+
+    for profile in ["alpha", "beta"] {
+        cargo_bin_cmd!("repoverlay")
+            .args([
+                "profile",
+                "apply",
+                profile,
+                "--harness",
+                "claude",
+                "--target",
+                ctx.repo_path().to_str().unwrap(),
+            ])
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+            .assert()
+            .success();
+    }
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "alpha",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    // beta still owns the shared marketplace registration, so it must remain;
+    // alpha's own plugin enablement is gone.
+    let after: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+    assert!(after["extraKnownMarketplaces"]["vendor"].is_object());
+    assert_eq!(after["enabledPlugins"]["other@vendor"], true);
+    assert!(after["enabledPlugins"].get("cool@vendor").is_none());
+
+    // Removing the last owner (in apply order, after alpha) must fully
+    // unregister the shared marketplace rather than orphaning it.
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "beta",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(
+        !settings.exists(),
+        "settings.json should be removed once the last marketplace owner is gone"
     );
 }
 
@@ -660,7 +815,7 @@ fn copilot_profile_removes_generated_mcp_json_after_cleanup() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    let mcp_json = copilot_home.path().join("mcp.json");
+    let mcp_json = ctx.repo_path().join(".mcp.json");
     ctx.create_repo_file(
         "plugins/rust/.mcp.json",
         r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]}}}"#,
@@ -700,7 +855,7 @@ fn copilot_profile_restores_existing_mcp_json_after_cleanup() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    let mcp_json = copilot_home.path().join("mcp.json");
+    let mcp_json = ctx.repo_path().join(".mcp.json");
     let original_mcp_json = r#"{"servers":{"existing":{"command":"keep"}}}"#;
     fs::write(&mcp_json, original_mcp_json).unwrap();
     ctx.create_repo_file(
@@ -1078,7 +1233,7 @@ fn profile_remove_preserves_unrelated_mcp_changes() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    let mcp_json = copilot_home.path().join("mcp.json");
+    let mcp_json = ctx.repo_path().join(".mcp.json");
     ctx.create_repo_file(
         "plugins/rust/.mcp.json",
         r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]}}}"#,
@@ -1208,7 +1363,7 @@ fn profile_apply_rolls_back_overlay_when_later_action_fails() {
         .join("dotenv");
     fs::create_dir_all(&overlay_path).unwrap();
     fs::write(overlay_path.join(".envrc"), "export PROFILE_OVERLAY=1").unwrap();
-    fs::write(copilot_home.path().join("mcp.json"), "{invalid json").unwrap();
+    fs::write(ctx.repo_path().join(".mcp.json"), "{invalid json").unwrap();
     ctx.create_repo_file(
         "plugins/rust/.mcp.json",
         r#"{"mcpServers":{"rust":{"command":"uvx"}}}"#,
@@ -1551,7 +1706,7 @@ profiles =
         .repo_path()
         .join(".repoverlay/profiles/alpha.copilot.ccl");
     let original_alpha_state = fs::read_to_string(&alpha_state).unwrap();
-    let original_mcp = fs::read_to_string(copilot_home.path().join("mcp.json")).unwrap();
+    let original_mcp = fs::read_to_string(ctx.repo_path().join(".mcp.json")).unwrap();
 
     cargo_bin_cmd!("repoverlay")
         .args([
@@ -1578,7 +1733,7 @@ profiles =
         original_alpha_state
     );
     assert_eq!(
-        fs::read_to_string(copilot_home.path().join("mcp.json")).unwrap(),
+        fs::read_to_string(ctx.repo_path().join(".mcp.json")).unwrap(),
         original_mcp
     );
     assert!(
@@ -1632,7 +1787,7 @@ profiles =
     }
 
     let mcp: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(copilot_home.path().join("mcp.json")).unwrap())
+        serde_json::from_str(&fs::read_to_string(ctx.repo_path().join(".mcp.json")).unwrap())
             .unwrap();
     assert_eq!(mcp["servers"]["rust"]["command"], "uvx");
     assert_eq!(mcp["servers"]["other"]["command"], "other");

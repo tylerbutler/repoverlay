@@ -238,6 +238,21 @@ pub(crate) enum ProfileScope {
     User,
 }
 
+/// Settings scope for the delegate-to-Claude plugin fallback.
+///
+/// Selects which repo-local Claude `settings.json` file receives the
+/// `enabledPlugins` / `extraKnownMarketplaces` entries. Distinct from
+/// [`ProfileScope`] because the delegate path needs a project/local split.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)]
+pub(crate) enum DelegateScope {
+    /// `.claude/settings.json` (team-shareable, committed)
+    Project,
+    /// `.claude/settings.local.json` (gitignored)
+    Local,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct SkippedCapability {
