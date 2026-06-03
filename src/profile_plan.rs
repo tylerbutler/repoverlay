@@ -39,6 +39,10 @@ pub(crate) enum ProfileAction {
         target: PathBuf,
         value: Value,
         scope: ProfileScope,
+        /// RFC 6901 JSON-pointer paths this merge owns (e.g. `/servers/rust`).
+        /// Ownership is tracked per-pointer for conflict detection and clean
+        /// removal; each owned pointer's value is replaced wholesale.
+        owned_paths: Vec<String>,
     },
     SkipCapability {
         capability: String,
@@ -177,6 +181,7 @@ fn apply_profile_with_harness_home(
                     target: json_target,
                     value,
                     scope,
+                    owned_paths,
                 } => {
                     if scope == ProfileScope::User {
                         rollbacks.push(capture_file_rollback(&json_target)?);
@@ -188,8 +193,9 @@ fn apply_profile_with_harness_home(
                         &json_target,
                         action_index,
                         &value,
+                        &owned_paths,
                     )?;
-                    merge_json_value(&json_target, &value)?;
+                    merge_json_value(&json_target, &value, &owned_paths)?;
                     state.files.push(ProfileFileEntry {
                         source: backup_source,
                         target: json_target,
@@ -425,43 +431,34 @@ fn reject_duplicate_profile_target(
     Ok(())
 }
 
-/// Collect the MCP server keys a `merge-json` value would manage.
-fn planned_mcp_server_keys(value: &Value) -> BTreeSet<String> {
-    value
-        .get("servers")
-        .and_then(Value::as_object)
-        .map(|servers| servers.keys().cloned().collect())
-        .unwrap_or_default()
-}
-
-/// Read the MCP server keys an already-applied profile manages for a target.
+/// Read the JSON-pointer paths an already-applied profile manages for a target.
 ///
 /// Returns `None` if the backup metadata cannot be read or parsed, in which case
 /// callers should fall back to conservative same-target locking.
-fn owned_mcp_server_keys(file: &ProfileFileEntry) -> Option<BTreeSet<String>> {
+fn owned_json_pointers(file: &ProfileFileEntry) -> Option<BTreeSet<String>> {
     let content = fs::read_to_string(&file.source).ok()?;
     let backup: MergeJsonBackup = serde_json::from_str(&content).ok()?;
-    Some(backup.servers.keys().cloned().collect())
+    Some(backup.paths.keys().cloned().collect())
 }
 
-/// Reject applying a profile whose planned MCP merge would manage `mcp.json`
-/// server keys already owned by another applied profile for the same harness.
+/// Reject applying a profile whose planned JSON merge would manage JSON-pointer
+/// paths already owned by another applied profile for the same harness.
 ///
-/// Precise key tracking is used when the other profile's backup metadata is
+/// Precise pointer tracking is used when the other profile's backup metadata is
 /// readable; otherwise we conservatively reject any other profile that already
-/// manages the same `mcp.json` target.
+/// manages the same JSON target.
 fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path, harness: &str) -> Result<()> {
     let existing = list_profile_states(target)?;
     for action in &plan.actions {
         let ProfileAction::MergeJson {
             target: json_target,
-            value,
+            owned_paths,
             ..
         } = action
         else {
             continue;
         };
-        let planned_keys = planned_mcp_server_keys(value);
+        let planned_keys: BTreeSet<String> = owned_paths.iter().cloned().collect();
         for state in &existing {
             if state.harness != harness {
                 continue;
@@ -470,7 +467,7 @@ fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path, harness: &st
                 if file.action != "merge-json" || file.target != *json_target {
                     continue;
                 }
-                match owned_mcp_server_keys(file) {
+                match owned_json_pointers(file) {
                     Some(owned) => {
                         let mut overlap: Vec<&String> = planned_keys.intersection(&owned).collect();
                         overlap.sort();
@@ -481,7 +478,7 @@ fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path, harness: &st
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             bail!(
-                                "MCP server key(s) {keys} in {} are already managed by applied \
+                                "JSON path(s) {keys} in {} are already managed by applied \
                                  profile '{}' for {harness}; remove that profile first",
                                 json_target.display(),
                                 state.name
@@ -638,6 +635,7 @@ fn capture_merge_json_backup(
     merge_target: &Path,
     action_index: usize,
     value: &Value,
+    owned_paths: &[String],
 ) -> Result<PathBuf> {
     let backup_path = merge_json_backup_path(repo_target, name, harness, action_index)?;
     if let Some(parent) = backup_path.parent() {
@@ -666,7 +664,7 @@ fn capture_merge_json_backup(
             });
         }
     };
-    let backup = MergeJsonBackup::from_existing(value, existing.as_ref());
+    let backup = MergeJsonBackup::from_existing(value, existing.as_ref(), owned_paths);
     fs::write(&backup_path, serde_json::to_vec_pretty(&backup)?).with_context(|| {
         format!(
             "Failed to back up profile JSON target {} to {}",
@@ -677,38 +675,48 @@ fn capture_merge_json_backup(
     Ok(backup_path)
 }
 
+/// Backup metadata for a `merge-json` action, keyed by RFC 6901 JSON pointer.
+///
+/// For each owned pointer we record whether a prior value existed (and what it
+/// was) and the value we wrote, so removal can restore the prior value, remove a
+/// key we added (only if it still equals what we wrote), or leave a value the
+/// user has since changed.
 #[derive(Debug, Deserialize, Serialize)]
 struct MergeJsonBackup {
-    servers: BTreeMap<String, MergeJsonServerBackup>,
+    paths: BTreeMap<String, MergeJsonPathBackup>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct MergeJsonServerBackup {
+struct MergeJsonPathBackup {
     existed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<Value>,
+    prior: Option<Value>,
+    written: Value,
 }
 
 impl MergeJsonBackup {
-    fn from_existing(applied_value: &Value, existing: Option<&Value>) -> Self {
-        let mut servers = BTreeMap::new();
-        let Some(managed_servers) = applied_value.get("servers").and_then(Value::as_object) else {
-            return Self { servers };
-        };
-        let existing_servers = existing
-            .and_then(|value| value.get("servers"))
-            .and_then(Value::as_object);
-        for server_name in managed_servers.keys() {
-            let prior_value = existing_servers.and_then(|servers| servers.get(server_name));
-            servers.insert(
-                server_name.clone(),
-                MergeJsonServerBackup {
-                    existed: prior_value.is_some(),
-                    value: prior_value.cloned(),
+    fn from_existing(
+        applied_value: &Value,
+        existing: Option<&Value>,
+        owned_paths: &[String],
+    ) -> Self {
+        let mut paths = BTreeMap::new();
+        for pointer in owned_paths {
+            let written = applied_value
+                .pointer(pointer)
+                .cloned()
+                .unwrap_or(Value::Null);
+            let prior = existing.and_then(|value| value.pointer(pointer));
+            paths.insert(
+                pointer.clone(),
+                MergeJsonPathBackup {
+                    existed: prior.is_some(),
+                    prior: prior.cloned(),
+                    written,
                 },
             );
         }
-        Self { servers }
+        Self { paths }
     }
 }
 
@@ -745,7 +753,8 @@ fn restore_merge_json_backup(
             file.target.display()
         )
     })?;
-    restore_managed_mcp_servers(&mut current, &backup)?;
+    restore_owned_json_paths(&mut current, &backup, &file.target);
+    prune_empty_objects(&mut current);
     if is_empty_profile_json(&current) {
         fs::remove_file(&file.target)
             .with_context(|| format!("Failed to remove {}", file.target.display()))?;
@@ -761,41 +770,115 @@ fn restore_merge_json_backup(
     Ok(())
 }
 
-fn restore_managed_mcp_servers(current: &mut Value, backup: &MergeJsonBackup) -> Result<()> {
-    let current_object = current
-        .as_object_mut()
-        .context("Current profile JSON target must be a JSON object during removal")?;
-    let servers_value = current_object
-        .entry("servers")
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
-    let servers = servers_value
-        .as_object_mut()
-        .context("Current profile JSON target field 'servers' must be an object during removal")?;
-
-    for (server_name, prior) in &backup.servers {
-        if prior.existed {
-            let value = prior.value.clone().with_context(|| {
-                format!("Profile JSON backup for server '{server_name}' is missing its prior value")
-            })?;
-            servers.insert(server_name.clone(), value);
+/// Reverse a `merge-json` action using its pointer-keyed backup.
+///
+/// For each owned pointer: restore the prior value if one existed; otherwise
+/// remove the key, but only if its current value still equals what we wrote
+/// (a user edit since apply is left in place, with a warning).
+fn restore_owned_json_paths(current: &mut Value, backup: &MergeJsonBackup, target: &Path) {
+    for (pointer, entry) in &backup.paths {
+        if entry.existed {
+            let prior = entry.prior.clone().unwrap_or(Value::Null);
+            set_json_pointer(current, pointer, prior);
         } else {
-            servers.remove(server_name);
+            match current.pointer(pointer) {
+                Some(actual) if *actual == entry.written => {
+                    remove_json_pointer(current, pointer);
+                }
+                Some(_) => {
+                    eprintln!(
+                        "Warning: leaving {pointer} in {} — it was changed after the profile \
+                         was applied",
+                        target.display()
+                    );
+                }
+                None => {}
+            }
         }
     }
+}
 
-    Ok(())
+/// Build an RFC 6901 JSON pointer from path segments, escaping `~` and `/`.
+fn json_pointer(segments: &[&str]) -> String {
+    let mut out = String::new();
+    for segment in segments {
+        out.push('/');
+        out.push_str(&segment.replace('~', "~0").replace('/', "~1"));
+    }
+    out
+}
+
+/// Split a JSON pointer into its unescaped tokens.
+fn pointer_tokens(pointer: &str) -> Vec<String> {
+    pointer
+        .split('/')
+        .skip(1)
+        .map(|token| token.replace("~1", "/").replace("~0", "~"))
+        .collect()
+}
+
+/// Set the value at a JSON pointer, creating intermediate objects as needed.
+fn set_json_pointer(root: &mut Value, pointer: &str, new_value: Value) {
+    let tokens = pointer_tokens(pointer);
+    if tokens.is_empty() {
+        *root = new_value;
+        return;
+    }
+    let mut current = root;
+    for (index, token) in tokens.iter().enumerate() {
+        if !current.is_object() {
+            *current = Value::Object(serde_json::Map::new());
+        }
+        let map = current
+            .as_object_mut()
+            .expect("current was just ensured to be an object");
+        if index + 1 == tokens.len() {
+            map.insert(token.clone(), new_value);
+            return;
+        }
+        current = map
+            .entry(token.clone())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    }
+}
+
+/// Remove the value at a JSON pointer, if present.
+fn remove_json_pointer(root: &mut Value, pointer: &str) {
+    let tokens = pointer_tokens(pointer);
+    let Some((last, parents)) = tokens.split_last() else {
+        return;
+    };
+    let mut current = root;
+    for token in parents {
+        let Some(next) = current.as_object_mut().and_then(|map| map.get_mut(token)) else {
+            return;
+        };
+        current = next;
+    }
+    if let Some(map) = current.as_object_mut() {
+        map.remove(last);
+    }
+}
+
+/// Recursively remove empty objects left behind after restoration.
+fn prune_empty_objects(value: &mut Value) {
+    let Value::Object(map) = value else {
+        return;
+    };
+    let empty_keys: Vec<String> = map
+        .iter_mut()
+        .filter_map(|(key, child)| {
+            prune_empty_objects(child);
+            matches!(child, Value::Object(inner) if inner.is_empty()).then(|| key.clone())
+        })
+        .collect();
+    for key in empty_keys {
+        map.remove(&key);
+    }
 }
 
 fn is_empty_profile_json(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    object.is_empty()
-        || (object.len() == 1
-            && object
-                .get("servers")
-                .and_then(Value::as_object)
-                .is_some_and(serde_json::Map::is_empty))
+    value.as_object().is_some_and(serde_json::Map::is_empty)
 }
 
 fn restore_write_file_backup(
@@ -1016,7 +1099,10 @@ fn reject_symlink_profile_target(target: &Path) -> Result<()> {
     }
 }
 
-fn merge_json_value(target: &Path, value: &Value) -> Result<()> {
+/// Apply a `merge-json` action by writing each owned JSON-pointer's value into
+/// the target document, replacing it wholesale and creating intermediate
+/// objects as needed. Unowned content in the target is preserved.
+fn merge_json_value(target: &Path, value: &Value, owned_paths: &[String]) -> Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1026,47 +1112,12 @@ fn merge_json_value(target: &Path, value: &Value) -> Result<()> {
     } else {
         Value::Object(serde_json::Map::new())
     };
-    merge_json_objects(&mut merged, value);
+    for pointer in owned_paths {
+        let new_value = value.pointer(pointer).cloned().unwrap_or(Value::Null);
+        set_json_pointer(&mut merged, pointer, new_value);
+    }
     crate::state::atomic_write(target, &serde_json::to_string_pretty(&merged)?)?;
     Ok(())
-}
-
-// NOTE: This intentionally does not reuse `json_merge::deep_merge`. That helper
-// deep-merges every key uniformly, but profile MCP merges need replace-semantics
-// for the `servers` subtree (see `merge_json_servers`), so `deep_merge` is not a
-// drop-in substitute here.
-fn merge_json_objects(base: &mut Value, overlay: &Value) {
-    match (base, overlay) {
-        (Value::Object(base_map), Value::Object(overlay_map)) => {
-            for (key, value) in overlay_map {
-                let base_value = base_map.entry(key.clone()).or_insert(Value::Null);
-                if key == "servers" {
-                    merge_json_servers(base_value, value);
-                } else {
-                    merge_json_objects(base_value, value);
-                }
-            }
-        }
-        (base_value, overlay_value) => *base_value = overlay_value.clone(),
-    }
-}
-
-fn merge_json_servers(base: &mut Value, overlay: &Value) {
-    let Value::Object(overlay_servers) = overlay else {
-        *base = overlay.clone();
-        return;
-    };
-
-    if !base.is_object() {
-        *base = Value::Object(serde_json::Map::new());
-    }
-    let Value::Object(base_servers) = base else {
-        unreachable!("base was just initialized as an object");
-    };
-
-    for (server_name, server_value) in overlay_servers {
-        base_servers.insert(server_name.clone(), server_value.clone());
-    }
 }
 
 fn simple_profile_fingerprint(profile: &crate::profile::ProfileConfig) -> u64 {
@@ -1169,6 +1220,7 @@ profiles =
                     target: target.clone(),
                     value: serde_json::json!({ "servers": { "rust": { "command": "uvx" } } }),
                     scope: ProfileScope::User,
+                    owned_paths: vec!["/servers/rust".to_string()],
                 },
                 ProfileAction::WriteFile {
                     source: temp.path().join("missing.md"),
@@ -1358,6 +1410,7 @@ profiles =
                     target: PathBuf::new(),
                     value: serde_json::json!({}),
                     scope: ProfileScope::User,
+                    owned_paths: Vec::new(),
                 },
             ],
         };
@@ -1380,6 +1433,7 @@ profiles =
         merge_json_value(
             &target,
             &serde_json::json!({ "servers": { "rust": { "command": "uvx" } } }),
+            &["/servers/rust".to_string()],
         )
         .unwrap();
 
@@ -1409,6 +1463,7 @@ profiles =
                     }
                 }
             }),
+            &["/servers/rust".to_string()],
         )
         .unwrap();
 
@@ -1418,6 +1473,73 @@ profiles =
         assert_eq!(merged["servers"]["rust"]["env"], serde_json::json!({}));
         assert!(merged["servers"]["rust"]["env"]["SECRET"].is_null());
         assert_eq!(merged["servers"]["other"]["command"], "keep");
+    }
+
+    #[test]
+    fn merge_json_value_supports_arbitrary_pointer_container() {
+        // Claude's `.mcp.json` uses `mcpServers` rather than `servers`.
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join(".mcp.json");
+        fs::write(&target, r#"{"mcpServers":{"keep":{"command":"x"}}}"#).unwrap();
+
+        merge_json_value(
+            &target,
+            &serde_json::json!({ "mcpServers": { "rust": { "command": "uvx" } } }),
+            &["/mcpServers/rust".to_string()],
+        )
+        .unwrap();
+
+        let merged: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(target).unwrap()).unwrap();
+        assert_eq!(merged["mcpServers"]["rust"]["command"], "uvx");
+        assert_eq!(merged["mcpServers"]["keep"]["command"], "x");
+    }
+
+    #[test]
+    fn backup_records_pointer_prior_and_written_values() {
+        let value = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
+        let existing = serde_json::json!({ "servers": { "rust": { "command": "old" } } });
+        let backup =
+            MergeJsonBackup::from_existing(&value, Some(&existing), &["/servers/rust".to_string()]);
+        let entry = backup.paths.get("/servers/rust").unwrap();
+        assert!(entry.existed);
+        assert_eq!(entry.prior, Some(serde_json::json!({ "command": "old" })));
+        assert_eq!(entry.written, serde_json::json!({ "command": "new" }));
+    }
+
+    #[test]
+    fn unmerge_restores_prior_value_when_key_preexisted() {
+        let value = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
+        let existing = serde_json::json!({ "servers": { "rust": { "command": "old" } } });
+        let backup =
+            MergeJsonBackup::from_existing(&value, Some(&existing), &["/servers/rust".to_string()]);
+        let mut current = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
+        restore_owned_json_paths(&mut current, &backup, Path::new("mcp.json"));
+        prune_empty_objects(&mut current);
+        assert_eq!(current["servers"]["rust"]["command"], "old");
+    }
+
+    #[test]
+    fn unmerge_removes_added_key_when_value_unchanged() {
+        let value = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
+        let backup = MergeJsonBackup::from_existing(&value, None, &["/servers/rust".to_string()]);
+        let mut current = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
+        restore_owned_json_paths(&mut current, &backup, Path::new("mcp.json"));
+        prune_empty_objects(&mut current);
+        // The whole empty container is pruned away.
+        assert!(current.get("servers").is_none());
+        assert!(is_empty_profile_json(&current));
+    }
+
+    #[test]
+    fn unmerge_leaves_added_key_when_value_changed_by_user() {
+        let value = serde_json::json!({ "servers": { "rust": { "command": "new" } } });
+        let backup = MergeJsonBackup::from_existing(&value, None, &["/servers/rust".to_string()]);
+        let mut current =
+            serde_json::json!({ "servers": { "rust": { "command": "user-edited" } } });
+        restore_owned_json_paths(&mut current, &backup, Path::new("mcp.json"));
+        prune_empty_objects(&mut current);
+        assert_eq!(current["servers"]["rust"]["command"], "user-edited");
     }
 
     #[test]
