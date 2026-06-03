@@ -506,6 +506,16 @@ pub(crate) fn merge_repo_config(
 }
 
 /// Generate a config file for multi-source configuration.
+//
+// TODO(santa#205, santa#206): this re-serializes the typed struct via
+// `sickle::to_string`, which DROPS user comments and blank lines on every save
+// (verified: `source add` reduces a commented config to zero comments). Once
+// sickle ships faithful comment round-trip (santa#205) and a
+// comment/format-preserving read-modify-write API (santa#206), switch
+// `save_config`/`save_repo_config` to load the existing document, merge the
+// updated data in, and reprint — preserving the user's comments. Until then,
+// edits to a commented config must be made by hand. Land before this long-lived
+// `profiles` branch merges.
 pub(crate) fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
     sickle::to_string(config).expect("RepoverlayConfig serialization should not fail")
 }
