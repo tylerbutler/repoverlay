@@ -37,22 +37,26 @@ The key distinction in repoverlay is between a **definition** (a reusable, repo-
 
 An **overlay** is a *definition*: a named bundle of config files. Nothing about an overlay is tied to a repo — `rust-base` is just "these files." It only becomes repo-associated when you `apply` it, at which point the files land in *that* repo's working tree and are excluded via `.git/info/exclude`. So "overlays are associated with a repo" is only true of the **applied instance**, not the overlay itself.
 
-A **profile** is a *recipe* one layer up: it composes overlays **and** adds AI-harness capabilities (MCP servers, skills, plugins, harness/user-level instructions). Like overlays, a profile is a portable definition that gets applied to a specific repo — but its effects span two scopes:
+A **profile** is a *recipe* one layer up: it composes overlays **and** adds AI-harness capabilities — instruction files and plugins. Plugins are the bundling unit for skills and MCP servers, in the same Claude-style format used by the Claude Code ecosystem. Like overlays, a profile is a portable definition that gets applied to a specific repo, and everything it applies lands **inside that repo's working tree** (git-excluded):
 
 | | Payload | Scope of effect when applied |
 | --- | --- | --- |
-| **Overlay** | files only | always **repo-scoped** (working tree) |
-| **Profile** | overlays **+** capabilities | spans **repo-scoped** *and* **user/harness-scoped** |
+| **Overlay** | files only | **repo-scoped** (working tree) |
+| **Profile** | overlays **+** capabilities | **repo-scoped** (working tree) |
 
-In short: an **overlay** is an *ingredient* (repo-facing, files only), a **profile** is a *recipe* (harness-facing) that lists overlays plus the capabilities to turn on. A profile *references* overlays rather than replacing them.
+In short: an **overlay** is an *ingredient* (files only), a **profile** is a *recipe* that lists overlays plus the plugins/instructions to turn on. A profile *references* overlays rather than replacing them. There is no user- or machine-global scope — a profile only ever touches the repo you apply it to.
 
 ### Object reference
 
 repoverlay manages these kinds of objects:
 
 - **Overlay** — a reusable, repo-agnostic bundle of config files. Becomes repo-associated only when applied. Lifecycle: `create` → `apply` → `update` → `remove`.
-- **Profile** — a recipe that composes overlays with AI harness capabilities (MCP servers, skills, plugins, harness/user-level instruction files). Applied persistently with `profile apply` or ephemerally with harness commands such as `repoverlay copilot --profile rust-dev`.
+- **Profile** — a recipe that composes overlays with AI harness capabilities (plugins bundling skills + MCP servers, and instruction files), all placed repo-local. Applied persistently with `profile apply` or ephemerally with harness commands such as `repoverlay copilot --profile rust-dev` or `repoverlay claude --profile rust-dev`.
+- **Plugin** — a Claude-style bundle of skills and/or MCP servers. Referenced from a profile via a marketplace (`marketplace/plugin`) or a local path; scaffold a new one with `repoverlay plugin new`.
+- **Marketplace** — a named git repository registry that plugins are resolved from, cached locally like overlay sources.
 - **Source** — a configured location (GitHub repo or local directory) to find overlays. Lifecycle: `source add` → `source list` → `source remove`.
+- **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
+- **File** — an individual file within an overlay. Managed via `edit` and `sync`.
 - **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
 - **File** — an individual file within an overlay. Managed via `edit` and `sync`.
 
@@ -129,9 +133,10 @@ Ephemeral mode applies the profile only while the harness process runs:
 
 ```bash
 repoverlay copilot --profile rust-dev -- --help
+repoverlay claude --profile rust-dev
 ```
 
-Copilot v1 applies overlays, MCP servers, and harness/user-level instruction files. Skills and plugins are accepted in profile config but skipped with warnings until Copilot placement semantics are defined.
+Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copilot) or `.claude/skills/` (Claude), plugin MCP servers merge into the repo's `.mcp.json`, and Copilot instruction files are written into an `AGENTS.md` managed region. Claude can also *delegate* plugin enablement to its own settings instead of placing files. A full `repoverlay update` re-resolves applied profiles' managed plugins and re-applies any whose source changed.
 
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 

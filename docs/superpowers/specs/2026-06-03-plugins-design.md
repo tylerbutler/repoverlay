@@ -5,6 +5,13 @@
 > primitive for MCP servers and skills, **removes** the inline `mcps` and `skills`
 > profile fields, and treats plugins as **cached, introspectable bundles** managed by
 > repoverlay — the same model used for overlay sources.
+>
+> **Revision (2026-06-03):** during implementation the user/global scope was dropped in
+> favor of a repo-local-only model. Everything a profile applies (plugin skills, MCP
+> servers, instructions, delegate settings) lands inside the target repo's working tree;
+> the delegate `scope` is now just `project` (`.claude/settings.json`) or `local`
+> (`.claude/settings.local.json`). References to a `user` scope or `~/.claude` below have
+> been updated accordingly.
 
 ## Summary
 
@@ -197,7 +204,7 @@ A plugin entry is either a **shorthand string** or an **expanded table**:
 | `source`      | local             | Local path / library ref / overlay-relative dir (alternative to the shorthand string). |
 | `ref`         | marketplace       | Optional pin (branch/tag/commit). The resolved commit is recorded in state. |
 | `install`     | marketplace       | `managed` (default; repoverlay caches + places) or `delegate` (Claude enablement). Auto-forced to `delegate` when the resolved plugin source is not cloneable. |
-| `scope`       | delegate          | `user` / `project` / `local`. Optional; defaults by mode (see Scope defaults). Only meaningful for the delegate fallback. |
+| `scope`       | delegate          | `project` / `local`. Optional; defaults by mode (see Scope defaults). Only meaningful for the delegate fallback. Both files are repo-local. |
 
 The reference shape determines default behavior: a path is a local plugin; a
 `marketplace/plugin` reference is `managed` caching by default; a plugin whose
@@ -287,7 +294,7 @@ state records the exact JSON locations a profile owns, as JSON Pointer–style p
 ambiguous dotted strings — plugin and marketplace names may contain `.`, `/`, or `@`):
 
 ```text
-target = ~/.claude/settings.json
+target = .claude/settings.json
 path   = /enabledPlugins/rust-dev@playground
 prior  = <absent | previous value>
 wrote  = true
@@ -318,7 +325,7 @@ plugins =
     install = delegate
     owned_settings =
       =
-        target = ~/.claude/settings.local.json
+        target = .claude/settings.local.json
         path = /enabledPlugins/cool@vendor
         prior = absent
 ```
@@ -352,7 +359,7 @@ plugins =
 | Mode | Default scope | Rationale |
 | --- | --- | --- |
 | Persistent (`profile apply`) | `project` | Team-shareable, explicit in plan output. |
-| Ephemeral (`copilot`/`claude --profile`) | `local` (fall back to `user`) | Never dirty the tracked `.claude/settings.json` for a transient session. |
+| Ephemeral (`copilot`/`claude --profile`) | `local` | Never dirty the tracked `.claude/settings.json` for a transient session. |
 
 Managed plugins do not register marketplaces or write `enabledPlugins`, so scope does not
 apply to them; their placement is decomposed into native harness locations
