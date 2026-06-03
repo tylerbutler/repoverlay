@@ -94,6 +94,8 @@ impl HarnessProcess {
     }
 
     pub(crate) fn process_group_id(&self) -> u32 {
+        // On Unix, `spawn` always wraps the child with `ProcessGroup::leader()`, which
+        // makes the child its own process-group leader, so its PGID equals its PID.
         self.id()
     }
 
