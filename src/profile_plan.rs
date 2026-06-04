@@ -70,8 +70,8 @@ pub(crate) enum ProfileAction {
         target: PathBuf,
         marker_id: String,
     },
-    /// Place a plugin's skill directory into a native harness location by
-    /// copying/symlinking the whole tree.
+    /// Place a decomposed plugin part (a skill directory or an agent file) into
+    /// a native harness location by copying the tree/file.
     ///
     /// Unlike [`ProfileAction::WriteFile`], the `source` lives in the resolved
     /// plugin bundle (the cache), not the profile asset directory. Execution,
@@ -694,12 +694,12 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
                 if target.as_os_str().is_empty() {
                     bail!("Profile plugin directory target must not be empty");
                 }
-                // The placed directory must be exactly `<skills-root>/<name>` with a
+                // The placed target must be exactly `<managed-root>/<name>` with a
                 // single, traversal-free final component; everything else is rejected
                 // before any filesystem mutation runs.
                 validate_plugin_dir_target(target)?;
                 if !source.exists() {
-                    bail!("Plugin skill source does not exist: {}", source.display());
+                    bail!("Plugin part source does not exist: {}", source.display());
                 }
                 reject_duplicate_profile_target(&mut seen_targets, target)?;
             }
@@ -1422,6 +1422,15 @@ fn managed_skills_root(harness: &str, repo_target: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Native location for decomposed plugin agent files, per harness.
+fn managed_agents_root(harness: &str, repo_target: &Path) -> Result<PathBuf> {
+    match harness {
+        "claude" => Ok(repo_target.join(".claude").join("agents")),
+        "copilot" => Ok(repo_target.join(".github").join("agents")),
+        _ => bail!("Unsupported harness '{harness}'"),
+    }
+}
+
 /// Lexically validate that a plugin-directory target's final component is a
 /// single, traversal-free name. The harness-specific root check happens at
 /// placement/removal time via [`ensure_plugin_dir_under_skills_root`].
@@ -1448,21 +1457,23 @@ fn validate_plugin_dir_target(target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Verify a plugin-directory target is exactly `<skills-root>/<single-component>`
-/// for the given harness, rejecting anything outside the managed skills root.
-fn ensure_plugin_dir_under_skills_root(
+/// Verify a plugin-directory target is exactly `<managed-root>/<single-component>`
+/// for the given harness, where `<managed-root>` is the skills root or the agents
+/// root, rejecting anything outside those managed locations.
+fn ensure_plugin_dir_under_managed_root(
     harness: &str,
     repo_target: &Path,
     target: &Path,
 ) -> Result<()> {
     validate_plugin_dir_target(target)?;
     let skills_root = managed_skills_root(harness, repo_target)?;
+    let agents_root = managed_agents_root(harness, repo_target)?;
     let parent = target
         .parent()
         .context("Plugin directory target has no parent")?;
-    if parent != skills_root {
+    if parent != skills_root && parent != agents_root {
         bail!(
-            "Refusing plugin directory placement outside managed skills root: {}",
+            "Refusing plugin placement outside managed skills/agents roots: {}",
             target.display()
         );
     }
@@ -1570,7 +1581,7 @@ fn place_plugin_dir(
     dir_target: &Path,
     action_index: usize,
 ) -> Result<(Option<PathBuf>, bool)> {
-    ensure_plugin_dir_under_skills_root(harness, repo_target, dir_target)?;
+    ensure_plugin_dir_under_managed_root(harness, repo_target, dir_target)?;
     reject_symlink_profile_target(dir_target)?;
 
     let mut backup = None;
@@ -1633,7 +1644,7 @@ fn restore_placed_plugin_dir(
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
-    ensure_plugin_dir_under_skills_root(harness, repo_target, &file.target)?;
+    ensure_plugin_dir_under_managed_root(harness, repo_target, &file.target)?;
     remove_path(&file.target)?;
     if file.existed {
         if let Some(backup) = &file.backup {

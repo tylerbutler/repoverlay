@@ -275,8 +275,11 @@ pub(crate) struct PluginBundle {
     pub(crate) mcp_servers: serde_json::Map<String, serde_json::Value>,
     /// Skill directory names found under `skills/`.
     pub(crate) skills: Vec<String>,
+    /// Agent definition filenames (`*.md`/`*.agent.md`) found directly under
+    /// `agents/`. Each is decomposed into a native harness agent placement.
+    pub(crate) agents: Vec<String>,
     /// Bundle capabilities repoverlay cannot decompose into native harness
-    /// locations (e.g. `hooks`, `agents`, `commands`). Surfaced so applicators
+    /// locations (e.g. `hooks`, `commands`). Surfaced so applicators
     /// can emit `SkipCapability` rather than silently dropping them.
     pub(crate) unsupported_capabilities: Vec<String>,
 }
@@ -284,8 +287,8 @@ pub(crate) struct PluginBundle {
 impl PluginBundle {
     /// Read and introspect a plugin bundle directory.
     ///
-    /// Missing `.claude-plugin/plugin.json`, `.mcp.json`, or `skills/` are not
-    /// errors — they yield empty/absent fields. Malformed JSON is an error.
+    /// Missing `.claude-plugin/plugin.json`, `.mcp.json`, `skills/`, or `agents/`
+    /// are not errors — they yield empty/absent fields. Malformed JSON is an error.
     #[allow(dead_code)]
     pub(crate) fn read(dir: &std::path::Path) -> anyhow::Result<Self> {
         use anyhow::Context;
@@ -333,10 +336,33 @@ impl PluginBundle {
             skills.sort();
         }
 
+        // Agent definitions are individual markdown files (Claude/Copilot both
+        // load `<agents-root>/<name>.md`; Copilot also recognizes `.agent.md`).
+        // Decompose by placing each top-level agent file directly into the
+        // harness-native agents root, so they become first-class native agents.
+        let mut agents = Vec::new();
+        let agents_dir = dir.join("agents");
+        if agents_dir.is_dir() {
+            for entry in std::fs::read_dir(&agents_dir)
+                .with_context(|| format!("Failed to read {}", agents_dir.display()))?
+            {
+                let entry = entry?;
+                if entry.file_type()?.is_file()
+                    && let Some(name) = entry.file_name().to_str()
+                    && std::path::Path::new(name)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                {
+                    agents.push(name.to_string());
+                }
+            }
+            agents.sort();
+        }
+
         // Capabilities repoverlay does not decompose: surface them so the
         // applicator can record a `SkipCapability` instead of dropping silently.
         let mut unsupported_capabilities = Vec::new();
-        for capability in ["hooks", "agents", "commands"] {
+        for capability in ["hooks", "commands"] {
             if dir.join(capability).is_dir() {
                 unsupported_capabilities.push(capability.to_string());
             }
@@ -346,6 +372,7 @@ impl PluginBundle {
             manifest,
             mcp_servers,
             skills,
+            agents,
             unsupported_capabilities,
         })
     }
@@ -895,7 +922,43 @@ mod tests {
         let bundle = PluginBundle::read(dir.path()).unwrap();
         assert!(bundle.mcp_servers.is_empty());
         assert!(bundle.skills.is_empty());
+        assert!(bundle.agents.is_empty());
         assert!(bundle.manifest.is_none());
+    }
+
+    #[test]
+    fn introspects_agents_and_no_longer_marks_them_unsupported() {
+        let dir = TempDir::new().unwrap();
+        let agents = dir.path().join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        fs::write(
+            agents.join("reviewer.agent.md"),
+            "---\nname: reviewer\n---\n",
+        )
+        .unwrap();
+        fs::write(agents.join("planner.md"), "---\nname: planner\n---\n").unwrap();
+        // A non-md file and a subdirectory are ignored by the top-level scan.
+        fs::write(agents.join("README.txt"), "ignore me").unwrap();
+        fs::create_dir_all(agents.join("claude")).unwrap();
+        fs::write(agents.join("claude/variant.md"), "---\nname: v\n---\n").unwrap();
+        // `hooks` remains an unsupported capability.
+        fs::create_dir_all(dir.path().join("hooks")).unwrap();
+
+        let bundle = PluginBundle::read(dir.path()).unwrap();
+        assert_eq!(
+            bundle.agents,
+            vec!["planner.md".to_string(), "reviewer.agent.md".to_string()]
+        );
+        assert!(
+            !bundle
+                .unsupported_capabilities
+                .contains(&"agents".to_string())
+        );
+        assert!(
+            bundle
+                .unsupported_capabilities
+                .contains(&"hooks".to_string())
+        );
     }
 
     #[test]

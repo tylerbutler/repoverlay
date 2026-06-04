@@ -450,6 +450,72 @@ profiles =
 }
 
 #[test]
+fn profile_apply_places_plugin_agent_into_github_agents() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file(
+        "plugins/rust/agents/reviewer.agent.md",
+        "---\nname: reviewer\n---\nReview Rust code.",
+    );
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    plugins =
+      = ./plugins/rust
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let placed = ctx.repo_path().join(".github/agents/reviewer.agent.md");
+    assert!(
+        placed.exists(),
+        "agent should be placed under repo .github/agents"
+    );
+    assert_eq!(
+        fs::read_to_string(&placed).unwrap(),
+        "---\nname: reviewer\n---\nReview Rust code."
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(
+        !placed.exists(),
+        "agent placement should be removed on profile remove"
+    );
+}
+
+#[test]
 fn profile_remove_restores_displaced_plugin_skill() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();

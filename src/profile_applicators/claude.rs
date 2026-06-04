@@ -164,6 +164,13 @@ impl ClaudeApplicator {
             });
         }
 
+        for agent in &bundle.agents {
+            actions.push(ProfileAction::PlacePluginDir {
+                source: bundle_dir.join("agents").join(agent),
+                target: repo_target.join(".claude").join("agents").join(agent),
+            });
+        }
+
         for (server_name, server) in &bundle.mcp_servers {
             let pointer = json_pointer(&["mcpServers", server_name]);
             if owned_paths.contains(&pointer) {
@@ -469,6 +476,36 @@ mod tests {
             a,
             ProfileAction::SkipCapability { capability, .. }
                 if capability == "plugin:hooky:hooks"
+        )));
+    }
+
+    #[test]
+    fn claude_places_plugin_agents_into_claude_agents() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("repo");
+        fs::create_dir_all(&target).unwrap();
+
+        let bundle = local_bundle(&target, "rust-dev");
+        fs::create_dir_all(bundle.join("agents")).unwrap();
+        fs::write(
+            bundle.join("agents/reviewer.md"),
+            "---\nname: reviewer\n---\n",
+        )
+        .unwrap();
+
+        let profile = ProfileConfig {
+            plugins: vec![PluginRef::Local {
+                source: PathBuf::from("./rust-dev"),
+            }],
+            ..ProfileConfig::default()
+        };
+        let context = context_for(&target, &temp.path().join("claude-home"));
+
+        let plan = ClaudeApplicator.plan(&profile, &context).unwrap();
+        assert!(plan.actions.iter().any(|a| matches!(
+            a,
+            ProfileAction::PlacePluginDir { target: t, .. }
+                if t.ends_with("agents/reviewer.md")
         )));
     }
 

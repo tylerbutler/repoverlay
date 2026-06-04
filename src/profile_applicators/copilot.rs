@@ -76,6 +76,13 @@ impl CopilotApplicator {
             });
         }
 
+        for agent in &bundle.agents {
+            actions.push(ProfileAction::PlacePluginDir {
+                source: bundle_dir.join("agents").join(agent),
+                target: repo_target.join(".github").join("agents").join(agent),
+            });
+        }
+
         for (server_name, server) in &bundle.mcp_servers {
             let pointer = json_pointer(&["servers", server_name]);
             if owned_paths.contains(&pointer) {
@@ -271,6 +278,61 @@ mod tests {
         assert!(mtarget.ends_with(".mcp.json"));
         assert_eq!(owned, &vec!["/servers/rust".to_string()]);
         assert_eq!(value["servers"]["rust"]["command"], "uvx");
+    }
+
+    #[test]
+    fn copilot_places_plugin_agents_into_github_agents() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("repo");
+        std::fs::create_dir_all(&target).unwrap();
+        let bundle = target.join("rust-plugin");
+        std::fs::create_dir_all(bundle.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            bundle.join(".claude-plugin/plugin.json"),
+            r#"{"name":"rust"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(bundle.join("agents")).unwrap();
+        std::fs::write(
+            bundle.join("agents/reviewer.agent.md"),
+            "---\nname: reviewer\n---\n",
+        )
+        .unwrap();
+
+        let profile = ProfileConfig {
+            plugins: vec![PluginRef::Local {
+                source: PathBuf::from("./rust-plugin"),
+            }],
+            ..ProfileConfig::default()
+        };
+        let context = ProfileContext {
+            profile_name: "rust-dev".to_string(),
+            target: target.clone(),
+            profile_asset_dir: target.clone(),
+            harness_home: temp.path().join("copilot-home"),
+            mode: crate::profile::ProfileMode::Persistent,
+            session_id: None,
+            marketplaces: Vec::new(),
+            cache: crate::cache::CacheManager::new().unwrap(),
+        };
+
+        let plan = CopilotApplicator.plan(&profile, &context).unwrap();
+        let placed = plan
+            .actions
+            .iter()
+            .find_map(|a| match a {
+                ProfileAction::PlacePluginDir { source, target } => Some((source, target)),
+                _ => None,
+            })
+            .expect("expected an agent placement action");
+        assert!(placed.0.ends_with("agents/reviewer.agent.md"));
+        assert_eq!(
+            placed.1,
+            &target
+                .join(".github")
+                .join("agents")
+                .join("reviewer.agent.md")
+        );
     }
 
     #[test]
