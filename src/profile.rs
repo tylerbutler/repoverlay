@@ -22,9 +22,83 @@ pub(crate) struct ProfileConfig {
     pub(crate) plugins: Vec<crate::plugin::PluginRef>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub(crate) struct InstructionConfig {
-    pub(crate) source: String,
+    /// Relative path to an instruction file, resolved against `base_dir` (the
+    /// directory of the config file that defined this entry). Mutually exclusive
+    /// with `content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<String>,
+    /// Inline instruction text written directly into the managed region.
+    /// Mutually exclusive with `source`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) content: Option<String>,
+    /// Directory the relative `source` path is rooted at — the originating config
+    /// file's directory, stamped at load time. Runtime-only; never serialized and
+    /// excluded from equality (it is provenance, not identity).
+    #[serde(skip)]
+    pub(crate) base_dir: Option<PathBuf>,
+}
+
+impl PartialEq for InstructionConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source && self.content == other.content
+    }
+}
+
+impl Eq for InstructionConfig {}
+
+impl InstructionConfig {
+    /// Require exactly one of `source`/`content` to be set.
+    pub(crate) fn validate_exactly_one(&self) -> Result<()> {
+        match (&self.source, &self.content) {
+            (Some(_), Some(_)) => {
+                bail!("instruction entry sets both `source` and `content`; set exactly one")
+            }
+            (None, None) => {
+                bail!("instruction entry sets neither `source` nor `content`; set exactly one")
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// A short label for diagnostics: the source path, or `<inline>` for content.
+    pub(crate) fn label(&self) -> String {
+        self.source
+            .clone()
+            .unwrap_or_else(|| "<inline>".to_string())
+    }
+
+    /// Inline `content` normalized for embedding: a CCL multiline block arrives
+    /// with a leading newline and uniform indentation, so we drop one leading
+    /// newline and strip the common leading indentation (textwrap-style dedent).
+    pub(crate) fn normalized_content(&self) -> Option<String> {
+        self.content.as_deref().map(dedent_block)
+    }
+}
+
+/// Remove a single leading newline and the longest common leading whitespace
+/// prefix shared by all non-blank lines. Trailing newlines are left for the
+/// caller's existing trim step.
+fn dedent_block(s: &str) -> String {
+    let s = s.strip_prefix('\n').unwrap_or(s);
+    let leading_ws = |line: &str| line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+    let min_indent = s
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(leading_ws)
+        .min()
+        .unwrap_or(0);
+    s.lines()
+        .map(|line| {
+            if line.len() >= min_indent {
+                &line[min_indent..]
+            } else {
+                line.trim_start()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn merge_profile_config(
@@ -315,6 +389,67 @@ mod tests {
     use crate::plugin::{InstallMode, PluginRef};
 
     #[test]
+    fn parses_inline_instruction_content_from_ccl() {
+        let ccl = "
+profiles =
+  rust-dev =
+    instructions =
+      =
+        content =
+          Be concise in all responses.
+          Prefer composition over inheritance.
+";
+
+        let config: crate::config::RepoverlayConfig = sickle::from_str(ccl).unwrap();
+        let profile = config.profiles.get("rust-dev").unwrap();
+        assert_eq!(profile.instructions[0].source, None);
+        assert_eq!(
+            profile.instructions[0].normalized_content().as_deref(),
+            Some("Be concise in all responses.\nPrefer composition over inheritance.")
+        );
+    }
+
+    #[test]
+    fn instruction_requires_exactly_one_of_source_or_content() {
+        let both = InstructionConfig {
+            source: Some("a.md".to_string()),
+            content: Some("inline".to_string()),
+            base_dir: None,
+        };
+        assert!(both.validate_exactly_one().is_err());
+
+        let neither = InstructionConfig::default();
+        assert!(neither.validate_exactly_one().is_err());
+
+        let source_only = InstructionConfig {
+            source: Some("a.md".to_string()),
+            ..InstructionConfig::default()
+        };
+        assert!(source_only.validate_exactly_one().is_ok());
+
+        let content_only = InstructionConfig {
+            content: Some("inline".to_string()),
+            ..InstructionConfig::default()
+        };
+        assert!(content_only.validate_exactly_one().is_ok());
+    }
+
+    #[test]
+    fn instruction_equality_ignores_base_dir() {
+        let a = InstructionConfig {
+            source: Some("a.md".to_string()),
+            content: None,
+            base_dir: Some(PathBuf::from("/one")),
+        };
+        let b = InstructionConfig {
+            source: Some("a.md".to_string()),
+            content: None,
+            base_dir: Some(PathBuf::from("/two")),
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
     fn parses_profile_config_from_ccl() {
         let ccl = r"
 profiles =
@@ -333,7 +468,10 @@ profiles =
         let profile = config.profiles.get("rust-dev").unwrap();
         assert_eq!(profile.description.as_deref(), Some("Rust profile"));
         assert_eq!(profile.overlays, vec!["rust-base"]);
-        assert_eq!(profile.instructions[0].source, "copilot-instructions.md");
+        assert_eq!(
+            profile.instructions[0].source.as_deref(),
+            Some("copilot-instructions.md")
+        );
         assert_eq!(
             profile.plugins,
             vec![PluginRef::Marketplace {
@@ -352,7 +490,9 @@ profiles =
             description: Some("Base".to_string()),
             overlays: vec!["base-overlay".to_string()],
             instructions: vec![InstructionConfig {
-                source: "base.md".to_string(),
+                source: Some("base.md".to_string()),
+                content: None,
+                base_dir: None,
             }],
             plugins: vec![PluginRef::Marketplace {
                 marketplace: "playground".to_string(),
@@ -378,7 +518,7 @@ profiles =
         let merged = merge_profile_config(&base, &overlay);
         assert_eq!(merged.description.as_deref(), Some("Base"));
         assert_eq!(merged.overlays, vec!["repo-overlay"]);
-        assert_eq!(merged.instructions[0].source, "base.md");
+        assert_eq!(merged.instructions[0].source.as_deref(), Some("base.md"));
         // Plugins follow the list-replace rule: a non-empty override wins.
         assert_eq!(
             merged.plugins,

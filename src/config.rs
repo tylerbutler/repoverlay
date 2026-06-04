@@ -490,10 +490,26 @@ pub(crate) fn load_global_config() -> Result<RepoverlayConfig> {
     let config: RepoverlayConfig = sickle::from_str(&content)
         .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
 
+    let mut config = config;
+    if let Some(base_dir) = config_path.parent() {
+        stamp_instruction_base_dir(&mut config, base_dir);
+    }
+
     Ok(config)
 }
 
-/// Load the per-repo configuration.
+/// Stamp every profile instruction's `base_dir` with the directory of the config
+/// file that defined it, so file `source` paths resolve relative to the config
+/// file rather than the target repo. Only entries with a `source` are stamped.
+fn stamp_instruction_base_dir(config: &mut RepoverlayConfig, base_dir: &Path) {
+    for profile in config.profiles.values_mut() {
+        for instruction in &mut profile.instructions {
+            if instruction.source.is_some() {
+                instruction.base_dir = Some(base_dir.to_path_buf());
+            }
+        }
+    }
+}
 pub(crate) fn load_repo_config(repo_root: &Path) -> Result<Option<RepoverlayConfig>> {
     let config_path = repo_config_path(repo_root);
 
@@ -506,6 +522,11 @@ pub(crate) fn load_repo_config(repo_root: &Path) -> Result<Option<RepoverlayConf
 
     let config: RepoverlayConfig = sickle::from_str(&content)
         .with_context(|| format!("Failed to parse repo config: {}", config_path.display()))?;
+
+    let mut config = config;
+    if let Some(base_dir) = config_path.parent() {
+        stamp_instruction_base_dir(&mut config, base_dir);
+    }
 
     Ok(Some(config))
 }
@@ -783,7 +804,9 @@ profiles =
                     description: Some("Global Rust".to_string()),
                     overlays: vec!["global-rust".to_string()],
                     instructions: vec![crate::profile::InstructionConfig {
-                        source: "global.md".to_string(),
+                        source: Some("global.md".to_string()),
+                        content: None,
+                        base_dir: None,
                     }],
                     plugins: vec![crate::plugin::PluginRef::Marketplace {
                         marketplace: "playground".to_string(),
@@ -802,7 +825,7 @@ profiles =
 
         assert_eq!(profile.description.as_deref(), Some("Global Rust"));
         assert_eq!(profile.overlays, vec!["repo-rust"]);
-        assert_eq!(profile.instructions[0].source, "global.md");
+        assert_eq!(profile.instructions[0].source.as_deref(), Some("global.md"));
         // Plugins follow the list-replace rule: the repo-local list wins.
         assert_eq!(
             profile.plugins,

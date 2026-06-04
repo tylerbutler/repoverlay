@@ -342,7 +342,7 @@ fn profile_apply_writes_copilot_assets_and_state() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -512,6 +512,111 @@ profiles =
     assert!(
         !placed.exists(),
         "agent placement should be removed on profile remove"
+    );
+}
+
+#[test]
+fn profile_apply_writes_inline_instruction_content() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config(
+        "
+profiles =
+  docs =
+    instructions =
+      =
+        content =
+          Be concise in all responses.
+          Prefer composition over inheritance.
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "docs",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let agents = ctx.repo_path().join("AGENTS.md");
+    let body = fs::read_to_string(&agents).unwrap();
+    assert!(
+        body.contains("Be concise in all responses.\nPrefer composition over inheritance."),
+        "inline content should be dedented into AGENTS.md: {body}"
+    );
+    assert!(body.contains("repoverlay:profile:docs:begin"));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "docs",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(
+        !ctx.repo_path().join("AGENTS.md").exists()
+            || !fs::read_to_string(&agents).unwrap().contains("Be concise"),
+        "inline instruction region should be removed on profile remove"
+    );
+}
+
+#[test]
+fn profile_apply_resolves_instruction_source_relative_to_config_dir() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    // The instruction file lives next to the config file (.repoverlay/), not at
+    // the repo root, proving sources are rooted at the originating config dir.
+    ctx.create_repo_file(".repoverlay/guidance.md", "Follow the house style.");
+    ctx.write_repo_config(
+        "
+profiles =
+  docs =
+    instructions =
+      =
+        source = guidance.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "docs",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let body = fs::read_to_string(ctx.repo_path().join("AGENTS.md")).unwrap();
+    assert!(
+        body.contains("Follow the house style."),
+        "instruction source resolved from .repoverlay/ should appear in AGENTS.md: {body}"
     );
 }
 
@@ -737,7 +842,7 @@ fn copilot_profile_runs_command_and_cleans_up() {
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
     let marker = ctx.repo_path().join("copilot-ran.txt");
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -787,7 +892,7 @@ fn copilot_profile_cleans_up_when_harness_spawn_fails() {
     let state_file = ctx
         .repo_path()
         .join(".repoverlay/profiles/rust-dev.copilot.ccl");
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -832,7 +937,7 @@ fn copilot_profile_cleans_up_after_wrapper_sigint() {
     let state_file = ctx
         .repo_path()
         .join(".repoverlay/profiles/rust-dev.copilot.ccl");
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -995,7 +1100,7 @@ fn copilot_profile_preserves_harness_exit_code_after_cleanup() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -1037,7 +1142,7 @@ fn copilot_profile_refuses_to_overwrite_applied_profile_state() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -1188,7 +1293,7 @@ fn profile_status_and_remove_manage_profile_state_and_files() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -1261,7 +1366,7 @@ fn profile_remove_restores_existing_instruction_target() {
     let copilot_home = tempfile::TempDir::new().unwrap();
     let agents = ctx.repo_path().join("AGENTS.md");
     fs::write(&agents, "# Existing user notes\n").unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "profile");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "profile");
     ctx.write_repo_config(
         r"
 profiles =
@@ -1320,8 +1425,8 @@ fn profile_remove_keeps_other_profile_agents_region() {
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
     let agents = ctx.repo_path().join("AGENTS.md");
-    ctx.create_repo_file("alpha.md", "Alpha guidance.");
-    ctx.create_repo_file("beta.md", "Beta guidance.");
+    ctx.create_repo_file(".repoverlay/alpha.md", "Alpha guidance.");
+    ctx.create_repo_file(".repoverlay/beta.md", "Beta guidance.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -1450,7 +1555,7 @@ fn profile_apply_rejects_reapplying_same_profile() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -1570,7 +1675,7 @@ fn profile_status_harness_filter_reports_no_matches() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -1766,7 +1871,7 @@ fn profile_status_warns_and_skips_malformed_profile_state() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -1951,7 +2056,7 @@ fn profile_remove_fails_when_session_lock_present() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -2018,7 +2123,7 @@ fn profile_remove_recovers_stale_session_lock() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
-    ctx.create_repo_file("copilot-instructions.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
     ctx.write_repo_config(
         r"
 profiles =
@@ -2134,7 +2239,7 @@ fn profile_apply_refuses_symlinked_instruction_target() {
     let outside_file = outside.path().join("secret.txt");
     fs::write(&outside_file, "outside-secret").unwrap();
 
-    ctx.create_repo_file("copilot-instructions.md", "profile");
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "profile");
     ctx.write_repo_config(
         r"
 profiles =

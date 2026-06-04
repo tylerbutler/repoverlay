@@ -123,15 +123,27 @@ impl ProfileApplicator for CopilotApplicator {
             });
         }
 
-        let mut instruction_sources = Vec::new();
+        let mut instruction_bodies = Vec::new();
         for instruction in &profile.instructions {
-            let source_rel = Path::new(&instruction.source);
-            validate_instruction_source(source_rel)?;
-            instruction_sources.push(context.profile_asset_dir.join(source_rel));
+            instruction.validate_exactly_one()?;
+            if let Some(source) = &instruction.source {
+                let source_rel = Path::new(source);
+                validate_instruction_source(source_rel)?;
+                let base_dir = instruction
+                    .base_dir
+                    .clone()
+                    .unwrap_or_else(|| context.profile_asset_dir.clone());
+                instruction_bodies.push(crate::profile_plan::InstructionBody::File {
+                    path: base_dir.join(source_rel),
+                    base_dir,
+                });
+            } else if let Some(content) = instruction.normalized_content() {
+                instruction_bodies.push(crate::profile_plan::InstructionBody::Inline(content));
+            }
         }
-        if !instruction_sources.is_empty() {
+        if !instruction_bodies.is_empty() {
             actions.push(ProfileAction::WriteManagedRegion {
-                sources: instruction_sources,
+                bodies: instruction_bodies,
                 target: context.target.join("AGENTS.md"),
                 marker_id: context.profile_name.clone(),
             });
@@ -344,7 +356,9 @@ mod tests {
 
         let profile = ProfileConfig {
             instructions: vec![InstructionConfig {
-                source: "copilot-instructions.md".to_string(),
+                source: Some("copilot-instructions.md".to_string()),
+                content: None,
+                base_dir: None,
             }],
             ..ProfileConfig::default()
         };
@@ -390,7 +404,9 @@ mod tests {
         for source in unsafe_sources {
             let profile = ProfileConfig {
                 instructions: vec![InstructionConfig {
-                    source: source.clone(),
+                    source: Some(source.clone()),
+                    content: None,
+                    base_dir: None,
                 }],
                 ..ProfileConfig::default()
             };

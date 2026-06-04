@@ -62,11 +62,11 @@ pub(crate) enum ProfileAction {
         reason: String,
     },
     /// Insert or replace a profile-owned managed region inside a shared markdown
-    /// file (e.g. `<repo>/AGENTS.md`). All of a profile's instruction sources are
+    /// file (e.g. `<repo>/AGENTS.md`). All of a profile's instruction bodies are
     /// concatenated into a single marker-delimited block keyed by `marker_id`,
     /// coexisting with user content and other profiles' regions.
     WriteManagedRegion {
-        sources: Vec<PathBuf>,
+        bodies: Vec<InstructionBody>,
         target: PathBuf,
         marker_id: String,
     },
@@ -81,6 +81,18 @@ pub(crate) enum ProfileAction {
         source: PathBuf,
         target: PathBuf,
     },
+}
+
+/// One piece of instruction content destined for a profile's managed region.
+///
+/// A `File` carries its own `base_dir` (the directory of the config file that
+/// defined the entry), which is the containment root the preflight check
+/// validates the resolved path against. `Inline` content has no file and is
+/// used verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InstructionBody {
+    File { path: PathBuf, base_dir: PathBuf },
+    Inline(String),
 }
 
 pub(crate) fn apply_profile(
@@ -244,17 +256,21 @@ fn apply_profile_with_harness_home(
                     state.skipped.push(SkippedCapability { capability, reason });
                 }
                 ProfileAction::WriteManagedRegion {
-                    sources,
+                    bodies: instruction_bodies,
                     target: region_target,
                     marker_id,
                 } => {
                     crate::profile::validate_profile_marker_component(&marker_id)?;
                     reject_symlink_profile_target(&region_target)?;
-                    let mut bodies = Vec::with_capacity(sources.len());
-                    for source in &sources {
-                        let content = fs::read_to_string(source).with_context(|| {
-                            format!("Failed to read instruction source {}", source.display())
-                        })?;
+                    let mut bodies = Vec::with_capacity(instruction_bodies.len());
+                    for instruction in &instruction_bodies {
+                        let content = match instruction {
+                            InstructionBody::File { path, .. } => fs::read_to_string(path)
+                                .with_context(|| {
+                                    format!("Failed to read instruction source {}", path.display())
+                                })?,
+                            InstructionBody::Inline(text) => text.clone(),
+                        };
                         bodies.push(content.trim_end_matches('\n').to_string());
                     }
                     let body = bodies.join("\n\n");
@@ -669,7 +685,7 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
                 reject_duplicate_profile_target(&mut seen_targets, target)?;
             }
             ProfileAction::WriteManagedRegion {
-                sources,
+                bodies,
                 target,
                 marker_id,
             } => {
@@ -677,11 +693,13 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
                 if target.as_os_str().is_empty() {
                     bail!("Profile managed-region target path must not be empty");
                 }
-                if sources.is_empty() {
-                    bail!("Profile managed-region must have at least one source");
+                if bodies.is_empty() {
+                    bail!("Profile managed-region must have at least one instruction");
                 }
-                for source in sources {
-                    ensure_regular_profile_source(source, profile_asset_dir)?;
+                for body in bodies {
+                    if let InstructionBody::File { path, base_dir } = body {
+                        ensure_regular_profile_source(path, base_dir)?;
+                    }
                 }
                 reject_duplicate_profile_target(&mut seen_targets, target)?;
             }
@@ -2124,7 +2142,6 @@ profiles =
             "Do not copy from outside profile assets.",
         )
         .unwrap();
-        std::os::unix::fs::symlink(outside.path(), temp.path().join("assets")).unwrap();
         write_config(
             temp.path(),
             r"
@@ -2135,6 +2152,7 @@ profiles =
         source = assets/copilot-instructions.md
 ",
         );
+        std::os::unix::fs::symlink(outside.path(), temp.path().join(".repoverlay/assets")).unwrap();
 
         let err = apply_profile_with_harness_home(
             "rust-dev",
@@ -2197,10 +2215,10 @@ profiles =
     fn apply_profile_merges_multiple_instructions_into_one_region() {
         let temp = tempfile::TempDir::new().unwrap();
         let copilot_home = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(temp.path().join("a")).unwrap();
-        fs::create_dir_all(temp.path().join("b")).unwrap();
-        fs::write(temp.path().join("a/instructions.md"), "first").unwrap();
-        fs::write(temp.path().join("b/instructions.md"), "second").unwrap();
+        fs::create_dir_all(temp.path().join(".repoverlay/a")).unwrap();
+        fs::create_dir_all(temp.path().join(".repoverlay/b")).unwrap();
+        fs::write(temp.path().join(".repoverlay/a/instructions.md"), "first").unwrap();
+        fs::write(temp.path().join(".repoverlay/b/instructions.md"), "second").unwrap();
         write_config(
             temp.path(),
             r"
@@ -2437,7 +2455,9 @@ profiles =
     fn simple_profile_fingerprint_is_stable_for_same_profile() {
         let profile = ProfileConfig {
             instructions: vec![InstructionConfig {
-                source: "copilot-instructions.md".to_string(),
+                source: Some("copilot-instructions.md".to_string()),
+                content: None,
+                base_dir: None,
             }],
             plugins: vec![crate::plugin::PluginRef::Marketplace {
                 marketplace: "playground".to_string(),

@@ -215,10 +215,12 @@ impl ProfileApplicator for ClaudeApplicator {
         // Claude has no persistent profile-instruction convention yet; record
         // each instruction as skipped rather than dropping it silently.
         for instruction in &profile.instructions {
-            let source_rel = Path::new(&instruction.source);
-            validate_instruction_source(source_rel)?;
+            instruction.validate_exactly_one()?;
+            if let Some(source) = &instruction.source {
+                validate_instruction_source(Path::new(source))?;
+            }
             actions.push(ProfileAction::SkipCapability {
-                capability: format!("instruction:{}", instruction.source),
+                capability: format!("instruction:{}", instruction.label()),
                 reason: "Claude persistent instruction placement is not implemented yet"
                     .to_string(),
             });

@@ -43,7 +43,7 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
                 &profile
                     .instructions
                     .iter()
-                    .map(|entry| entry.source.clone())
+                    .map(crate::profile::InstructionConfig::label)
                     .collect::<Vec<_>>(),
             );
             if !profile.plugins.is_empty() {
