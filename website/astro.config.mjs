@@ -1,4 +1,5 @@
 import starlight from "@astrojs/starlight";
+import starlightAnnouncement from "starlight-announcement";
 import starlightCatppuccin from "@catppuccin/starlight";
 import a11yEmoji from "@fec/remark-a11y-emoji";
 import { includeMarkdown } from "@hashicorp/platform-remark-plugins";
@@ -42,6 +43,20 @@ export default defineConfig({
 				// 	dark: { flavor: "macchiato", accent: "maroon" },
 				// 	light: { accent: "maroon" },
 				// }),
+				starlightAnnouncement({
+					announcements: [
+						{
+							id: "v0-14-2",
+							content: "repoverlay 0.14.2 is out now.",
+							variant: "tip",
+							dismissible: true,
+							link: {
+								text: "Release notes",
+								href: "https://github.com/tylerbutler/repoverlay/releases/tag/v0.14.2",
+							},
+						},
+					],
+				}),
 				starlightLlmsTxt(),
 				starlightLinksValidator(),
 			],
