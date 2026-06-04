@@ -58,7 +58,8 @@ impl CopilotApplicator {
 
     /// Decompose a resolved plugin bundle into Copilot placements, appending
     /// skill-placement and skip actions and accumulating MCP servers for the
-    /// single Copilot `mcp.json` merge (Copilot keys servers under `servers`).
+    /// single Copilot `.mcp.json` merge (Copilot CLI keys servers under
+    /// `mcpServers`, matching `~/.copilot/mcp-config.json`).
     fn decompose_bundle(
         bundle_dir: &Path,
         plugin_name: &str,
@@ -84,7 +85,7 @@ impl CopilotApplicator {
         }
 
         for (server_name, server) in &bundle.mcp_servers {
-            let pointer = json_pointer(&["servers", server_name]);
+            let pointer = json_pointer(&["mcpServers", server_name]);
             if owned_paths.contains(&pointer) {
                 anyhow::bail!(
                     "MCP server '{server_name}' is provided by more than one plugin; \
@@ -150,7 +151,8 @@ impl ProfileApplicator for CopilotApplicator {
         }
 
         // Plugin introspection: resolve each plugin, decompose its bundle into
-        // Copilot's native `mcp.json` servers + skills, and skip what cannot map.
+        // Copilot's native `mcp.json` `mcpServers` + skills, and skip what
+        // cannot map.
         let mut servers = serde_json::Map::new();
         let mut owned_paths = Vec::new();
         let mut plugins = Vec::new();
@@ -211,7 +213,7 @@ impl ProfileApplicator for CopilotApplicator {
         if !servers.is_empty() {
             actions.push(ProfileAction::MergeJson {
                 target: context.target.join(".mcp.json"),
-                value: serde_json::json!({ "servers": servers }),
+                value: serde_json::json!({ "mcpServers": servers }),
                 owned_paths,
             });
         }
@@ -288,8 +290,8 @@ mod tests {
             })
             .expect("expected an mcp.json merge action");
         assert!(mtarget.ends_with(".mcp.json"));
-        assert_eq!(owned, &vec!["/servers/rust".to_string()]);
-        assert_eq!(value["servers"]["rust"]["command"], "uvx");
+        assert_eq!(owned, &vec!["/mcpServers/rust".to_string()]);
+        assert_eq!(value["mcpServers"]["rust"]["command"], "uvx");
     }
 
     #[test]

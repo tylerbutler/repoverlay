@@ -1124,7 +1124,7 @@ fn restore_merge_json_backup(
         fs::remove_file(&file.target)
             .with_context(|| format!("Failed to remove {}", file.target.display()))?;
     } else {
-        crate::state::atomic_write(&file.target, &serde_json::to_string(&current)?)?;
+        crate::state::atomic_write(&file.target, &serde_json::to_string_pretty(&current)?)?;
     }
     if let Err(err) = fs::remove_file(&file.source) {
         eprintln!(

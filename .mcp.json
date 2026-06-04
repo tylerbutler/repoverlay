@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "fff": {
-      "type": "stdio",
+      "args": [],
       "command": "fff-mcp",
-      "args": []
+      "type": "stdio"
     }
   }
 }
