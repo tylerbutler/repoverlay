@@ -19,7 +19,7 @@ The key thing to understand is the difference between a **definition** and its *
 | --- | --- | --- |
 | Role | Ingredient (files) | Recipe (overlays + capabilities) |
 | Payload | A file tree applied to a repo | A composition of overlays + harness capabilities |
-| Owns | Symlinks, git excludes, conflict handling | Instructions, plugins (skills + MCP servers) |
+| Owns | Symlinks, git excludes, conflict handling | Instructions, plugins (skills + agents + MCP servers) |
 | Portable across harnesses? | N/A (files only) | Yes — placement lives in the harness applicator |
 
 Everything a profile applies lands **inside the target repo's working tree** (git-excluded, never committed). There is no user- or machine-global scope — a profile only ever touches the repo you apply it to.
@@ -60,6 +60,10 @@ profiles =
     instructions =
       =
         source = copilot-instructions.md
+      =
+        content =
+          Be concise in all responses.
+          Prefer composition over inheritance.
 
     plugins =
       = playground/rust-dev
@@ -76,7 +80,7 @@ profiles =
 | --- | --- | --- |
 | `description` | scalar | Optional user-facing text shown by `profile list` and `profile show`. |
 | `overlays` | list | Overlay references, resolved with the usual source/library semantics. |
-| `instructions` | list | Harness instruction files. Each entry has a `source` relative to the repo root. |
+| `instructions` | list | Harness instruction entries. Each entry sets exactly one of `source` (a file path resolved relative to the config file that defines it) or `content` (inline text). |
 | `plugins` | list | Plugin references (see below). |
 
 ### Marketplaces registry
@@ -245,13 +249,14 @@ Each capability in a profile is translated into a concrete, **repo-local** actio
 | --- | --- | --- |
 | `overlays` | Applied with the normal overlay machinery (symlinks, git excludes, state). | Same. |
 | plugin skills | `<repo>/.claude/skills/<skill>` | `<repo>/.agents/skills/<skill>` |
+| plugin agents | `<repo>/.claude/agents/<agent>` | `<repo>/.github/agents/<agent>` |
 | plugin MCP servers | Merged into `<repo>/.mcp.json` (`mcpServers` key). | Merged into `<repo>/.mcp.json` (`servers` key). |
 | delegate plugins | Recorded in `.claude/settings.json` / `.claude/settings.local.json`. | n/a |
-| `instructions` | n/a | Written into the `<repo>/AGENTS.md` managed region for the profile. |
+| `instructions` | n/a | Each entry's `source` file or inline `content` is concatenated into the `<repo>/AGENTS.md` managed region for the profile. |
 
 Everything is placed inside the target repo and git-excluded; nothing is written to a user- or machine-global location.
 
-Instruction `source` paths must be relative and stay within the repo — paths that escape the directory (for example `../secret.md`) or absolute paths are rejected.
+Instruction `source` paths must be relative and stay within the directory of the config file that defines them — paths that escape that directory (for example `../secret.md`) or absolute paths are rejected. A repo profile's sources therefore live next to `<repo>/.repoverlay/config.ccl`; a global profile's live next to the global config. Use inline `content` to avoid companion files entirely.
 
 ## Merge behavior across configs
 
