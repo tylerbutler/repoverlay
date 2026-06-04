@@ -1,0 +1,1017 @@
+---
+import "@fontsource/metropolis/400.css";
+import "@fontsource/metropolis/500.css";
+import "@fontsource/metropolis/600.css";
+import "@fontsource/metropolis/700.css";
+import "@fontsource/metropolis/800.css";
+import logo from "../assets/repoverlay.svg";
+
+const description =
+	"Overlay AI configs, editor settings, and dev tooling into any git repo. Symlinked and auto-excluded from version control.";
+const ghUrl = "https://github.com/tylerbutler/repoverlay";
+const release = "0.14.2";
+
+const features = [
+	{
+		title: "Overlay without committing",
+		body: "Apply shared files to any git repo. They're excluded through .git/info/exclude, so .gitignore stays untouched.",
+		code: ".git/info/exclude",
+		variant: "accent",
+	},
+	{
+		title: "Symlink or copy",
+		body: "Symlinked by default for instant updates. Reach for --copy when symlinks aren't an option.",
+		variant: "plain",
+	},
+	{
+		title: "GitHub-aware",
+		body: "Pull overlays from repos, branches, tags, or subdirectories. Cached locally with shallow clones.",
+		variant: "plain",
+	},
+	{
+		title: "Fork inheritance",
+		body: "Working on a fork? repoverlay falls back to the upstream repo's overlays until yours exist.",
+		variant: "plain",
+	},
+	{
+		title: "Survives git clean",
+		body: "State is backed up outside the repo, so repoverlay restore brings every overlaid file back.",
+		code: "repoverlay restore",
+		variant: "gradient",
+	},
+];
+
+const steps = [
+	{
+		key: "Browse",
+		body: "Discover overlays from a shared source and pick interactively.",
+		cmd: "repoverlay browse tylerbutler",
+	},
+	{
+		key: "Apply",
+		body: "Link the overlay into your repo, excluded from git automatically.",
+		cmd: "repoverlay apply claude-config",
+	},
+	{
+		key: "Restore",
+		body: "Wiped by git clean? Bring everything back in one command.",
+		cmd: "repoverlay restore",
+	},
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<link rel="icon" href={logo.src} type="image/svg+xml" />
+		<title>repoverlay: share configs across repos, commit nothing</title>
+		<meta name="description" content={description} />
+		<meta property="og:title" content="repoverlay" />
+		<meta property="og:description" content={description} />
+		<meta property="og:type" content="website" />
+		<meta name="generator" content={Astro.generator} />
+	</head>
+	<body>
+		<a class="skip" href="#main">Skip to content</a>
+
+		<div class="release" role="note">
+			<span class="release__dot" aria-hidden="true"></span>
+			<span>repoverlay {release} is out.</span>
+			<a href={`${ghUrl}/releases/tag/v${release}`}>Release notes</a>
+		</div>
+
+		<header class="nav">
+			<div class="nav__inner">
+				<a class="brand" href="/" aria-label="repoverlay home">
+					<img src={logo.src} alt="" width="28" height="31" />
+					<span>repoverlay</span>
+				</a>
+				<nav class="nav__links" aria-label="Primary">
+					<a href="/introduction/">Docs</a>
+					<a href="/quick-start/">Quick Start</a>
+					<a href="/cli-reference/">CLI</a>
+					<a class="nav__gh" href={ghUrl} aria-label="repoverlay on GitHub">
+						<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"
+							><path
+								fill="currentColor"
+								d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
+							></path></svg
+						>
+					</a>
+				</nav>
+			</div>
+		</header>
+
+		<main id="main">
+			<!-- HERO: asymmetric split -->
+			<section class="hero">
+				<div class="hero__copy reveal">
+					<h1>
+						Share configs across repos.<br /><span class="accentword"
+							>Commit nothing.</span
+						>
+					</h1>
+					<p class="lede">{description}</p>
+					<div class="cta-row">
+						<a class="btn btn--primary" href="/quick-start/">
+							Get started
+							<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
+								><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M5 12h14M13 6l6 6-6 6"></path></svg
+							>
+						</a>
+						<a class="btn btn--ghost" href="/introduction/">Read the docs</a>
+					</div>
+				</div>
+
+				<div class="hero__panel reveal" style="--delay:90ms">
+					<div class="shell" aria-label="Example shell session">
+						<div class="shell__bar">
+							<span class="shell__name">zsh</span>
+							<button class="copy" type="button" data-copy="repoverlay apply claude-config">
+								<span class="copy__label">Copy</span>
+							</button>
+						</div>
+						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> repoverlay apply claude-config</span>
+<span class="ln"><span class="ok">Applying</span> overlay: claude-config</span>
+<span class="ln dim">  <span class="ok">+</span> .claude/</span>
+<span class="ln dim">  <span class="ok">+</span> CLAUDE.md</span>
+<span class="ln"> </span>
+<span class="ln"><span class="ok">✓</span> Applied 2 file(s) from 'claude-config'</span>
+<span class="ln"><span class="pr">$</span> <span class="caret">▍</span></span></code></pre>
+					</div>
+				</div>
+			</section>
+
+			<!-- PROBLEM: editorial statement -->
+			<section class="problem reveal">
+				<div class="problem__lead">
+					<h2>Some files don't belong in the repo.</h2>
+					<p>
+						AI assistant configs, editor settings, local environment files, the
+						tooling you carry between projects. You want them in every checkout,
+						but committing them clutters history, and git clean wipes them.
+					</p>
+				</div>
+				<ul class="configs" aria-label="Examples of files repoverlay manages">
+					<li><span>AI assistants</span><code>.claude/ · CLAUDE.md</code></li>
+					<li><span>Editor settings</span><code>.vscode/settings.json</code></li>
+					<li><span>Environment</span><code>.envrc · .env.local</code></li>
+					<li><span>Dev tooling</span><code>.prettierrc · biome.json</code></li>
+				</ul>
+			</section>
+
+			<!-- FEATURES: bento -->
+			<section class="features">
+				<h2 class="section-head reveal">What you get</h2>
+				<div class="bento">
+					{
+						features.map((f, i) => (
+							<article
+								class:list={["cell", `cell--${f.variant}`, `cell--${i}`, "reveal"]}
+								style={`--delay:${i * 60}ms`}
+							>
+								<h3>{f.title}</h3>
+								<p>{f.body}</p>
+								{f.code && <code class="chip">{f.code}</code>}
+							</article>
+						))
+					}
+				</div>
+			</section>
+
+			<!-- HOW IT WORKS: command flow -->
+			<section class="flow reveal">
+				<h2 class="section-head">Three commands, end to end.</h2>
+				<ol class="flow__track">
+					{
+						steps.map((s) => (
+							<li class="flow__step">
+								<h3>{s.key}</h3>
+								<p>{s.body}</p>
+								<code class="flow__cmd">
+									<span class="pr">$</span> {s.cmd}
+								</code>
+							</li>
+						))
+					}
+				</ol>
+			</section>
+
+			<!-- FINAL CTA -->
+			<section class="final reveal">
+				<h2>Stop copying configs by hand.</h2>
+				<p>Define your overlays once, apply them anywhere, recover them anytime.</p>
+				<div class="cta-row cta-row--center">
+					<a class="btn btn--primary" href="/quick-start/">
+						Get started
+						<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
+							><path
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M5 12h14M13 6l6 6-6 6"></path></svg
+						>
+					</a>
+					<a class="btn btn--ghost" href={ghUrl}>View source</a>
+				</div>
+			</section>
+		</main>
+
+		<footer class="foot">
+			<div class="foot__inner">
+				<div class="foot__brand">
+					<a class="brand" href="/">
+						<img src={logo.src} alt="" width="26" height="29" />
+						<span>repoverlay</span>
+					</a>
+					<p>Overlay config files into git repositories without committing them.</p>
+				</div>
+				<nav class="foot__cols" aria-label="Footer">
+					<div>
+						<h4>Docs</h4>
+						<a href="/introduction/">Introduction</a>
+						<a href="/installation/">Installation</a>
+						<a href="/quick-start/">Quick Start</a>
+						<a href="/cli-reference/">CLI Reference</a>
+					</div>
+					<div>
+						<h4>Project</h4>
+						<a href={ghUrl}>GitHub</a>
+						<a href={`${ghUrl}/releases`}>Releases</a>
+						<a href={`${ghUrl}/issues`}>Issues</a>
+					</div>
+				</nav>
+			</div>
+			<div class="foot__base">
+				<span>MIT licensed</span>
+				<span>Built by Tyler Butler</span>
+			</div>
+		</footer>
+
+		<script>
+			// Copy-to-clipboard for the shell example.
+			document.querySelectorAll<HTMLButtonElement>(".copy").forEach((btn) => {
+				btn.addEventListener("click", async () => {
+					const text = btn.dataset.copy ?? "";
+					try {
+						await navigator.clipboard.writeText(text);
+						const label = btn.querySelector(".copy__label");
+						if (label) {
+							const prev = label.textContent;
+							label.textContent = "Copied";
+							btn.classList.add("is-copied");
+							setTimeout(() => {
+								label.textContent = prev;
+								btn.classList.remove("is-copied");
+							}, 1400);
+						}
+					} catch {
+						/* clipboard unavailable */
+					}
+				});
+			});
+
+			// Scroll-reveal via IntersectionObserver (no scroll listeners).
+			const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+			const reveals = document.querySelectorAll(".reveal");
+			if (reduce || !("IntersectionObserver" in window)) {
+				reveals.forEach((el) => el.classList.add("in"));
+			} else {
+				const io = new IntersectionObserver(
+					(entries) => {
+						for (const entry of entries) {
+							if (entry.isIntersecting) {
+								entry.target.classList.add("in");
+								io.unobserve(entry.target);
+							}
+						}
+					},
+					{ threshold: 0.18, rootMargin: "0px 0px -8% 0px" },
+				);
+				reveals.forEach((el) => io.observe(el));
+			}
+		</script>
+
+		<style is:global>
+			:root {
+				color-scheme: dark;
+				--bg: #14151f;
+				--bg-2: #181a26;
+				--surface: #1d1f2c;
+				--surface-2: #23253480;
+				--border: rgba(235, 237, 249, 0.1);
+				--border-strong: rgba(235, 237, 249, 0.18);
+				--text: #ebedf9;
+				--text-2: #b7bace;
+				--muted: #8789a4;
+				--accent: #cf6242;
+				--accent-2: #aa462c;
+				--accent-soft: rgba(207, 98, 66, 0.14);
+				--accent-line: rgba(207, 98, 66, 0.4);
+				--on-accent: #1a0f0b;
+				--radius: 16px;
+				--radius-sm: 10px;
+				--maxw: 1180px;
+				--font: "Metropolis", system-ui, sans-serif;
+				--mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo,
+					Consolas, monospace;
+				--ease: cubic-bezier(0.16, 1, 0.3, 1);
+			}
+
+			@media (prefers-color-scheme: light) {
+				:root {
+					color-scheme: light;
+					--bg: #f6f7fc;
+					--bg-2: #eef0f8;
+					--surface: #ffffff;
+					--surface-2: #ffffff;
+					--border: rgba(22, 23, 33, 0.1);
+					--border-strong: rgba(22, 23, 33, 0.16);
+					--text: #161721;
+					--text-2: #3a3c52;
+					--muted: #6b6e87;
+					--accent: #ac482e;
+					--accent-2: #8f371f;
+					--accent-soft: rgba(172, 72, 46, 0.1);
+					--accent-line: rgba(172, 72, 46, 0.35);
+					--on-accent: #ffffff;
+				}
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+			html {
+				scroll-behavior: smooth;
+			}
+			@media (prefers-reduced-motion: reduce) {
+				html {
+					scroll-behavior: auto;
+				}
+			}
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				font-family: var(--font);
+				font-size: 17px;
+				line-height: 1.6;
+				-webkit-font-smoothing: antialiased;
+				text-rendering: optimizeLegibility;
+			}
+			a {
+				color: inherit;
+				text-decoration: none;
+			}
+			h1,
+			h2,
+			h3,
+			h4 {
+				margin: 0;
+				line-height: 1.05;
+				letter-spacing: -0.02em;
+				font-weight: 800;
+			}
+			p {
+				margin: 0;
+			}
+			code {
+				font-family: var(--mono);
+			}
+
+			.skip {
+				position: absolute;
+				left: -9999px;
+				top: 0;
+				background: var(--accent);
+				color: var(--on-accent);
+				padding: 0.6rem 1rem;
+				border-radius: var(--radius-sm);
+				z-index: 100;
+			}
+			.skip:focus {
+				left: 1rem;
+				top: 1rem;
+			}
+
+			:focus-visible {
+				outline: 2px solid var(--accent);
+				outline-offset: 3px;
+				border-radius: 6px;
+			}
+
+			/* Release banner */
+			.release {
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				gap: 0.55rem;
+				flex-wrap: wrap;
+				padding: 0.5rem 1rem;
+				font-size: 0.85rem;
+				color: var(--text-2);
+				background: var(--bg-2);
+				border-bottom: 1px solid var(--border);
+			}
+			.release__dot {
+				width: 7px;
+				height: 7px;
+				border-radius: 50%;
+				background: var(--accent);
+			}
+			.release a {
+				color: var(--accent);
+				font-weight: 600;
+			}
+			.release a:hover {
+				text-decoration: underline;
+			}
+
+			/* Nav */
+			.nav {
+				position: sticky;
+				top: 0;
+				z-index: 50;
+				background: color-mix(in srgb, var(--bg) 82%, transparent);
+				backdrop-filter: saturate(160%) blur(12px);
+				border-bottom: 1px solid var(--border);
+			}
+			.nav__inner {
+				max-width: var(--maxw);
+				margin: 0 auto;
+				height: 64px;
+				padding: 0 1.5rem;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+			}
+			.brand {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.55rem;
+				font-weight: 700;
+				letter-spacing: -0.01em;
+			}
+			.brand img {
+				display: block;
+			}
+			.nav__links {
+				display: flex;
+				align-items: center;
+				gap: 1.6rem;
+				font-size: 0.95rem;
+				color: var(--text-2);
+			}
+			.nav__links a:hover {
+				color: var(--text);
+			}
+			.nav__gh {
+				display: inline-flex;
+				color: var(--text-2);
+			}
+			.nav__gh:hover {
+				color: var(--accent);
+			}
+
+			/* Shared */
+			main {
+				max-width: var(--maxw);
+				margin: 0 auto;
+				padding: 0 1.5rem;
+			}
+			section {
+				padding-block: clamp(4.5rem, 9vw, 8rem);
+			}
+			.section-head {
+				font-size: clamp(1.6rem, 3.2vw, 2.3rem);
+				margin-bottom: 2.5rem;
+			}
+			.accentword {
+				color: var(--accent);
+			}
+
+			.btn {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.5rem;
+				white-space: nowrap;
+				padding: 0.8rem 1.4rem;
+				border-radius: 999px;
+				font-weight: 600;
+				font-size: 1rem;
+				border: 1px solid transparent;
+				transition:
+					transform 0.18s var(--ease),
+					background 0.18s var(--ease),
+					border-color 0.18s var(--ease);
+			}
+			.btn svg {
+				transition: transform 0.18s var(--ease);
+			}
+			.btn--primary {
+				background: var(--accent);
+				color: var(--on-accent);
+			}
+			.btn--primary:hover {
+				transform: translateY(-2px);
+				background: color-mix(in srgb, var(--accent) 88%, #fff);
+			}
+			.btn--primary:hover svg {
+				transform: translateX(3px);
+			}
+			.btn--primary:active {
+				transform: translateY(0);
+			}
+			.btn--ghost {
+				background: transparent;
+				color: var(--text);
+				border-color: var(--border-strong);
+			}
+			.btn--ghost:hover {
+				transform: translateY(-2px);
+				border-color: var(--accent-line);
+				background: var(--accent-soft);
+			}
+			.btn--ghost:active {
+				transform: translateY(0);
+			}
+
+			.cta-row {
+				display: flex;
+				gap: 0.9rem;
+				flex-wrap: wrap;
+			}
+			.cta-row--center {
+				justify-content: center;
+			}
+
+			/* Hero */
+			.hero {
+				display: grid;
+				grid-template-columns: 1.05fr 0.95fr;
+				gap: clamp(2rem, 5vw, 4.5rem);
+				align-items: center;
+				padding-top: clamp(3rem, 6vw, 5.5rem);
+			}
+			.hero h1 {
+				font-size: clamp(2.6rem, 6vw, 4.2rem);
+				letter-spacing: -0.035em;
+			}
+			.lede {
+				margin-top: 1.4rem;
+				max-width: 34ch;
+				color: var(--text-2);
+				font-size: clamp(1.05rem, 1.6vw, 1.2rem);
+			}
+			.cta-row {
+				margin-top: 2rem;
+			}
+			.quickfacts {
+				margin: 2.6rem 0 0;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 2rem;
+			}
+			.quickfacts div {
+				display: flex;
+				flex-direction: column;
+				gap: 0.2rem;
+			}
+			.quickfacts dt {
+				font-size: 0.72rem;
+				text-transform: uppercase;
+				letter-spacing: 0.14em;
+				color: var(--muted);
+			}
+			.quickfacts dd {
+				margin: 0;
+				font-weight: 600;
+				font-size: 0.95rem;
+			}
+
+			/* Shell panel */
+			.hero__panel {
+				position: relative;
+			}
+			.hero__panel::before {
+				content: "";
+				position: absolute;
+				inset: -14% -10% -22% 6%;
+				background: radial-gradient(
+					60% 60% at 70% 25%,
+					var(--accent-soft),
+					transparent 70%
+				);
+				filter: blur(8px);
+				z-index: -1;
+			}
+			.shell {
+				border: 1px solid var(--border-strong);
+				border-radius: var(--radius);
+				background: var(--surface);
+				box-shadow: 0 24px 60px rgba(8, 9, 16, 0.45);
+				overflow: hidden;
+			}
+			.shell__bar {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 0.6rem 0.85rem;
+				border-bottom: 1px solid var(--border);
+				background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+			}
+			.shell__name {
+				font-family: var(--mono);
+				font-size: 0.78rem;
+				color: var(--muted);
+			}
+			.copy {
+				font-family: var(--font);
+				font-size: 0.78rem;
+				color: var(--text-2);
+				background: transparent;
+				border: 1px solid var(--border-strong);
+				border-radius: 7px;
+				padding: 0.25rem 0.6rem;
+				cursor: pointer;
+				transition:
+					color 0.15s var(--ease),
+					border-color 0.15s var(--ease);
+			}
+			.copy:hover {
+				color: var(--text);
+				border-color: var(--accent-line);
+			}
+			.copy.is-copied {
+				color: var(--accent);
+				border-color: var(--accent-line);
+			}
+			.shell__body {
+				margin: 0;
+				padding: 1.1rem 1.2rem 1.3rem;
+				font-family: var(--mono);
+				font-size: 0.86rem;
+				line-height: 1.85;
+				overflow-x: auto;
+			}
+			.shell__body .ln {
+				display: block;
+			}
+			.shell__body .pr {
+				color: var(--accent);
+				font-weight: 700;
+				margin-right: 0.4rem;
+			}
+			.shell__body .dim {
+				color: var(--muted);
+			}
+			.shell__body .ok {
+				color: #5fb98b;
+			}
+			.caret {
+				color: var(--accent);
+				animation: blink 1.1s steps(1) infinite;
+			}
+			@keyframes blink {
+				50% {
+					opacity: 0;
+				}
+			}
+			@media (prefers-reduced-motion: reduce) {
+				.caret {
+					animation: none;
+				}
+			}
+
+			/* Problem */
+			.problem {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: clamp(2rem, 5vw, 4rem);
+				align-items: start;
+				border-top: 1px solid var(--border);
+			}
+			.problem h2 {
+				font-size: clamp(1.9rem, 3.6vw, 2.8rem);
+			}
+			.problem p {
+				margin-top: 1.2rem;
+				color: var(--text-2);
+				max-width: 42ch;
+			}
+			.configs {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 1px;
+				background: var(--border);
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				overflow: hidden;
+			}
+			.configs li {
+				background: var(--surface);
+				padding: 1.2rem 1.25rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			.configs span {
+				font-size: 0.72rem;
+				text-transform: uppercase;
+				letter-spacing: 0.13em;
+				color: var(--muted);
+			}
+			.configs code {
+				font-size: 0.9rem;
+				color: var(--text);
+			}
+
+			/* Bento */
+			.bento {
+				display: grid;
+				grid-template-columns: repeat(3, 1fr);
+				grid-auto-rows: 1fr;
+				gap: 1rem;
+			}
+			.cell {
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				padding: 1.6rem 1.6rem 1.7rem;
+				background: var(--surface);
+				display: flex;
+				flex-direction: column;
+				gap: 0.7rem;
+				transition:
+					transform 0.2s var(--ease),
+					border-color 0.2s var(--ease);
+			}
+			.cell:hover {
+				transform: translateY(-4px);
+				border-color: var(--accent-line);
+			}
+			.cell h3 {
+				font-size: 1.18rem;
+				font-weight: 700;
+			}
+			.cell p {
+				color: var(--text-2);
+				font-size: 0.97rem;
+			}
+			.chip {
+				align-self: flex-start;
+				margin-top: auto;
+				font-size: 0.8rem;
+				padding: 0.3rem 0.6rem;
+				border-radius: 7px;
+				background: var(--bg-2);
+				border: 1px solid var(--border);
+				color: var(--text-2);
+			}
+			/* cell 0: big accent feature */
+			.cell--0 {
+				grid-column: span 2;
+				grid-row: span 2;
+				background:
+					radial-gradient(
+						80% 90% at 100% 0%,
+						var(--accent-soft),
+						transparent 60%
+					),
+					var(--surface);
+				border-color: var(--accent-line);
+			}
+			.cell--0 h3 {
+				font-size: 1.7rem;
+			}
+			.cell--0 p {
+				font-size: 1.05rem;
+				max-width: 40ch;
+			}
+			.cell--0 .chip {
+				background: var(--accent-soft);
+				border-color: var(--accent-line);
+				color: var(--accent);
+			}
+			/* cell 4: gradient wide */
+			.cell--4 {
+				grid-column: span 2;
+				background: linear-gradient(
+					120deg,
+					color-mix(in srgb, var(--accent-2) 22%, var(--surface)),
+					var(--surface) 70%
+				);
+			}
+			.cell--4 .chip {
+				background: rgba(0, 0, 0, 0.12);
+			}
+
+			/* Flow */
+			.flow {
+				border-top: 1px solid var(--border);
+			}
+			.flow__track {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: grid;
+				grid-template-columns: repeat(3, 1fr);
+				gap: 1.2rem;
+				counter-reset: step;
+			}
+			.flow__step {
+				position: relative;
+				padding-top: 1.6rem;
+				border-top: 2px solid var(--border-strong);
+			}
+			.flow__step::before {
+				content: "";
+				position: absolute;
+				top: -2px;
+				left: 0;
+				width: 38%;
+				height: 2px;
+				background: var(--accent);
+			}
+			.flow__step h3 {
+				font-size: 1.25rem;
+				font-weight: 700;
+			}
+			.flow__step p {
+				margin-top: 0.5rem;
+				color: var(--text-2);
+				font-size: 0.97rem;
+				min-height: 3.4em;
+			}
+			.flow__cmd {
+				display: block;
+				margin-top: 1rem;
+				font-size: 0.85rem;
+				padding: 0.7rem 0.85rem;
+				border-radius: var(--radius-sm);
+				background: var(--surface);
+				border: 1px solid var(--border);
+				overflow-x: auto;
+			}
+			.flow__cmd .pr {
+				color: var(--accent);
+				font-weight: 700;
+			}
+
+			/* Final CTA */
+			.final {
+				text-align: center;
+				border-top: 1px solid var(--border);
+			}
+			.final h2 {
+				font-size: clamp(1.9rem, 4vw, 3rem);
+			}
+			.final p {
+				margin: 1.1rem auto 0;
+				color: var(--text-2);
+				max-width: 46ch;
+			}
+			.final .cta-row {
+				margin-top: 2.2rem;
+			}
+
+			/* Footer */
+			.foot {
+				border-top: 1px solid var(--border);
+				background: var(--bg-2);
+			}
+			.foot__inner {
+				max-width: var(--maxw);
+				margin: 0 auto;
+				padding: 3.5rem 1.5rem 2.5rem;
+				display: grid;
+				grid-template-columns: 1.3fr 1fr;
+				gap: 2.5rem;
+			}
+			.foot__brand p {
+				margin-top: 0.9rem;
+				color: var(--muted);
+				max-width: 34ch;
+				font-size: 0.95rem;
+			}
+			.foot__cols {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 2rem;
+			}
+			.foot__cols h4 {
+				font-size: 0.78rem;
+				text-transform: uppercase;
+				letter-spacing: 0.13em;
+				color: var(--muted);
+				font-weight: 700;
+				margin-bottom: 0.9rem;
+			}
+			.foot__cols a {
+				display: block;
+				color: var(--text-2);
+				font-size: 0.95rem;
+				padding: 0.2rem 0;
+			}
+			.foot__cols a:hover {
+				color: var(--accent);
+			}
+			.foot__base {
+				max-width: var(--maxw);
+				margin: 0 auto;
+				padding: 1.3rem 1.5rem;
+				border-top: 1px solid var(--border);
+				display: flex;
+				justify-content: space-between;
+				flex-wrap: wrap;
+				gap: 0.5rem;
+				font-size: 0.85rem;
+				color: var(--muted);
+			}
+
+			/* Reveal motion */
+			.reveal {
+				opacity: 0;
+				transform: translateY(18px);
+				transition:
+					opacity 0.6s var(--ease),
+					transform 0.6s var(--ease);
+				transition-delay: var(--delay, 0ms);
+			}
+			.reveal.in {
+				opacity: 1;
+				transform: none;
+			}
+			@media (prefers-reduced-motion: reduce) {
+				.reveal {
+					opacity: 1;
+					transform: none;
+					transition: none;
+				}
+			}
+
+			/* Responsive */
+			@media (max-width: 900px) {
+				.hero,
+				.problem,
+				.foot__inner {
+					grid-template-columns: 1fr;
+				}
+				.hero {
+					gap: 2.5rem;
+				}
+				.bento {
+					grid-template-columns: 1fr 1fr;
+				}
+				.cell--0,
+				.cell--4 {
+					grid-column: span 2;
+					grid-row: auto;
+				}
+				.flow__track {
+					grid-template-columns: 1fr;
+				}
+				.flow__step p {
+					min-height: 0;
+				}
+			}
+			@media (max-width: 600px) {
+				body {
+					font-size: 16px;
+				}
+				.nav__links {
+					gap: 1rem;
+					font-size: 0.9rem;
+				}
+				.nav__links a[href="/cli-reference/"] {
+					display: none;
+				}
+				.bento,
+				.configs,
+				.foot__cols {
+					grid-template-columns: 1fr;
+				}
+				.cell--0,
+				.cell--4 {
+					grid-column: span 1;
+				}
+				.cta-row .btn {
+					flex: 1 1 auto;
+					justify-content: center;
+				}
+			}
+		</style>
+	</body>
+</html>
