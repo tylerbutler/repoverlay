@@ -15,7 +15,7 @@ const features = [
 	{
 		title: "Overlay without committing",
 		body: "Apply shared files to any git repo. They're excluded through .git/info/exclude, so .gitignore stays untouched.",
-		code: "git/info/exclude",
+		code: ".git/info/exclude",
 		variant: "accent",
 	},
 	{
@@ -139,13 +139,13 @@ const steps = [
 								<span class="copy__label">Copy</span>
 							</button>
 						</div>
-						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> repoverlay browse tylerbutler</span>
-<span class="ln dim">  select an overlay…  <span class="ok">claude-config</span></span>
-<span class="ln"><span class="pr">$</span> repoverlay apply claude-config</span>
-<span class="ln dim">  <span class="ok">✓</span> linked .claude/    excluded from git</span>
-<span class="ln dim">  <span class="ok">✓</span> linked CLAUDE.md   excluded from git</span>
-<span class="ln"><span class="pr">$</span> repoverlay status</span>
-<span class="ln dim">  claude-config · tylerbutler · 2 files<span class="caret">▍</span></span></code></pre>
+						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> repoverlay apply claude-config</span>
+<span class="ln"><span class="ok">Applying</span> overlay: claude-config</span>
+<span class="ln dim">  <span class="ok">+</span> .claude/</span>
+<span class="ln dim">  <span class="ok">+</span> CLAUDE.md</span>
+<span class="ln"> </span>
+<span class="ln"><span class="ok">✓</span> Applied 2 file(s) from 'claude-config'</span>
+<span class="ln"><span class="pr">$</span> <span class="caret">▍</span></span></code></pre>
 					</div>
 				</div>
 			</section>
