@@ -1,9 +1,8 @@
 #![allow(dead_code)]
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
 use crate::plugin::{InstallMode, PluginBundle, PluginRef, ResolvedPlugin, resolve_plugin};
 use crate::profile::{DelegateScope, ProfileConfig, ProfileMode};
@@ -23,49 +22,7 @@ struct DelegateSettings {
     owned_paths: Vec<String>,
 }
 
-fn validate_instruction_source(source: &Path) -> Result<()> {
-    for component in source.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                anyhow::bail!(
-                    "Instruction source '{}' must stay within the profile asset directory",
-                    source.display()
-                );
-            }
-        }
-    }
-    if source.is_absolute() {
-        anyhow::bail!("Instruction source '{}' must be relative", source.display());
-    }
-    Ok(())
-}
-
 impl ClaudeApplicator {
-    fn harness_home_from_override(override_home: Option<std::ffi::OsString>) -> Result<PathBuf> {
-        if let Some(home) = override_home {
-            return Ok(home.into());
-        }
-        let home = dirs::home_dir().context("Could not determine home directory")?;
-        Ok(home.join(".claude"))
-    }
-
-    pub(crate) fn harness_home_from_env() -> Result<PathBuf> {
-        Self::harness_home_from_override(std::env::var_os("REPOVERLAY_CLAUDE_HOME"))
-    }
-
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    pub(crate) fn command_with_program(
-        &self,
-        _context: &ProfileContext,
-        program: &str,
-        extra_args: &[String],
-    ) -> Result<Command> {
-        let mut command = Command::new(program);
-        command.args(extra_args);
-        Ok(command)
-    }
-
     /// Default delegate settings scope when a plugin does not set one.
     ///
     /// Persistent profiles default to `project` (team-shareable, committed);
@@ -160,14 +117,14 @@ impl ClaudeApplicator {
         for skill in &bundle.skills {
             actions.push(ProfileAction::PlacePluginDir {
                 source: bundle_dir.join("skills").join(skill),
-                target: repo_target.join(".claude").join("skills").join(skill),
+                target: AgentHarness::Claude.skills_root(repo_target).join(skill),
             });
         }
 
         for agent in &bundle.agents {
             actions.push(ProfileAction::PlacePluginDir {
                 source: bundle_dir.join("agents").join(agent),
-                target: repo_target.join(".claude").join("agents").join(agent),
+                target: AgentHarness::Claude.agents_root(repo_target).join(agent),
             });
         }
 
@@ -199,10 +156,6 @@ impl ClaudeApplicator {
 }
 
 impl ProfileApplicator for ClaudeApplicator {
-    fn harness(&self) -> AgentHarness {
-        AgentHarness::Claude
-    }
-
     fn plan(&self, profile: &ProfileConfig, context: &ProfileContext) -> Result<ProfilePlan> {
         let mut actions = Vec::new();
 
@@ -217,7 +170,7 @@ impl ProfileApplicator for ClaudeApplicator {
         for instruction in &profile.instructions {
             instruction.validate_exactly_one()?;
             if let Some(source) = &instruction.source {
-                validate_instruction_source(Path::new(source))?;
+                super::validate_instruction_source(Path::new(source))?;
             }
             actions.push(ProfileAction::SkipCapability {
                 capability: format!("instruction:{}", instruction.label()),
@@ -327,17 +280,11 @@ impl ProfileApplicator for ClaudeApplicator {
 
         Ok(ProfilePlan {
             profile_name: context.profile_name.clone(),
-            harness: "claude".to_string(),
+            harness: context.harness,
             actions,
             plugins,
             plugin_dirs,
         })
-    }
-
-    fn command(&self, context: &ProfileContext, extra_args: &[String]) -> Result<Command> {
-        let program =
-            std::env::var("REPOVERLAY_CLAUDE_COMMAND").unwrap_or_else(|_| "claude".to_string());
-        self.command_with_program(context, &program, extra_args)
     }
 }
 
@@ -363,6 +310,7 @@ mod tests {
     fn context_for(target: &Path, harness_home: &Path) -> ProfileContext {
         ProfileContext {
             profile_name: "rust-dev".to_string(),
+            harness: AgentHarness::Claude,
             target: target.to_path_buf(),
             profile_asset_dir: target.to_path_buf(),
             harness_home: harness_home.to_path_buf(),
@@ -371,34 +319,6 @@ mod tests {
             marketplaces: Vec::<Marketplace>::new(),
             cache: CacheManager::new().unwrap(),
         }
-    }
-
-    #[test]
-    fn claude_home_defaults_to_dot_claude() {
-        let expected = dirs::home_dir().unwrap().join(".claude");
-        assert_eq!(
-            ClaudeApplicator::harness_home_from_override(None).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn claude_home_honors_override() {
-        let temp = tempfile::TempDir::new().unwrap();
-        assert_eq!(
-            ClaudeApplicator::harness_home_from_override(Some(temp.path().into())).unwrap(),
-            temp.path()
-        );
-    }
-
-    #[test]
-    fn claude_command_uses_env_program_name() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let context = context_for(temp.path(), &temp.path().join("claude-home"));
-        let command = ClaudeApplicator
-            .command_with_program(&context, "echo", &["hi".to_string()])
-            .unwrap();
-        assert_eq!(command.get_program(), "echo");
     }
 
     #[test]
@@ -524,6 +444,7 @@ mod tests {
     fn context_with_marketplace(target: &Path, mode: ProfileMode) -> ProfileContext {
         ProfileContext {
             profile_name: "rust-dev".to_string(),
+            harness: AgentHarness::Claude,
             target: target.to_path_buf(),
             profile_asset_dir: target.to_path_buf(),
             harness_home: target.join("claude-home"),

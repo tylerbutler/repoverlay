@@ -9,6 +9,7 @@ use std::time::Duration;
 use std::os::unix::process::ExitStatusExt;
 
 use crate::profile::ProfileMode;
+use crate::profile_applicators::AgentHarness;
 
 struct ProfileRunLock {
     path: PathBuf,
@@ -25,22 +26,18 @@ pub(crate) fn handle_copilot_command(
     target: Option<PathBuf>,
     extra_args: Vec<String>,
 ) -> Result<()> {
-    run_ephemeral_profiles(
-        "copilot",
-        "Copilot",
-        "REPOVERLAY_COPILOT_COMMAND",
-        "copilot",
-        profiles,
-        target,
-        extra_args,
-    )
+    run_ephemeral_profiles(AgentHarness::Copilot, profiles, target, extra_args)
 }
 
 /// Claim the ephemeral session lock for `(profile, harness)`.
 ///
 /// Recovers a lock orphaned by a dead session (SIGKILL/power loss) before trying
 /// to claim it; a live lock is left in place so `create_new` rejects us.
-fn claim_profile_lock(target: &Path, profile: &str, harness: &str) -> Result<ProfileRunLock> {
+fn claim_profile_lock(
+    target: &Path,
+    profile: &str,
+    harness: AgentHarness,
+) -> Result<ProfileRunLock> {
     let lock_path = crate::profile::profile_lock_path(target, profile, harness)?;
     let lock_parent = lock_path
         .parent()
@@ -91,7 +88,7 @@ fn claim_profile_lock(target: &Path, profile: &str, harness: &str) -> Result<Pro
 ///
 /// All removals are attempted even if one fails; the first error is returned so
 /// the caller can surface it.
-fn rollback_applied(applied: &[String], harness: &str, target: &Path) -> Result<()> {
+fn rollback_applied(applied: &[String], harness: AgentHarness, target: &Path) -> Result<()> {
     let mut first_err: Option<anyhow::Error> = None;
     for profile in applied.iter().rev() {
         if let Err(error) =
@@ -113,14 +110,12 @@ fn rollback_applied(applied: &[String], harness: &str, target: &Path) -> Result<
 /// applying any profile rolls back the ones already applied so the repository is
 /// never left half-configured.
 pub(crate) fn run_ephemeral_profiles(
-    harness: &str,
-    label: &str,
-    program_env: &str,
-    default_program: &str,
+    harness: AgentHarness,
     profiles: &[String],
     target: Option<PathBuf>,
     extra_args: Vec<String>,
 ) -> Result<()> {
+    let label = harness.label();
     let target = target.unwrap_or_else(|| PathBuf::from("."));
     let target = crate::canonicalize_path(&target, "Target")?;
     crate::validate_git_repo(&target)?;
@@ -194,8 +189,7 @@ pub(crate) fn run_ephemeral_profiles(
         return Err(apply_error);
     }
 
-    let program = std::env::var(program_env).unwrap_or_else(|_| default_program.to_string());
-    let mut command = Command::new(program);
+    let mut command = Command::new(harness.program());
     for dir in &plugin_dirs {
         command.arg("--plugin-dir").arg(dir);
     }

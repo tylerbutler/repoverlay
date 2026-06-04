@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::profile_applicators::AgentHarness;
+
 #[allow(dead_code)]
 const PROFILES_DIR: &str = "profiles";
 
@@ -125,9 +127,12 @@ fn merge_list<T: Clone>(base: &[T], override_list: &[T]) -> Vec<T> {
 }
 
 #[allow(dead_code)]
-pub(crate) fn profile_state_path(target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
+pub(crate) fn profile_state_path(
+    target: &Path,
+    name: &str,
+    harness: AgentHarness,
+) -> Result<PathBuf> {
     validate_profile_state_component(name)?;
-    validate_profile_state_component(harness)?;
 
     Ok(target
         .join(crate::state::STATE_DIR)
@@ -135,9 +140,12 @@ pub(crate) fn profile_state_path(target: &Path, name: &str, harness: &str) -> Re
         .join(format!("{name}.{harness}.ccl")))
 }
 
-pub(crate) fn profile_lock_path(target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
+pub(crate) fn profile_lock_path(
+    target: &Path,
+    name: &str,
+    harness: AgentHarness,
+) -> Result<PathBuf> {
     validate_profile_state_component(name)?;
-    validate_profile_state_component(harness)?;
 
     Ok(target
         .join(crate::state::STATE_DIR)
@@ -243,7 +251,7 @@ pub(crate) fn validate_profile_marker_component(component: &str) -> Result<()> {
 
 #[allow(dead_code)]
 pub(crate) fn save_profile_state(target: &Path, state: &ProfileState) -> Result<()> {
-    let path = profile_state_path(target, &state.name, &state.harness)?;
+    let path = profile_state_path(target, &state.name, state.harness)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -254,7 +262,11 @@ pub(crate) fn save_profile_state(target: &Path, state: &ProfileState) -> Result<
 }
 
 #[allow(dead_code)]
-pub(crate) fn load_profile_state(target: &Path, name: &str, harness: &str) -> Result<ProfileState> {
+pub(crate) fn load_profile_state(
+    target: &Path,
+    name: &str,
+    harness: AgentHarness,
+) -> Result<ProfileState> {
     let path = profile_state_path(target, name, harness)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read profile state: {}", path.display()))?;
@@ -292,12 +304,14 @@ pub(crate) fn list_applied_profile_states(target: &Path) -> Result<Vec<ProfileSt
             }
         }
     }
-    states.sort_by(|a, b| (a.name.as_str(), a.harness.as_str()).cmp(&(&b.name, &b.harness)));
+    states.sort_by(|a, b| {
+        (a.name.as_str(), a.harness.as_str()).cmp(&(b.name.as_str(), b.harness.as_str()))
+    });
     Ok(states)
 }
 
 #[allow(dead_code)]
-pub(crate) fn remove_profile_state(target: &Path, name: &str, harness: &str) -> Result<()> {
+pub(crate) fn remove_profile_state(target: &Path, name: &str, harness: AgentHarness) -> Result<()> {
     let path = profile_state_path(target, name, harness)?;
     if path.exists() {
         fs::remove_file(&path)
@@ -318,7 +332,7 @@ pub(crate) enum ProfileMode {
 #[allow(dead_code)]
 pub(crate) struct ProfileState {
     pub(crate) name: String,
-    pub(crate) harness: String,
+    pub(crate) harness: AgentHarness,
     pub(crate) mode: ProfileMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) session_id: Option<String>,
@@ -537,7 +551,7 @@ profiles =
         let temp = tempfile::TempDir::new().unwrap();
         let state = ProfileState {
             name: "rust-dev".to_string(),
-            harness: "copilot".to_string(),
+            harness: AgentHarness::Copilot,
             mode: ProfileMode::Persistent,
             session_id: None,
             applied_at: Utc::now(),
@@ -550,9 +564,9 @@ profiles =
         };
 
         save_profile_state(temp.path(), &state).unwrap();
-        let loaded = load_profile_state(temp.path(), "rust-dev", "copilot").unwrap();
+        let loaded = load_profile_state(temp.path(), "rust-dev", AgentHarness::Copilot).unwrap();
         assert_eq!(loaded.name, "rust-dev");
-        assert_eq!(loaded.harness, "copilot");
+        assert_eq!(loaded.harness, AgentHarness::Copilot);
         assert_eq!(loaded.overlays, vec!["rust-base"]);
     }
 
@@ -561,7 +575,7 @@ profiles =
         let temp = tempfile::TempDir::new().unwrap();
         let state = ProfileState {
             name: "rust-dev".to_string(),
-            harness: "copilot".to_string(),
+            harness: AgentHarness::Copilot,
             mode: ProfileMode::Persistent,
             session_id: None,
             applied_at: Utc::now(),
@@ -574,24 +588,19 @@ profiles =
         };
 
         save_profile_state(temp.path(), &state).unwrap();
-        remove_profile_state(temp.path(), "rust-dev", "copilot").unwrap();
-        assert!(load_profile_state(temp.path(), "rust-dev", "copilot").is_err());
+        remove_profile_state(temp.path(), "rust-dev", AgentHarness::Copilot).unwrap();
+        assert!(load_profile_state(temp.path(), "rust-dev", AgentHarness::Copilot).is_err());
     }
 
     #[test]
     fn profile_state_path_rejects_traversal_components() {
         let temp = tempfile::TempDir::new().unwrap();
         for invalid in ["../evil", "bad/name", "bad\\name", ".", ""] {
-            let name_err = profile_state_path(temp.path(), invalid, "copilot").unwrap_err();
+            let name_err =
+                profile_state_path(temp.path(), invalid, AgentHarness::Copilot).unwrap_err();
             assert!(
                 name_err.to_string().contains("profile state component"),
                 "unexpected error for invalid profile name {invalid:?}: {name_err}"
-            );
-
-            let harness_err = profile_state_path(temp.path(), "rust-dev", invalid).unwrap_err();
-            assert!(
-                harness_err.to_string().contains("profile state component"),
-                "unexpected error for invalid harness {invalid:?}: {harness_err}"
             );
         }
     }
@@ -599,7 +608,7 @@ profiles =
     #[test]
     fn profile_lock_path_uses_validated_profile_components() {
         let temp = tempfile::TempDir::new().unwrap();
-        let path = profile_lock_path(temp.path(), "rust-dev", "copilot").unwrap();
+        let path = profile_lock_path(temp.path(), "rust-dev", AgentHarness::Copilot).unwrap();
         assert_eq!(
             path,
             temp.path()
@@ -608,7 +617,7 @@ profiles =
                 .join("rust-dev.copilot.lock")
         );
 
-        let err = profile_lock_path(temp.path(), "../evil", "copilot").unwrap_err();
+        let err = profile_lock_path(temp.path(), "../evil", AgentHarness::Copilot).unwrap_err();
         assert!(err.to_string().contains("profile state component"));
     }
 

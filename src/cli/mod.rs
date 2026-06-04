@@ -657,7 +657,7 @@ pub(crate) enum ProfileCommand {
         name: String,
 
         #[arg(long)]
-        harness: String,
+        harness: crate::profile_applicators::AgentHarness,
 
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
@@ -671,7 +671,7 @@ pub(crate) enum ProfileCommand {
         target: Option<PathBuf>,
 
         #[arg(long)]
-        harness: Option<String>,
+        harness: Option<crate::profile_applicators::AgentHarness>,
     },
 
     /// Remove an applied profile
@@ -680,7 +680,7 @@ pub(crate) enum ProfileCommand {
         name: String,
 
         #[arg(long)]
-        harness: String,
+        harness: crate::profile_applicators::AgentHarness,
 
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]

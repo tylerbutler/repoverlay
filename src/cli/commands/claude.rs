@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 use super::copilot::run_ephemeral_profiles;
+use crate::profile_applicators::AgentHarness;
 
 /// Run Claude with one or more profiles applied for the process lifetime
 /// (ephemeral).
@@ -14,13 +15,5 @@ pub(crate) fn handle_claude_command(
     target: Option<PathBuf>,
     extra_args: Vec<String>,
 ) -> Result<()> {
-    run_ephemeral_profiles(
-        "claude",
-        "Claude",
-        "REPOVERLAY_CLAUDE_COMMAND",
-        "claude",
-        profiles,
-        target,
-        extra_args,
-    )
+    run_ephemeral_profiles(AgentHarness::Claude, profiles, target, extra_args)
 }

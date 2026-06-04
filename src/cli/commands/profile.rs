@@ -68,7 +68,7 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
             crate::validate_git_repo(&target)?;
             crate::profile_plan::apply_profile(
                 &name,
-                &harness,
+                harness,
                 &target,
                 crate::profile::ProfileMode::Persistent,
                 None,
@@ -80,7 +80,7 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
             let states = crate::profile_plan::list_profile_states(&target)?;
             let states: Vec<_> = states
                 .into_iter()
-                .filter(|state| harness.as_ref().is_none_or(|h| h == &state.harness))
+                .filter(|state| harness.is_none_or(|h| h == state.harness))
                 .collect();
             if states.is_empty() {
                 println!("No profiles applied.");
@@ -97,7 +97,7 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
             target,
         } => {
             let target = resolve_target(target)?;
-            crate::profile_plan::remove_profile(&name, &harness, &target)?;
+            crate::profile_plan::remove_profile(&name, harness, &target)?;
             Ok(())
         }
     }

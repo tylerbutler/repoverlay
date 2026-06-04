@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
-use anyhow::{Context, Result};
-use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use anyhow::Result;
+use std::path::Path;
 
 use crate::plugin::{InstallMode, PluginBundle, PluginRef, ResolvedPlugin, resolve_plugin};
 use crate::profile::ProfileConfig;
@@ -11,51 +10,7 @@ use crate::profile_plan::{ProfileAction, ProfilePlan, json_pointer};
 
 pub(crate) struct CopilotApplicator;
 
-fn validate_instruction_source(source: &Path) -> Result<()> {
-    for component in source.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                anyhow::bail!(
-                    "Instruction source '{}' must stay within the profile asset directory",
-                    source.display()
-                );
-            }
-        }
-    }
-
-    if source.is_absolute() {
-        anyhow::bail!("Instruction source '{}' must be relative", source.display());
-    }
-
-    Ok(())
-}
-
 impl CopilotApplicator {
-    fn harness_home_from_override(override_home: Option<std::ffi::OsString>) -> Result<PathBuf> {
-        if let Some(home) = override_home {
-            return Ok(home.into());
-        }
-        let home = dirs::home_dir().context("Could not determine home directory")?;
-        Ok(home.join(".config").join("github-copilot"))
-    }
-
-    pub(crate) fn harness_home_from_env() -> Result<PathBuf> {
-        Self::harness_home_from_override(std::env::var_os("REPOVERLAY_COPILOT_HOME"))
-    }
-
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    pub(crate) fn command_with_program(
-        &self,
-        _context: &ProfileContext,
-        program: &str,
-        extra_args: &[String],
-    ) -> Result<Command> {
-        let mut command = Command::new(program);
-        command.args(extra_args);
-        Ok(command)
-    }
-
     /// Decompose a resolved plugin bundle into Copilot placements, appending
     /// skill-placement and skip actions and accumulating MCP servers for the
     /// single Copilot `.mcp.json` merge (Copilot CLI keys servers under
@@ -73,14 +28,14 @@ impl CopilotApplicator {
         for skill in &bundle.skills {
             actions.push(ProfileAction::PlacePluginDir {
                 source: bundle_dir.join("skills").join(skill),
-                target: repo_target.join(".agents").join("skills").join(skill),
+                target: AgentHarness::Copilot.skills_root(repo_target).join(skill),
             });
         }
 
         for agent in &bundle.agents {
             actions.push(ProfileAction::PlacePluginDir {
                 source: bundle_dir.join("agents").join(agent),
-                target: repo_target.join(".github").join("agents").join(agent),
+                target: AgentHarness::Copilot.agents_root(repo_target).join(agent),
             });
         }
 
@@ -111,10 +66,6 @@ impl CopilotApplicator {
 }
 
 impl ProfileApplicator for CopilotApplicator {
-    fn harness(&self) -> AgentHarness {
-        AgentHarness::Copilot
-    }
-
     fn plan(&self, profile: &ProfileConfig, context: &ProfileContext) -> Result<ProfilePlan> {
         let mut actions = Vec::new();
 
@@ -129,7 +80,7 @@ impl ProfileApplicator for CopilotApplicator {
             instruction.validate_exactly_one()?;
             if let Some(source) = &instruction.source {
                 let source_rel = Path::new(source);
-                validate_instruction_source(source_rel)?;
+                super::validate_instruction_source(source_rel)?;
                 let base_dir = instruction
                     .base_dir
                     .clone()
@@ -220,17 +171,11 @@ impl ProfileApplicator for CopilotApplicator {
 
         Ok(ProfilePlan {
             profile_name: context.profile_name.clone(),
-            harness: "copilot".to_string(),
+            harness: context.harness,
             actions,
             plugins,
             plugin_dirs: Vec::new(),
         })
-    }
-
-    fn command(&self, context: &ProfileContext, extra_args: &[String]) -> Result<Command> {
-        let program =
-            std::env::var("REPOVERLAY_COPILOT_COMMAND").unwrap_or_else(|_| "copilot".to_string());
-        self.command_with_program(context, &program, extra_args)
     }
 }
 
@@ -239,6 +184,7 @@ mod tests {
     use super::*;
     use crate::profile::{InstructionConfig, ProfileConfig};
     use crate::profile_applicators::{ProfileApplicator, ProfileContext};
+    use std::path::PathBuf;
 
     #[test]
     fn copilot_introspects_plugin_mcp_into_servers_merge() {
@@ -266,6 +212,7 @@ mod tests {
         };
         let context = ProfileContext {
             profile_name: "rust-dev".to_string(),
+            harness: AgentHarness::Copilot,
             target: target.clone(),
             profile_asset_dir: target,
             harness_home: temp.path().join("copilot-home"),
@@ -321,6 +268,7 @@ mod tests {
         };
         let context = ProfileContext {
             profile_name: "rust-dev".to_string(),
+            harness: AgentHarness::Copilot,
             target: target.clone(),
             profile_asset_dir: target.clone(),
             harness_home: temp.path().join("copilot-home"),
@@ -366,6 +314,7 @@ mod tests {
         };
         let context = ProfileContext {
             profile_name: "rust-dev".to_string(),
+            harness: AgentHarness::Copilot,
             target: temp.path().to_path_buf(),
             profile_asset_dir: source_dir,
             harness_home: temp.path().join("copilot-home"),
@@ -389,6 +338,7 @@ mod tests {
         let source_dir = temp.path().join("profile-assets");
         let context = ProfileContext {
             profile_name: "rust-dev".to_string(),
+            harness: AgentHarness::Copilot,
             target: temp.path().to_path_buf(),
             profile_asset_dir: source_dir,
             harness_home: temp.path().join("copilot-home"),
@@ -419,52 +369,5 @@ mod tests {
                 "unexpected error for {source}: {err}"
             );
         }
-    }
-
-    #[test]
-    fn copilot_harness_home_uses_override_when_provided() {
-        let temp = tempfile::TempDir::new().unwrap();
-
-        assert_eq!(
-            CopilotApplicator::harness_home_from_override(Some(temp.path().into())).unwrap(),
-            temp.path()
-        );
-    }
-
-    #[test]
-    fn copilot_harness_home_defaults_to_github_copilot_config_dir() {
-        let expected = dirs::home_dir().unwrap().join(".config/github-copilot");
-
-        assert_eq!(
-            CopilotApplicator::harness_home_from_override(None).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn copilot_command_uses_env_override_and_extra_args() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let context = ProfileContext {
-            profile_name: "rust-dev".to_string(),
-            target: temp.path().to_path_buf(),
-            profile_asset_dir: temp.path().to_path_buf(),
-            harness_home: temp.path().join("copilot-home"),
-            mode: crate::profile::ProfileMode::Ephemeral,
-            session_id: Some("session-1".to_string()),
-            marketplaces: Vec::new(),
-            cache: crate::cache::CacheManager::new().unwrap(),
-        };
-
-        let command = CopilotApplicator
-            .command_with_program(&context, "echo", &["hello".to_string()])
-            .unwrap();
-        assert_eq!(command.get_program(), "echo");
-        assert_eq!(
-            command
-                .get_args()
-                .map(|arg| arg.to_string_lossy().to_string())
-                .collect::<Vec<_>>(),
-            vec!["hello"]
-        );
     }
 }

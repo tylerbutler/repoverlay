@@ -202,7 +202,7 @@ pub(crate) fn repair_git_exclude(target: &Path) -> Result<bool> {
         if entries.is_empty() {
             continue;
         }
-        let section = crate::profile_plan::profile_exclude_section(&state.name, &state.harness);
+        let section = crate::profile_plan::profile_exclude_section(&state.name, state.harness);
         update_git_exclude(target, &section, &entries, true)?;
     }
 

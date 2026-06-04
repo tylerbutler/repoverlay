@@ -11,17 +11,12 @@ use std::path::{Path, PathBuf};
 use crate::profile::{
     ProfileFileEntry, ProfileMode, ProfileState, SkippedCapability, save_profile_state,
 };
-use crate::profile_applicators::claude::ClaudeApplicator;
-use crate::profile_applicators::copilot::CopilotApplicator;
-use crate::profile_applicators::{ProfileApplicator, ProfileContext};
+use crate::profile_applicators::{AgentHarness, ProfileContext};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ProfilePlan {
-    // `profile_name`/`harness` currently duplicate `ProfileContext`; this is part
-    // of the planned typed-harness work — see the design note on `AgentHarness`
-    // in `profile_applicators/mod.rs`.
     pub(crate) profile_name: String,
-    pub(crate) harness: String,
+    pub(crate) harness: AgentHarness,
     pub(crate) actions: Vec<ProfileAction>,
     /// Provenance for each managed (resolved-and-cached) plugin, recorded into
     /// `ProfileState` so removal/`show`/`update` can reason about what was placed.
@@ -97,7 +92,7 @@ pub(crate) enum InstructionBody {
 
 pub(crate) fn apply_profile(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     target: &Path,
     mode: ProfileMode,
     session_id: Option<String>,
@@ -108,20 +103,19 @@ pub(crate) fn apply_profile(
         target,
         mode,
         session_id,
-        harness_home_for(harness)?,
+        harness.home_from_env()?,
     )
 }
 
 fn apply_profile_with_harness_home(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     target: &Path,
     mode: ProfileMode,
     session_id: Option<String>,
     harness_home: PathBuf,
 ) -> Result<ProfileState> {
     crate::profile::validate_profile_state_component(name)?;
-    crate::profile::validate_profile_state_component(harness)?;
     let state_path = crate::profile::profile_state_path(target, name, harness)?;
     match state_path.try_exists() {
         Ok(true) => bail!(
@@ -140,9 +134,10 @@ fn apply_profile_with_harness_home(
         .profiles
         .get(name)
         .ok_or_else(|| anyhow::anyhow!("Profile '{name}' not found"))?;
-    let applicator = applicator_for(harness)?;
+    let applicator = harness.applicator();
     let context = ProfileContext {
         profile_name: name.to_string(),
+        harness,
         target: target.to_path_buf(),
         profile_asset_dir: target.to_path_buf(),
         harness_home,
@@ -156,7 +151,7 @@ fn apply_profile_with_harness_home(
     check_mcp_ownership_conflicts(&plan, target, harness)?;
     let mut state = ProfileState {
         name: name.to_string(),
-        harness: harness.to_string(),
+        harness,
         mode,
         session_id,
         applied_at: Utc::now(),
@@ -379,7 +374,7 @@ fn apply_profile_with_harness_home(
 /// Namespaced as `profile:<name>@<harness>` so it cannot collide with an overlay
 /// section (which uses the bare overlay name) and so the same profile applied for
 /// two harnesses gets two independent sections.
-pub(crate) fn profile_exclude_section(name: &str, harness: &str) -> String {
+pub(crate) fn profile_exclude_section(name: &str, harness: AgentHarness) -> String {
     format!("profile:{name}@{harness}")
 }
 
@@ -523,7 +518,7 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
             continue;
         }
 
-        remove_profile(&state.name, &state.harness, target).with_context(|| {
+        remove_profile(&state.name, state.harness, target).with_context(|| {
             format!(
                 "Failed to remove '{}' ({}) before re-applying updated plugins",
                 state.name, state.harness
@@ -531,7 +526,7 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
         })?;
         apply_profile(
             &state.name,
-            &state.harness,
+            state.harness,
             target,
             ProfileMode::Persistent,
             None,
@@ -549,9 +544,8 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
     Ok(inspected)
 }
 
-pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result<()> {
+pub(crate) fn remove_profile(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
     crate::profile::validate_profile_state_component(name)?;
-    crate::profile::validate_profile_state_component(harness)?;
 
     let lock_path = crate::profile::profile_lock_path(target, name, harness)?;
     match crate::profile::inspect_lock(&lock_path)? {
@@ -583,13 +577,16 @@ pub(crate) fn remove_profile(name: &str, harness: &str, target: &Path) -> Result
 /// owning `repoverlay copilot --profile` session can clean itself up while still
 /// holding its lock. Callers must only use this for the session that created the
 /// lock.
-pub(crate) fn remove_profile_for_session(name: &str, harness: &str, target: &Path) -> Result<()> {
+pub(crate) fn remove_profile_for_session(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+) -> Result<()> {
     crate::profile::validate_profile_state_component(name)?;
-    crate::profile::validate_profile_state_component(harness)?;
     remove_profile_inner(name, harness, target)
 }
 
-fn remove_profile_inner(name: &str, harness: &str, target: &Path) -> Result<()> {
+fn remove_profile_inner(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
     let state = crate::profile::load_profile_state(target, name, harness)?;
     for file in state.files.iter().rev() {
         match file.action.as_str() {
@@ -671,21 +668,19 @@ pub(crate) fn list_profile_states(target: &Path) -> Result<Vec<ProfileState>> {
     states.sort_by(|left: &ProfileState, right: &ProfileState| {
         left.name
             .cmp(&right.name)
-            .then_with(|| left.harness.cmp(&right.harness))
+            .then_with(|| left.harness.as_str().cmp(right.harness.as_str()))
     });
     Ok(states)
 }
 
 fn ensure_removable_profile_file(
     _name: &str,
-    harness: &str,
+    _harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
-    let allowed_root = match harness {
-        "copilot" | "claude" => repo_target.to_path_buf(),
-        _ => bail!("Unsupported harness '{harness}'"),
-    };
+    // Every harness places removable profile files under the repo root.
+    let allowed_root = repo_target.to_path_buf();
 
     if !file.target.starts_with(&allowed_root) {
         bail!(
@@ -816,7 +811,7 @@ fn is_shared_marketplace_pointer(pointer: &str) -> bool {
 /// these (they remain in use by another profile).
 fn protected_json_pointers(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     json_target: &Path,
 ) -> BTreeSet<String> {
@@ -846,7 +841,11 @@ fn protected_json_pointers(
 /// Precise pointer tracking is used when the other profile's backup metadata is
 /// readable; otherwise we conservatively reject any other profile that already
 /// manages the same JSON target.
-fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path, harness: &str) -> Result<()> {
+fn check_mcp_ownership_conflicts(
+    plan: &ProfilePlan,
+    target: &Path,
+    harness: AgentHarness,
+) -> Result<()> {
     let existing = list_profile_states(target)?;
     for action in &plan.actions {
         let ProfileAction::MergeJson {
@@ -924,9 +923,8 @@ fn rollback_applied_overlays(repo_target: &Path, overlays: &[String]) -> Result<
     Ok(())
 }
 
-fn profile_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Result<PathBuf> {
+fn profile_backup_dir(repo_target: &Path, name: &str, harness: AgentHarness) -> Result<PathBuf> {
     crate::profile::validate_profile_state_component(name)?;
-    crate::profile::validate_profile_state_component(harness)?;
 
     Ok(repo_target
         .join(crate::state::STATE_DIR)
@@ -938,7 +936,7 @@ fn profile_backup_dir(repo_target: &Path, name: &str, harness: &str) -> Result<P
 fn merge_json_backup_path(
     repo_target: &Path,
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     action_index: usize,
 ) -> Result<PathBuf> {
     Ok(profile_backup_dir(repo_target, name, harness)?
@@ -948,7 +946,7 @@ fn merge_json_backup_path(
 fn write_file_backup_path(
     repo_target: &Path,
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     action_index: usize,
 ) -> Result<PathBuf> {
     Ok(profile_backup_dir(repo_target, name, harness)?
@@ -957,7 +955,7 @@ fn write_file_backup_path(
 
 fn capture_write_file_backup(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     write_target: &Path,
     action_index: usize,
@@ -994,7 +992,7 @@ fn capture_write_file_backup(
 
 fn capture_merge_json_backup(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     merge_target: &Path,
     action_index: usize,
@@ -1086,13 +1084,13 @@ impl MergeJsonBackup {
 
 fn restore_merge_json_backup(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
     ensure_removable_profile_json(harness, repo_target, file)?;
 
-    ensure_valid_merge_json_backup_source(name, harness, repo_target, &file.source)?;
+    ensure_valid_profile_backup_source(name, harness, repo_target, &file.source)?;
     let backup_content = fs::read_to_string(&file.source).with_context(|| {
         format!(
             "Failed to read profile JSON backup {}",
@@ -1138,14 +1136,13 @@ fn restore_merge_json_backup(
 /// Validate that a managed-region target is the one allowed shared file for the
 /// harness (`<repo>/AGENTS.md` for Copilot), refusing to touch anything else.
 fn ensure_removable_managed_region(
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
-    let allowed = match harness {
-        "copilot" => repo_target.join("AGENTS.md"),
-        _ => bail!("Managed regions are only supported for the copilot harness"),
-    };
+    let allowed = harness.managed_region_path(repo_target).ok_or_else(|| {
+        anyhow::anyhow!("Managed regions are only supported for the copilot harness")
+    })?;
     if file.target != allowed {
         bail!(
             "Refusing to modify managed region outside the allowed path: {}",
@@ -1162,7 +1159,7 @@ fn ensure_removable_managed_region(
 /// rewritten with the block stripped.
 fn restore_managed_region(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
@@ -1424,7 +1421,7 @@ fn is_empty_profile_json(value: &Value) -> bool {
 
 fn restore_write_file_backup(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
@@ -1481,27 +1478,6 @@ struct DirRollback {
     existed: bool,
 }
 
-/// The managed root under which a harness's plugin skill directories live.
-///
-/// Repo-local: Claude uses `<repo>/.claude/skills`, Copilot uses
-/// `<repo>/.agents/skills`.
-fn managed_skills_root(harness: &str, repo_target: &Path) -> Result<PathBuf> {
-    match harness {
-        "claude" => Ok(repo_target.join(".claude").join("skills")),
-        "copilot" => Ok(repo_target.join(".agents").join("skills")),
-        _ => bail!("Unsupported harness '{harness}'"),
-    }
-}
-
-/// Native location for decomposed plugin agent files, per harness.
-fn managed_agents_root(harness: &str, repo_target: &Path) -> Result<PathBuf> {
-    match harness {
-        "claude" => Ok(repo_target.join(".claude").join("agents")),
-        "copilot" => Ok(repo_target.join(".github").join("agents")),
-        _ => bail!("Unsupported harness '{harness}'"),
-    }
-}
-
 /// Lexically validate that a plugin-directory target's final component is a
 /// single, traversal-free name. The harness-specific root check happens at
 /// placement/removal time via [`ensure_plugin_dir_under_skills_root`].
@@ -1532,13 +1508,13 @@ fn validate_plugin_dir_target(target: &Path) -> Result<()> {
 /// for the given harness, where `<managed-root>` is the skills root or the agents
 /// root, rejecting anything outside those managed locations.
 fn ensure_plugin_dir_under_managed_root(
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     target: &Path,
 ) -> Result<()> {
     validate_plugin_dir_target(target)?;
-    let skills_root = managed_skills_root(harness, repo_target)?;
-    let agents_root = managed_agents_root(harness, repo_target)?;
+    let skills_root = harness.skills_root(repo_target);
+    let agents_root = harness.agents_root(repo_target);
     let parent = target
         .parent()
         .context("Plugin directory target has no parent")?;
@@ -1646,7 +1622,7 @@ fn move_path(from: &Path, to: &Path) -> Result<()> {
 /// content. Returns `(backup, existed)`.
 fn place_plugin_dir(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     source: &Path,
     dir_target: &Path,
@@ -1711,7 +1687,7 @@ fn rollback_placed_dirs(dirs: &[DirRollback]) -> Result<()> {
 /// Remove a placed plugin directory and restore any backed-up prior content.
 fn restore_placed_plugin_dir(
     _name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
@@ -1736,21 +1712,13 @@ fn restore_placed_plugin_dir(
 }
 
 fn ensure_removable_profile_json(
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
     // Plugin MCP servers and Claude delegate settings are decomposed into
     // repo-local files; only those exact paths may be restored.
-    let allowed: &[PathBuf] = &match harness {
-        "claude" => vec![
-            repo_target.join(".mcp.json"),
-            repo_target.join(".claude").join("settings.json"),
-            repo_target.join(".claude").join("settings.local.json"),
-        ],
-        "copilot" => vec![repo_target.join(".mcp.json")],
-        _ => bail!("Unsupported profile JSON target for harness '{harness}'"),
-    };
+    let allowed = harness.removable_json_targets(repo_target);
 
     if !allowed.contains(&file.target) {
         bail!(
@@ -1761,38 +1729,9 @@ fn ensure_removable_profile_json(
     Ok(())
 }
 
-fn ensure_valid_merge_json_backup_source(
-    name: &str,
-    harness: &str,
-    repo_target: &Path,
-    source: &Path,
-) -> Result<()> {
-    if source.as_os_str().is_empty() {
-        bail!("Profile JSON backup source must not be empty");
-    }
-    if source
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        bail!(
-            "Refusing profile JSON backup source with parent directory traversal: {}",
-            source.display()
-        );
-    }
-
-    let backup_root = profile_backup_dir(repo_target, name, harness)?;
-    if !source.starts_with(&backup_root) {
-        bail!(
-            "Refusing profile JSON backup outside managed location: {}",
-            source.display()
-        );
-    }
-    Ok(())
-}
-
 fn ensure_valid_profile_backup_source(
     name: &str,
-    harness: &str,
+    harness: AgentHarness,
     repo_target: &Path,
     source: &Path,
 ) -> Result<()> {
@@ -1870,26 +1809,6 @@ fn ensure_regular_profile_source(source: &Path, profile_asset_dir: &Path) -> Res
     }
 
     Ok(())
-}
-
-// String-based harness dispatch is an intentional placeholder; see the design
-// note on `AgentHarness` in `profile_applicators/mod.rs`.
-fn applicator_for(harness: &str) -> Result<Box<dyn ProfileApplicator>> {
-    match harness {
-        "copilot" => Ok(Box::new(CopilotApplicator)),
-        "claude" => Ok(Box::new(ClaudeApplicator)),
-        _ => bail!("Unsupported harness '{harness}'"),
-    }
-}
-
-/// Resolve the harness home directory for a harness identity, honoring the
-/// per-harness `REPOVERLAY_*_HOME` override.
-pub(crate) fn harness_home_for(harness: &str) -> Result<PathBuf> {
-    match harness {
-        "copilot" => CopilotApplicator::harness_home_from_env(),
-        "claude" => ClaudeApplicator::harness_home_from_env(),
-        _ => bail!("Unsupported harness '{harness}'"),
-    }
 }
 
 fn copy_profile_file(source: &Path, target: &Path, profile_asset_dir: &Path) -> Result<()> {
@@ -2070,7 +1989,7 @@ profiles =
 
         let err = apply_profile(
             "bad/name",
-            "copilot",
+            AgentHarness::Copilot,
             temp.path(),
             ProfileMode::Persistent,
             None,
@@ -2095,7 +2014,7 @@ profiles =
             temp.path(),
             &ProfileState {
                 name: "rust-dev".to_string(),
-                harness: "copilot".to_string(),
+                harness: AgentHarness::Copilot,
                 mode: ProfileMode::Persistent,
                 session_id: None,
                 applied_at: Utc::now(),
@@ -2115,7 +2034,7 @@ profiles =
         )
         .unwrap();
 
-        let err = remove_profile("rust-dev", "copilot", temp.path()).unwrap_err();
+        let err = remove_profile("rust-dev", AgentHarness::Copilot, temp.path()).unwrap_err();
 
         assert!(
             err.to_string().contains("Refusing to remove profile file"),
@@ -2130,7 +2049,7 @@ profiles =
         let target = temp.path().join("mcp.json");
         let plan = ProfilePlan {
             profile_name: "rust-dev".to_string(),
-            harness: "copilot".to_string(),
+            harness: AgentHarness::Copilot,
             actions: vec![
                 ProfileAction::MergeJson {
                     target: target.clone(),
@@ -2165,7 +2084,7 @@ profiles =
         std::os::unix::fs::symlink(&outside, &symlink).unwrap();
         let plan = ProfilePlan {
             profile_name: "rust-dev".to_string(),
-            harness: "copilot".to_string(),
+            harness: AgentHarness::Copilot,
             actions: vec![ProfileAction::WriteFile {
                 source: symlink,
                 target: temp
@@ -2209,7 +2128,7 @@ profiles =
 
         let err = apply_profile_with_harness_home(
             "rust-dev",
-            "copilot",
+            AgentHarness::Copilot,
             temp.path(),
             ProfileMode::Persistent,
             None,
@@ -2250,7 +2169,7 @@ profiles =
 
         let state = apply_profile(
             "rust-dev",
-            "copilot",
+            AgentHarness::Copilot,
             temp.path(),
             ProfileMode::Persistent,
             None,
@@ -2287,7 +2206,7 @@ profiles =
 
         apply_profile_with_harness_home(
             "rust-dev",
-            "copilot",
+            AgentHarness::Copilot,
             temp.path(),
             ProfileMode::Persistent,
             None,
@@ -2307,7 +2226,7 @@ profiles =
         let temp = tempfile::TempDir::new().unwrap();
         let plan = ProfilePlan {
             profile_name: "rust-dev".to_string(),
-            harness: "copilot".to_string(),
+            harness: AgentHarness::Copilot,
             actions: vec![
                 ProfileAction::ApplyOverlay {
                     reference: " ".to_string(),
@@ -2486,7 +2405,7 @@ profiles =
 
         let err = apply_profile_with_harness_home(
             "rust-dev",
-            "copilot",
+            AgentHarness::Copilot,
             temp.path(),
             ProfileMode::Persistent,
             None,
