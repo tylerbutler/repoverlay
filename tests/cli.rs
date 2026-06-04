@@ -950,6 +950,122 @@ profiles =
 }
 
 #[test]
+fn copilot_runs_multiple_profiles_and_cleans_up_all() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let captured = ctx.repo_path().join("captured-agents.txt");
+    ctx.create_repo_file(".repoverlay/rust.md", "Use Rust 2024.");
+    ctx.create_repo_file(".repoverlay/docs.md", "Write thorough docs.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = rust.md
+  docs-dev =
+    instructions =
+      =
+        source = docs.md
+",
+    );
+
+    // While the harness runs, both profiles must be applied: capture AGENTS.md
+    // so we can assert both managed regions are present mid-session.
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--profile",
+            "docs-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            &format!("cp AGENTS.md {}", captured.display()),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let snapshot = fs::read_to_string(&captured).unwrap();
+    assert!(
+        snapshot.contains("Use Rust 2024."),
+        "rust-dev instructions should be present mid-session: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("Write thorough docs."),
+        "docs-dev instructions should be present mid-session: {snapshot}"
+    );
+
+    // After cleanup, both profiles' state and the shared AGENTS.md are gone.
+    assert!(
+        !ctx.repo_path().join("AGENTS.md").exists(),
+        "AGENTS.md should be removed once both profiles are torn down"
+    );
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists()
+    );
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/docs-dev.copilot.ccl")
+            .exists()
+    );
+}
+
+#[test]
+fn copilot_rejects_duplicate_profile_arguments() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file(".repoverlay/rust.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = rust.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--profile",
+            "rust-dev",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--",
+            "-c",
+            "true",
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Profile 'rust-dev' was specified more than once",
+        ));
+
+    assert!(
+        !ctx.repo_path().join("AGENTS.md").exists(),
+        "no profile should be applied when arguments are rejected"
+    );
+}
+
+#[test]
 fn copilot_profile_cleans_up_when_harness_spawn_fails() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();

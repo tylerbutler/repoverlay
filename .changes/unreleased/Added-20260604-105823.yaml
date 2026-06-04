@@ -1,0 +1,11 @@
+kind: Added
+body: |-
+    Apply multiple profiles in one ephemeral session
+
+    `repoverlay copilot` and `repoverlay claude` now accept `--profile`
+    repeatedly to apply several profiles for a single agent run. Profiles are
+    applied (and locked) independently and all are torn down on exit; if one
+    fails to apply, the already-applied profiles are rolled back. For Claude,
+    plugin bundles from every profile are aggregated into deduplicated
+    `--plugin-dir` flags.
+time: 2026-06-04T10:58:23-07:00

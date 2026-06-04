@@ -548,11 +548,11 @@ enum Commands {
         command: LibraryCommand,
     },
 
-    /// Run GitHub Copilot with a profile applied for the process lifetime
+    /// Run GitHub Copilot with one or more profiles applied for the process lifetime
     Copilot {
-        /// Profile name to apply while Copilot runs
-        #[arg(long)]
-        profile: String,
+        /// Profile name to apply while Copilot runs (repeat to apply several)
+        #[arg(long = "profile", required = true)]
+        profiles: Vec<String>,
 
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
@@ -563,11 +563,11 @@ enum Commands {
         extra_args: Vec<String>,
     },
 
-    /// Run Claude with a profile applied for the process lifetime
+    /// Run Claude with one or more profiles applied for the process lifetime
     Claude {
-        /// Profile name to apply while Claude runs
-        #[arg(long)]
-        profile: String,
+        /// Profile name to apply while Claude runs (repeat to apply several)
+        #[arg(long = "profile", required = true)]
+        profiles: Vec<String>,
 
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
@@ -1156,18 +1156,18 @@ pub(crate) fn run() -> Result<()> {
             handle_library_command(command)?;
         }
         Commands::Copilot {
-            profile,
+            profiles,
             target,
             extra_args,
         } => {
-            handle_copilot_command(profile, target, extra_args)?;
+            handle_copilot_command(&profiles, target, extra_args)?;
         }
         Commands::Claude {
-            profile,
+            profiles,
             target,
             extra_args,
         } => {
-            handle_claude_command(&profile, target, extra_args)?;
+            handle_claude_command(&profiles, target, extra_args)?;
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();

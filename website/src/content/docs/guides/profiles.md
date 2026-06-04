@@ -213,7 +213,7 @@ Managed plugins are pinned to the commit they resolved to at apply time (recorde
 
 ### Ephemeral mode
 
-`repoverlay copilot --profile` (or `repoverlay claude --profile`) applies the profile only for the lifetime of the launched agent process, then cleans up automatically:
+`repoverlay copilot --profile` (or `repoverlay claude --profile`) applies one or more profiles only for the lifetime of the launched agent process, then cleans up automatically:
 
 ```bash
 repoverlay copilot --profile rust-dev
@@ -234,6 +234,17 @@ Pass extra arguments straight through to the agent after `--`:
 ```bash
 repoverlay copilot --profile rust-dev -- --help
 ```
+
+#### Applying several profiles at once
+
+Repeat `--profile` to stack multiple profiles into a single ephemeral session. Each profile is applied (and locked) independently, and all of them are torn down when the agent exits:
+
+```bash
+repoverlay copilot --profile rust-dev --profile docs-dev
+repoverlay claude --profile rust-dev --profile docs-dev -- --help
+```
+
+Profiles compose: shared files such as `AGENTS.md` accumulate one managed region per profile, and `.mcp.json` servers are merged with per-server ownership. For Claude, managed plugin bundles from every profile are aggregated into deduplicated `--plugin-dir` flags. If applying one profile fails, any profiles already applied in the same invocation are rolled back, so the repository is never left half-configured. A profile name may not be repeated in the same command.
 
 For Claude, managed plugin bundles are loaded directly via Claude's native `--plugin-dir` flag from the cache, so the ephemeral session does not place plugin files into the repo.
 
