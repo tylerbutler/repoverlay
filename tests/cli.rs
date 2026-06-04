@@ -383,6 +383,72 @@ profiles =
 }
 
 #[test]
+fn profile_apply_excludes_repo_files_from_git() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let exclude = ctx.git_exclude_content();
+    assert!(
+        exclude.contains("# repoverlay:profile:rust-dev@copilot start"),
+        "git exclude should contain the profile section marker, got: {exclude}"
+    );
+    assert!(
+        exclude.contains("AGENTS.md"),
+        "git exclude should list the profile-written AGENTS.md, got: {exclude}"
+    );
+
+    // Removing the profile cleans up its exclude section.
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let exclude_after = ctx.git_exclude_content();
+    assert!(
+        !exclude_after.contains("# repoverlay:profile:rust-dev@copilot"),
+        "git exclude should drop the profile section after remove, got: {exclude_after}"
+    );
+}
+
+#[test]
 fn profile_apply_places_plugin_skill_and_records_provenance() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();

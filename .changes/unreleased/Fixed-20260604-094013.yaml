@@ -1,0 +1,10 @@
+kind: Fixed
+body: |-
+    Exclude profile-written files from git
+
+    Files a profile writes into the repository (instructions, `.mcp.json`,
+    placed skills/agents, plugin directories) are now added to
+    `.git/info/exclude` under a per-profile section and removed again when the
+    profile is removed, so they no longer appear as untracked changes. The
+    `repair` path also rebuilds these profile exclusions.
+time: 2026-06-04T09:40:13-07:00

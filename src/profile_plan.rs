@@ -357,8 +357,57 @@ fn apply_profile_with_harness_home(
         return Err(err);
     }
 
+    // Exclude the profile's repo-local files from git so they don't show up as
+    // untracked. Best-effort: a failure here only means the files may appear in
+    // `git status`, so we warn rather than tearing down a successful apply.
+    let exclude_entries = profile_exclude_entries(target, &state);
+    if !exclude_entries.is_empty() {
+        let section = profile_exclude_section(name, harness);
+        if let Err(err) = crate::update_git_exclude(target, &section, &exclude_entries, true) {
+            eprintln!(
+                "Warning: could not update git exclude (profile files may show as untracked): {err}"
+            );
+        }
+    }
+
     println!("Applied profile {name} for {harness}");
     Ok(state)
+}
+
+/// Section name used in `.git/info/exclude` for a profile's repo-local files.
+///
+/// Namespaced as `profile:<name>@<harness>` so it cannot collide with an overlay
+/// section (which uses the bare overlay name) and so the same profile applied for
+/// two harnesses gets two independent sections.
+pub(crate) fn profile_exclude_section(name: &str, harness: &str) -> String {
+    format!("profile:{name}@{harness}")
+}
+
+/// Compute the repo-relative `.git/info/exclude` entries for a profile's
+/// in-repo file placements.
+///
+/// Entries are derived from `state.files` (the files this profile wrote into the
+/// repo). Targets outside `target` are skipped, directories get a trailing `/`,
+/// and duplicates are collapsed.
+pub(crate) fn profile_exclude_entries(target: &Path, state: &ProfileState) -> Vec<String> {
+    let mut entries = Vec::new();
+    let mut seen = BTreeSet::new();
+    for file in &state.files {
+        let Ok(rel) = file.target.strip_prefix(target) else {
+            continue;
+        };
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        let mut entry = rel.to_string_lossy().replace('\\', "/");
+        if file.target.is_dir() && !entry.ends_with('/') {
+            entry.push('/');
+        }
+        if seen.insert(entry.clone()) {
+            entries.push(entry);
+        }
+    }
+    entries
 }
 
 /// Re-resolve managed plugins for every persistently-applied profile and
@@ -578,6 +627,10 @@ fn remove_profile_inner(name: &str, harness: &str, target: &Path) -> Result<()> 
         }
     }
     crate::profile::remove_profile_state(target, name, harness)?;
+    let section = profile_exclude_section(name, harness);
+    if let Err(err) = crate::update_git_exclude(target, &section, &[], false) {
+        eprintln!("Warning: could not update git exclude while removing profile: {err}");
+    }
     println!("Removed profile {name} for {harness}");
     Ok(())
 }
