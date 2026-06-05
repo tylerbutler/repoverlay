@@ -174,7 +174,6 @@ impl ProfileApplicator for CopilotApplicator {
             harness: context.harness,
             actions,
             plugins,
-            plugin_dirs: Vec::new(),
         })
     }
 }

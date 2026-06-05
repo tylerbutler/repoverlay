@@ -346,11 +346,6 @@ pub(crate) struct ProfileState {
     pub(crate) skipped: Vec<SkippedCapability>,
     #[serde(default)]
     pub(crate) plugins: Vec<ProfilePluginEntry>,
-    /// Ephemeral-only: cached bundle directories passed to the harness via
-    /// `--plugin-dir`. Recorded for introspection; nothing is placed on disk
-    /// for these, so removal is a no-op for them.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) plugin_dirs: Vec<PathBuf>,
 }
 
 /// Provenance for a managed plugin that was resolved, cached, and decomposed
@@ -560,7 +555,6 @@ profiles =
             files: Vec::new(),
             skipped: Vec::new(),
             plugins: Vec::new(),
-            plugin_dirs: Vec::new(),
         };
 
         save_profile_state(temp.path(), &state).unwrap();
@@ -584,7 +578,6 @@ profiles =
             files: Vec::new(),
             skipped: Vec::new(),
             plugins: Vec::new(),
-            plugin_dirs: Vec::new(),
         };
 
         save_profile_state(temp.path(), &state).unwrap();

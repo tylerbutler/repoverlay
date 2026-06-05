@@ -7,9 +7,10 @@ use crate::profile_applicators::AgentHarness;
 /// Run Claude with one or more profiles applied for the process lifetime
 /// (ephemeral).
 ///
-/// Bundle plugins are loaded natively via `--plugin-dir` (nothing placed on
-/// disk); overlays and delegate-settings enablement still flow through the
-/// regular apply/remove machinery so they are cleaned up when Claude exits.
+/// Bundle plugins are decomposed into repo-local skill/agent/MCP placements
+/// (the same as Copilot and as persistent applies); those placements, overlays,
+/// and delegate-settings enablement all flow through the regular apply/remove
+/// machinery so they are cleaned up when Claude exits.
 pub(crate) fn handle_claude_command(
     profiles: &[String],
     target: Option<PathBuf>,

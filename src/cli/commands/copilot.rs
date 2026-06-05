@@ -105,8 +105,8 @@ fn rollback_applied(applied: &[String], harness: AgentHarness, target: &Path) ->
 /// lifetime of the session, then tear the profiles down again.
 ///
 /// Each profile gets its own session lock and ephemeral apply; bundle plugins
-/// resolved for ephemeral use are aggregated and loaded natively via
-/// `--plugin-dir` (deduplicated, nothing placed on disk). A failure while
+/// are decomposed into repo-local skill/agent/MCP placements (the same as a
+/// persistent apply) and rolled back when the session ends. A failure while
 /// applying any profile rolls back the ones already applied so the repository is
 /// never left half-configured.
 pub(crate) fn run_ephemeral_profiles(
@@ -147,7 +147,6 @@ pub(crate) fn run_ephemeral_profiles(
     // Locks are held (and their files removed on drop) for the whole session.
     let mut locks: Vec<ProfileRunLock> = Vec::new();
     let mut applied: Vec<String> = Vec::new();
-    let mut plugin_dirs: Vec<PathBuf> = Vec::new();
 
     let apply_outcome = (|| -> Result<()> {
         for profile in profiles {
@@ -160,7 +159,7 @@ pub(crate) fn run_ephemeral_profiles(
                 harness,
                 profile
             );
-            let state = crate::profile_plan::apply_profile(
+            crate::profile_plan::apply_profile(
                 profile,
                 harness,
                 &target,
@@ -168,11 +167,6 @@ pub(crate) fn run_ephemeral_profiles(
                 Some(session_id),
             )?;
             applied.push(profile.clone());
-            for dir in state.plugin_dirs {
-                if !plugin_dirs.contains(&dir) {
-                    plugin_dirs.push(dir);
-                }
-            }
         }
         Ok(())
     })();
@@ -190,9 +184,6 @@ pub(crate) fn run_ephemeral_profiles(
     }
 
     let mut command = Command::new(harness.program());
-    for dir in &plugin_dirs {
-        command.arg("--plugin-dir").arg(dir);
-    }
     command.args(&extra_args);
     drop(extra_args);
     command.current_dir(&target);

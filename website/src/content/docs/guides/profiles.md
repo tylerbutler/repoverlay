@@ -4,11 +4,15 @@ sidebar:
   order: 5
 ---
 
+:::note[New in v0.15.0]
+Profiles were introduced in repoverlay **v0.15.0**. See the [release notes](https://github.com/tylerbutler/repoverlay/releases/tag/v0.15.0) for details.
+:::
+
 A **profile** is a named, agent-centric configuration that composes overlays together with AI harness capabilities — instruction files and plugins — into a single loadable unit.
 
 Where an overlay describes *files to place in a repo*, a profile describes *intent*: "give me everything I need to do Rust development with this agent." Applying a profile always happens for a specific agent harness (currently GitHub Copilot and Claude Code), and the harness decides where each capability is placed.
 
-## Profiles vs. overlays
+## Profiles vs. overlays :badge[v0.15.0]{variant=tip}
 
 The key thing to understand is the difference between a **definition** and its **application**:
 
@@ -29,10 +33,11 @@ Everything a profile applies lands **inside the target repo's working tree** (gi
 Profiles do not define MCP servers or skills directly. Instead, those capabilities are bundled into **plugins** — the same Claude-style plugin format used by the Claude Code ecosystem. A plugin can ship:
 
 - **skills** — placed under `.claude/skills/` (Claude) or `.agents/skills/` (Copilot)
+- **agents** — placed under `.claude/agents/` (Claude) or `.github/agents/` (Copilot)
 - **MCP servers** — merged into the repo's `.mcp.json`
 - plugin metadata in `.claude-plugin/plugin.json`
 
-This keeps a single, portable bundling unit: the same plugin works whether it is enabled through Claude's native plugin machinery or placed by repoverlay for Copilot.
+This keeps a single, portable bundling unit. When a profile is applied — persistently or for an ephemeral session — repoverlay **decomposes** each plugin bundle into its parts and lays them down with the harness's own placement paths. The mechanism is identical for both Claude and Copilot; only the destination directories differ. Ephemeral placements are rolled back when the session ends.
 
 ## Defining a profile
 
@@ -235,7 +240,7 @@ Pass extra arguments straight through to the agent after `--`:
 repoverlay copilot --profile rust-dev -- --help
 ```
 
-#### Applying several profiles at once
+#### Applying several profiles at once :badge[v0.15.0]{variant=tip}
 
 Repeat `--profile` to stack multiple profiles into a single ephemeral session. Each profile is applied (and locked) independently, and all of them are torn down when the agent exits:
 
@@ -244,9 +249,9 @@ repoverlay copilot --profile rust-dev --profile docs-dev
 repoverlay claude --profile rust-dev --profile docs-dev -- --help
 ```
 
-Profiles compose: shared files such as `AGENTS.md` accumulate one managed region per profile, and `.mcp.json` servers are merged with per-server ownership. For Claude, managed plugin bundles from every profile are aggregated into deduplicated `--plugin-dir` flags. If applying one profile fails, any profiles already applied in the same invocation are rolled back, so the repository is never left half-configured. A profile name may not be repeated in the same command.
+Profiles compose: shared files such as `AGENTS.md` accumulate one managed region per profile, and `.mcp.json` servers are merged with per-server ownership. If applying one profile fails, any profiles already applied in the same invocation are rolled back, so the repository is never left half-configured. A profile name may not be repeated in the same command.
 
-For Claude, managed plugin bundles are loaded directly via Claude's native `--plugin-dir` flag from the cache, so the ephemeral session does not place plugin files into the repo.
+For both Claude and Copilot, managed plugin bundles are decomposed into repo-local placements (skills, agents, and merged `.mcp.json` servers) — the same way for persistent applies and ephemeral sessions. Ephemeral placements are removed when the session exits.
 
 :::note
 A profile that is already applied persistently (or already running an ephemeral session) cannot be launched ephemerally at the same time. Remove it first, or wait for the running session to finish. A lock file guards against concurrent sessions and is recovered automatically if a previous session was killed.
@@ -261,7 +266,7 @@ Each capability in a profile is translated into a concrete, **repo-local** actio
 | `overlays` | Applied with the normal overlay machinery (symlinks, git excludes, state). | Same. |
 | plugin skills | `<repo>/.claude/skills/<skill>` | `<repo>/.agents/skills/<skill>` |
 | plugin agents | `<repo>/.claude/agents/<agent>` | `<repo>/.github/agents/<agent>` |
-| plugin MCP servers | Merged into `<repo>/.mcp.json` (`mcpServers` key). | Merged into `<repo>/.mcp.json` (`servers` key). |
+| plugin MCP servers | Merged into `<repo>/.mcp.json` (`mcpServers` key). | Merged into `<repo>/.mcp.json` (`mcpServers` key). |
 | delegate plugins | Recorded in `.claude/settings.json` / `.claude/settings.local.json`. | n/a |
 | `instructions` | n/a | Each entry's `source` file or inline `content` is concatenated into the `<repo>/AGENTS.md` managed region for the profile. |
 

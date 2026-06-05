@@ -21,10 +21,6 @@ pub(crate) struct ProfilePlan {
     /// Provenance for each managed (resolved-and-cached) plugin, recorded into
     /// `ProfileState` so removal/`show`/`update` can reason about what was placed.
     pub(crate) plugins: Vec<PluginProvenance>,
-    /// Ephemeral-only: cached bundle directories to load natively via the
-    /// harness `--plugin-dir` flag instead of placing them on disk. Empty for
-    /// persistent applies.
-    pub(crate) plugin_dirs: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,7 +163,6 @@ fn apply_profile_with_harness_home(
                 resolved_commit: p.resolved_commit.clone(),
             })
             .collect(),
-        plugin_dirs: plan.plugin_dirs.clone(),
     };
 
     let apply_result = (|| -> Result<()> {
@@ -2014,7 +2009,6 @@ profiles =
                 }],
                 skipped: Vec::new(),
                 plugins: Vec::new(),
-                plugin_dirs: Vec::new(),
             },
         )
         .unwrap();
@@ -2047,7 +2041,6 @@ profiles =
                 },
             ],
             plugins: Vec::new(),
-            plugin_dirs: Vec::new(),
         };
 
         let err = preflight_plan(&plan, temp.path()).unwrap_err();
@@ -2077,7 +2070,6 @@ profiles =
                     .join("instructions/rust-dev/copilot-instructions.md"),
             }],
             plugins: Vec::new(),
-            plugin_dirs: Vec::new(),
         };
 
         let err = preflight_plan(&plan, temp.path()).unwrap_err();
@@ -2223,7 +2215,6 @@ profiles =
                 },
             ],
             plugins: Vec::new(),
-            plugin_dirs: Vec::new(),
         };
 
         let err = preflight_plan(&plan, temp.path()).unwrap_err();
@@ -2468,7 +2459,6 @@ profiles =
                 owned_paths: Vec::new(),
             }],
             plugins: Vec::new(),
-            plugin_dirs: Vec::new(),
         };
 
         let err = preflight_plan(&plan, &target).unwrap_err();

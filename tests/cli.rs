@@ -7401,16 +7401,18 @@ fn write_executable_script(path: &std::path::Path, body: &str) {
 
 #[cfg(unix)]
 #[test]
-fn claude_profile_loads_bundles_via_plugin_dir_and_cleans_up() {
+fn claude_profile_decomposes_bundles_and_cleans_up() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
-    let args_marker = ctx.repo_path().join("claude-args.txt");
+    let marker = ctx.repo_path().join("skill-present.txt");
 
-    // Local plugin bundle (introspectable -> resolves to a Bundle).
+    // Local plugin bundle (introspectable -> resolves to a Bundle) shipping a
+    // skill, so decomposition has something to place.
     ctx.create_repo_file(
         "plugins/rust/.claude-plugin/plugin.json",
         r#"{"name":"rust"}"#,
     );
+    ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# fmt skill\n");
     ctx.write_repo_config(
         r"
 profiles =
@@ -7420,13 +7422,15 @@ profiles =
 ",
     );
 
-    // Fake Claude command that records its argv to a marker file.
+    // Fake Claude command that records whether the decomposed skill is present
+    // in the repo while the session is running.
     let script = ctx.repo_path().join("fake-claude.sh");
     write_executable_script(
         &script,
         &format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n",
-            args_marker.display()
+            "#!/bin/sh\nif [ -f .claude/skills/fmt/SKILL.md ]; then echo present > {0}; \
+             else echo absent > {0}; fi\n",
+            marker.display()
         ),
     );
 
@@ -7444,18 +7448,16 @@ profiles =
         .assert()
         .success();
 
-    let recorded = fs::read_to_string(&args_marker).unwrap();
-    assert!(
-        recorded.contains("--plugin-dir"),
-        "expected --plugin-dir in argv, got: {recorded}"
-    );
-    assert!(
-        recorded.contains("plugins/rust"),
-        "expected the bundle dir in argv, got: {recorded}"
+    // The skill was placed for the duration of the ephemeral session...
+    let recorded = fs::read_to_string(&marker).unwrap();
+    assert_eq!(
+        recorded.trim(),
+        "present",
+        "expected decomposed skill to be present during the session"
     );
 
-    // Ephemeral bundles are loaded natively; nothing is placed and the state is
-    // cleaned up after Claude exits.
+    // ...and torn down (placement + state) after Claude exits.
+    assert!(!ctx.repo_path().join(".claude/skills/fmt").exists());
     assert!(
         !ctx.repo_path()
             .join(".repoverlay/profiles/rust-dev.claude.ccl")
@@ -7465,7 +7467,7 @@ profiles =
 
 #[cfg(unix)]
 #[test]
-fn claude_profile_forwards_extra_args_after_plugin_dirs() {
+fn claude_profile_forwards_extra_args() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
     let args_marker = ctx.repo_path().join("claude-args.txt");
@@ -7509,8 +7511,10 @@ profiles =
         .success();
 
     let recorded = fs::read_to_string(&args_marker).unwrap();
-    assert!(recorded.contains("--plugin-dir"));
     assert!(recorded.contains("--resume"));
+    // Bundles are decomposed into repo-local placements now, never loaded via a
+    // native plugin flag.
+    assert!(!recorded.contains("--plugin-dir"));
 }
 
 #[cfg(unix)]

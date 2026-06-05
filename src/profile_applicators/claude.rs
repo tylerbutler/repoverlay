@@ -146,7 +146,7 @@ impl ClaudeApplicator {
                 capability: format!("plugin:{plugin_name}:{capability}"),
                 reason: format!(
                     "Claude '{capability}' from plugin '{plugin_name}' cannot be decomposed \
-                     into a persistent placement; use an ephemeral session for full plugin load"
+                     into a repo-local placement"
                 ),
             });
         }
@@ -182,8 +182,6 @@ impl ProfileApplicator for ClaudeApplicator {
         let mut mcp_servers = serde_json::Map::new();
         let mut owned_paths = Vec::new();
         let mut plugins = Vec::new();
-        let mut plugin_dirs = Vec::new();
-        let ephemeral = context.mode == ProfileMode::Ephemeral;
         let mut delegates: BTreeMap<PathBuf, DelegateSettings> = BTreeMap::new();
 
         for plugin in &profile.plugins {
@@ -220,21 +218,18 @@ impl ProfileApplicator for ClaudeApplicator {
                         reference: plugin.to_string(),
                         resolved_commit,
                     });
-                    // Ephemeral sessions load bundles natively via `--plugin-dir`
-                    // (nothing placed on disk); persistent applies decompose the
-                    // bundle into repo-local skill/MCP placements.
-                    if ephemeral {
-                        plugin_dirs.push(bundle_dir);
-                    } else {
-                        Self::decompose_bundle(
-                            &bundle_dir,
-                            &name,
-                            &mut actions,
-                            &mut mcp_servers,
-                            &mut owned_paths,
-                            &context.target,
-                        )?;
-                    }
+                    // Decompose the bundle into repo-local skill/agent/MCP
+                    // placements for both persistent and ephemeral applies, so
+                    // Claude and Copilot behave identically. (Ephemeral
+                    // placements are rolled back when the session ends.)
+                    Self::decompose_bundle(
+                        &bundle_dir,
+                        &name,
+                        &mut actions,
+                        &mut mcp_servers,
+                        &mut owned_paths,
+                        &context.target,
+                    )?;
                 }
                 // The source could not be cached/introspected, so fall back to
                 // Claude's native enablement via scoped settings (same as an
@@ -283,7 +278,6 @@ impl ProfileApplicator for ClaudeApplicator {
             harness: context.harness,
             actions,
             plugins,
-            plugin_dirs,
         })
     }
 }
