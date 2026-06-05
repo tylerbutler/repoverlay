@@ -170,7 +170,6 @@ fn apply_profile_with_harness_home(
         plugin_dirs: plan.plugin_dirs.clone(),
     };
 
-    let mut dir_rollbacks: Vec<DirRollback> = Vec::new();
     let apply_result = (|| -> Result<()> {
         for (action_index, action) in plan.actions.into_iter().enumerate() {
             match action {
@@ -228,6 +227,7 @@ fn apply_profile_with_harness_home(
                     value,
                     owned_paths,
                 } => {
+                    reject_symlink_profile_target(&json_target)?;
                     let backup_source = capture_merge_json_backup(
                         name,
                         harness,
@@ -323,11 +323,6 @@ fn apply_profile_with_harness_home(
                         &dir_target,
                         action_index,
                     )?;
-                    dir_rollbacks.push(DirRollback {
-                        target: dir_target.clone(),
-                        backup: backup.clone(),
-                        existed,
-                    });
                     state.files.push(ProfileFileEntry {
                         source,
                         target: dir_target,
@@ -343,8 +338,13 @@ fn apply_profile_with_harness_home(
     })();
 
     if let Err(err) = apply_result {
-        rollback_placed_dirs(&dir_rollbacks).with_context(|| {
-            format!("Profile apply failed ({err}); failed to roll back plugin placements")
+        // A partial apply may have mutated repo-local files (write-file,
+        // merge-json, managed-region) and placed plugin directories without
+        // persisting a state file. Reverse every recorded mutation using the same
+        // restore routines as removal so a failed apply leaves no orphaned changes
+        // (which a later retry would otherwise mis-record as pre-existing data).
+        restore_profile_files(name, harness, target, &state.files).with_context(|| {
+            format!("Profile apply failed ({err}); failed to roll back profile file changes")
         })?;
         rollback_applied_overlays(target, &state.overlays).with_context(|| {
             format!("Profile apply failed ({err}); failed to roll back applied overlays")
@@ -586,25 +586,35 @@ pub(crate) fn remove_profile_for_session(
     remove_profile_inner(name, harness, target)
 }
 
-fn remove_profile_inner(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
-    let state = crate::profile::load_profile_state(target, name, harness)?;
-    for file in state.files.iter().rev() {
+/// Reverse the per-file mutations recorded in `files`, in reverse application
+/// order, dispatching to the same restore routines used during removal.
+///
+/// Shared by [`remove_profile_inner`] and the apply failure path so that a
+/// partial apply is undone exactly as a full removal would be: write-file and
+/// merge-json mutations are restored from their backups, managed regions are
+/// stripped, and placed plugin directories are removed (restoring any displaced
+/// content).
+fn restore_profile_files(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+    files: &[ProfileFileEntry],
+) -> Result<()> {
+    for file in files.iter().rev() {
         match file.action.as_str() {
-            "write-file" => {
-                restore_write_file_backup(name, harness, target, file)?;
-            }
-            "merge-json" => {
-                restore_merge_json_backup(name, harness, target, file)?;
-            }
-            "managed-region" => {
-                restore_managed_region(name, harness, target, file)?;
-            }
-            "place-plugin-dir" => {
-                restore_placed_plugin_dir(name, harness, target, file)?;
-            }
+            "write-file" => restore_write_file_backup(name, harness, target, file)?,
+            "merge-json" => restore_merge_json_backup(name, harness, target, file)?,
+            "managed-region" => restore_managed_region(name, harness, target, file)?,
+            "place-plugin-dir" => restore_placed_plugin_dir(name, harness, target, file)?,
             _ => {}
         }
     }
+    Ok(())
+}
+
+fn remove_profile_inner(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
+    let state = crate::profile::load_profile_state(target, name, harness)?;
+    restore_profile_files(name, harness, target, &state.files)?;
     for overlay in &state.overlays {
         let overlay_state_path = target
             .join(crate::state::STATE_DIR)
@@ -730,6 +740,7 @@ fn preflight_plan(plan: &ProfilePlan, profile_asset_dir: &Path) -> Result<()> {
                 if target.as_os_str().is_empty() {
                     bail!("Profile JSON target path must not be empty");
                 }
+                reject_symlink_profile_target(target)?;
                 reject_duplicate_profile_target(&mut seen_targets, target)?;
             }
             ProfileAction::WriteManagedRegion {
@@ -1469,15 +1480,6 @@ fn restore_write_file_backup(
     Ok(())
 }
 
-/// Rollback record for a plugin directory placed during apply, used to reverse
-/// the placement if a later action fails before state is persisted.
-#[derive(Debug)]
-struct DirRollback {
-    target: PathBuf,
-    backup: Option<PathBuf>,
-    existed: bool,
-}
-
 /// Lexically validate that a plugin-directory target's final component is a
 /// single, traversal-free name. The harness-specific root check happens at
 /// placement/removal time via [`ensure_plugin_dir_under_skills_root`].
@@ -1488,6 +1490,12 @@ fn validate_plugin_dir_target(target: &Path) -> Result<()> {
         .context("Plugin directory target has no final component")?;
     if name.is_empty() || name == "." || name == ".." {
         bail!("Invalid plugin directory name: {name:?}");
+    }
+    // Plugin bundles are untrusted: a skill/agent directory name is later written
+    // verbatim into `.git/info/exclude`, so a control character (e.g. a newline)
+    // could inject extra ignore patterns or corrupt the managed section markers.
+    if name.chars().any(char::is_control) {
+        bail!("Plugin directory name must not contain control characters: {name:?}");
     }
     if name.contains('/') || name.contains('\\') {
         bail!("Plugin directory name must be a single path component: {name:?}");
@@ -1659,29 +1667,6 @@ fn place_plugin_dir(
         )
     })?;
     Ok((backup, existed))
-}
-
-/// Reverse plugin directory placements after a failed apply, in reverse order.
-fn rollback_placed_dirs(dirs: &[DirRollback]) -> Result<()> {
-    for placement in dirs.iter().rev() {
-        remove_path(&placement.target).with_context(|| {
-            format!(
-                "Failed to roll back plugin placement {}",
-                placement.target.display()
-            )
-        })?;
-        if placement.existed
-            && let Some(backup) = &placement.backup
-        {
-            move_path(backup, &placement.target).with_context(|| {
-                format!(
-                    "Failed to restore displaced content for {}",
-                    placement.target.display()
-                )
-            })?;
-        }
-    }
-    Ok(())
 }
 
 /// Remove a placed plugin directory and restore any backed-up prior content.
@@ -2445,5 +2430,102 @@ profiles =
             simple_profile_fingerprint(&profile),
             simple_profile_fingerprint(&profile)
         );
+    }
+
+    #[test]
+    fn validate_plugin_dir_target_rejects_control_characters() {
+        // A skill/agent dir name is later written into `.git/info/exclude`; a
+        // newline (legal in Unix filenames) would let an untrusted plugin bundle
+        // inject extra ignore patterns or corrupt the managed section markers.
+        let skills_root = AgentHarness::Copilot.skills_root(Path::new("/repo"));
+        let malicious = skills_root.join("ok\nmalicious-pattern");
+        let err = validate_plugin_dir_target(&malicious).unwrap_err();
+        assert!(
+            err.to_string().contains("control characters"),
+            "unexpected error: {err}"
+        );
+
+        // A normal name still passes.
+        validate_plugin_dir_target(&skills_root.join("rust")).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preflight_rejects_symlinked_merge_json_target() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().to_path_buf();
+        let secret = temp.path().join("secret");
+        fs::write(&secret, "sensitive").unwrap();
+        let json_target = target.join(".mcp.json");
+        std::os::unix::fs::symlink(&secret, &json_target).unwrap();
+
+        let plan = ProfilePlan {
+            profile_name: "rust-dev".to_string(),
+            harness: AgentHarness::Copilot,
+            actions: vec![ProfileAction::MergeJson {
+                target: json_target,
+                value: serde_json::json!({ "mcpServers": {} }),
+                owned_paths: Vec::new(),
+            }],
+            plugins: Vec::new(),
+            plugin_dirs: Vec::new(),
+        };
+
+        let err = preflight_plan(&plan, &target).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("symlink"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn restore_profile_files_reverses_a_merge_json_mutation() {
+        // A partial apply must be undone exactly as removal would: a merge-json
+        // mutation (the class that was previously left orphaned on failure) is
+        // reversed via the shared restore helper.
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path();
+        let json_target = target.join(".mcp.json");
+        fs::write(
+            &json_target,
+            r#"{"mcpServers":{"existing":{"command":"old"}}}"#,
+        )
+        .unwrap();
+
+        let value = serde_json::json!({ "mcpServers": { "rust": { "command": "uvx" } } });
+        let owned = vec!["/mcpServers/rust".to_string()];
+
+        let backup = capture_merge_json_backup(
+            "rust-dev",
+            AgentHarness::Copilot,
+            target,
+            &json_target,
+            0,
+            &value,
+            &owned,
+        )
+        .unwrap();
+        merge_json_value(&json_target, &value, &owned).unwrap();
+
+        let merged: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&json_target).unwrap()).unwrap();
+        assert_eq!(merged["mcpServers"]["rust"]["command"], "uvx");
+
+        let entry = ProfileFileEntry {
+            source: backup,
+            target: json_target.clone(),
+            action: "merge-json".to_string(),
+            backup: None,
+            existed: false,
+        };
+        restore_profile_files("rust-dev", AgentHarness::Copilot, target, &[entry]).unwrap();
+
+        let restored: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&json_target).unwrap()).unwrap();
+        assert!(
+            restored["mcpServers"]["rust"].is_null(),
+            "leaked merge-json server should be removed on rollback: {restored}"
+        );
+        assert_eq!(restored["mcpServers"]["existing"]["command"], "old");
     }
 }

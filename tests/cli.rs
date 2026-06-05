@@ -1274,7 +1274,15 @@ profiles =
         .assert()
         .success();
 
-    assert_eq!(fs::read_to_string(mcp_json).unwrap(), original_mcp_json);
+    // Restoration re-serializes the JSON (so byte-exact formatting is not
+    // preserved); assert the unrelated pre-existing content survives structurally
+    // and the profile's merged server is gone.
+    let restored: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(mcp_json).unwrap()).unwrap();
+    assert_eq!(
+        restored,
+        serde_json::from_str::<serde_json::Value>(original_mcp_json).unwrap()
+    );
 }
 
 #[test]
@@ -1705,7 +1713,7 @@ profiles =
 
     fs::write(
         &mcp_json,
-        r#"{"servers":{"rust":{"command":"uvx","args":["mcp-rust"]},"other":{"command":"keep"}},"custom":true}"#,
+        r#"{"mcpServers":{"rust":{"command":"uvx","args":["mcp-rust"]},"other":{"command":"keep"}},"custom":true}"#,
     )
     .unwrap();
 
@@ -1727,9 +1735,9 @@ profiles =
 
     let remaining: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(mcp_json).unwrap()).unwrap();
-    assert_eq!(remaining["servers"]["other"]["command"], "keep");
+    assert_eq!(remaining["mcpServers"]["other"]["command"], "keep");
     assert_eq!(remaining["custom"], true);
-    assert!(remaining["servers"]["rust"].is_null());
+    assert!(remaining["mcpServers"]["rust"].is_null());
 }
 
 #[test]
@@ -2229,8 +2237,8 @@ profiles =
     let mcp: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(ctx.repo_path().join(".mcp.json")).unwrap())
             .unwrap();
-    assert_eq!(mcp["servers"]["rust"]["command"], "uvx");
-    assert_eq!(mcp["servers"]["other"]["command"], "other");
+    assert_eq!(mcp["mcpServers"]["rust"]["command"], "uvx");
+    assert_eq!(mcp["mcpServers"]["other"]["command"], "other");
 }
 
 #[test]
