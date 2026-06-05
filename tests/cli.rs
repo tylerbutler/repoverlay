@@ -3413,7 +3413,7 @@ fn restore_when_no_overlays_shows_message() {
         .args(["--target", ctx.repo_path().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No overlay"));
+        .stdout(predicate::str::contains("Nothing to restore"));
 }
 
 // ============================================================================
