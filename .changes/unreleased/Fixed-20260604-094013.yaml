@@ -1,10 +1,11 @@
 kind: Fixed
 body: |-
-    Exclude profile-written files from git
+    Keep profile-written files out of git status
 
-    Files a profile writes into the repository (instructions, `.mcp.json`,
-    placed skills/agents, plugin directories) are now added to
-    `.git/info/exclude` under a per-profile section and removed again when the
-    profile is removed, so they no longer appear as untracked changes. The
-    `repair` path also rebuilds these profile exclusions.
+    Files that a profile writes into your repository (agent instructions,
+    `.mcp.json`, placed skills and agents, and plugin directories) are now
+    excluded from git via a per-profile section in `.git/info/exclude`, so they
+    no longer show up as untracked changes. The exclusions are added when a
+    profile is applied and removed when it is removed, and `repoverlay repair`
+    rebuilds them if they go missing.
 time: 2026-06-04T09:40:13-07:00
