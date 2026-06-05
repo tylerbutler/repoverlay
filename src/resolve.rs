@@ -1239,10 +1239,16 @@ mod tests {
 
             match resolved {
                 ResolvedSources::Single(source) => {
-                    assert_eq!(source.path, overlay);
+                    assert_eq!(
+                        source.path.canonicalize().unwrap(),
+                        overlay.canonicalize().unwrap()
+                    );
                     match source.source_info {
                         OverlaySource::Local { path, source_name } => {
-                            assert_eq!(path, overlay);
+                            assert_eq!(
+                                path.canonicalize().unwrap(),
+                                overlay.canonicalize().unwrap()
+                            );
                             assert_eq!(source_name.as_deref(), Some("local"));
                         }
                         other => panic!("expected local source, got {other:?}"),

@@ -583,9 +583,12 @@ mod tests {
 
         let resolved = resolve_local_browse_source(source.path(), &overlay).unwrap();
 
-        assert_eq!(resolved.path, source.path().join("config-a"));
+        let expected = source.path().join("config-a").canonicalize().unwrap();
+        assert_eq!(resolved.path.canonicalize().unwrap(), expected);
         match resolved.source_info {
-            OverlaySource::Local { path, .. } => assert_eq!(path, source.path().join("config-a")),
+            OverlaySource::Local { path, .. } => {
+                assert_eq!(path.canonicalize().unwrap(), expected);
+            }
             other => panic!("expected local source, got {other:?}"),
         }
     }
@@ -618,10 +621,16 @@ mod tests {
             resolve_configured_browse_source(source.path(), &overlay, "local", "local-flat", true)
                 .unwrap();
 
-        assert_eq!(resolved.path, source.path().join("config-a"));
+        assert_eq!(
+            resolved.path.canonicalize().unwrap(),
+            source.path().join("config-a").canonicalize().unwrap()
+        );
         match resolved.source_info {
             OverlaySource::Local { path, source_name } => {
-                assert_eq!(path, source.path().join("config-a"));
+                assert_eq!(
+                    path.canonicalize().unwrap(),
+                    source.path().join("config-a").canonicalize().unwrap()
+                );
                 assert_eq!(source_name.as_deref(), Some("local-flat"));
             }
             other => panic!("expected local source, got {other:?}"),
@@ -638,7 +647,14 @@ mod tests {
             resolve_configured_browse_source(source.path(), &overlay, "abc123", "shared", false)
                 .unwrap();
 
-        assert_eq!(resolved.path, source.path().join("owner/repo/config"));
+        assert_eq!(
+            resolved.path.canonicalize().unwrap(),
+            source
+                .path()
+                .join("owner/repo/config")
+                .canonicalize()
+                .unwrap()
+        );
         match resolved.source_info {
             OverlaySource::OverlayRepo {
                 org,
