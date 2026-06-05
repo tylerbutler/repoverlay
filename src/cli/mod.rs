@@ -537,6 +537,7 @@ enum Commands {
     },
 
     /// Manage repository profiles
+    #[command(hide = true)]
     Profile {
         #[command(subcommand)]
         command: ProfileCommand,
@@ -549,6 +550,7 @@ enum Commands {
     },
 
     /// Run GitHub Copilot with one or more profiles applied for the process lifetime
+    #[command(hide = true)]
     Copilot {
         /// Profile name to apply while Copilot runs (repeat to apply several)
         #[arg(long = "profile", required = true)]
@@ -564,6 +566,7 @@ enum Commands {
     },
 
     /// Run Claude with one or more profiles applied for the process lifetime
+    #[command(hide = true)]
     Claude {
         /// Profile name to apply while Claude runs (repeat to apply several)
         #[arg(long = "profile", required = true)]

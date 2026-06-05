@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -165,168 +166,21 @@ fn apply_profile_with_harness_home(
             .collect(),
     };
 
+    // Keep a copy of the resolved actions so a successful apply can write a
+    // self-contained external snapshot for `restore` after `git clean`.
+    let snapshot_actions = plan.actions.clone();
+
     let apply_result = (|| -> Result<()> {
         for (action_index, action) in plan.actions.into_iter().enumerate() {
-            match action {
-                ProfileAction::ApplyOverlay { reference } => {
-                    let before = crate::state::list_applied_overlays(target)?;
-                    crate::apply_overlay(
-                        &reference,
-                        target,
-                        false,
-                        None,
-                        None,
-                        true,
-                        crate::ConflictStrategy::Fail,
-                        false,
-                        None,
-                        false,
-                    )?;
-                    let after = crate::state::list_applied_overlays(target)?;
-                    let new_overlays: Vec<_> = after
-                        .into_iter()
-                        .filter(|overlay| !before.contains(overlay))
-                        .collect();
-                    if new_overlays.is_empty() {
-                        bail!(
-                            "Profile overlay '{reference}' did not create overlay state; \
-                             cannot record removable overlay name"
-                        );
-                    }
-                    state
-                        .overlays
-                        .extend(new_overlays.into_iter().map(|overlay| overlay.to_string()));
-                }
-                ProfileAction::WriteFile {
-                    source,
-                    target: file_target,
-                } => {
-                    let (backup, existed) = capture_write_file_backup(
-                        name,
-                        harness,
-                        target,
-                        &file_target,
-                        action_index,
-                    )?;
-                    copy_profile_file(&source, &file_target, &context.profile_asset_dir)?;
-                    state.files.push(ProfileFileEntry {
-                        source,
-                        target: file_target,
-                        action: "write-file".to_string(),
-                        backup,
-                        existed,
-                    });
-                }
-                ProfileAction::MergeJson {
-                    target: json_target,
-                    value,
-                    owned_paths,
-                } => {
-                    reject_symlink_profile_target(&json_target)?;
-                    let backup_source = capture_merge_json_backup(
-                        name,
-                        harness,
-                        target,
-                        &json_target,
-                        action_index,
-                        &value,
-                        &owned_paths,
-                    )?;
-                    merge_json_value(&json_target, &value, &owned_paths)?;
-                    state.files.push(ProfileFileEntry {
-                        source: backup_source,
-                        target: json_target,
-                        action: "merge-json".to_string(),
-                        backup: None,
-                        existed: false,
-                    });
-                }
-                ProfileAction::SkipCapability { capability, reason } => {
-                    eprintln!("Warning: skipped {capability}: {reason}");
-                    state.skipped.push(SkippedCapability { capability, reason });
-                }
-                ProfileAction::WriteManagedRegion {
-                    bodies: instruction_bodies,
-                    target: region_target,
-                    marker_id,
-                } => {
-                    crate::profile::validate_profile_marker_component(&marker_id)?;
-                    reject_symlink_profile_target(&region_target)?;
-                    let mut bodies = Vec::with_capacity(instruction_bodies.len());
-                    for instruction in &instruction_bodies {
-                        let content = match instruction {
-                            InstructionBody::File { path, .. } => fs::read_to_string(path)
-                                .with_context(|| {
-                                    format!("Failed to read instruction source {}", path.display())
-                                })?,
-                            InstructionBody::Inline(text) => text.clone(),
-                        };
-                        bodies.push(content.trim_end_matches('\n').to_string());
-                    }
-                    let body = bodies.join("\n\n");
-                    if body.lines().any(is_reserved_marker_line) {
-                        bail!(
-                            "Instruction content for profile '{marker_id}' contains a reserved \
-                             repoverlay managed-region marker line; remove it before applying"
-                        );
-                    }
-                    // Removal strips this profile's block from the live file rather
-                    // than restoring a snapshot, so other profiles' regions and user
-                    // edits survive; we only record whether we created the file, to
-                    // decide deletion on empty during removal.
-                    let (current, existed) = match fs::read_to_string(&region_target) {
-                        Ok(content) => (content, true),
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                            (String::new(), false)
-                        }
-                        Err(err) => {
-                            return Err(err).with_context(|| {
-                                format!(
-                                    "Failed to read managed-region target {}",
-                                    region_target.display()
-                                )
-                            });
-                        }
-                    };
-                    let updated = upsert_managed_region(&current, &marker_id, &body);
-                    if let Some(parent) = region_target.parent() {
-                        fs::create_dir_all(parent).with_context(|| {
-                            format!(
-                                "Failed to create parent directory for {}",
-                                region_target.display()
-                            )
-                        })?;
-                    }
-                    crate::state::atomic_write(&region_target, &updated)?;
-                    state.files.push(ProfileFileEntry {
-                        source: region_target.clone(),
-                        target: region_target,
-                        action: "managed-region".to_string(),
-                        backup: None,
-                        existed,
-                    });
-                }
-                ProfileAction::PlacePluginDir {
-                    source,
-                    target: dir_target,
-                } => {
-                    let (backup, existed) = place_plugin_dir(
-                        name,
-                        harness,
-                        target,
-                        &source,
-                        &dir_target,
-                        action_index,
-                    )?;
-                    state.files.push(ProfileFileEntry {
-                        source,
-                        target: dir_target,
-                        action: "place-plugin-dir".to_string(),
-                        backup,
-                        existed,
-                    });
-                }
-            }
+            execute_profile_action(
+                action,
+                action_index,
+                name,
+                harness,
+                target,
+                &context.profile_asset_dir,
+                &mut state,
+            )?;
         }
 
         save_profile_state(target, &state)
@@ -360,8 +214,190 @@ fn apply_profile_with_harness_home(
         }
     }
 
+    // Mirror the in-repo state to an external snapshot so `restore` can rebuild
+    // the profile after `git clean -fdx` wipes `.repoverlay/`. Best-effort: a
+    // failure here only costs restore-after-clean, not the apply itself.
+    if let Err(err) = save_external_profile_snapshot(
+        target,
+        &state,
+        &context.profile_asset_dir,
+        &snapshot_actions,
+    ) {
+        eprintln!(
+            "Warning: could not write external profile snapshot \
+             (restore after `git clean` may be unavailable): {err}"
+        );
+    }
+
     println!("Applied profile {name} for {harness}");
     Ok(state)
+}
+
+/// Execute a single resolved profile action, mutating `state` to record the
+/// placement so it can later be removed or rolled back.
+///
+/// Shared by `profile apply` (where `asset_dir` is the repo/profile asset
+/// directory) and `restore` (where `asset_dir` is the external snapshot's blob
+/// directory). The `ApplyOverlay` arm is only reached during apply; restore
+/// reconstructs overlay names from the snapshot and relies on overlay restore.
+fn execute_profile_action(
+    action: ProfileAction,
+    action_index: usize,
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+    asset_dir: &Path,
+    state: &mut ProfileState,
+) -> Result<()> {
+    match action {
+        ProfileAction::ApplyOverlay { reference } => {
+            let before = crate::state::list_applied_overlays(target)?;
+            crate::apply_overlay(
+                &reference,
+                target,
+                false,
+                None,
+                None,
+                true,
+                crate::ConflictStrategy::Fail,
+                false,
+                None,
+                false,
+            )?;
+            let after = crate::state::list_applied_overlays(target)?;
+            let new_overlays: Vec<_> = after
+                .into_iter()
+                .filter(|overlay| !before.contains(overlay))
+                .collect();
+            if new_overlays.is_empty() {
+                bail!(
+                    "Profile overlay '{reference}' did not create overlay state; \
+                     cannot record removable overlay name"
+                );
+            }
+            state
+                .overlays
+                .extend(new_overlays.into_iter().map(|overlay| overlay.to_string()));
+        }
+        ProfileAction::WriteFile {
+            source,
+            target: file_target,
+        } => {
+            let (backup, existed) =
+                capture_write_file_backup(name, harness, target, &file_target, action_index)?;
+            copy_profile_file(&source, &file_target, asset_dir)?;
+            state.files.push(ProfileFileEntry {
+                source,
+                target: file_target,
+                action: "write-file".to_string(),
+                backup,
+                existed,
+            });
+        }
+        ProfileAction::MergeJson {
+            target: json_target,
+            value,
+            owned_paths,
+        } => {
+            reject_symlink_profile_target(&json_target)?;
+            let backup_source = capture_merge_json_backup(
+                name,
+                harness,
+                target,
+                &json_target,
+                action_index,
+                &value,
+                &owned_paths,
+            )?;
+            merge_json_value(&json_target, &value, &owned_paths)?;
+            state.files.push(ProfileFileEntry {
+                source: backup_source,
+                target: json_target,
+                action: "merge-json".to_string(),
+                backup: None,
+                existed: false,
+            });
+        }
+        ProfileAction::SkipCapability { capability, reason } => {
+            eprintln!("Warning: skipped {capability}: {reason}");
+            state.skipped.push(SkippedCapability { capability, reason });
+        }
+        ProfileAction::WriteManagedRegion {
+            bodies: instruction_bodies,
+            target: region_target,
+            marker_id,
+        } => {
+            crate::profile::validate_profile_marker_component(&marker_id)?;
+            reject_symlink_profile_target(&region_target)?;
+            let mut bodies = Vec::with_capacity(instruction_bodies.len());
+            for instruction in &instruction_bodies {
+                let content = match instruction {
+                    InstructionBody::File { path, .. } => {
+                        fs::read_to_string(path).with_context(|| {
+                            format!("Failed to read instruction source {}", path.display())
+                        })?
+                    }
+                    InstructionBody::Inline(text) => text.clone(),
+                };
+                bodies.push(content.trim_end_matches('\n').to_string());
+            }
+            let body = bodies.join("\n\n");
+            if body.lines().any(is_reserved_marker_line) {
+                bail!(
+                    "Instruction content for profile '{marker_id}' contains a reserved \
+                     repoverlay managed-region marker line; remove it before applying"
+                );
+            }
+            // Removal strips this profile's block from the live file rather
+            // than restoring a snapshot, so other profiles' regions and user
+            // edits survive; we only record whether we created the file, to
+            // decide deletion on empty during removal.
+            let (current, existed) = match fs::read_to_string(&region_target) {
+                Ok(content) => (content, true),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!(
+                            "Failed to read managed-region target {}",
+                            region_target.display()
+                        )
+                    });
+                }
+            };
+            let updated = upsert_managed_region(&current, &marker_id, &body);
+            if let Some(parent) = region_target.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Failed to create parent directory for {}",
+                        region_target.display()
+                    )
+                })?;
+            }
+            crate::state::atomic_write(&region_target, &updated)?;
+            state.files.push(ProfileFileEntry {
+                source: region_target.clone(),
+                target: region_target,
+                action: "managed-region".to_string(),
+                backup: None,
+                existed,
+            });
+        }
+        ProfileAction::PlacePluginDir {
+            source,
+            target: dir_target,
+        } => {
+            let (backup, existed) =
+                place_plugin_dir(name, harness, target, &source, &dir_target, action_index)?;
+            state.files.push(ProfileFileEntry {
+                source,
+                target: dir_target,
+                action: "place-plugin-dir".to_string(),
+                backup,
+                existed,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Section name used in `.git/info/exclude` for a profile's repo-local files.
@@ -629,6 +665,9 @@ fn remove_profile_inner(name: &str, harness: AgentHarness, target: &Path) -> Res
         }
     }
     crate::profile::remove_profile_state(target, name, harness)?;
+    if let Err(err) = remove_external_profile_snapshot(target, name, harness) {
+        eprintln!("Warning: could not update external profile snapshot during removal: {err}");
+    }
     let section = profile_exclude_section(name, harness);
     if let Err(err) = crate::update_git_exclude(target, &section, &[], false) {
         eprintln!("Warning: could not update git exclude while removing profile: {err}");
@@ -1853,6 +1892,384 @@ fn simple_profile_fingerprint(profile: &crate::profile::ProfileConfig) -> u64 {
         .unwrap_or_default()
         .hash(&mut hasher);
     hasher.finish()
+}
+
+// ---------------------------------------------------------------------------
+// External profile snapshots (restore after `git clean`)
+// ---------------------------------------------------------------------------
+//
+// All in-repo profile state lives under `.repoverlay/profiles/`, which a
+// `git clean -fdx` wipes. To make `restore` able to rebuild a profile we mirror
+// a self-contained snapshot of the *resolved* plan (file/dir sources copied
+// into `blobs/`, instruction bodies inlined) into the same external location
+// used for overlay state. On restore we redirect the recorded sources at the
+// external blob directory and re-run the normal apply executor, which
+// regenerates a correct in-repo state (including fresh removal backups).
+
+/// On-disk manifest for an externally snapshotted profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProfileSnapshot {
+    name: String,
+    harness: AgentHarness,
+    mode: ProfileMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    applied_at: chrono::DateTime<chrono::Utc>,
+    profile_fingerprint: String,
+    #[serde(default)]
+    plugins: Vec<crate::profile::ProfilePluginEntry>,
+    #[serde(default)]
+    skipped: Vec<SkippedCapability>,
+    /// Overlay state names this profile applied. Overlay files themselves are
+    /// restored independently from overlay external state; recorded here only so
+    /// the rebuilt in-repo profile state can later remove them.
+    #[serde(default)]
+    overlays: Vec<String>,
+    actions: Vec<SnapshotAction>,
+    /// Set when the profile was removed; such snapshots are skipped by restore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    removed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// A resolved, self-contained profile action. `WriteFile`/`PlacePluginDir`
+/// reference a path under the snapshot's `blobs/` directory; managed-region
+/// bodies are inlined.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+enum SnapshotAction {
+    WriteFile {
+        blob: String,
+        target: PathBuf,
+    },
+    MergeJson {
+        target: PathBuf,
+        value: Value,
+        owned_paths: Vec<String>,
+    },
+    ManagedRegion {
+        bodies: Vec<String>,
+        target: PathBuf,
+        marker_id: String,
+    },
+    PlacePluginDir {
+        blob: String,
+        target: PathBuf,
+    },
+}
+
+const PROFILE_SNAPSHOT_MANIFEST: &str = "snapshot.json";
+const PROFILE_SNAPSHOT_BLOBS: &str = "blobs";
+
+/// External directory holding profile snapshots for a target repository.
+fn external_profile_root(target: &Path) -> Result<PathBuf> {
+    Ok(crate::state::external_state_dir_for_target(target)?.join("profiles"))
+}
+
+/// External directory for a single profile snapshot.
+fn external_profile_dir(target: &Path, name: &str, harness: AgentHarness) -> Result<PathBuf> {
+    crate::profile::validate_profile_state_component(name)?;
+    Ok(external_profile_root(target)?.join(format!("{name}.{harness}")))
+}
+
+/// Write a self-contained external snapshot of a freshly applied profile.
+fn save_external_profile_snapshot(
+    target: &Path,
+    state: &ProfileState,
+    asset_dir: &Path,
+    actions: &[ProfileAction],
+) -> Result<()> {
+    let dir = external_profile_dir(target, &state.name, state.harness)?;
+    // Start fresh so a re-apply never inherits stale blobs or a `removed_at`.
+    if dir.exists() {
+        fs::remove_dir_all(&dir)
+            .with_context(|| format!("Failed to clear old profile snapshot: {}", dir.display()))?;
+    }
+    let blobs_dir = dir.join(PROFILE_SNAPSHOT_BLOBS);
+    fs::create_dir_all(&blobs_dir).with_context(|| {
+        format!(
+            "Failed to create profile snapshot directory: {}",
+            blobs_dir.display()
+        )
+    })?;
+
+    let mut snapshot_actions = Vec::new();
+    for (index, action) in actions.iter().enumerate() {
+        match action {
+            // Overlays are restored from overlay external state; only the names
+            // (already in `state.overlays`) are needed here.
+            ProfileAction::ApplyOverlay { .. } | ProfileAction::SkipCapability { .. } => {}
+            ProfileAction::WriteFile { source, target } => {
+                let blob = format!("write-file-{index}");
+                ensure_regular_profile_source(source, asset_dir)?;
+                fs::copy(source, blobs_dir.join(&blob)).with_context(|| {
+                    format!("Failed to snapshot profile file {}", source.display())
+                })?;
+                snapshot_actions.push(SnapshotAction::WriteFile {
+                    blob,
+                    target: target.clone(),
+                });
+            }
+            ProfileAction::MergeJson {
+                target,
+                value,
+                owned_paths,
+            } => snapshot_actions.push(SnapshotAction::MergeJson {
+                target: target.clone(),
+                value: value.clone(),
+                owned_paths: owned_paths.clone(),
+            }),
+            ProfileAction::WriteManagedRegion {
+                bodies,
+                target,
+                marker_id,
+            } => {
+                let mut resolved = Vec::with_capacity(bodies.len());
+                for body in bodies {
+                    let content = match body {
+                        InstructionBody::File { path, .. } => fs::read_to_string(path)
+                            .with_context(|| {
+                                format!("Failed to snapshot instruction source {}", path.display())
+                            })?,
+                        InstructionBody::Inline(text) => text.clone(),
+                    };
+                    resolved.push(content);
+                }
+                snapshot_actions.push(SnapshotAction::ManagedRegion {
+                    bodies: resolved,
+                    target: target.clone(),
+                    marker_id: marker_id.clone(),
+                });
+            }
+            ProfileAction::PlacePluginDir { source, target } => {
+                let blob = format!("plugin-dir-{index}");
+                copy_tree_no_symlinks(source, &blobs_dir.join(&blob)).with_context(|| {
+                    format!("Failed to snapshot plugin directory {}", source.display())
+                })?;
+                snapshot_actions.push(SnapshotAction::PlacePluginDir {
+                    blob,
+                    target: target.clone(),
+                });
+            }
+        }
+    }
+
+    let snapshot = ProfileSnapshot {
+        name: state.name.clone(),
+        harness: state.harness,
+        mode: state.mode,
+        session_id: state.session_id.clone(),
+        applied_at: state.applied_at,
+        profile_fingerprint: state.profile_fingerprint.clone(),
+        plugins: state.plugins.clone(),
+        skipped: state.skipped.clone(),
+        overlays: state.overlays.clone(),
+        actions: snapshot_actions,
+        removed_at: None,
+    };
+    let manifest = dir.join(PROFILE_SNAPSHOT_MANIFEST);
+    let content =
+        serde_json::to_string_pretty(&snapshot).context("Failed to serialize profile snapshot")?;
+    crate::state::atomic_write(&manifest, &content)
+}
+
+/// Mark a profile's external snapshot as removed so `restore` skips it.
+pub(crate) fn remove_external_profile_snapshot(
+    target: &Path,
+    name: &str,
+    harness: AgentHarness,
+) -> Result<()> {
+    let manifest = external_profile_dir(target, name, harness)?.join(PROFILE_SNAPSHOT_MANIFEST);
+    if !manifest.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(&manifest)?;
+    match serde_json::from_str::<ProfileSnapshot>(&content) {
+        Ok(mut snapshot) => {
+            snapshot.removed_at = Some(chrono::Utc::now());
+            let updated = serde_json::to_string_pretty(&snapshot)
+                .context("Failed to serialize profile snapshot")?;
+            crate::state::atomic_write(&manifest, &updated)
+        }
+        Err(err) => {
+            warn!(
+                "Failed to parse profile snapshot {}, deleting it: {err}",
+                manifest.display()
+            );
+            if let Some(parent) = manifest.parent() {
+                let _ = fs::remove_dir_all(parent);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Load every restorable (not-removed) external profile snapshot for a target.
+fn load_external_profile_snapshots(target: &Path) -> Result<Vec<ProfileSnapshot>> {
+    let root = external_profile_root(target)?;
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut snapshots = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let manifest = entry?.path().join(PROFILE_SNAPSHOT_MANIFEST);
+        if !manifest.is_file() {
+            continue;
+        }
+        let content = fs::read_to_string(&manifest)?;
+        match serde_json::from_str::<ProfileSnapshot>(&content) {
+            Ok(snapshot) if snapshot.removed_at.is_none() => snapshots.push(snapshot),
+            Ok(_) => {}
+            Err(err) => warn!(
+                "Failed to parse profile snapshot {}: {err}",
+                manifest.display()
+            ),
+        }
+    }
+    snapshots.sort_by(|a, b| {
+        (a.name.as_str(), a.harness.as_str()).cmp(&(b.name.as_str(), b.harness.as_str()))
+    });
+    Ok(snapshots)
+}
+
+/// Summary of restorable profiles for the `restore` command's preview.
+pub(crate) struct RestorableProfile {
+    pub(crate) name: String,
+    pub(crate) harness: AgentHarness,
+}
+
+/// List profiles that `restore_profiles` would re-establish for `target`.
+pub(crate) fn list_restorable_profiles(target: &Path) -> Result<Vec<RestorableProfile>> {
+    let target = crate::resolve::canonicalize_path(target, "Target directory")?;
+    Ok(load_external_profile_snapshots(&target)?
+        .into_iter()
+        .filter(|snapshot| {
+            crate::profile::profile_state_path(&target, &snapshot.name, snapshot.harness)
+                .map(|path| !path.exists())
+                .unwrap_or(false)
+        })
+        .map(|snapshot| RestorableProfile {
+            name: snapshot.name,
+            harness: snapshot.harness,
+        })
+        .collect())
+}
+
+/// Re-establish every profile recorded in the external snapshots for `target`.
+///
+/// Profiles whose in-repo state still exists are left untouched. Returns the
+/// number of profiles restored.
+pub(crate) fn restore_profiles(target: &Path) -> Result<usize> {
+    let target = crate::resolve::canonicalize_path(target, "Target directory")?;
+    let snapshots = load_external_profile_snapshots(&target)?;
+    let mut restored = 0;
+    for snapshot in snapshots {
+        if restore_profile_from_snapshot(&target, &snapshot)? {
+            restored += 1;
+        }
+    }
+    Ok(restored)
+}
+
+/// Rebuild a single profile from its external snapshot.
+///
+/// Returns `Ok(false)` (and does nothing) when the profile's in-repo state still
+/// exists. Sources are redirected at the snapshot's `blobs/` directory and the
+/// shared apply executor is re-run, regenerating in-repo state and backups.
+fn restore_profile_from_snapshot(target: &Path, snapshot: &ProfileSnapshot) -> Result<bool> {
+    let name = snapshot.name.as_str();
+    let harness = snapshot.harness;
+    let state_path = crate::profile::profile_state_path(target, name, harness)?;
+    if state_path.exists() {
+        return Ok(false);
+    }
+
+    let blobs_dir = external_profile_dir(target, name, harness)?.join(PROFILE_SNAPSHOT_BLOBS);
+    let mut actions = Vec::with_capacity(snapshot.actions.len());
+    for action in &snapshot.actions {
+        match action {
+            SnapshotAction::WriteFile { blob, target } => actions.push(ProfileAction::WriteFile {
+                source: blobs_dir.join(blob),
+                target: target.clone(),
+            }),
+            SnapshotAction::MergeJson {
+                target,
+                value,
+                owned_paths,
+            } => actions.push(ProfileAction::MergeJson {
+                target: target.clone(),
+                value: value.clone(),
+                owned_paths: owned_paths.clone(),
+            }),
+            SnapshotAction::ManagedRegion {
+                bodies,
+                target,
+                marker_id,
+            } => actions.push(ProfileAction::WriteManagedRegion {
+                bodies: bodies
+                    .iter()
+                    .cloned()
+                    .map(InstructionBody::Inline)
+                    .collect(),
+                target: target.clone(),
+                marker_id: marker_id.clone(),
+            }),
+            SnapshotAction::PlacePluginDir { blob, target } => {
+                actions.push(ProfileAction::PlacePluginDir {
+                    source: blobs_dir.join(blob),
+                    target: target.clone(),
+                });
+            }
+        }
+    }
+
+    let mut state = ProfileState {
+        name: name.to_string(),
+        harness,
+        mode: snapshot.mode,
+        session_id: snapshot.session_id.clone(),
+        applied_at: snapshot.applied_at,
+        profile_fingerprint: snapshot.profile_fingerprint.clone(),
+        // Overlay files are restored separately; record the names so a later
+        // `remove` tears the overlays down too.
+        overlays: snapshot.overlays.clone(),
+        files: Vec::new(),
+        skipped: snapshot.skipped.clone(),
+        plugins: snapshot.plugins.clone(),
+    };
+
+    let restore_result = (|| -> Result<()> {
+        for (action_index, action) in actions.into_iter().enumerate() {
+            execute_profile_action(
+                action,
+                action_index,
+                name,
+                harness,
+                target,
+                &blobs_dir,
+                &mut state,
+            )?;
+        }
+        save_profile_state(target, &state)
+    })();
+
+    if let Err(err) = restore_result {
+        restore_profile_files(name, harness, target, &state.files).with_context(|| {
+            format!("Profile restore failed ({err}); failed to roll back profile file changes")
+        })?;
+        return Err(err);
+    }
+
+    let exclude_entries = profile_exclude_entries(target, &state);
+    if !exclude_entries.is_empty() {
+        let section = profile_exclude_section(name, harness);
+        if let Err(err) = crate::update_git_exclude(target, &section, &exclude_entries, true) {
+            eprintln!(
+                "Warning: could not update git exclude for restored profile \
+                 (files may show as untracked): {err}"
+            );
+        }
+    }
+    Ok(true)
 }
 
 #[cfg(test)]

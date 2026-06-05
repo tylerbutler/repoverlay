@@ -449,6 +449,100 @@ profiles =
 }
 
 #[test]
+fn restore_rebuilds_profile_after_git_clean() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let agents = ctx.repo_path().join("AGENTS.md");
+    assert!(agents.exists(), "apply should write AGENTS.md");
+
+    // Simulate `git clean -fdx`: wipe the in-repo state directory (which also
+    // removes the config and instruction source) and the produced AGENTS.md.
+    fs::remove_dir_all(ctx.repo_path().join(".repoverlay")).unwrap();
+    fs::remove_file(&agents).unwrap();
+    assert!(!agents.exists());
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["restore", "--target", ctx.repo_path().to_str().unwrap()])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Restored 1 profile"));
+
+    let contents = fs::read_to_string(&agents).unwrap();
+    assert!(contents.contains("<!-- repoverlay:profile:rust-dev:begin -->"));
+    assert!(contents.contains("Use Rust 2024."));
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists(),
+        "restore should recreate the in-repo profile state"
+    );
+
+    // The restored profile must still be removable end-to-end.
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "copilot",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    // After an explicit removal, a subsequent restore must not bring it back.
+    cargo_bin_cmd!("repoverlay")
+        .args(["restore", "--target", ctx.repo_path().to_str().unwrap()])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Restored 1 profile").not());
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists(),
+        "explicitly removed profile must not be restored"
+    );
+}
+
+#[test]
 fn profile_apply_places_plugin_skill_and_records_provenance() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
