@@ -32,6 +32,9 @@ importers:
       starlight-announcement:
         specifier: ^1.1.0
         version: 1.1.0(@astrojs/starlight@0.39.2(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0))(typescript@6.0.3))
+      starlight-heading-badges:
+        specifier: ^0.7.0
+        version: 0.7.0(@astrojs/starlight@0.39.2(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0))(typescript@6.0.3))
       starlight-links-validator:
         specifier: ^0.24.0
         version: 0.24.0(@astrojs/starlight@0.39.2(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0))(typescript@6.0.3))(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0))
@@ -2324,6 +2327,12 @@ packages:
 
   starlight-announcement@1.1.0:
     resolution: {integrity: sha512-+AuFgJdJhmvupMaqeSuA4ke/6DeXGq2hl1y8eYKflmg9OXt9FaVkDJDYPkx2Ivp4rfJMqg5Lw+E1I4h4/hVnhw==}
+    engines: {node: '>=22.12.0'}
+    peerDependencies:
+      '@astrojs/starlight': '>=0.38.0'
+
+  starlight-heading-badges@0.7.0:
+    resolution: {integrity: sha512-mzxTn7lFd2OPB6naJKYelZbu1EUGCT2hm8Ozx/9EqgGy68y7ggUGxrDmdTvpozzi5OLkijiZw8zcvdq63JdRbA==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
       '@astrojs/starlight': '>=0.38.0'
@@ -5952,6 +5961,16 @@ snapshots:
     dependencies:
       '@astrojs/starlight': 0.39.2(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0))(typescript@6.0.3)
       picomatch: 4.0.4
+
+  starlight-heading-badges@0.7.0(@astrojs/starlight@0.39.2(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0))(typescript@6.0.3)):
+    dependencies:
+      '@astrojs/markdown-remark': 7.1.2
+      '@astrojs/starlight': 0.39.2(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0))(typescript@6.0.3)
+      github-slugger: 2.0.0
+      mdast-util-directive: 3.1.0
+      unist-util-visit: 5.1.0
+    transitivePeerDependencies:
+      - supports-color
 
   starlight-links-validator@0.24.0(@astrojs/starlight@0.39.2(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0))(typescript@6.0.3))(astro@6.3.3(@netlify/blobs@10.6.0)(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(yaml@2.9.0)):
     dependencies:

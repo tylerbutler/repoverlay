@@ -1,7 +1,7 @@
 ---
 title: How It Works
 sidebar:
-  order: 5
+  order: 6
 ---
 
 This page explains the mechanics behind how repoverlay manages overlay files.
