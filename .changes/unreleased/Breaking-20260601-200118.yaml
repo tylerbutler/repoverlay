@@ -1,4 +1,4 @@
-kind: Changed
+kind: Breaking
 body: |-
     Remove deprecated hidden CLI compatibility syntax
 
