@@ -1,4 +1,4 @@
-kind: Changed
+kind: Breaking
 body: |-
     Reject unsupported source URL schemes at parse time
 
