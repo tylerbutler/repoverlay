@@ -1,6 +1,5 @@
 import starlight from "@astrojs/starlight";
 import starlightAnnouncement from "starlight-announcement";
-import starlightHeadingBadges from "starlight-heading-badges";
 import starlightCatppuccin from "@catppuccin/starlight";
 import a11yEmoji from "@fec/remark-a11y-emoji";
 import { includeMarkdown } from "@hashicorp/platform-remark-plugins";
@@ -47,18 +46,17 @@ export default defineConfig({
 				starlightAnnouncement({
 					announcements: [
 						{
-							id: "v0-15-0",
-							content: "repoverlay 0.15.0 is out — meet profiles.",
+							id: "v0-14-2",
+							content: "repoverlay 0.14.2 is out now.",
 							variant: "tip",
 							dismissible: true,
 							link: {
-								text: "Read the profiles guide",
-								href: "/guides/profiles/",
+								text: "Release notes",
+								href: "https://github.com/tylerbutler/repoverlay/releases/tag/v0.14.2",
 							},
 						},
 					],
 				}),
-				starlightHeadingBadges(),
 				starlightLlmsTxt(),
 				starlightLinksValidator(),
 			],
@@ -105,10 +103,6 @@ export default defineConfig({
 						{
 							label: "Restoring After Git Clean",
 							slug: "guides/restoring",
-						},
-						{
-							label: "Profiles",
-							slug: "guides/profiles",
 						},
 						{
 							label: "How It Works",
