@@ -1,0 +1,7 @@
+kind: Changed
+body: |-
+    Require `--merge` for cross-overlay JSON merges
+
+    JSON conflicts between overlays now fail by default like other cross-overlay conflicts. Pass `--merge` to opt into deep merging, and repoverlay rejects symlinked merge targets instead of following them.
+time: 2026-06-01T20:01:22-07:00
+component: apply

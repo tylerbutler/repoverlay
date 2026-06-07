@@ -3,6 +3,8 @@
 //! Handles overlay state persistence, both in-repo (`.repoverlay/`) and external
 //! (`~/.local/share/repoverlay/`) for recovery after `git clean`.
 
+use crate::fs_util::atomic_write as atomic_write_impl;
+use crate::overlay_name::OverlayName;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
@@ -11,11 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
-
-use crate::overlay_name::OverlayName;
 
 /// Constants for state directory structure
 pub(crate) const STATE_DIR: &str = ".repoverlay";
@@ -576,20 +574,8 @@ pub(crate) fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
     Ok(base.join(target_hash))
 }
 
-/// Write content to a file atomically using write-then-rename.
-///
-/// Creates a temporary file in the same directory as the target path,
-/// writes the content, then atomically renames it into place. This
-/// prevents corruption if the process is interrupted mid-write.
 pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {
-    let dir = path
-        .parent()
-        .context("State file has no parent directory")?;
-    let mut tmp = NamedTempFile::new_in(dir)?;
-    tmp.write_all(content.as_bytes())?;
-    tmp.persist(path)
-        .context("Failed to atomically persist state file")?;
-    Ok(())
+    atomic_write_impl(path, content)
 }
 
 /// Save overlay state to the external backup location.
@@ -605,7 +591,7 @@ pub(crate) fn save_external_state(
     // Also save a marker file with the original target path for debugging
     let marker_path = dir.join(".target_path");
     if !marker_path.exists() {
-        fs::write(&marker_path, target.display().to_string())?;
+        atomic_write(&marker_path, &target.display().to_string())?;
     }
 
     let state_file = dir.join(format!("{overlay_name}.ccl"));

@@ -1,8 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use log::debug;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 
+use crate::fs_util::atomic_write;
 use crate::git::resolve_git_exclude_path;
 use crate::github;
 use crate::state::{
@@ -31,7 +33,7 @@ pub(crate) fn update_git_exclude(
         fs::create_dir_all(parent)?;
     }
 
-    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
+    let mut content = read_exclude_or_empty(&exclude_path)?;
 
     // Remove existing section for this overlay
     content = remove_overlay_section(&content, overlay_name);
@@ -72,7 +74,7 @@ pub(crate) fn update_git_exclude(
         content.pop();
     }
 
-    fs::write(&exclude_path, content)?;
+    atomic_write(&exclude_path, &content)?;
     Ok(())
 }
 
@@ -88,7 +90,7 @@ pub(crate) fn ensure_repoverlay_excluded(repo_root: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
+    let mut content = read_exclude_or_empty(&exclude_path)?;
 
     if content.contains(&exclude_marker_start(MANAGED_SECTION_NAME)) {
         return Ok(());
@@ -104,7 +106,7 @@ pub(crate) fn ensure_repoverlay_excluded(repo_root: &Path) -> Result<()> {
     content.push_str(&exclude_marker_end(MANAGED_SECTION_NAME));
     content.push('\n');
 
-    fs::write(&exclude_path, content)?;
+    atomic_write(&exclude_path, &content)?;
     Ok(())
 }
 
@@ -171,7 +173,7 @@ pub(crate) fn repair_git_exclude(target: &Path) -> Result<bool> {
     }
 
     let exclude_path = resolve_git_exclude_path(target)?;
-    let before = fs::read_to_string(&exclude_path).unwrap_or_default();
+    let before = read_exclude_or_empty(&exclude_path)?;
 
     for name in &applied {
         let name_str = name.as_str();
@@ -205,9 +207,17 @@ pub(crate) fn repair_git_exclude(target: &Path) -> Result<bool> {
         let section = crate::profile_plan::profile_exclude_section(&state.name, state.harness);
         update_git_exclude(target, &section, &entries, true)?;
     }
-
-    let after = fs::read_to_string(&exclude_path).unwrap_or_default();
+    let after = read_exclude_or_empty(&exclude_path)?;
     Ok(before != after)
+}
+
+fn read_exclude_or_empty(exclude_path: &Path) -> Result<String> {
+    match fs::read_to_string(exclude_path) {
+        Ok(content) => Ok(content),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(err)
+            .with_context(|| format!("Failed to read git exclude: {}", exclude_path.display())),
+    }
 }
 
 /// Parse owner/repo from a GitHub URL (HTTPS or SSH format).
@@ -393,6 +403,19 @@ mod tests {
             let content = fs::read_to_string(&exclude_path).unwrap();
             assert!(content.contains("*.log"));
             assert!(content.contains("# repoverlay:test-overlay start"));
+        }
+
+        #[test]
+        fn returns_error_when_existing_exclude_cannot_be_read_as_utf8() {
+            let repo = create_test_repo();
+            let exclude_path = repo.path().join(".git/info/exclude");
+            fs::create_dir_all(exclude_path.parent().unwrap()).unwrap();
+            fs::write(&exclude_path, [0xff, 0xfe, b'\n']).unwrap();
+
+            let result = update_git_exclude(repo.path(), "test-overlay", &[".envrc".into()], true);
+
+            assert!(result.is_err());
+            assert_eq!(fs::read(&exclude_path).unwrap(), [0xff, 0xfe, b'\n']);
         }
 
         #[test]

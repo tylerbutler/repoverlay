@@ -134,7 +134,7 @@ repoverlay apply ./overlay --merge
 
 This is useful when an overlay provides default settings that should be merged with a repository's existing configuration. For example, an overlay might add recommended VS Code extensions to an existing `.vscode/settings.json`.
 
-Deep merge combines objects recursively — overlay keys are added or updated, but existing keys not in the overlay are preserved. For non-JSON files, `--merge` has no effect (the file is treated as a conflict).
+Deep merge combines objects recursively — overlay keys are added or updated, but existing keys not in the overlay are preserved. Merge targets must be repo-relative real files; repoverlay rejects target symlinks and symlinked parent directories instead of following them. For non-JSON files, `--merge` has no effect (the file is treated as a conflict).
 
 :::note
 `--merge` can be combined with `--force` or `--skip-conflicts`. When combined with `--force`, JSON files are merged while non-JSON conflicts are overwritten. When combined with `--skip-conflicts`, JSON files are merged while non-JSON conflicts are skipped.

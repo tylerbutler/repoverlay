@@ -241,3 +241,104 @@ pub(crate) fn resolve_git_dir(repo_path: &Path) -> Result<PathBuf> {
 
     bail!("Not a git repository: {}", repo_path.display());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn git_init(path: &Path) {
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .expect("git init should execute");
+        assert!(
+            output.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn validate_git_repo_accepts_git_directory() {
+        let repo = TempDir::new().unwrap();
+        git_init(repo.path());
+
+        validate_git_repo(repo.path()).unwrap();
+    }
+
+    #[test]
+    fn validate_git_repo_rejects_directory_without_git_metadata() {
+        let dir = TempDir::new().unwrap();
+
+        let err = validate_git_repo(dir.path()).unwrap_err().to_string();
+
+        assert!(err.contains("Target is not a git repository"));
+    }
+
+    #[test]
+    fn resolve_git_exclude_path_returns_info_exclude() {
+        let repo = TempDir::new().unwrap();
+        git_init(repo.path());
+
+        let exclude = resolve_git_exclude_path(repo.path()).unwrap();
+
+        assert_eq!(
+            exclude,
+            repo.path().join(".git").join("info").join("exclude")
+        );
+    }
+
+    #[test]
+    fn resolve_git_exclude_path_rejects_non_repo() {
+        let dir = TempDir::new().unwrap();
+
+        let err = resolve_git_exclude_path(dir.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Failed to resolve git exclude path"));
+    }
+
+    #[test]
+    fn resolve_git_dir_returns_regular_git_directory() {
+        let repo = TempDir::new().unwrap();
+        git_init(repo.path());
+
+        let git_dir = resolve_git_dir(repo.path()).unwrap();
+
+        assert_eq!(git_dir, repo.path().join(".git"));
+    }
+
+    #[test]
+    fn resolve_git_dir_resolves_relative_gitdir_file() {
+        let worktree = TempDir::new().unwrap();
+        let actual = worktree.path().join("actual-git-dir");
+        fs::create_dir(&actual).unwrap();
+        fs::write(worktree.path().join(".git"), "gitdir: actual-git-dir\n").unwrap();
+
+        let git_dir = resolve_git_dir(worktree.path()).unwrap();
+
+        assert_eq!(git_dir, actual.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_git_dir_rejects_git_file_without_gitdir() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(".git"), "not a gitdir file\n").unwrap();
+
+        let err = resolve_git_dir(dir.path()).unwrap_err().to_string();
+
+        assert!(err.contains("Invalid .git file"));
+    }
+
+    #[test]
+    fn resolve_git_dir_rejects_directory_without_git_metadata() {
+        let dir = TempDir::new().unwrap();
+
+        let err = resolve_git_dir(dir.path()).unwrap_err().to_string();
+
+        assert!(err.contains("Not a git repository"));
+    }
+}

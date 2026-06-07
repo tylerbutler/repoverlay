@@ -64,28 +64,83 @@ repoverlay manages these kinds of objects:
 
 ### Homebrew (macOS/Linux)
 
+**Install:**
 ```bash
 brew install tylerbutler/tap/repoverlay
 ```
 
+**Update:**
+```bash
+brew update && brew upgrade repoverlay
+```
+
+**Uninstall:**
+```bash
+brew uninstall repoverlay
+```
+
 ### Shell installer (macOS/Linux)
 
+**Install:**
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.sh | sh
 ```
 
+The binary is installed to `$CARGO_HOME/bin` (or `$HOME/.cargo/bin` if `CARGO_HOME` is not set).
+
+**Update:**
+Rerun the install command in the Install section to replace the binary.
+
+**Uninstall:**
+```bash
+rm "${CARGO_HOME:-$HOME/.cargo}/bin/repoverlay"
+```
+
 ### PowerShell installer (Windows)
 
+**Install:**
 ```powershell
 irm https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.ps1 | iex
 ```
 
+The binary is installed to `$env:CARGO_HOME\bin` (or `$env:USERPROFILE\.cargo\bin` if `CARGO_HOME` is not set).
+
+**Update:**
+Rerun the install command in the Install section to replace the binary.
+
+**Uninstall:**
+```powershell
+$cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+Remove-Item (Join-Path $cargoHome "bin\repoverlay.exe")
+```
+
 ### Cargo
 
+**Install:**
 ```bash
 cargo binstall repoverlay  # pre-built binary
 cargo install repoverlay   # build from source
 ```
+
+**Update:**
+```bash
+cargo binstall repoverlay --force
+# or
+cargo install repoverlay --force
+```
+
+**Uninstall:**
+```bash
+cargo uninstall repoverlay
+```
+
+### Manual binaries
+
+Download the pre-built binaries for your platform from the [repoverlay releases](https://github.com/tylerbutler/repoverlay/releases).
+
+**Update:** Download the latest release artifact and replace the `repoverlay` binary on your `PATH`.
+
+**Uninstall:** Delete the `repoverlay` binary from your `PATH`.
 
 ## Usage
 
@@ -139,6 +194,13 @@ repoverlay claude --profile rust-dev
 Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copilot) or `.claude/skills/` (Claude), plugin MCP servers merge into the repo's `.mcp.json`, and Copilot instruction files are written into an `AGENTS.md` managed region. Claude can also *delegate* plugin enablement to its own settings instead of placing files. A full `repoverlay update` re-resolves applied profiles' managed plugins and re-applies any whose source changed.
 
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
+
+## Migrating to 1.0
+
+repoverlay 1.0 removes hidden deprecated CLI aliases and unsupported source URL schemes.
+If you use older command forms such as `create-local`, top-level `list`, `edit --add`,
+or `cache clear`, see the [1.0 migration guide](https://repoverlay.tylerbutler.com/guides/migrating-to-1-0/)
+for replacements.
 
 ## Overlay Configuration
 

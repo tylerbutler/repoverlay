@@ -17,6 +17,8 @@ body:
     block: true
     minLength: 1
 kinds:
+    - label: Breaking
+      auto: minor
     - label: Added
       auto: minor
     - label: Fixed
