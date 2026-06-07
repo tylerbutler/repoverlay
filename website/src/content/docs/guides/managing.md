@@ -22,6 +22,59 @@ repoverlay status --name my-overlay
 
 Status shows each overlay's name, source, and the files it manages.
 
+### Status JSON schema
+
+Use JSON output for scripts and CI:
+
+```bash
+repoverlay status --json
+repoverlay status --json --name my-overlay
+```
+
+The `status --json` output is a versioned public contract. The top-level
+`schema_version` field is currently `1`.
+
+```json
+{
+  "schema_version": 1,
+  "overlays": [
+    {
+      "name": "my-overlay",
+      "applied_at": "2026-03-15T12:34:56Z",
+      "source": {
+        "type": "local",
+        "path": "/Users/me/overlays/my-overlay"
+      },
+      "files": [
+        {
+          "source": ".envrc",
+          "target": ".envrc",
+          "link_type": "symlink",
+          "entry_type": "file",
+          "status": "ok"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`source.type` is one of `local`, `github`, `library`, or `overlay_repo`.
+Source objects include the stable fields relevant to that source type:
+
+- `local`: `path`, optional `source_name`
+- `github`: `url`, `owner`, `repo`, `git_ref`, `commit`, optional `subpath`
+- `library`: `name`
+- `overlay_repo`: `org`, `repo`, `name`, `commit`, optional `resolved_via`,
+  optional `source_name`
+
+File entries use string values for `link_type` (`symlink`, `copy`, `merged`),
+`entry_type` (`file`, `directory`), and `status` (`ok`, `missing`).
+
+Patch releases may add fields without changing `schema_version`. Removing or
+renaming fields, changing field meanings, or changing enum string values requires
+a new `schema_version` and a semver-major release.
+
 ## Editing an overlay
 
 The `edit` command lets you add or remove files from an applied overlay.
@@ -46,7 +99,7 @@ repoverlay edit remove my-overlay oldfile.txt
 Re-run the interactive file selector with current files pre-selected:
 
 ```bash
-repoverlay edit my-overlay --interactive
+repoverlay edit my-overlay
 ```
 
 ### Preview changes
@@ -112,7 +165,7 @@ repoverlay remove --interactive
 repoverlay remove my-overlay --dry-run
 ```
 
-Removing an overlay deletes its symlinks (or copies), cleans up the git exclude entries, and removes the state files.
+Removing an overlay deletes its symlinks (or copies), cleans up the git exclude entries, and removes the state files. If exclude cleanup fails, managed files and state are still removed where practical, but the command exits non-zero so you can repair `.git/info/exclude`.
 
 ## Switching overlays
 

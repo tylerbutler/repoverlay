@@ -108,6 +108,10 @@ export default defineConfig({
 							label: "How It Works",
 							slug: "guides/how-it-works",
 						},
+						{
+							label: "Migrating to 1.0",
+							slug: "guides/migrating-to-1-0",
+						},
 					],
 				},
 				{

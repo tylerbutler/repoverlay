@@ -6,21 +6,56 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 <Tabs>
 	<TabItem label="Homebrew">
+		**Install:**
 		```bash
 		brew install tylerbutler/tap/repoverlay
 		```
+
+		**Update:**
+		```bash
+		brew update && brew upgrade repoverlay
+		```
+
+		**Uninstall:**
+		```bash
+		brew uninstall repoverlay
+		```
 	</TabItem>
 	<TabItem label="Shell script">
+		**Install:**
 		```bash
 		curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.sh | sh
 		```
+
+		The binary is installed to `$CARGO_HOME/bin` (or `$HOME/.cargo/bin` if `CARGO_HOME` is not set).
+
+		**Update:**
+		Rerun the install command in the Install section to replace the binary.
+
+		**Uninstall:**
+		```bash
+		rm "${CARGO_HOME:-$HOME/.cargo}/bin/repoverlay"
+		```
 	</TabItem>
 	<TabItem label="PowerShell">
+		**Install:**
 		```powershell
 		irm https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.ps1 | iex
 		```
+
+		The binary is installed to `$env:CARGO_HOME\bin` (or `$env:USERPROFILE\.cargo\bin` if `CARGO_HOME` is not set).
+
+		**Update:**
+		Rerun the install command in the Install section to replace the binary.
+
+		**Uninstall:**
+		```powershell
+		$cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+		Remove-Item (Join-Path $cargoHome "bin\repoverlay.exe")
+		```
 	</TabItem>
 	<TabItem label="Cargo">
+		**Install:**
 		```bash
 		# Install a pre-built binary (faster)
 		cargo binstall repoverlay
@@ -28,10 +63,25 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 		# Build from source
 		cargo install repoverlay
 		```
+
+		**Update:**
+		```bash
+		cargo binstall repoverlay --force
+		# or
+		cargo install repoverlay --force
+		```
+
+		**Uninstall:**
+		```bash
+		cargo uninstall repoverlay
+		```
 	</TabItem>
 </Tabs>
 
 ## Manual
 
-Download the pre-built binaries for your platform at
-[repoverlay releases](https://github.com/tylerbutler/repoverlay/releases).
+Download the pre-built binaries for your platform at [repoverlay releases](https://github.com/tylerbutler/repoverlay/releases).
+
+**Update:** Download and replace the binary on your PATH.
+
+**Uninstall:** Delete the binary from your PATH.

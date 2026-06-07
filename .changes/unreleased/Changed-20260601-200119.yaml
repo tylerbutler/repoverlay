@@ -1,0 +1,7 @@
+kind: Changed
+body: |-
+    Reject unsupported source URL schemes at parse time
+
+    **BREAKING:** Source configuration now accepts documented local path syntax plus `https://`, `ssh://`, `git@`, GitHub shorthand, and bare owner references. Unsupported schemes such as `file://`, `ftp://`, and `http://` fail immediately.
+time: 2026-06-01T20:01:19-07:00
+component: source

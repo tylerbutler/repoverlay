@@ -1,13 +1,76 @@
 use anyhow::{Result, bail};
 use colored::Colorize;
-use std::path::{Path, PathBuf};
+use serde::Serialize;
+use std::path::Path;
 
 use crate::OverlayName;
 use crate::canonicalize_path;
 use crate::state::{
-    EntryType, LinkType, OVERLAYS_DIR, OverlaySource, STATE_DIR, list_applied_overlays,
-    load_overlay_state, normalize_overlay_name,
+    EntryType, LinkType, OVERLAYS_DIR, OverlaySource, ResolvedVia, STATE_DIR,
+    list_applied_overlays, load_overlay_state, normalize_overlay_name,
 };
+
+const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Serialize)]
+struct JsonStatusOutput {
+    schema_version: u32,
+    overlays: Vec<JsonStatusOverlay>,
+}
+
+impl JsonStatusOutput {
+    const fn new(overlays: Vec<JsonStatusOverlay>) -> Self {
+        Self {
+            schema_version: STATUS_JSON_SCHEMA_VERSION,
+            overlays,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct JsonStatusOverlay {
+    name: String,
+    applied_at: String,
+    source: JsonStatusSource,
+    files: Vec<JsonStatusFile>,
+}
+
+#[derive(Serialize)]
+struct JsonStatusSource {
+    #[serde(rename = "type")]
+    source_type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    org: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subpath: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolved_via: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct JsonStatusFile {
+    source: String,
+    target: String,
+    link_type: &'static str,
+    entry_type: &'static str,
+    status: &'static str,
+}
 
 /// Check whether overlays are currently applied (for `--quiet` mode).
 ///
@@ -30,37 +93,13 @@ pub(crate) fn status_has_overlays(target: &Path, filter_name: Option<&str>) -> R
 
 /// Output overlay status as JSON for scripting and CI integration.
 pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Result<()> {
-    use serde::Serialize;
-
-    #[derive(Serialize)]
-    struct JsonOutput {
-        overlays: Vec<JsonOverlay>,
-    }
-
-    #[derive(Serialize)]
-    struct JsonOverlay {
-        name: String,
-        applied_at: String,
-        source: OverlaySource,
-        files: Vec<JsonFileEntry>,
-    }
-
-    #[derive(Serialize)]
-    struct JsonFileEntry {
-        source: PathBuf,
-        target: PathBuf,
-        link_type: LinkType,
-        entry_type: EntryType,
-        status: &'static str,
-    }
-
     let target = canonicalize_path(target, "Target directory")?;
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
 
     if !overlays_dir.exists() {
         println!(
             "{}",
-            serde_json::to_string_pretty(&JsonOutput { overlays: vec![] })?
+            serde_json::to_string_pretty(&JsonStatusOutput::new(vec![]))?
         );
         return Ok(());
     }
@@ -69,7 +108,7 @@ pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Resu
     if applied_overlays.is_empty() {
         println!(
             "{}",
-            serde_json::to_string_pretty(&JsonOutput { overlays: vec![] })?
+            serde_json::to_string_pretty(&JsonStatusOutput::new(vec![]))?
         );
         return Ok(());
     }
@@ -96,7 +135,7 @@ pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Resu
     let mut overlays = Vec::new();
     for overlay_name in &names {
         let state = load_overlay_state(&target, overlay_name.as_str())?;
-        let files: Vec<JsonFileEntry> = state
+        let files: Vec<JsonStatusFile> = state
             .file_entries()
             .iter()
             .map(|entry| {
@@ -106,29 +145,131 @@ pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Resu
                 } else {
                     "missing"
                 };
-                JsonFileEntry {
-                    source: entry.source.clone(),
-                    target: entry.target.clone(),
-                    link_type: entry.link_type,
-                    entry_type: entry.entry_type,
+                JsonStatusFile {
+                    source: path_to_json_string(&entry.source),
+                    target: path_to_json_string(&entry.target),
+                    link_type: link_type_to_json(entry.link_type),
+                    entry_type: entry_type_to_json(entry.entry_type),
                     status,
                 }
             })
             .collect();
 
-        overlays.push(JsonOverlay {
+        overlays.push(JsonStatusOverlay {
             name: state.name.clone(),
             applied_at: state.applied_at.to_rfc3339(),
-            source: state.source.clone(),
+            source: source_to_json(&state.source),
             files,
         });
     }
 
     println!(
         "{}",
-        serde_json::to_string_pretty(&JsonOutput { overlays })?
+        serde_json::to_string_pretty(&JsonStatusOutput::new(overlays))?
     );
     Ok(())
+}
+
+fn source_to_json(source: &OverlaySource) -> JsonStatusSource {
+    match source {
+        OverlaySource::Local { path, source_name } => JsonStatusSource {
+            source_type: "local",
+            path: Some(path_to_json_string(path)),
+            source_name: source_name.clone(),
+            url: None,
+            owner: None,
+            org: None,
+            repo: None,
+            name: None,
+            git_ref: None,
+            commit: None,
+            subpath: None,
+            resolved_via: None,
+        },
+        OverlaySource::GitHub {
+            url,
+            owner,
+            repo,
+            git_ref,
+            commit,
+            subpath,
+            ..
+        } => JsonStatusSource {
+            source_type: "github",
+            path: None,
+            source_name: None,
+            url: Some(url.clone()),
+            owner: Some(owner.clone()),
+            org: None,
+            repo: Some(repo.clone()),
+            name: None,
+            git_ref: Some(git_ref.clone()),
+            commit: Some(commit.clone()),
+            subpath: subpath.clone(),
+            resolved_via: None,
+        },
+        OverlaySource::Library { name } => JsonStatusSource {
+            source_type: "library",
+            path: None,
+            source_name: None,
+            url: None,
+            owner: None,
+            org: None,
+            repo: None,
+            name: Some(name.clone()),
+            git_ref: None,
+            commit: None,
+            subpath: None,
+            resolved_via: None,
+        },
+        OverlaySource::OverlayRepo {
+            org,
+            repo,
+            name,
+            commit,
+            resolved_via,
+            source_name,
+        } => JsonStatusSource {
+            source_type: "overlay_repo",
+            path: None,
+            source_name: source_name.clone(),
+            url: None,
+            owner: None,
+            org: Some(org.clone()),
+            repo: Some(repo.clone()),
+            name: Some(name.clone()),
+            git_ref: None,
+            commit: Some(commit.clone()),
+            subpath: None,
+            resolved_via: resolved_via.map(resolved_via_to_json),
+        },
+    }
+}
+
+const fn resolved_via_to_json(resolved_via: ResolvedVia) -> &'static str {
+    match resolved_via {
+        ResolvedVia::Direct => "direct",
+        ResolvedVia::Upstream => "upstream",
+    }
+}
+
+const fn link_type_to_json(link_type: LinkType) -> &'static str {
+    match link_type {
+        LinkType::Symlink => "symlink",
+        LinkType::Copy => "copy",
+        LinkType::Merged => "merged",
+    }
+}
+
+const fn entry_type_to_json(entry_type: EntryType) -> &'static str {
+    match entry_type {
+        EntryType::File => "file",
+        EntryType::Directory => "directory",
+    }
+}
+
+fn path_to_json_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 /// Show the status of applied overlays.

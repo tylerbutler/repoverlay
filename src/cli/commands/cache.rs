@@ -35,17 +35,6 @@ pub(crate) fn handle_cache_command(command: CacheCommand) -> Result<()> {
             }
         }
 
-        CacheCommand::Clear { yes } => {
-            eprintln!(
-                "{} 'repoverlay cache clear' is deprecated and will be removed in 1.0.",
-                "Warning:".yellow().bold()
-            );
-            eprintln!("         Use 'repoverlay cache remove --all' instead.");
-            eprintln!();
-
-            clear_cache(&cache, yes)?;
-        }
-
         CacheCommand::Remove { repo, all, yes } => {
             if all {
                 clear_cache(&cache, yes)?;

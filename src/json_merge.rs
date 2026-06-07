@@ -3,9 +3,9 @@
 //! When overlays contain JSON files that already exist in the target repo,
 //! this module merges them recursively instead of overwriting.
 
-use anyhow::Context;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 /// Result of merging two JSON values, with statistics for logging.
 #[derive(Debug, Default)]
@@ -22,6 +22,33 @@ pub(crate) struct TypeMismatch {
     pub(crate) key_path: String,
     pub(crate) base_type: String,
     pub(crate) overlay_type: String,
+}
+
+/// Errors that can occur while merging JSON files.
+#[derive(Debug, Error)]
+pub(crate) enum JsonMergeError {
+    #[error("Failed to read JSON file: {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("Failed to parse JSON file: {path}: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error("Failed to serialize merged JSON: {0}")]
+    Serialize(#[source] serde_json::Error),
+
+    #[error("Failed to write merged JSON: {path}: {source}")]
+    Write {
+        path: PathBuf,
+        source: anyhow::Error,
+    },
 }
 
 /// Deep merge two JSON values. Overlay wins for scalars, arrays, and type mismatches.
@@ -87,11 +114,15 @@ pub(crate) fn is_json_file(path: &Path) -> bool {
 
 /// Read a file, parse as JSON, and return the parsed value.
 /// Returns an error if the file can't be read or isn't valid JSON.
-fn read_json_file(path: &Path) -> anyhow::Result<Value> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read JSON file: {}", path.display()))?;
-    serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse JSON file: {}", path.display()))
+fn read_json_file(path: &Path) -> Result<Value, JsonMergeError> {
+    let content = std::fs::read_to_string(path).map_err(|source| JsonMergeError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_str(&content).map_err(|source| JsonMergeError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Merge overlay JSON into base JSON and write the result to the target path.
@@ -100,15 +131,16 @@ pub(crate) fn merge_json_files(
     base_path: &Path,
     overlay_path: &Path,
     target_path: &Path,
-) -> anyhow::Result<MergeResult> {
+) -> Result<MergeResult, JsonMergeError> {
     let base = read_json_file(base_path)?;
     let overlay = read_json_file(overlay_path)?;
     let result = deep_merge(&base, &overlay);
 
-    let output =
-        serde_json::to_string_pretty(&result.merged).context("Failed to serialize merged JSON")?;
-    std::fs::write(target_path, output)
-        .with_context(|| format!("Failed to write merged JSON: {}", target_path.display()))?;
+    let output = serde_json::to_string_pretty(&result.merged).map_err(JsonMergeError::Serialize)?;
+    crate::fs_util::atomic_write(target_path, &output).map_err(|source| JsonMergeError::Write {
+        path: target_path.to_path_buf(),
+        source,
+    })?;
 
     Ok(result)
 }
@@ -117,6 +149,12 @@ pub(crate) fn merge_json_files(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+    #[cfg(unix)]
+    use tempfile::TempDir;
 
     #[test]
     fn merge_disjoint_objects() {
@@ -215,6 +253,31 @@ mod tests {
         assert_eq!(result.merged, json!({"a": 1}));
         assert_eq!(result.type_mismatches.len(), 1);
         assert_eq!(result.type_mismatches[0].base_type, "null");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merge_json_files_writes_atomically_without_following_target_symlink() {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("base.json");
+        let overlay = dir.path().join("overlay.json");
+        let external = dir.path().join("external.json");
+        let target = dir.path().join("target.json");
+
+        fs::write(&base, r#"{"base": true}"#).unwrap();
+        fs::write(&overlay, r#"{"overlay": true}"#).unwrap();
+        fs::write(&external, r#"{"external": true}"#).unwrap();
+        symlink(&external, &target).unwrap();
+
+        merge_json_files(&base, &overlay, &target).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&external).unwrap(),
+            r#"{"external": true}"#
+        );
+        assert!(!target.is_symlink());
+        let merged: Value = serde_json::from_str(&fs::read_to_string(target).unwrap()).unwrap();
+        assert_eq!(merged, json!({"base": true, "overlay": true}));
     }
 
     #[test]

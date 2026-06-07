@@ -1,0 +1,7 @@
+kind: Changed
+body: |-
+    Version the status JSON output schema
+
+    `repoverlay status --json` now includes `schema_version: 1` and serializes through explicit stable DTOs instead of internal state types.
+time: 2026-06-01T20:01:21-07:00
+component: status

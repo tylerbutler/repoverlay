@@ -91,6 +91,9 @@ pub(crate) fn restore_overlays(
     println!();
 
     // Restore each overlay
+    let mut restored = Vec::new();
+    let mut failures = Vec::new();
+
     for state in external_states {
         let source_str = match &state.source {
             OverlaySource::Local { path, .. } => path.to_string_lossy().to_string(),
@@ -140,16 +143,53 @@ pub(crate) fn restore_overlays(
             None,  // Use default source resolution for restore
             false, // Not a dry run
         ) {
-            Ok(()) => {}
+            Ok(()) => {
+                println!("  {} Restored '{}'", "✓".green(), state.name);
+                restored.push(state.name.clone());
+            }
             Err(e) => {
+                let error = e.to_string();
                 eprintln!(
                     "  {} Failed to restore '{}': {}",
                     "Error:".red(),
                     state.name,
-                    e
+                    error
                 );
+                failures.push((state.name.clone(), error));
             }
         }
+    }
+
+    println!();
+    println!("{}", "Restore summary:".bold());
+    if restored.is_empty() {
+        println!("  Restored: none");
+    } else {
+        println!("  Restored: {}", restored.join(", "));
+    }
+
+    if failures.is_empty() {
+        println!("  Failed: none");
+    } else {
+        println!("  Failed:");
+        for (name, error) in &failures {
+            println!("    - {name}: {error}");
+        }
+
+        let failed_names = failures
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let restored_names = if restored.is_empty() {
+            "none".to_string()
+        } else {
+            restored.join(", ")
+        };
+        bail!(
+            "Failed to restore {} overlay(s): {failed_names}. Restored: {restored_names}",
+            failures.len()
+        );
     }
 
     Ok(())
@@ -991,7 +1031,7 @@ mod tests {
     mod restore_overlays_tests {
         use super::*;
         use crate::state::{OverlayState, external_state_dir_for_target, load_external_states};
-        use crate::testutil::TestContext;
+        use crate::testutil::{TestContext, create_overlay_dir};
 
         #[test]
         fn does_not_restore_explicitly_removed_overlay() {
@@ -1163,6 +1203,117 @@ mod tests {
             assert!(
                 ctx.file_exists(".envrc"),
                 "overlay file should be restored after git clean"
+            );
+        }
+
+        #[test]
+        fn restores_all_overlays_after_git_clean_returns_ok() {
+            let ctx = TestContext::new();
+            let overlay_a = create_overlay_dir(&[(".envrc", "export FOO=bar")]);
+            let overlay_b = create_overlay_dir(&[(".toolrc", "tool = true")]);
+
+            apply_overlay(
+                overlay_a.path().to_str().unwrap(),
+                ctx.repo_path(),
+                false,
+                Some("overlay-a".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .expect("first apply should succeed");
+            apply_overlay(
+                overlay_b.path().to_str().unwrap(),
+                ctx.repo_path(),
+                false,
+                Some("overlay-b".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .expect("second apply should succeed");
+
+            fs::remove_dir_all(ctx.repo_path().join(".repoverlay")).unwrap();
+            fs::remove_file(ctx.repo_path().join(".envrc")).unwrap();
+            fs::remove_file(ctx.repo_path().join(".toolrc")).unwrap();
+
+            restore_overlays(ctx.repo_path(), false, ConflictStrategy::default(), false)
+                .expect("restore should succeed when every overlay restores");
+
+            assert!(
+                ctx.file_exists(".envrc"),
+                "first overlay should be restored"
+            );
+            assert!(
+                ctx.file_exists(".toolrc"),
+                "second overlay should be restored"
+            );
+        }
+
+        #[test]
+        fn returns_error_summary_after_partial_restore_failure() {
+            let ctx = TestContext::new();
+            let overlay_a = create_overlay_dir(&[(".envrc", "export FOO=bar")]);
+            let overlay_b = create_overlay_dir(&[(".toolrc", "tool = true")]);
+
+            apply_overlay(
+                overlay_a.path().to_str().unwrap(),
+                ctx.repo_path(),
+                false,
+                Some("restorable".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .expect("first apply should succeed");
+            apply_overlay(
+                overlay_b.path().to_str().unwrap(),
+                ctx.repo_path(),
+                false,
+                Some("missing-source".to_string()),
+                None,
+                false,
+                ConflictStrategy::default(),
+                false,
+                None,
+                false,
+            )
+            .expect("second apply should succeed");
+
+            fs::remove_dir_all(ctx.repo_path().join(".repoverlay")).unwrap();
+            fs::remove_file(ctx.repo_path().join(".envrc")).unwrap();
+            fs::remove_file(ctx.repo_path().join(".toolrc")).unwrap();
+            fs::remove_dir_all(overlay_b.path()).unwrap();
+
+            let error =
+                restore_overlays(ctx.repo_path(), false, ConflictStrategy::default(), false)
+                    .expect_err("restore should fail when any overlay cannot be restored");
+            let message = error.to_string();
+
+            assert!(
+                ctx.file_exists(".envrc"),
+                "restore should continue and restore successful overlays"
+            );
+            assert!(
+                !ctx.file_exists(".toolrc"),
+                "failed overlay file should remain missing"
+            );
+            assert!(
+                message.contains("restorable"),
+                "summary should include successful overlay name: {message}"
+            );
+            assert!(
+                message.contains("missing-source"),
+                "summary should include failed overlay name: {message}"
             );
         }
 
