@@ -20,11 +20,11 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: tylerbutler/actions/changie-release@ee7def5950abcf0a519add705a95719ab345c05e # ratchet:tylerbutler/actions/changie-release@main
+      - uses: tylerbutler/actions/changie-release@c3a7aaef75dddeb7e07ffd49392238f996feb906 # ratchet:tylerbutler/actions/changie-release@main
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
-          version-files: 'Cargo.toml:version'
+          version-files: 'Cargo.toml:package.version'
 
       # Update Cargo.lock to match the version bumped by changie-release
       - name: Update Cargo.lock
