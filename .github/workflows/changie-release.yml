@@ -24,7 +24,14 @@ jobs:
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
-          version-files: 'Cargo.toml:version'
+          # The changie-release action's bump-files only supports top-level TOML
+          # keys, but Cargo.toml's version lives under [package]. Bump it via
+          # toml-cli (tomlkit-based, comment-preserving) in post-batch-command instead.
+          post-batch-command: |
+            python3 -m pip install --quiet toml-cli
+            semver="$(changie latest)"; semver="${semver#v}"
+            toml set --toml-path Cargo.toml package.version "$semver"
+            echo "Bumped Cargo.toml to ${semver}"
 
       # Update Cargo.lock to match the version bumped by changie-release
       - name: Update Cargo.lock
