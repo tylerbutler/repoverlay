@@ -4,7 +4,7 @@ sidebar:
   order: 5
 ---
 
-This page explains the mechanics behind how repoverlay manages overlay files.
+Symlinks, git exclusions, and external backups do the work. This page covers each mechanism.
 
 ## Symlinks vs copies
 

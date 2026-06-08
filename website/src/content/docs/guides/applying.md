@@ -4,7 +4,7 @@ sidebar:
   order: 1
 ---
 
-This guide covers the different ways to apply overlays to a git repository.
+Apply overlays to a git repository from a local directory, a GitHub URL, or a configured source.
 
 ## Basic usage
 

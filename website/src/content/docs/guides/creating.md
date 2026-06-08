@@ -4,7 +4,7 @@ sidebar:
   order: 2
 ---
 
-This guide covers how to create overlays from existing files and share them with others.
+Package existing files into an overlay, then share it so others can apply it.
 
 ## Creating an overlay
 
