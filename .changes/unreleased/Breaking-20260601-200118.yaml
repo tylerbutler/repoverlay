@@ -1,6 +1,0 @@
-kind: Breaking
-body: |-
-    Remove deprecated hidden CLI compatibility syntax
-
-    **BREAKING:** Remove `create-local`, `list`, `edit --add/--remove/--interactive`, and `cache clear`. Use `create --output`, `browse`, `edit add/remove`, plain `edit`, and `cache remove --all` instead.
-time: 2026-06-01T20:01:18-07:00

@@ -1,7 +1,0 @@
-kind: Fixed
-body: |-
-    Return a restore failure when any overlay fails
-
-    `repoverlay restore` still attempts every saved overlay, but now summarizes successes and failures and exits non-zero if recovery was incomplete.
-time: 2026-06-01T20:01:20-07:00
-component: restore
