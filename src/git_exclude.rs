@@ -143,11 +143,12 @@ pub(crate) fn remove_overlay_section(content: &str, name: &str) -> String {
 
 /// Check if any overlay sections remain in git exclude content.
 pub(crate) fn any_overlay_sections_remain(content: &str) -> bool {
-    // Check for any repoverlay sections except "managed"
+    let managed_start = exclude_marker_start(MANAGED_SECTION_NAME);
+    // Check for any repoverlay sections except the shared "managed" section.
     for line in content.lines() {
         if line.starts_with("# repoverlay:")
             && line.ends_with(" start")
-            && !line.contains(MANAGED_SECTION_NAME)
+            && line.trim() != managed_start
         {
             return true;
         }
@@ -166,7 +167,8 @@ pub(crate) fn repair_git_exclude(target: &Path) -> Result<bool> {
     use crate::state::EntryType;
 
     let applied = list_applied_overlays(target)?;
-    if applied.is_empty() {
+    let profile_states = crate::profile_plan::list_profile_states(target).unwrap_or_default();
+    if applied.is_empty() && profile_states.is_empty() {
         return Ok(false);
     }
 
@@ -195,6 +197,16 @@ pub(crate) fn repair_git_exclude(target: &Path) -> Result<bool> {
         update_git_exclude(target, name_str, &exclude_entries, true)?;
     }
 
+    // Profiles write their own repo-local files (instructions, mcp.json, skills,
+    // agents); rebuild their sections too so repair fully restores exclusions.
+    for state in &profile_states {
+        let entries = crate::profile_plan::profile_exclude_entries(target, state);
+        if entries.is_empty() {
+            continue;
+        }
+        let section = crate::profile_plan::profile_exclude_section(&state.name, state.harness);
+        update_git_exclude(target, &section, &entries, true)?;
+    }
     let after = read_exclude_or_empty(&exclude_path)?;
     Ok(before != after)
 }

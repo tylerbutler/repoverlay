@@ -3,7 +3,7 @@
 //! Handles overlay state persistence, both in-repo (`.repoverlay/`) and external
 //! (`~/.local/share/repoverlay/`) for recovery after `git clean`.
 
-use crate::fs_util::atomic_write;
+use crate::fs_util::atomic_write as atomic_write_impl;
 use crate::overlay_name::OverlayName;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -572,6 +572,10 @@ pub(crate) fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
     let base = external_state_dir()?;
     let target_hash = hash_path(target);
     Ok(base.join(target_hash))
+}
+
+pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    atomic_write_impl(path, content)
 }
 
 /// Save overlay state to the external backup location.

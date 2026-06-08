@@ -48,38 +48,54 @@ pub(crate) fn restore_overlays(
     let external_states = load_external_states(&target)?;
     debug!("found {} external states to restore", external_states.len());
 
-    if external_states.is_empty() {
-        println!("{} No overlays to restore.", "Status:".bold());
+    let restorable_profiles = crate::profile_plan::list_restorable_profiles(&target)?;
+    debug!("found {} profile(s) to restore", restorable_profiles.len());
+
+    if external_states.is_empty() && restorable_profiles.is_empty() {
+        println!("{} Nothing to restore.", "Status:".bold());
         println!("  No external backup found for this repository.");
         return Ok(());
     }
 
-    println!(
-        "{} {} overlay(s) to restore:",
-        "Found".blue().bold(),
-        external_states.len()
-    );
+    if !external_states.is_empty() {
+        println!(
+            "{} {} overlay(s) to restore:",
+            "Found".blue().bold(),
+            external_states.len()
+        );
 
-    for state in &external_states {
-        println!("  - {}", state.name);
-        match &state.source {
-            OverlaySource::Local { path, .. } => {
-                println!("    Source: {}", path.display());
+        for state in &external_states {
+            println!("  - {}", state.name);
+            match &state.source {
+                OverlaySource::Local { path, .. } => {
+                    println!("    Source: {}", path.display());
+                }
+                OverlaySource::GitHub { url, git_ref, .. } => {
+                    println!("    Source: {url} ({git_ref})");
+                }
+                OverlaySource::OverlayRepo {
+                    org,
+                    repo,
+                    name: overlay_name,
+                    ..
+                } => {
+                    println!("    Source: {org}/{repo}/{overlay_name} (overlay repo)");
+                }
+                OverlaySource::Library { name } => {
+                    println!("    Source: {name} (library)");
+                }
             }
-            OverlaySource::GitHub { url, git_ref, .. } => {
-                println!("    Source: {url} ({git_ref})");
-            }
-            OverlaySource::OverlayRepo {
-                org,
-                repo,
-                name: overlay_name,
-                ..
-            } => {
-                println!("    Source: {org}/{repo}/{overlay_name} (overlay repo)");
-            }
-            OverlaySource::Library { name } => {
-                println!("    Source: {name} (library)");
-            }
+        }
+    }
+
+    if !restorable_profiles.is_empty() {
+        println!(
+            "{} {} profile(s) to restore:",
+            "Found".blue().bold(),
+            restorable_profiles.len()
+        );
+        for profile in &restorable_profiles {
+            println!("  - {} ({})", profile.name, profile.harness);
         }
     }
 
@@ -156,6 +172,22 @@ pub(crate) fn restore_overlays(
                     error
                 );
                 failures.push((state.name.clone(), error));
+            }
+        }
+    }
+
+    // Profiles are restored after overlays so any overlay files a profile
+    // depends on are already back in place.
+    if !restorable_profiles.is_empty() {
+        match crate::profile_plan::restore_profiles(&target) {
+            Ok(count) => {
+                println!(
+                    "  {} Restored {count} profile(s).",
+                    "Profiles:".cyan().bold()
+                );
+            }
+            Err(e) => {
+                eprintln!("  {} Failed to restore profiles: {}", "Error:".red(), e);
             }
         }
     }

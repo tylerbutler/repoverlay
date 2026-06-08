@@ -75,6 +75,12 @@ impl TestContext {
         fs::write(file_path, content).expect("Failed to write file");
     }
 
+    pub fn write_repo_config(&self, content: &str) {
+        let config_dir = self.repo.path().join(".repoverlay");
+        fs::create_dir_all(&config_dir).expect("Failed to create repo config dir");
+        fs::write(config_dir.join("config.ccl"), content).expect("Failed to write repo config");
+    }
+
     pub fn file_exists(&self, path: &str) -> bool {
         self.repo.path().join(path).exists()
     }

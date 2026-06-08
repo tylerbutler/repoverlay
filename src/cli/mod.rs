@@ -21,10 +21,14 @@ pub(crate) mod commands;
 
 pub(crate) use commands::browse::browse_overlays;
 pub(crate) use commands::cache::handle_cache_command;
+pub(crate) use commands::claude::handle_claude_command;
+pub(crate) use commands::copilot::handle_copilot_command;
 pub(crate) use commands::create::{create_into_library, create_overlay_command};
 pub(crate) use commands::edit::{add_files_to_overlay, edit_overlay, remove_files_from_overlay};
 pub(crate) use commands::handle_remove;
 pub(crate) use commands::library::handle_library_command;
+pub(crate) use commands::marketplace::handle_marketplace_command;
+pub(crate) use commands::profile::handle_profile_command;
 pub(crate) use commands::source::handle_source_command;
 pub(crate) use commands::sync::{handle_sync, select_overlay_interactive};
 
@@ -451,10 +455,55 @@ enum Commands {
         command: SourceCommand,
     },
 
+    /// Manage plugin marketplaces
+    Marketplace {
+        #[command(subcommand)]
+        command: MarketplaceCommand,
+    },
+
+    /// Manage repository profiles
+    #[command(hide = true)]
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
+    },
+
     /// Manage the in-repo overlay library
     Library {
         #[command(subcommand)]
         command: LibraryCommand,
+    },
+
+    /// Run GitHub Copilot with one or more profiles applied for the process lifetime
+    #[command(hide = true)]
+    Copilot {
+        /// Profile name to apply while Copilot runs (repeat to apply several)
+        #[arg(long = "profile", required = true)]
+        profiles: Vec<String>,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Extra arguments forwarded to the Copilot harness
+        #[arg(last = true)]
+        extra_args: Vec<String>,
+    },
+
+    /// Run Claude with one or more profiles applied for the process lifetime
+    #[command(hide = true)]
+    Claude {
+        /// Profile name to apply while Claude runs (repeat to apply several)
+        #[arg(long = "profile", required = true)]
+        profiles: Vec<String>,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Extra arguments forwarded to the Claude harness
+        #[arg(last = true)]
+        extra_args: Vec<String>,
     },
 
     /// Generate shell completions
@@ -483,6 +532,87 @@ pub(crate) enum SourceCommand {
     Remove {
         /// Name of the source to remove
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum MarketplaceCommand {
+    /// Register a plugin marketplace
+    Add {
+        /// Name for this marketplace (used in `marketplace/plugin` references)
+        name: String,
+
+        /// Marketplace git URL or GitHub shorthand (owner/repo)
+        url: String,
+
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// List registered marketplaces
+    List,
+
+    /// Remove a registered marketplace
+    Remove {
+        /// Name of the marketplace to remove
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ProfileCommand {
+    /// List configured profiles
+    List {
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Show a configured profile
+    Show {
+        /// Profile name
+        name: String,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Apply a profile persistently
+    Apply {
+        /// Profile name
+        name: String,
+
+        #[arg(long)]
+        harness: crate::profile_applicators::AgentHarness,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+
+    /// Show applied profile state
+    Status {
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        #[arg(long)]
+        harness: Option<crate::profile_applicators::AgentHarness>,
+    },
+
+    /// Remove an applied profile
+    Remove {
+        /// Profile name
+        name: String,
+
+        #[arg(long)]
+        harness: crate::profile_applicators::AgentHarness,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
     },
 }
 
@@ -735,7 +865,24 @@ pub(crate) fn run() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
-            update_overlays(&target, name, dry_run, conflict_strategy, merge)?;
+            // Profile plugin re-resolution only runs for a full `update` (no
+            // overlay name filter); a name filter scopes the command to one
+            // overlay and should not silently churn applied profiles.
+            let profiles_checked = if name.is_none() {
+                crate::profile_plan::update_profile_plugins(&target, dry_run)?
+            } else {
+                0
+            };
+            let overlays_dir = target.join(crate::STATE_DIR).join(crate::OVERLAYS_DIR);
+            let have_overlays = overlays_dir.exists()
+                && !crate::list_applied_overlays(&target)
+                    .unwrap_or_default()
+                    .is_empty();
+            if name.is_some() || have_overlays {
+                update_overlays(&target, name, dry_run, conflict_strategy, merge)?;
+            } else if profiles_checked == 0 {
+                bail!("No overlays are currently applied in: {}", target.display());
+            }
         }
         Commands::Create {
             name,
@@ -877,8 +1024,28 @@ pub(crate) fn run() -> Result<()> {
         Commands::Source { command } => {
             handle_source_command(command)?;
         }
+        Commands::Marketplace { command } => {
+            handle_marketplace_command(command)?;
+        }
+        Commands::Profile { command } => {
+            handle_profile_command(command)?;
+        }
         Commands::Library { command } => {
             handle_library_command(command)?;
+        }
+        Commands::Copilot {
+            profiles,
+            target,
+            extra_args,
+        } => {
+            handle_copilot_command(&profiles, target, extra_args)?;
+        }
+        Commands::Claude {
+            profiles,
+            target,
+            extra_args,
+        } => {
+            handle_claude_command(&profiles, target, extra_args)?;
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
