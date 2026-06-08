@@ -1,0 +1,61 @@
+name: Release SBOM
+
+# Generates a CycloneDX SBOM for a published release, attaches it to the release,
+# and creates a signed SBOM attestation bound to the released binary archives.
+#
+# Build provenance for the binaries themselves is handled separately by the
+# dist-generated release.yml (github-attestations in dist-workspace.toml).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to generate and attach the SBOM for
+        required: true
+
+permissions: {}
+
+jobs:
+  sbom:
+    name: Generate, attach, and attest SBOM
+    runs-on: ${{ vars.RUNS_ON_SBOM || vars.RUNS_ON || 'ubuntu-latest' }}
+    permissions:
+      contents: write # upload the SBOM asset to the release
+      id-token: write # request the Sigstore signing certificate
+      attestations: write # write the attestation to the attestations API
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+
+      - uses: ./.github/actions/install-tools
+        with:
+          tools: cargo-cyclonedx,just
+
+      - name: Generate SBOM
+        run: just sbom
+
+      - name: Download release archives
+        run: |
+          mkdir -p dist-artifacts
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist-artifacts \
+            --pattern 'repoverlay-*.tar.xz' --pattern 'repoverlay-*.zip'
+
+      - name: Upload SBOM to release
+        run: gh release upload "$TAG" repoverlay.cdx.json --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Attest SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # ratchet:actions/attest@v4.1.0
+        with:
+          subject-path: 'dist-artifacts/*'
+          predicate-type: 'https://cyclonedx.org/bom'
+          predicate-path: repoverlay.cdx.json

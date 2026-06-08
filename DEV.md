@@ -5,6 +5,7 @@
 - **Rust** 1.91+ (2024 edition) - https://rustup.rs/
 - **just** - Task runner - https://github.com/casey/just
 - **git** - Required at runtime for GitHub overlay functionality
+- **mise** (optional) - `mise install` provisions the pinned dev tools (`cargo-cyclonedx`, `cargo-dist`, etc.) used by the supply-chain recipes - https://mise.jdx.dev/
 
 ## Building
 
@@ -91,7 +92,8 @@ This project uses a release pipeline with clear ownership boundaries: [changie](
 
 - **changie** (`.changes/unreleased/`, `CHANGELOG.md`) owns changelog fragments and changelog aggregation. `.changie.yaml` defines the allowed kinds/components and renders `CHANGELOG.md`.
 - **release-plz** (`release-plz.toml`, `.github/workflows/release-plz.yml`) owns crates.io publishing and `v<version>` tag creation after a release PR lands on `main`. It does **not** update `CHANGELOG.md` (`changelog_update = false`) or create GitHub releases (`git_release_enable = false`).
-- **cargo-dist** (`dist-workspace.toml`, `.github/workflows/release.yml`) owns binary artifacts, shell/PowerShell/Homebrew installers, GitHub release hosting, and the Homebrew publish job.
+- **cargo-dist** (`dist-workspace.toml`, `.github/workflows/release.yml`) owns binary artifacts, shell/PowerShell/Homebrew installers, GitHub release hosting, the Homebrew publish job, and SLSA build-provenance attestation of the binaries (`github-attestations = true`).
+- **SBOM** (`.github/workflows/release-sbom.yml`) owns generating a CycloneDX SBOM, attaching it to the GitHub release, and creating a signed SBOM attestation bound to the released archives.
 - **Custom Homebrew tap workflow** (`.github/workflows/publish-homebrew-tap.yml`) publishes the generated formula to `tylerbutler/homebrew-tap` using a GitHub App token instead of a long-lived PAT.
 
 ### Release Preflight Checklist
@@ -130,7 +132,29 @@ Before merging a release PR, ensure:
    - The changie release workflow, which runs again but skips if no unreleased fragments remain.
    - The release-plz workflow (`.github/workflows/release-plz.yml`), which detects the version change in `Cargo.toml`, publishes the crate to crates.io, and creates the `v<version>` git tag configured by `release-plz.toml`.
 
-4. **Publish binaries and installers** - The `v<version>` tag created by release-plz triggers the cargo-dist release workflow (`.github/workflows/release.yml`, via the `**[0-9]+.[0-9]+.[0-9]+*` tag pattern). It builds the configured targets (`aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`), creates the GitHub release, uploads artifacts, publishes shell/PowerShell installers, and invokes the custom Homebrew publish job (`.github/workflows/publish-homebrew-tap.yml`).
+4. **Publish binaries and installers** - The `v<version>` tag created by release-plz triggers the cargo-dist release workflow (`.github/workflows/release.yml`, via the `**[0-9]+.[0-9]+.[0-9]+*` tag pattern). It builds the configured targets (`aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`), creates the GitHub release, uploads artifacts, attests SLSA build provenance for the binaries, publishes shell/PowerShell installers, and invokes the custom Homebrew publish job (`.github/workflows/publish-homebrew-tap.yml`).
+
+5. **Generate and attest the SBOM** - Publishing the GitHub release fires the `release-sbom.yml` workflow (on `release: published`). It runs `just sbom` to produce a CycloneDX SBOM (`repoverlay.cdx.json`), uploads it as a release asset, and creates a signed SBOM attestation bound to the released archives via `actions/attest`.
+
+### Supply Chain: SBOM and Attestations
+
+Releases ship two kinds of [GitHub Artifact Attestations](https://docs.github.com/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds), both signed via Sigstore:
+
+- **Build provenance** for each binary archive, produced by cargo-dist (`github-attestations = true` in `dist-workspace.toml`, regenerated into `release.yml`).
+- **SBOM attestation** binding the CycloneDX SBOM to the released archives, produced by `release-sbom.yml`.
+
+The SBOM (`repoverlay.cdx.json`) is also attached to the GitHub release as a downloadable asset.
+
+Local tooling (installed via `mise install`):
+
+- `just sbom` - generate the CycloneDX SBOM locally (uses `cargo-cyclonedx`).
+- `just dist-generate` / `just dist-plan` - regenerate and validate `release.yml` after editing `dist-workspace.toml` (uses the pinned `cargo-dist`).
+- `just sbom-attest-verify <archive>` - verify attestations for a downloaded release archive:
+
+```bash
+gh release download v<version> --pattern 'repoverlay-*.tar.xz'
+just sbom-attest-verify repoverlay-x86_64-unknown-linux-gnu.tar.xz
+```
 
 ### Conventional Commit Types
 

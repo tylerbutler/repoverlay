@@ -19,6 +19,8 @@ install-path = "CARGO_HOME"
 pr-run-mode = "plan"
 # Whether to install an updater program
 install-updater = false
+# Generate GitHub Artifact Attestations (SLSA build provenance) for release binaries
+github-attestations = true
 
 # Host releases on GitHub
 hosting = ["github"]
