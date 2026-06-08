@@ -1,6 +1,0 @@
-kind: Security
-body: |-
-    Harden repo-contained file operations for 1.0
-
-    Validate managed paths consistently, reject symlink-ancestor escapes, and use atomic writes for persistent outputs including config, git exclude files, state markers, and merged JSON.
-time: 2026-06-01T20:01:17-07:00
