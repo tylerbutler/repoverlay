@@ -1,9 +1,13 @@
 pub(crate) mod browse;
 pub(crate) mod cache;
+pub(crate) mod claude;
+pub(crate) mod copilot;
 pub(crate) mod create;
 pub(crate) mod edit;
 pub(crate) mod library;
+pub(crate) mod marketplace;
 pub(crate) mod r#move;
+pub(crate) mod profile;
 pub(crate) mod source;
 pub(crate) mod sync;
 

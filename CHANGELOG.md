@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.15.0 - 2026-06-08
+
+
+### Command: `apply`
+
+
+#### Changed
+
+##### Require `--merge` for cross-overlay JSON merges
+
+JSON conflicts between overlays now fail by default like other cross-overlay conflicts. Pass `--merge` to opt into deep merging, and repoverlay rejects symlinked merge targets instead of following them.
+
+
+### Command: `restore`
+
+
+#### Fixed
+
+##### Return a restore failure when any overlay fails
+
+`repoverlay restore` still attempts every saved overlay, but now summarizes successes and failures and exits non-zero if recovery was incomplete.
+
+
+### Command: `source`
+
+
+#### Breaking
+
+##### Reject unsupported source URL schemes at parse time
+
+**BREAKING:** Source configuration now accepts documented local path syntax plus `https://`, `ssh://`, `git@`, GitHub shorthand, and bare owner references. Unsupported schemes such as `file://`, `ftp://`, and `http://` fail immediately.
+
+
+### Command: `status`
+
+
+#### Changed
+
+##### Version the status JSON output schema
+
+`repoverlay status --json` now includes `schema_version: 1` and serializes through explicit stable DTOs instead of internal state types.
+
+
+
+
+
+#### Breaking
+
+##### Remove deprecated hidden CLI compatibility syntax
+
+**BREAKING:** Remove `create-local`, `list`, `edit --add/--remove/--interactive`, and `cache clear`. Use `create --output`, `browse`, `edit add/remove`, plain `edit`, and `cache remove --all` instead.
+
+
+#### Security
+
+##### Harden repo-contained file operations for 1.0
+
+Validate managed paths consistently, reject symlink-ancestor escapes, and use atomic writes for persistent outputs including config, git exclude files, state markers, and merged JSON.
+
+
 ## v0.14.2 - 2026-05-30
 
 

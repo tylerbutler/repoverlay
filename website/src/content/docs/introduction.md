@@ -13,7 +13,7 @@ Many development workflows require configuration files that shouldn't be committ
 - **Environment files** (`.envrc`, `.env.local`) — machine-specific paths and secrets
 - **Dev tooling** (`.prettierrc`, `biome.json`) — standards you apply across multiple repos
 
-You could copy these files manually and add them to `.gitignore`, but then you have to keep them updated across dozens of repositories. And if someone runs `git clean`, they're gone.
+You could copy these files manually and add them to `.gitignore`, but then you must keep them updated across dozens of repositories — and if someone runs `git clean`, they're gone.
 
 ## How repoverlay helps
 

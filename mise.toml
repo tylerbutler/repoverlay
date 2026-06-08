@@ -1,6 +1,8 @@
 [tools]
 "cargo:cargo-audit" = "0.22.1"
+"cargo:cargo-cyclonedx" = "0.5.9"
 "cargo:cargo-deny" = "0.19.0"
+"cargo:cargo-dist" = "0.30.3"
 changie = "latest"
 "github:cargo-bins/cargo-binstall" = "1.17.9"
 hk = "latest"

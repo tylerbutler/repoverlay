@@ -4,17 +4,17 @@ sidebar:
   order: 1
 ---
 
-This guide covers the different ways to apply overlays to a git repository.
+Apply overlays to a git repository from a local directory, a GitHub URL, or a configured source.
 
 ## Basic usage
 
-The simplest way to get started is to browse overlays from a GitHub username. repoverlay fetches the available overlays and lets you pick interactively:
+The simplest way to start is to browse overlays from a GitHub username. repoverlay fetches the available overlays and lets you pick interactively:
 
 ```bash
 repoverlay browse tylerbutler
 ```
 
-For scripting or power-user workflows, use `apply` to apply a specific local directory, GitHub URL, or configured overlay reference directly:
+For scripting or power-user workflows, point `apply` at a specific local directory, GitHub URL, or configured overlay reference:
 
 ```bash
 # Local directory
@@ -134,7 +134,7 @@ repoverlay apply ./overlay --merge
 
 This is useful when an overlay provides default settings that should be merged with a repository's existing configuration. For example, an overlay might add recommended VS Code extensions to an existing `.vscode/settings.json`.
 
-Deep merge combines objects recursively — overlay keys are added or updated, but existing keys not in the overlay are preserved. For non-JSON files, `--merge` has no effect (the file is treated as a conflict).
+Deep merge combines objects recursively — overlay keys are added or updated, but existing keys not in the overlay are preserved. Merge targets must be repo-relative real files; repoverlay rejects target symlinks and symlinked parent directories instead of following them. For non-JSON files, `--merge` has no effect (the file is treated as a conflict).
 
 :::note
 `--merge` can be combined with `--force` or `--skip-conflicts`. When combined with `--force`, JSON files are merged while non-JSON conflicts are overwritten. When combined with `--skip-conflicts`, JSON files are merged while non-JSON conflicts are skipped.

@@ -4,11 +4,11 @@ sidebar:
   order: 6
 ---
 
-This page explains the mechanics behind how repoverlay manages overlay files.
+Symlinks, git exclusions, and external backups do the work. This page covers each mechanism.
 
 ## Symlinks vs copies
 
-By default, repoverlay creates **symlinks** from the target repo to the overlay source. This means changes to the source are immediately reflected in the target.
+By default, repoverlay creates **symlinks** from the target repo to the overlay source, so changes to the source appear immediately in the target.
 
 Use the `--copy` flag to copy files instead, which is useful when:
 - Symlinks aren't supported (e.g., some Docker setups or Windows without developer mode)
@@ -34,6 +34,14 @@ The exclude entries look like this:
 
 This approach keeps overlay files completely invisible to git without modifying any tracked files.
 
+Because this exclusion is core to preventing accidental commits, `repoverlay apply`
+fails if `.git/info/exclude` cannot be updated. If files were already created,
+repoverlay rolls them back where practical and does not save overlay state.
+
+During `repoverlay remove`, managed files and state are still removed where
+practical. If exclude cleanup fails, the command exits non-zero and reports that
+the files were removed but `.git/info/exclude` still needs attention.
+
 ## State tracking
 
 repoverlay tracks applied overlays in two locations:
@@ -44,6 +52,30 @@ repoverlay tracks applied overlays in two locations:
 The external backup exists so that overlays can be restored after `git clean` or other operations that remove untracked files. See [Restoring After Git Clean](/guides/restoring/) for details.
 
 State files are written in [CCL format](https://ccl.tylerbutler.com/) and track the overlay name, source, applied timestamp, and list of files with their link types.
+
+### CCL compatibility and migrations
+
+repoverlay treats these CCL files as user-facing data contracts:
+
+- Overlay source config: `repoverlay.ccl`
+- Global and per-repository source config
+- In-repo state: `.repoverlay/overlays/<name>.ccl`
+- External backup state: `~/.local/share/repoverlay/applied/`
+
+Compatibility follows the CLI's semver policy:
+
+- Patch and minor releases may add optional CCL fields. Older files continue to
+  load with documented defaults.
+- Patch and minor releases do not remove fields, rename fields, or change the
+  meaning of existing fields.
+- Any required migration for existing CCL files must be automatic when possible
+  and documented in the release notes.
+- Removing or renaming fields, changing meanings, or requiring a manual migration
+  is reserved for semver-major releases.
+
+State files are implementation records used for restore/update/remove, but their
+format is still stable enough for backups to survive normal upgrades. Prefer
+`repoverlay status --json` for scripting instead of reading state CCL directly.
 
 ## Caching
 

@@ -575,6 +575,13 @@ mod tests {
         )
     }
 
+    fn assert_same_canonical_path(actual: &Path, expected: &Path) {
+        assert_eq!(
+            actual.canonicalize().unwrap(),
+            expected.canonicalize().unwrap()
+        );
+    }
+
     #[test]
     fn local_browse_flat_subdirectory_records_overlay_path() {
         let source = tempfile::TempDir::new().unwrap();
@@ -583,11 +590,10 @@ mod tests {
 
         let resolved = resolve_local_browse_source(source.path(), &overlay).unwrap();
 
-        let expected = source.path().join("config-a").canonicalize().unwrap();
-        assert_eq!(resolved.path.canonicalize().unwrap(), expected);
+        assert_same_canonical_path(&resolved.path, &source.path().join("config-a"));
         match resolved.source_info {
             OverlaySource::Local { path, .. } => {
-                assert_eq!(path.canonicalize().unwrap(), expected);
+                assert_same_canonical_path(&path, &source.path().join("config-a"));
             }
             other => panic!("expected local source, got {other:?}"),
         }
@@ -621,16 +627,10 @@ mod tests {
             resolve_configured_browse_source(source.path(), &overlay, "local", "local-flat", true)
                 .unwrap();
 
-        assert_eq!(
-            resolved.path.canonicalize().unwrap(),
-            source.path().join("config-a").canonicalize().unwrap()
-        );
+        assert_same_canonical_path(&resolved.path, &source.path().join("config-a"));
         match resolved.source_info {
             OverlaySource::Local { path, source_name } => {
-                assert_eq!(
-                    path.canonicalize().unwrap(),
-                    source.path().join("config-a").canonicalize().unwrap()
-                );
+                assert_same_canonical_path(&path, &source.path().join("config-a"));
                 assert_eq!(source_name.as_deref(), Some("local-flat"));
             }
             other => panic!("expected local source, got {other:?}"),
@@ -647,14 +647,7 @@ mod tests {
             resolve_configured_browse_source(source.path(), &overlay, "abc123", "shared", false)
                 .unwrap();
 
-        assert_eq!(
-            resolved.path.canonicalize().unwrap(),
-            source
-                .path()
-                .join("owner/repo/config")
-                .canonicalize()
-                .unwrap()
-        );
+        assert_same_canonical_path(&resolved.path, &source.path().join("owner/repo/config"));
         match resolved.source_info {
             OverlaySource::OverlayRepo {
                 org,

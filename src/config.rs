@@ -6,10 +6,11 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+
+use crate::fs_util::atomic_write;
 
 /// Global repoverlay configuration.
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -21,6 +22,12 @@ pub(crate) struct RepoverlayConfig {
     /// When not set, defaults to `.repoverlay/library/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) library_path: Option<String>,
+    /// Named profile definitions.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) profiles: std::collections::BTreeMap<String, crate::profile::ProfileConfig>,
+    /// Named plugin marketplaces (checked by name when resolving plugin references).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) marketplaces: Vec<Marketplace>,
 }
 
 impl RepoverlayConfig {
@@ -157,6 +164,27 @@ impl Source {
     }
 }
 
+/// A named plugin marketplace.
+///
+/// Mirrors [`Source`]: a marketplace is a git repository (referenced by full URL
+/// or `owner/repo` GitHub shorthand) that contains a `.claude-plugin/marketplace.json`
+/// listing the plugins it provides. Plugin references in a profile use the
+/// `marketplace/plugin` shorthand, where `marketplace` is the `name` registered here.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub(crate) struct Marketplace {
+    /// Name for this marketplace (used in `marketplace/plugin` references).
+    pub(crate) name: String,
+    /// Git URL of the marketplace repository.
+    /// Accepts full URLs or GitHub shorthand (`owner/repo`), expanded during
+    /// deserialization to `https://github.com/owner/repo`.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_source_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) url: Option<String>,
+}
+
 /// Default overlay repository name for the one-part shorthand syntax.
 /// When user types `username`, it expands to `username/repo-overlays`.
 pub(crate) const DEFAULT_OVERLAY_REPO_NAME: &str = "repo-overlays";
@@ -178,10 +206,11 @@ fn default_overlay_repo_name_with_env(env_val: Option<String>) -> String {
 
 /// Parsed source URL input from the CLI.
 ///
-/// Represents the three valid input formats for overlay source URLs:
-/// - Full git URL (`https://...`, `git@...`)
+/// Represents the valid input formats for overlay source URLs:
+/// - Full git URL (`https://...`, `ssh://...`, `git@...`)
 /// - GitHub shorthand (`owner/repo`)
 /// - Bare GitHub owner/username (`owner`)
+/// - Local path (`./path`, `../path`, `/path`, `~/path`)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourceUrlInput {
     /// A full git-cloneable URL.
@@ -192,14 +221,14 @@ pub(crate) enum SourceUrlInput {
     BareOwner(String),
     /// A local directory path for overlay sources within the repo.
     LocalPath(PathBuf),
-    /// A `file://` URL pointing to a local directory (possibly external to the repo).
-    FileUrl {
-        /// The local filesystem path (stripped of `file://` prefix).
-        path: PathBuf,
-        /// The original `file://` URL string for display and storage.
-        original: String,
-    },
 }
+
+const SOURCE_URL_FORMATS: &str = "Supported formats: https://..., ssh://..., git@..., \
+                                  GitHub shorthand (owner/repo), or GitHub username (owner).";
+
+const SOURCE_INPUT_FORMATS: &str = "Supported formats: https://..., ssh://..., git@..., \
+                                    GitHub shorthand (owner/repo), GitHub username (owner), \
+                                    or local path (./path, ../path, /path, ~/path).";
 
 impl SourceUrlInput {
     /// Returns the expanded git URL for this input.
@@ -221,29 +250,21 @@ impl SourceUrlInput {
                 expand_github_shorthand(&format!("{owner}/{repo}"))
             }
             Self::BareOwner(owner) => expand_github_shorthand(&format!("{owner}/{default_repo}")),
-            Self::FileUrl { original, .. } => original.clone(),
             Self::LocalPath(_) => panic!("to_url() called on LocalPath variant"),
         }
     }
 
-    /// Returns `true` if this is a local path source (not a `file://` URL).
+    /// Returns `true` if this is a local path source.
     #[must_use]
     pub(crate) const fn is_local(&self) -> bool {
         matches!(self, Self::LocalPath(_))
-    }
-
-    /// Returns `true` if this is a `file://` URL source.
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) const fn is_file_url(&self) -> bool {
-        matches!(self, Self::FileUrl { .. })
     }
 
     /// Returns the local path. Panics if called on a git variant.
     #[must_use]
     pub(crate) fn local_path(&self) -> &Path {
         match self {
-            Self::LocalPath(p) | Self::FileUrl { path: p, .. } => p,
+            Self::LocalPath(p) => p,
             _ => panic!("local_path() called on non-LocalPath variant"),
         }
     }
@@ -254,25 +275,9 @@ impl FromStr for SourceUrlInput {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         if s.is_empty() || s.chars().all(char::is_whitespace) {
-            return Err(
-                "Invalid source URL: input cannot be empty. Expected a git URL (https://...), \
-                 GitHub shorthand (owner/repo), or a GitHub username (owner)."
-                    .to_string(),
-            );
-        }
-
-        // Check for file:// URLs — local path via URL syntax.
-        if let Some(path) = s.strip_prefix("file://") {
-            if path.is_empty() {
-                return Err(
-                    "Invalid file:// URL: path cannot be empty. Use file:///path/to/directory."
-                        .to_string(),
-                );
-            }
-            return Ok(Self::FileUrl {
-                path: PathBuf::from(path),
-                original: s.to_string(),
-            });
+            return Err(format!(
+                "Invalid source URL: input cannot be empty. {SOURCE_INPUT_FORMATS}"
+            ));
         }
 
         // Check for local path indicators before git URL checks.
@@ -297,10 +302,7 @@ impl FromStr for SourceUrlInput {
         } else if is_bare_owner(s) {
             Ok(Self::BareOwner(s.to_string()))
         } else {
-            Err(format!(
-                "Invalid source URL: '{s}'. Expected a git URL (https://...), \
-                 GitHub shorthand (owner/repo), or a GitHub username (owner)."
-            ))
+            Err(format!("Invalid source URL: '{s}'. {SOURCE_INPUT_FORMATS}"))
         }
     }
 }
@@ -312,14 +314,14 @@ impl std::fmt::Display for SourceUrlInput {
             Self::GitHubShorthand { owner, repo } => write!(f, "{owner}/{repo}"),
             Self::BareOwner(owner) => write!(f, "{owner}"),
             Self::LocalPath(path) => write!(f, "{}", path.display()),
-            Self::FileUrl { original, .. } => write!(f, "{original}"),
         }
     }
 }
 
 /// Check if a string looks like a git-cloneable URL.
 fn is_git_url(s: &str) -> bool {
-    s.contains("://") || s.starts_with("git@")
+    let lower = s.to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("ssh://") || s.starts_with("git@")
 }
 
 /// Check if a string is valid GitHub shorthand (`owner/repo`).
@@ -349,7 +351,7 @@ pub(crate) fn expand_github_shorthand(s: &str) -> String {
 /// Validate and normalize a source URL string.
 ///
 /// Accepts:
-/// - Full git URLs (`https://...`, `git@...`)
+/// - Full git URLs (`https://...`, `ssh://...`, `git@...`)
 /// - GitHub shorthand (`owner/repo`) - expanded to `https://github.com/owner/repo`
 /// - Bare owner name (`owner`) - expanded to `https://github.com/owner/repo-overlays`
 ///
@@ -363,9 +365,26 @@ pub(crate) fn validate_source_url(url: &str) -> std::result::Result<String, Stri
         let repo_name = default_overlay_repo_name();
         Ok(expand_github_shorthand(&format!("{url}/{repo_name}")))
     } else {
+        Err(format!("Invalid source URL: '{url}'. {SOURCE_URL_FORMATS}"))
+    }
+}
+
+/// Validate and normalize a marketplace URL string.
+///
+/// Unlike [`validate_source_url`], a marketplace must be a concrete git
+/// repository, so the bare-owner shorthand (which expands to a default overlay
+/// repo name) is rejected. Accepts:
+/// - Full git URLs (`https://...`, `ssh://...`, `git@...`)
+/// - GitHub shorthand (`owner/repo`) - expanded to `https://github.com/owner/repo`
+pub(crate) fn validate_marketplace_url(url: &str) -> std::result::Result<String, String> {
+    if is_git_url(url) {
+        Ok(url.to_string())
+    } else if is_github_shorthand(url) {
+        Ok(expand_github_shorthand(url))
+    } else {
         Err(format!(
-            "Invalid source URL: '{url}'. Expected a git URL (https://...), \
-             GitHub shorthand (owner/repo), or a GitHub username (owner)."
+            "Invalid marketplace URL: '{url}'. Expected a git URL (https://...) \
+             or GitHub shorthand (owner/repo)."
         ))
     }
 }
@@ -444,10 +463,26 @@ pub(crate) fn load_global_config() -> Result<RepoverlayConfig> {
     let config: RepoverlayConfig = sickle::from_str(&content)
         .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
 
+    let mut config = config;
+    if let Some(base_dir) = config_path.parent() {
+        stamp_instruction_base_dir(&mut config, base_dir);
+    }
+
     Ok(config)
 }
 
-/// Load the per-repo configuration.
+/// Stamp every profile instruction's `base_dir` with the directory of the config
+/// file that defined it, so file `source` paths resolve relative to the config
+/// file rather than the target repo. Only entries with a `source` are stamped.
+fn stamp_instruction_base_dir(config: &mut RepoverlayConfig, base_dir: &Path) {
+    for profile in config.profiles.values_mut() {
+        for instruction in &mut profile.instructions {
+            if instruction.source.is_some() {
+                instruction.base_dir = Some(base_dir.to_path_buf());
+            }
+        }
+    }
+}
 pub(crate) fn load_repo_config(repo_root: &Path) -> Result<Option<RepoverlayConfig>> {
     let config_path = repo_config_path(repo_root);
 
@@ -461,6 +496,11 @@ pub(crate) fn load_repo_config(repo_root: &Path) -> Result<Option<RepoverlayConf
     let config: RepoverlayConfig = sickle::from_str(&content)
         .with_context(|| format!("Failed to parse repo config: {}", config_path.display()))?;
 
+    let mut config = config;
+    if let Some(base_dir) = config_path.parent() {
+        stamp_instruction_base_dir(&mut config, base_dir);
+    }
+
     Ok(Some(config))
 }
 
@@ -469,47 +509,66 @@ pub(crate) fn load_repo_config(repo_root: &Path) -> Result<Option<RepoverlayConf
 /// When `repo_path` is provided, repo-local sources are loaded first (higher priority),
 /// followed by global sources. When `None`, only global config is loaded.
 pub(crate) fn load_config(repo_path: Option<&Path>) -> Result<RepoverlayConfig> {
-    let mut config = load_global_config()?;
+    let config = load_global_config()?;
 
     if let Some(repo_root) = repo_path
         && let Some(repo_config) = load_repo_config(repo_root)?
     {
-        let mut merged_sources = repo_config.sources;
-        merged_sources.extend(config.sources);
-        config.sources = merged_sources;
+        return Ok(merge_repo_config(config, repo_config));
     }
 
     Ok(config)
 }
 
-/// Generate a config file for multi-source configuration.
-pub(crate) fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
-    let mut output = String::new();
-    output.push_str("/= repoverlay global configuration\n");
-    output.push_str("/= This file configures repoverlay's overlay sources.\n\n");
+pub(crate) fn merge_repo_config(
+    mut global: RepoverlayConfig,
+    repo_config: RepoverlayConfig,
+) -> RepoverlayConfig {
+    let mut merged_sources = repo_config.sources;
+    merged_sources.extend(global.sources);
+    global.sources = merged_sources;
 
-    if !config.sources.is_empty() {
-        output.push_str(
-            "/= Sources are checked in priority order (first listed = highest priority).\n",
-        );
-        output.push_str(
-            "/= To change priority, edit this file directly or remove and re-add sources.\n",
-        );
-        output.push_str("sources =\n");
-
-        for source in &config.sources {
-            output.push_str("  =\n");
-            let _ = writeln!(output, "    name = {}", source.name);
-            if let Some(url) = &source.url {
-                let _ = writeln!(output, "    url = {url}");
-            }
-            if let Some(path) = &source.path {
-                let _ = writeln!(output, "    path = {}", path.display());
-            }
+    // Marketplaces merge by name: a repo-local entry overrides a global entry
+    // with the same name; remaining global entries are appended.
+    let mut merged_marketplaces = repo_config.marketplaces;
+    for global_marketplace in global.marketplaces {
+        if !merged_marketplaces
+            .iter()
+            .any(|m| m.name == global_marketplace.name)
+        {
+            merged_marketplaces.push(global_marketplace);
         }
     }
+    global.marketplaces = merged_marketplaces;
 
-    output
+    if repo_config.library_path.is_some() {
+        global.library_path = repo_config.library_path;
+    }
+
+    for (name, repo_profile) in repo_config.profiles {
+        let merged_profile = global.profiles.get(&name).map_or_else(
+            || repo_profile.clone(),
+            |base| crate::profile::merge_profile_config(base, &repo_profile),
+        );
+        global.profiles.insert(name, merged_profile);
+    }
+
+    global
+}
+
+/// Generate a config file for multi-source configuration.
+//
+// TODO(santa#205, santa#206): this re-serializes the typed struct via
+// `sickle::to_string`, which DROPS user comments and blank lines on every save
+// (verified: `source add` reduces a commented config to zero comments). Once
+// sickle ships faithful comment round-trip (santa#205) and a
+// comment/format-preserving read-modify-write API (santa#206), switch
+// `save_config`/`save_repo_config` to load the existing document, merge the
+// updated data in, and reprint — preserving the user's comments. Until then,
+// edits to a commented config must be made by hand. Land before this long-lived
+// `profiles` branch merges.
+pub(crate) fn generate_sources_config_ccl(config: &RepoverlayConfig) -> String {
+    sickle::to_string(config).expect("RepoverlayConfig serialization should not fail")
 }
 
 /// Save the global configuration.
@@ -524,7 +583,7 @@ pub(crate) fn save_config(config: &RepoverlayConfig) -> Result<()> {
 
     let content = generate_sources_config_ccl(config);
 
-    fs::write(&config_path, content)
+    atomic_write(&config_path, &content)
         .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
 
     Ok(())
@@ -540,7 +599,7 @@ pub(crate) fn save_repo_config(repo_root: &Path, config: &RepoverlayConfig) -> R
     }
 
     let content = generate_sources_config_ccl(config);
-    fs::write(&config_path, content)
+    atomic_write(&config_path, &content)
         .with_context(|| format!("Failed to write repo config: {}", config_path.display()))?;
 
     // Ensure .repoverlay is in .git/info/exclude so it doesn't show as untracked.
@@ -590,6 +649,88 @@ mod tests {
     }
 
     #[test]
+    fn ignores_removed_mcps_and_skills_keys() {
+        // `mcps` and `skills` were removed from the profile schema in favor of
+        // plugins. Because `ProfileConfig` does not deny unknown fields, leftover
+        // keys parse without error and have no effect (clean transitional behavior
+        // for the unreleased profiles feature).
+        let ccl = r"
+profiles =
+  legacy =
+    overlays =
+      = base
+    mcps =
+      servers =
+        rust =
+          command = uvx
+    skills =
+      = old-skill
+";
+        let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
+        let profile = config.profiles.get("legacy").unwrap();
+        assert_eq!(profile.overlays, vec!["base"]);
+        assert!(profile.plugins.is_empty());
+    }
+
+    #[test]
+    fn parses_marketplaces_registry_with_shorthand() {
+        let ccl = r"
+marketplaces =
+  =
+    name = playground
+    url = obra/claude-plugins
+  =
+    name = vendor
+    url = https://example.com/vendor/market.git
+";
+        let config: RepoverlayConfig = sickle::from_str(ccl).unwrap();
+        assert_eq!(config.marketplaces.len(), 2);
+        assert_eq!(config.marketplaces[0].name, "playground");
+        assert_eq!(
+            config.marketplaces[0].url.as_deref(),
+            Some("https://github.com/obra/claude-plugins")
+        );
+        assert_eq!(
+            config.marketplaces[1].url.as_deref(),
+            Some("https://example.com/vendor/market.git")
+        );
+    }
+
+    #[test]
+    fn repo_marketplace_overrides_global_by_name() {
+        let global = RepoverlayConfig {
+            marketplaces: vec![
+                Marketplace {
+                    name: "playground".to_string(),
+                    url: Some("https://github.com/global/playground".to_string()),
+                },
+                Marketplace {
+                    name: "global-only".to_string(),
+                    url: Some("https://github.com/global/only".to_string()),
+                },
+            ],
+            ..RepoverlayConfig::default()
+        };
+        let repo = RepoverlayConfig {
+            marketplaces: vec![Marketplace {
+                name: "playground".to_string(),
+                url: Some("https://github.com/repo/playground".to_string()),
+            }],
+            ..RepoverlayConfig::default()
+        };
+
+        let merged = merge_repo_config(global, repo);
+        assert_eq!(merged.marketplaces.len(), 2);
+        // Repo-local entry wins for the shared name and comes first.
+        assert_eq!(merged.marketplaces[0].name, "playground");
+        assert_eq!(
+            merged.marketplaces[0].url.as_deref(),
+            Some("https://github.com/repo/playground")
+        );
+        assert_eq!(merged.marketplaces[1].name, "global-only");
+    }
+
+    #[test]
     fn test_load_repo_config_valid() {
         let temp = TempDir::new().unwrap();
         let config_dir = temp.path().join(".repoverlay");
@@ -610,6 +751,64 @@ sources =
         assert_eq!(
             config.sources[0].url().unwrap(),
             "https://github.com/org/overlays"
+        );
+    }
+
+    #[test]
+    fn test_load_config_merges_same_name_profiles() {
+        let temp = TempDir::new().unwrap();
+        let repo_config_dir = temp.path().join(".repoverlay");
+        fs::create_dir_all(&repo_config_dir).unwrap();
+
+        let repo_ccl = r"
+profiles =
+  rust-dev =
+    overlays =
+      = repo-rust
+    plugins =
+      = playground/repo-plugin
+";
+        fs::write(repo_config_dir.join("config.ccl"), repo_ccl).unwrap();
+
+        let global = RepoverlayConfig {
+            profiles: std::collections::BTreeMap::from([(
+                "rust-dev".to_string(),
+                crate::profile::ProfileConfig {
+                    description: Some("Global Rust".to_string()),
+                    overlays: vec!["global-rust".to_string()],
+                    instructions: vec![crate::profile::InstructionConfig {
+                        source: Some("global.md".to_string()),
+                        content: None,
+                        base_dir: None,
+                    }],
+                    plugins: vec![crate::plugin::PluginRef::Marketplace {
+                        marketplace: "playground".to_string(),
+                        name: "global-plugin".to_string(),
+                        r#ref: None,
+                        install: crate::plugin::InstallMode::Managed,
+                        scope: None,
+                    }],
+                },
+            )]),
+            ..RepoverlayConfig::default()
+        };
+        let repo = load_repo_config(temp.path()).unwrap().unwrap();
+        let merged = merge_repo_config(global, repo);
+        let profile = merged.profiles.get("rust-dev").unwrap();
+
+        assert_eq!(profile.description.as_deref(), Some("Global Rust"));
+        assert_eq!(profile.overlays, vec!["repo-rust"]);
+        assert_eq!(profile.instructions[0].source.as_deref(), Some("global.md"));
+        // Plugins follow the list-replace rule: the repo-local list wins.
+        assert_eq!(
+            profile.plugins,
+            vec![crate::plugin::PluginRef::Marketplace {
+                marketplace: "playground".to_string(),
+                name: "repo-plugin".to_string(),
+                r#ref: None,
+                install: crate::plugin::InstallMode::Managed,
+                scope: None,
+            }]
         );
     }
 
@@ -802,6 +1001,8 @@ sources =
                 },
             ],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let ccl = sickle::to_string(&config).unwrap();
@@ -857,9 +1058,27 @@ sources =
     }
 
     #[test]
-    fn test_validate_source_url_git_protocol() {
-        let result = validate_source_url("git://example.com/repo.git");
-        assert_eq!(result.unwrap(), "git://example.com/repo.git");
+    fn test_validate_source_url_full_ssh_scheme() {
+        let result = validate_source_url("ssh://git@github.com/org/repo.git");
+        assert_eq!(result.unwrap(), "ssh://git@github.com/org/repo.git");
+    }
+
+    #[test]
+    fn test_validate_source_url_rejects_unsupported_schemes() {
+        for url in [
+            "git://example.com/repo.git",
+            "file:///etc/shadow",
+            "ftp://example.com/repo.git",
+            "http://github.com/org/repo",
+            "custom://example.com/repo.git",
+        ] {
+            let err = validate_source_url(url).unwrap_err();
+            assert!(err.contains("https://"));
+            assert!(err.contains("ssh://"));
+            assert!(err.contains("git@"));
+            assert!(err.contains("owner/repo"));
+            assert!(err.contains("owner"));
+        }
     }
 
     #[test]
@@ -953,6 +1172,8 @@ sources =
                 path: None,
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_default_overlay_repo_config();
@@ -966,6 +1187,8 @@ sources =
         let config = RepoverlayConfig {
             sources: vec![],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_default_overlay_repo_config();
@@ -983,6 +1206,8 @@ sources =
                 path: None,
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(None);
@@ -1006,6 +1231,8 @@ sources =
                 },
             ],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(Some("secondary"));
@@ -1022,6 +1249,8 @@ sources =
                 path: None,
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let result = config.get_overlay_repo_config_by_name(Some("nonexistent"));
@@ -1051,6 +1280,34 @@ sources =
             SourceUrlInput::GitUrl("git@github.com:org/repo.git".to_string())
         );
         assert_eq!(input.to_url(), "git@github.com:org/repo.git");
+    }
+
+    #[test]
+    fn test_source_url_input_ssh_scheme_url() {
+        let input: SourceUrlInput = "ssh://git@github.com/org/repo.git".parse().unwrap();
+        assert_eq!(
+            input,
+            SourceUrlInput::GitUrl("ssh://git@github.com/org/repo.git".to_string())
+        );
+        assert_eq!(input.to_url(), "ssh://git@github.com/org/repo.git");
+    }
+
+    #[test]
+    fn test_source_url_input_rejects_unsupported_schemes() {
+        for url in [
+            "git://example.com/repo.git",
+            "file:///etc/shadow",
+            "ftp://example.com/repo.git",
+            "http://github.com/org/repo",
+            "custom://example.com/repo.git",
+        ] {
+            let err = url.parse::<SourceUrlInput>().unwrap_err();
+            assert!(err.contains("https://"));
+            assert!(err.contains("ssh://"));
+            assert!(err.contains("git@"));
+            assert!(err.contains("owner/repo"));
+            assert!(err.contains("owner"));
+        }
     }
 
     #[test]
@@ -1252,6 +1509,8 @@ sources =
                 path: None,
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         save_repo_config(temp.path(), &config).unwrap();
@@ -1342,6 +1601,8 @@ sources =
                 path: Some(PathBuf::from("my-overlays")),
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let ccl = generate_sources_config_ccl(&config);
@@ -1375,6 +1636,8 @@ sources =
                 },
             ],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         let ccl = generate_sources_config_ccl(&config);
@@ -1459,46 +1722,17 @@ sources =
         assert!(matches!(input, SourceUrlInput::GitHubShorthand { .. }));
     }
 
-    // ==================== SourceUrlInput file:// URL parsing tests ====================
+    // ==================== SourceUrlInput unsupported scheme tests ====================
 
     #[test]
-    fn test_source_url_input_file_url_is_file_url() {
-        let input: SourceUrlInput = "file:///tmp/my-overlays".parse().unwrap();
-        assert!(input.is_file_url());
-        assert!(!input.is_local());
-        assert_eq!(input.local_path(), Path::new("/tmp/my-overlays"));
-    }
-
-    #[test]
-    fn test_source_url_input_file_url_two_slashes() {
-        let input: SourceUrlInput = "file:///home/user/overlays".parse().unwrap();
-        assert!(input.is_file_url());
-        assert_eq!(input.local_path(), Path::new("/home/user/overlays"));
-    }
-
-    #[test]
-    fn test_source_url_input_file_url_not_git_url() {
-        let input: SourceUrlInput = "file:///some/path".parse().unwrap();
-        assert!(!matches!(input, SourceUrlInput::GitUrl(_)));
-    }
-
-    #[test]
-    fn test_source_url_input_file_url_empty_path_rejected() {
-        let result: std::result::Result<SourceUrlInput, _> = "file://".parse();
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_source_url_input_file_url_display() {
-        let input: SourceUrlInput = "file:///tmp/overlays".parse().unwrap();
-        assert_eq!(format!("{input}"), "file:///tmp/overlays");
-    }
-
-    #[test]
-    fn test_source_url_input_file_url_preserves_original() {
-        // file:// URLs should preserve the original string for roundtripping
-        let input: SourceUrlInput = "file:///tmp/overlays".parse().unwrap();
-        assert!(input.is_file_url());
+    fn test_source_url_input_file_url_rejected() {
+        let err = "file:///home/user/overlays"
+            .parse::<SourceUrlInput>()
+            .unwrap_err();
+        assert!(err.contains("Invalid source URL"));
+        assert!(err.contains("https://"));
+        assert!(err.contains("ssh://"));
+        assert!(err.contains("git@"));
     }
 
     // ==================== Save/load roundtrip for path-based repo config ====================
@@ -1514,6 +1748,8 @@ sources =
                 path: Some(PathBuf::from("my-overlays")),
             }],
             library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
         };
 
         save_repo_config(temp.path(), &config).unwrap();
