@@ -220,7 +220,7 @@ git remote -v
 # origin    git@github.com:tylerbutler/FluidFramework.git (fetch)
 # upstream  git@github.com:microsoft/FluidFramework.git (fetch)
 
-# Apply overlay - will fallback to microsoft/FluidFramework if needed
+# Apply overlay - falls back to microsoft/FluidFramework if needed
 repoverlay apply microsoft/FluidFramework/claude-config
 ```
 
