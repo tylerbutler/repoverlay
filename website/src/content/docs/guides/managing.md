@@ -4,7 +4,7 @@ sidebar:
   order: 3
 ---
 
-This guide covers how to check, edit, update, and remove overlays after they've been applied.
+Once overlays are applied, you can check their status, edit them, update them from their source, and remove them.
 
 ## Checking status
 

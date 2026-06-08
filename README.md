@@ -57,8 +57,6 @@ repoverlay manages these kinds of objects:
 - **Source** — a configured location (GitHub repo or local directory) to find overlays. Lifecycle: `source add` → `source list` → `source remove`.
 - **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
 - **File** — an individual file within an overlay. Managed via `edit` and `sync`.
-- **Cache** — local clones of GitHub repos used by overlays. Managed automatically on `apply`; inspect with `cache list`, clean with `cache remove --all`.
-- **File** — an individual file within an overlay. Managed via `edit` and `sync`.
 
 ## Installation
 
