@@ -142,7 +142,7 @@ Download the pre-built binaries for your platform from the [repoverlay releases]
 
 ## Usage
 
-The easiest way to get started is with `browse`, which interactively lists available overlays and lets you select which to apply:
+The easiest way to start is with `browse`, which interactively lists available overlays and lets you select which to apply:
 
 ```bash
 # Add a source, then browse and apply interactively

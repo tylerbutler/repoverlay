@@ -8,7 +8,7 @@ Symlinks, git exclusions, and external backups do the work. This page covers eac
 
 ## Symlinks vs copies
 
-By default, repoverlay creates **symlinks** from the target repo to the overlay source. This means changes to the source are immediately reflected in the target.
+By default, repoverlay creates **symlinks** from the target repo to the overlay source, so changes to the source appear immediately in the target.
 
 Use the `--copy` flag to copy files instead, which is useful when:
 - Symlinks aren't supported (e.g., some Docker setups or Windows without developer mode)
