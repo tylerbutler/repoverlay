@@ -1615,19 +1615,13 @@ fn copy_tree_preserve(src: &Path, dst: &Path) -> Result<()> {
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent)?;
         }
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&link_target, dst)
+        let kind = if fs::metadata(src).map(|m| m.is_dir()).unwrap_or(false) {
+            crate::fs_util::SymlinkKind::Dir
+        } else {
+            crate::fs_util::SymlinkKind::File
+        };
+        crate::fs_util::create_symlink(&link_target, dst, kind)
             .with_context(|| format!("Failed to recreate symlink {}", dst.display()))?;
-        #[cfg(windows)]
-        {
-            if fs::metadata(src).map(|m| m.is_dir()).unwrap_or(false) {
-                std::os::windows::fs::symlink_dir(&link_target, dst)
-                    .with_context(|| format!("Failed to recreate symlink {}", dst.display()))?;
-            } else {
-                std::os::windows::fs::symlink_file(&link_target, dst)
-                    .with_context(|| format!("Failed to recreate symlink {}", dst.display()))?;
-            }
-        }
     } else if meta.is_dir() {
         fs::create_dir_all(dst)?;
         for entry in fs::read_dir(src)? {

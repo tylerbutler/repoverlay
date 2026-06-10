@@ -598,6 +598,93 @@ fn copy_dir_recursive_inner(
     Ok(())
 }
 
+/// Validate that a directory tree contains no symlinks escaping `root`.
+///
+/// Used before symlinking an overlay directory into a target repository: the
+/// directory symlink exposes the overlay's contents as-is, so an embedded
+/// symlink pointing outside the overlay would let a malicious overlay expose
+/// arbitrary host paths through the target repository. Copy mode gets the
+/// equivalent protection inside `copy_dir_recursive`.
+pub(crate) fn ensure_no_escaping_symlinks(root: &Path) -> Result<()> {
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize directory: {}", root.display()))?;
+    ensure_no_escaping_symlinks_inner(&canonical_root, &canonical_root, 0)
+}
+
+fn ensure_no_escaping_symlinks_inner(
+    dir: &Path,
+    canonical_root: &Path,
+    depth: usize,
+) -> Result<()> {
+    if depth > MAX_COPY_DEPTH {
+        bail!(
+            "Maximum directory depth ({MAX_COPY_DEPTH}) exceeded scanning {}: possible circular symlinks",
+            dir.display()
+        );
+    }
+
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_name() == ".git" {
+            continue;
+        }
+
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("Failed to read metadata: {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            let contained = if let Ok(canonical) = path.canonicalize() {
+                canonical.starts_with(canonical_root)
+            } else {
+                // Dangling symlink. It cannot exfiltrate data today, but it
+                // becomes live if its target is created later, so reject it
+                // unless the target stays lexically within the root.
+                let link_target = fs::read_link(&path)
+                    .with_context(|| format!("Failed to read symlink: {}", path.display()))?;
+                lexically_contained(&path, &link_target, canonical_root)
+            };
+            if !contained {
+                bail!(
+                    "Symlink escape detected: {} points outside the overlay directory",
+                    path.display()
+                );
+            }
+        } else if metadata.is_dir() {
+            ensure_no_escaping_symlinks_inner(&path, canonical_root, depth + 1)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Lexically resolve a symlink target and check it stays within `root`.
+///
+/// Used for dangling symlinks, where canonicalization is impossible. This is
+/// best-effort by nature (it cannot follow chains of dangling links), which is
+/// fine: it only ever rejects, never grants, access beyond the canonical check.
+fn lexically_contained(link_path: &Path, target: &Path, root: &Path) -> bool {
+    use std::path::Component;
+
+    let mut resolved = if target.is_absolute() {
+        PathBuf::new()
+    } else {
+        link_path.parent().unwrap_or(root).to_path_buf()
+    };
+    for component in target.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    return false;
+                }
+            }
+            other => resolved.push(other),
+        }
+    }
+    resolved.starts_with(root)
+}
+
 /// Parse an overlay reference in the format "org/repo/name".
 #[allow(dead_code)] // Kept for backward compatibility; new code uses reference::SourceReference
 pub(crate) fn parse_overlay_reference(s: &str) -> Option<(String, String, String)> {
@@ -1645,6 +1732,80 @@ mod tests {
             !dst.join("dangling.txt").exists(),
             "Dangling symlink should not be copied"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_no_escaping_symlinks_rejects_escape() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", root.join("nested/escape")).unwrap();
+
+        let result = ensure_no_escaping_symlinks(&root);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Symlink escape detected")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_no_escaping_symlinks_allows_internal() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("subdir")).unwrap();
+        fs::write(root.join("subdir/target.txt"), "content").unwrap();
+        std::os::unix::fs::symlink("subdir/target.txt", root.join("link.txt")).unwrap();
+
+        assert!(ensure_no_escaping_symlinks(&root).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_no_escaping_symlinks_allows_dangling_internal() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        // Dangling but lexically inside the root: harmless even if created later
+        std::os::unix::fs::symlink("not-yet-created.txt", root.join("dangling")).unwrap();
+
+        assert!(ensure_no_escaping_symlinks(&root).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_no_escaping_symlinks_rejects_dangling_escape() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        // Dangling relative link that would resolve outside the root if its
+        // target is ever created
+        std::os::unix::fs::symlink("../outside/secret.txt", root.join("dangling")).unwrap();
+
+        let result = ensure_no_escaping_symlinks(&root);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Symlink escape detected")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_no_escaping_symlinks_rejects_dangling_absolute() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink("/nonexistent/path/secret", root.join("dangling")).unwrap();
+
+        let result = ensure_no_escaping_symlinks(&root);
+        assert!(result.is_err());
     }
 
     #[test]

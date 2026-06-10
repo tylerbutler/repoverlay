@@ -643,23 +643,17 @@ pub(crate) fn add_files_to_overlay(
                 // Create symlink/copy from overlay source to target
                 match link_type {
                     LinkType::Symlink => {
-                        #[cfg(unix)]
-                        std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(
-                            || {
-                                format!(
-                                    "Failed to create directory symlink: {}",
-                                    target_file.display()
-                                )
-                            },
-                        )?;
-                        #[cfg(windows)]
-                        std::os::windows::fs::symlink_dir(&overlay_file, &target_file)
-                            .with_context(|| {
-                                format!(
-                                    "Failed to create directory symlink: {}",
-                                    target_file.display()
-                                )
-                            })?;
+                        crate::fs_util::create_symlink(
+                            &overlay_file,
+                            &target_file,
+                            crate::fs_util::SymlinkKind::Dir,
+                        )
+                        .with_context(|| {
+                            format!(
+                                "Failed to create directory symlink: {}",
+                                target_file.display()
+                            )
+                        })?;
                     }
                     LinkType::Copy | LinkType::Merged => {
                         fs::create_dir_all(&target_file).with_context(|| {
@@ -704,15 +698,14 @@ pub(crate) fn add_files_to_overlay(
                 // Create symlink/copy from overlay source to target
                 match link_type {
                     LinkType::Symlink => {
-                        #[cfg(unix)]
-                        std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(
-                            || format!("Failed to create symlink: {}", target_file.display()),
-                        )?;
-                        #[cfg(windows)]
-                        std::os::windows::fs::symlink_file(&overlay_file, &target_file)
-                            .with_context(|| {
-                                format!("Failed to create symlink: {}", target_file.display())
-                            })?;
+                        crate::fs_util::create_symlink(
+                            &overlay_file,
+                            &target_file,
+                            crate::fs_util::SymlinkKind::File,
+                        )
+                        .with_context(|| {
+                            format!("Failed to create symlink: {}", target_file.display())
+                        })?;
                     }
                     LinkType::Copy | LinkType::Merged => {
                         fs::copy(&overlay_file, &target_file).with_context(|| {

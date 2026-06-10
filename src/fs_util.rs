@@ -7,6 +7,38 @@ use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
+/// The kind of filesystem entry a symlink points to.
+///
+/// Only meaningful on Windows, where file and directory symlinks are distinct
+/// system objects; on Unix the distinction is ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SymlinkKind {
+    File,
+    Dir,
+}
+
+/// Create a symlink at `link` pointing to `original`, cross-platform.
+///
+/// Returns the raw `io::Result` so call sites can attach their own context.
+pub(crate) fn create_symlink(
+    original: &Path,
+    link: &Path,
+    kind: SymlinkKind,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let _ = kind;
+        std::os::unix::fs::symlink(original, link)
+    }
+    #[cfg(windows)]
+    {
+        match kind {
+            SymlinkKind::File => std::os::windows::fs::symlink_file(original, link),
+            SymlinkKind::Dir => std::os::windows::fs::symlink_dir(original, link),
+        }
+    }
+}
+
 /// Write content to a file atomically using write-then-rename.
 ///
 /// Creates a temporary file in the same directory as the target path,
