@@ -26,6 +26,10 @@ This document contains the help content for the `repoverlay` command-line progra
 * [`repoverlay source add`↴](#repoverlay-source-add)
 * [`repoverlay source list`↴](#repoverlay-source-list)
 * [`repoverlay source remove`↴](#repoverlay-source-remove)
+* [`repoverlay marketplace`↴](#repoverlay-marketplace)
+* [`repoverlay marketplace add`↴](#repoverlay-marketplace-add)
+* [`repoverlay marketplace list`↴](#repoverlay-marketplace-list)
+* [`repoverlay marketplace remove`↴](#repoverlay-marketplace-remove)
 * [`repoverlay library`↴](#repoverlay-library)
 * [`repoverlay library list`↴](#repoverlay-library-list)
 * [`repoverlay library import`↴](#repoverlay-library-import)
@@ -54,6 +58,7 @@ Overlay config files into git repositories without committing them
 * `sync` — Sync changes from an applied overlay back to the overlay repo
 * `edit` — Edit an existing applied overlay
 * `source` — Manage overlay sources (for multi-source configurations)
+* `marketplace` — Manage plugin marketplaces
 * `library` — Manage the in-repo overlay library
 * `completions` — Generate shell completions
 
@@ -457,6 +462,57 @@ Remove an overlay source
 ###### **Arguments:**
 
 * `<NAME>` — Name of the source to remove
+
+
+
+## `repoverlay marketplace`
+
+Manage plugin marketplaces
+
+**Usage:** `repoverlay marketplace <COMMAND>`
+
+###### **Subcommands:**
+
+* `add` — Register a plugin marketplace
+* `list` — List registered marketplaces
+* `remove` — Remove a registered marketplace
+
+
+
+## `repoverlay marketplace add`
+
+Register a plugin marketplace
+
+**Usage:** `repoverlay marketplace add [OPTIONS] <NAME> <URL>`
+
+###### **Arguments:**
+
+* `<NAME>` — Name for this marketplace (used in `marketplace/plugin` references)
+* `<URL>` — Marketplace git URL or GitHub shorthand (owner/repo)
+
+###### **Options:**
+
+* `--yes` — Skip the confirmation prompt
+
+
+
+## `repoverlay marketplace list`
+
+List registered marketplaces
+
+**Usage:** `repoverlay marketplace list`
+
+
+
+## `repoverlay marketplace remove`
+
+Remove a registered marketplace
+
+**Usage:** `repoverlay marketplace remove <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Name of the marketplace to remove
 
 
 
