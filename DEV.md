@@ -177,6 +177,54 @@ The GitHub App configured by `RELEASE_APP_ID`/`RELEASE_APP_PRIVATE_KEY` must be 
 - `tylerbutler/repoverlay` with contents/write access for release PR, tag, and release automation.
 - `tylerbutler/homebrew-tap` with contents/write access so `.github/workflows/publish-homebrew-tap.yml` can update the Homebrew formula.
 
+## Profiles Feature Status
+
+*Snapshot: 2026-06-10.*
+
+The full profiles + plugins implementation landed on `main` in #347 (squash of the `profiles` branch) and shipped in **v0.15.0**. All profile-related tests pass on `main` (46 tests via `cargo test profile`). The feature is **hidden**: the `profile`, `claude`, and `copilot` commands are declared with `hide = true` in `src/cli/mod.rs`, so they work but do not appear in `--help`. Only `marketplace` is visible.
+
+### CLI surface
+
+| Command | Visibility | Purpose |
+| --- | --- | --- |
+| `repoverlay profile list/show/apply/status/remove` | hidden | Persistent profile lifecycle (`apply`/`status`/`remove` take `--harness claude\|copilot`) |
+| `repoverlay claude --profile X [--profile Y] [-- args]` | hidden | Run Claude with profiles applied for the process lifetime (ephemeral) |
+| `repoverlay copilot --profile X [--profile Y] [-- args]` | hidden | Same for GitHub Copilot CLI |
+| `repoverlay marketplace …` | visible | Manage the plugin marketplace registry |
+| `repoverlay update` | visible | Also re-resolves managed profile plugins (full update only, not single-overlay) |
+
+### What a profile contains and how each part maps to a harness
+
+A profile (`ProfileConfig` in `src/profile.rs`) is defined under the `profiles` key of the CCL config (global `~/.config/repoverlay/config.ccl` or repo-local `.repoverlay/config.ccl`) and has four fields. Per-harness placement is owned by the applicators in `src/profile_applicators/` and the `AgentHarness` enum (single source of truth for harness paths).
+
+| Profile content | Claude mapping | Copilot mapping |
+| --- | --- | --- |
+| `description` | None — display-only in `profile list`/`show` | Same |
+| `overlays` (list of overlay refs) | `ApplyOverlay` through the regular overlay apply machinery; harness-independent | Same |
+| `instructions` (each entry exactly one of `source` file path or inline `content`) | Concatenated into a marker-delimited managed region keyed by profile name in `<repo>/CLAUDE.md`, coexisting with user content and other profiles' regions | Same, targeting `<repo>/AGENTS.md` |
+| `plugins` → bundle `skills/` | Copied to `<repo>/.claude/skills/<skill>` | Copied to `<repo>/.agents/skills/<skill>` |
+| `plugins` → bundle `agents/` | Copied to `<repo>/.claude/agents/<agent>` | Copied to `<repo>/.github/agents/<agent>` |
+| `plugins` → bundle `.mcp.json` `mcpServers` | Merged into `<repo>/.mcp.json` under `mcpServers`, `${CLAUDE_PLUGIN_ROOT}` substituted with the cached bundle dir; RFC 6901 per-pointer ownership for conflict detection and clean removal; two plugins providing the same server is an error | Same target and semantics (Copilot CLI also keys servers under `mcpServers`) |
+| `plugins` → bundle `hooks/`, `commands/` | `SkipCapability` — not decomposable | `SkipCapability` — unsupported |
+| `plugins` with `install = delegate` (or managed plugins whose source cannot be cached/introspected) | `enabledPlugins` (`"name@marketplace": true`) + `extraKnownMarketplaces` merged into `.claude/settings.json` (`scope = project`, default for persistent applies) or `.claude/settings.local.json` (`scope = local`, default for ephemeral); requires the marketplace to be registered with a URL | `SkipCapability` — delegate plugins are Claude-only |
+
+Plugin references (`PluginRef` in `src/plugin.rs`) are either marketplace refs (`marketplace/plugin` shorthand, or a table with optional `ref` pin, `install = managed|delegate`, delegate `scope`) or local paths (starting with `.` or `/`). Bundles use the Claude plugin format (`.claude-plugin/plugin.json`).
+
+Harness identity (`AgentHarness` in `src/profile_applicators/mod.rs`): stable ids `claude`/`copilot`; config homes `~/.claude` and `~/.config/github-copilot` (overridable via `REPOVERLAY_CLAUDE_HOME` / `REPOVERLAY_COPILOT_HOME`); launch programs `claude`/`copilot` (overridable via `REPOVERLAY_*_COMMAND`); removable JSON targets are `.mcp.json` plus, for Claude, `.claude/settings.json` and `.claude/settings.local.json`.
+
+### Lifecycle guarantees
+
+- Everything a profile applies lands inside the target repo's working tree, git-excluded — no user- or machine-global writes.
+- Persistent applies are transactional (rollback on failure) and recorded under `<repo>/.repoverlay/profiles/`; `repoverlay restore` rebuilds profiles after `git clean` via external snapshots.
+- Ephemeral sessions hold PID lock files with stale-lock recovery (survives `SIGKILL`/power loss), refuse to run over an already-persistent profile, and roll back all placements when the session exits or is interrupted.
+- Plugin decomposition is identical for persistent and ephemeral applies; only the delegate settings scope default differs.
+
+### Remaining work
+
+- **Hooks and commands**: plugin bundle `hooks/` and `commands/` are never decomposed for either harness.
+- **Un-hide the CLI**: `profile`, `claude`, and `copilot` are still hidden pending public announcement.
+- **Unmerged docs on the `profiles` branch**: the website profiles guide (`website/src/content/docs/guides/profiles.md`), homepage profile announcements, and the design specs/plans (`docs/superpowers/specs/2026-06-02-profiles-design.md`, `2026-06-03-plugins-design.md`, plans, and the harness-process refactor docs) exist only on the branch. The branch's source code is otherwise fully merged — `main` is *ahead* of it (the branch lacks the cf4114f cross-platform symlink fix), so only the docs need to be brought over. The unmerged guide also predates Claude instruction placement (it documents instructions as Copilot-only), so it needs updating when brought over.
+
 ## Project Structure
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed module structure and responsibilities.

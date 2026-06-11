@@ -383,6 +383,132 @@ profiles =
 }
 
 #[test]
+fn profile_apply_writes_claude_instruction_region_and_removes_it() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let claude_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file(".repoverlay/claude-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = claude-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "rust-dev",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_CLAUDE_HOME", claude_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Applied profile rust-dev"));
+
+    let claude_md = ctx.repo_path().join("CLAUDE.md");
+    let contents = fs::read_to_string(&claude_md).unwrap();
+    assert!(contents.contains("<!-- repoverlay:profile:rust-dev:begin -->"));
+    assert!(contents.contains("Use Rust 2024."));
+    assert!(contents.contains("<!-- repoverlay:profile:rust-dev:end -->"));
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.claude.ccl")
+            .exists()
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "rust-dev",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_CLAUDE_HOME", claude_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(
+        !claude_md.exists(),
+        "CLAUDE.md created by the profile should be removed with it"
+    );
+}
+
+#[test]
+fn profile_apply_preserves_existing_claude_md_content() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let claude_home = tempfile::TempDir::new().unwrap();
+    ctx.create_repo_file("CLAUDE.md", "# Project notes\n");
+    ctx.write_repo_config(
+        r"
+profiles =
+  docs =
+    instructions =
+      =
+        content = Be concise.
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "apply",
+            "docs",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_CLAUDE_HOME", claude_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let claude_md = ctx.repo_path().join("CLAUDE.md");
+    let contents = fs::read_to_string(&claude_md).unwrap();
+    assert!(contents.contains("# Project notes"));
+    assert!(contents.contains("Be concise."));
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "profile",
+            "remove",
+            "docs",
+            "--harness",
+            "claude",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_CLAUDE_HOME", claude_home.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let contents = fs::read_to_string(&claude_md).unwrap();
+    assert!(
+        contents.contains("# Project notes") && !contents.contains("Be concise."),
+        "user content must survive removal while the region is stripped: {contents}"
+    );
+}
+
+#[test]
 fn profile_apply_excludes_repo_files_from_git() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();

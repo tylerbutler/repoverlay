@@ -75,30 +75,8 @@ impl ProfileApplicator for CopilotApplicator {
             });
         }
 
-        let mut instruction_bodies = Vec::new();
-        for instruction in &profile.instructions {
-            instruction.validate_exactly_one()?;
-            if let Some(source) = &instruction.source {
-                let source_rel = Path::new(source);
-                super::validate_instruction_source(source_rel)?;
-                let base_dir = instruction
-                    .base_dir
-                    .clone()
-                    .unwrap_or_else(|| context.profile_asset_dir.clone());
-                instruction_bodies.push(crate::profile_plan::InstructionBody::File {
-                    path: base_dir.join(source_rel),
-                    base_dir,
-                });
-            } else if let Some(content) = instruction.normalized_content() {
-                instruction_bodies.push(crate::profile_plan::InstructionBody::Inline(content));
-            }
-        }
-        if !instruction_bodies.is_empty() {
-            actions.push(ProfileAction::WriteManagedRegion {
-                bodies: instruction_bodies,
-                target: context.target.join("AGENTS.md"),
-                marker_id: context.profile_name.clone(),
-            });
+        if let Some(action) = super::plan_instruction_region(profile, context)? {
+            actions.push(action);
         }
 
         // Plugin introspection: resolve each plugin, decompose its bundle into
