@@ -76,11 +76,11 @@ impl AgentHarness {
     }
 
     /// The single shared managed-region file this harness writes instructions
-    /// into, if any (`<repo>/AGENTS.md` for Copilot; Claude has none).
-    pub(crate) fn managed_region_path(self, repo_target: &Path) -> Option<PathBuf> {
+    /// into (`<repo>/AGENTS.md` for Copilot, `<repo>/CLAUDE.md` for Claude).
+    pub(crate) fn managed_region_path(self, repo_target: &Path) -> PathBuf {
         match self {
-            Self::Copilot => Some(repo_target.join("AGENTS.md")),
-            Self::Claude => None,
+            Self::Copilot => repo_target.join("AGENTS.md"),
+            Self::Claude => repo_target.join("CLAUDE.md"),
         }
     }
 
@@ -186,6 +186,48 @@ fn validate_instruction_source(source: &Path) -> Result<()> {
         anyhow::bail!("Instruction source '{}' must be relative", source.display());
     }
     Ok(())
+}
+
+/// Build the `WriteManagedRegion` action for a profile's instructions, if it
+/// has any.
+///
+/// Shared by every applicator: file `source` entries resolve against the
+/// entry's `base_dir` (the directory of the config file that defined it,
+/// falling back to the profile asset dir) and the region targets the harness's
+/// [`AgentHarness::managed_region_path`], keyed by the profile name.
+fn plan_instruction_region(
+    profile: &ProfileConfig,
+    context: &ProfileContext,
+) -> Result<Option<crate::profile_plan::ProfileAction>> {
+    let mut bodies = Vec::new();
+    for instruction in &profile.instructions {
+        instruction.validate_exactly_one()?;
+        if let Some(source) = &instruction.source {
+            let source_rel = Path::new(source);
+            validate_instruction_source(source_rel)?;
+            let base_dir = instruction
+                .base_dir
+                .clone()
+                .unwrap_or_else(|| context.profile_asset_dir.clone());
+            bodies.push(crate::profile_plan::InstructionBody::File {
+                path: base_dir.join(source_rel),
+                base_dir,
+            });
+        } else if let Some(content) = instruction.normalized_content() {
+            bodies.push(crate::profile_plan::InstructionBody::Inline(content));
+        }
+    }
+    if bodies.is_empty() {
+        return Ok(None);
+    }
+    let target = context.harness.managed_region_path(&context.target);
+    Ok(Some(
+        crate::profile_plan::ProfileAction::WriteManagedRegion {
+            bodies,
+            target,
+            marker_id: context.profile_name.clone(),
+        },
+    ))
 }
 
 #[derive(Debug, Clone)]

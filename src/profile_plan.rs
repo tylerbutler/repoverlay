@@ -66,9 +66,8 @@ pub(crate) enum ProfileAction {
     /// a native harness location by copying the tree/file.
     ///
     /// Unlike [`ProfileAction::WriteFile`], the `source` lives in the resolved
-    /// plugin bundle (the cache), not the profile asset directory. Execution,
-    /// backup, and removal of this action land in the managed-plugin lifecycle
-    /// task; until then `preflight_plan` rejects plans that contain it.
+    /// plugin bundle (the cache), not the profile asset directory. A
+    /// pre-existing target is backed up on apply and restored on removal.
     PlacePluginDir {
         source: PathBuf,
         target: PathBuf,
@@ -1179,15 +1178,14 @@ fn restore_merge_json_backup(
 }
 
 /// Validate that a managed-region target is the one allowed shared file for the
-/// harness (`<repo>/AGENTS.md` for Copilot), refusing to touch anything else.
+/// harness (`<repo>/AGENTS.md` for Copilot, `<repo>/CLAUDE.md` for Claude),
+/// refusing to touch anything else.
 fn ensure_removable_managed_region(
     harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
-    let allowed = harness.managed_region_path(repo_target).ok_or_else(|| {
-        anyhow::anyhow!("Managed regions are only supported for the copilot harness")
-    })?;
+    let allowed = harness.managed_region_path(repo_target);
     if file.target != allowed {
         bail!(
             "Refusing to modify managed region outside the allowed path: {}",

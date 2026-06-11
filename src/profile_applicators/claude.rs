@@ -165,18 +165,10 @@ impl ProfileApplicator for ClaudeApplicator {
             });
         }
 
-        // Claude has no persistent profile-instruction convention yet; record
-        // each instruction as skipped rather than dropping it silently.
-        for instruction in &profile.instructions {
-            instruction.validate_exactly_one()?;
-            if let Some(source) = &instruction.source {
-                super::validate_instruction_source(Path::new(source))?;
-            }
-            actions.push(ProfileAction::SkipCapability {
-                capability: format!("instruction:{}", instruction.label()),
-                reason: "Claude persistent instruction placement is not implemented yet"
-                    .to_string(),
-            });
+        // Instructions land in a profile-keyed managed region of CLAUDE.md,
+        // mirroring Copilot's AGENTS.md region.
+        if let Some(action) = super::plan_instruction_region(profile, context)? {
+            actions.push(action);
         }
 
         let mut mcp_servers = serde_json::Map::new();
@@ -423,6 +415,65 @@ mod tests {
             ProfileAction::PlacePluginDir { target: t, .. }
                 if t.ends_with("agents/reviewer.md")
         )));
+    }
+
+    #[test]
+    fn claude_plans_instruction_write_into_claude_md() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let source_dir = temp.path().join("profile-assets");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::write(source_dir.join("claude-instructions.md"), "Be concise.").unwrap();
+
+        let profile = ProfileConfig {
+            instructions: vec![crate::profile::InstructionConfig {
+                source: Some("claude-instructions.md".to_string()),
+                content: None,
+                base_dir: None,
+            }],
+            ..ProfileConfig::default()
+        };
+        let mut context = context_for(temp.path(), &temp.path().join("claude-home"));
+        context.profile_asset_dir = source_dir;
+
+        let plan = ClaudeApplicator.plan(&profile, &context).unwrap();
+        assert!(plan.actions.iter().any(|action| matches!(
+            action,
+            ProfileAction::WriteManagedRegion { target, marker_id, .. }
+                if target.ends_with("CLAUDE.md") && marker_id == "rust-dev"
+        )));
+        assert!(
+            !plan
+                .actions
+                .iter()
+                .any(|action| matches!(action, ProfileAction::SkipCapability { .. })),
+            "instructions must be placed, not skipped"
+        );
+    }
+
+    #[test]
+    fn claude_rejects_unsafe_instruction_sources() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = context_for(temp.path(), &temp.path().join("claude-home"));
+
+        for source in [
+            "../secret.md".to_string(),
+            temp.path().join("secret.md").display().to_string(),
+        ] {
+            let profile = ProfileConfig {
+                instructions: vec![crate::profile::InstructionConfig {
+                    source: Some(source.clone()),
+                    content: None,
+                    base_dir: None,
+                }],
+                ..ProfileConfig::default()
+            };
+
+            let err = ClaudeApplicator.plan(&profile, &context).unwrap_err();
+            assert!(
+                err.to_string().contains("Instruction source"),
+                "unexpected error for {source}: {err}"
+            );
+        }
     }
 
     fn delegate_plugin(scope: Option<DelegateScope>) -> PluginRef {
