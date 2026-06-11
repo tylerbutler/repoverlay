@@ -9,7 +9,7 @@ import logo from "../assets/repoverlay.svg";
 const description =
 	"Overlay AI configs, editor settings, and dev tooling into any git repo. Symlinked and auto-excluded from version control.";
 const ghUrl = "https://github.com/tylerbutler/repoverlay";
-const release = "0.15.0";
+const release = "0.16.0";
 
 const features = [
 	{
@@ -31,6 +31,12 @@ const features = [
 	{
 		title: "Fork inheritance",
 		body: "Working on a fork? repoverlay falls back to the upstream repo's overlays until yours exist.",
+		variant: "plain",
+	},
+	{
+		title: "Profiles for AI agents",
+		body: "Compose overlays with instructions, skills, and MCP servers, then launch Claude or Copilot with everything applied for just that session.",
+		code: "repoverlay claude --profile rust-dev",
 		variant: "plain",
 	},
 	{

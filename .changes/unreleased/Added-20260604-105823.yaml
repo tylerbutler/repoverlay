@@ -1,0 +1,11 @@
+kind: Added
+body: |-
+    Apply multiple profiles in a single agent run
+
+    `repoverlay copilot` and `repoverlay claude` now accept `--profile` more
+    than once, letting you stack several profiles into one ephemeral agent
+    session. Each profile is applied and locked independently, and all of them
+    are torn down automatically when the agent exits. If a profile fails to
+    apply, any profiles already applied in that run are rolled back so the
+    repository is left clean.
+time: 2026-06-04T10:58:23-07:00

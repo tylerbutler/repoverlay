@@ -47,8 +47,8 @@ export default defineConfig({
 				starlightAnnouncement({
 					announcements: [
 						{
-							id: "v0-15-0",
-							content: "repoverlay 0.15.0 is out — meet profiles.",
+							id: "v0-16-0",
+							content: "repoverlay 0.16.0 is out — meet profiles.",
 							variant: "tip",
 							dismissible: true,
 							link: {

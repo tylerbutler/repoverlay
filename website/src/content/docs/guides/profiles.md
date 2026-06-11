@@ -4,15 +4,15 @@ sidebar:
   order: 5
 ---
 
-:::note[New in v0.15.0]
-Profiles were introduced in repoverlay **v0.15.0**. See the [release notes](https://github.com/tylerbutler/repoverlay/releases/tag/v0.15.0) for details.
+:::note[New in v0.16.0]
+Profiles were introduced in repoverlay **v0.16.0**. See the [release notes](https://github.com/tylerbutler/repoverlay/releases/tag/v0.16.0) for details.
 :::
 
 A **profile** is a named, agent-centric configuration that composes overlays together with AI harness capabilities — instruction files and plugins — into a single loadable unit.
 
 Where an overlay describes *files to place in a repo*, a profile describes *intent*: "give me everything I need to do Rust development with this agent." Applying a profile always happens for a specific agent harness (currently GitHub Copilot and Claude Code), and the harness decides where each capability is placed.
 
-## Profiles vs. overlays :badge[v0.15.0]{variant=tip}
+## Profiles vs. overlays :badge[v0.16.0]{variant=tip}
 
 The key thing to understand is the difference between a **definition** and its **application**:
 
@@ -64,7 +64,7 @@ profiles =
 
     instructions =
       =
-        source = copilot-instructions.md
+        source = instructions.md
       =
         content =
           Be concise in all responses.
@@ -85,7 +85,7 @@ profiles =
 | --- | --- | --- |
 | `description` | scalar | Optional user-facing text shown by `profile list` and `profile show`. |
 | `overlays` | list | Overlay references, resolved with the usual source/library semantics. |
-| `instructions` | list | Harness instruction entries. Each entry sets exactly one of `source` (a file path resolved relative to the config file that defines it) or `content` (inline text). |
+| `instructions` | list | Harness instruction entries, written into a managed region of the repo's instruction file (`CLAUDE.md` for Claude, `AGENTS.md` for Copilot). Each entry sets exactly one of `source` (a file path resolved relative to the config file that defines it) or `content` (inline text). |
 | `plugins` | list | Plugin references (see below). |
 
 ### Marketplaces registry
@@ -178,7 +178,7 @@ rust-dev
     - rust-base
     - rust-tools
   Instructions:
-    - copilot-instructions.md
+    - instructions.md
   Plugins:
     - playground/rust-dev (managed)
     - vendor/cool (delegate, scope: local)
@@ -240,7 +240,7 @@ Pass extra arguments straight through to the agent after `--`:
 repoverlay copilot --profile rust-dev -- --help
 ```
 
-#### Applying several profiles at once :badge[v0.15.0]{variant=tip}
+#### Applying several profiles at once :badge[v0.16.0]{variant=tip}
 
 Repeat `--profile` to stack multiple profiles into a single ephemeral session. Each profile is applied (and locked) independently, and all of them are torn down when the agent exits:
 
@@ -249,7 +249,7 @@ repoverlay copilot --profile rust-dev --profile docs-dev
 repoverlay claude --profile rust-dev --profile docs-dev -- --help
 ```
 
-Profiles compose: shared files such as `AGENTS.md` accumulate one managed region per profile, and `.mcp.json` servers are merged with per-server ownership. If applying one profile fails, any profiles already applied in the same invocation are rolled back, so the repository is never left half-configured. A profile name may not be repeated in the same command.
+Profiles compose: shared instruction files (`CLAUDE.md` for Claude, `AGENTS.md` for Copilot) accumulate one managed region per profile, and `.mcp.json` servers are merged with per-server ownership. If applying one profile fails, any profiles already applied in the same invocation are rolled back, so the repository is never left half-configured. A profile name may not be repeated in the same command.
 
 For both Claude and Copilot, managed plugin bundles are decomposed into repo-local placements (skills, agents, and merged `.mcp.json` servers) — the same way for persistent applies and ephemeral sessions. Ephemeral placements are removed when the session exits.
 
@@ -268,7 +268,7 @@ Each capability in a profile is translated into a concrete, **repo-local** actio
 | plugin agents | `<repo>/.claude/agents/<agent>` | `<repo>/.github/agents/<agent>` |
 | plugin MCP servers | Merged into `<repo>/.mcp.json` (`mcpServers` key). | Merged into `<repo>/.mcp.json` (`mcpServers` key). |
 | delegate plugins | Recorded in `.claude/settings.json` / `.claude/settings.local.json`. | n/a |
-| `instructions` | n/a | Each entry's `source` file or inline `content` is concatenated into the `<repo>/AGENTS.md` managed region for the profile. |
+| `instructions` | Each entry's `source` file or inline `content` is concatenated into the profile's managed region of `<repo>/CLAUDE.md`. | Same, targeting `<repo>/AGENTS.md`. |
 
 Everything is placed inside the target repo and git-excluded; nothing is written to a user- or machine-global location.
 

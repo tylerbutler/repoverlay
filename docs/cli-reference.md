@@ -26,11 +26,23 @@ This document contains the help content for the `repoverlay` command-line progra
 * [`repoverlay source add`↴](#repoverlay-source-add)
 * [`repoverlay source list`↴](#repoverlay-source-list)
 * [`repoverlay source remove`↴](#repoverlay-source-remove)
+* [`repoverlay marketplace`↴](#repoverlay-marketplace)
+* [`repoverlay marketplace add`↴](#repoverlay-marketplace-add)
+* [`repoverlay marketplace list`↴](#repoverlay-marketplace-list)
+* [`repoverlay marketplace remove`↴](#repoverlay-marketplace-remove)
+* [`repoverlay profile`↴](#repoverlay-profile)
+* [`repoverlay profile list`↴](#repoverlay-profile-list)
+* [`repoverlay profile show`↴](#repoverlay-profile-show)
+* [`repoverlay profile apply`↴](#repoverlay-profile-apply)
+* [`repoverlay profile status`↴](#repoverlay-profile-status)
+* [`repoverlay profile remove`↴](#repoverlay-profile-remove)
 * [`repoverlay library`↴](#repoverlay-library)
 * [`repoverlay library list`↴](#repoverlay-library-list)
 * [`repoverlay library import`↴](#repoverlay-library-import)
 * [`repoverlay library export`↴](#repoverlay-library-export)
 * [`repoverlay library remove`↴](#repoverlay-library-remove)
+* [`repoverlay copilot`↴](#repoverlay-copilot)
+* [`repoverlay claude`↴](#repoverlay-claude)
 * [`repoverlay completions`↴](#repoverlay-completions)
 
 ## `repoverlay`
@@ -54,7 +66,11 @@ Overlay config files into git repositories without committing them
 * `sync` — Sync changes from an applied overlay back to the overlay repo
 * `edit` — Edit an existing applied overlay
 * `source` — Manage overlay sources (for multi-source configurations)
+* `marketplace` — Manage plugin marketplaces
+* `profile` — Manage repository profiles
 * `library` — Manage the in-repo overlay library
+* `copilot` — Run GitHub Copilot with one or more profiles applied for the process lifetime
+* `claude` — Run Claude with one or more profiles applied for the process lifetime
 * `completions` — Generate shell completions
 
 
@@ -460,6 +476,157 @@ Remove an overlay source
 
 
 
+## `repoverlay marketplace`
+
+Manage plugin marketplaces
+
+**Usage:** `repoverlay marketplace <COMMAND>`
+
+###### **Subcommands:**
+
+* `add` — Register a plugin marketplace
+* `list` — List registered marketplaces
+* `remove` — Remove a registered marketplace
+
+
+
+## `repoverlay marketplace add`
+
+Register a plugin marketplace
+
+**Usage:** `repoverlay marketplace add [OPTIONS] <NAME> <URL>`
+
+###### **Arguments:**
+
+* `<NAME>` — Name for this marketplace (used in `marketplace/plugin` references)
+* `<URL>` — Marketplace git URL or GitHub shorthand (owner/repo)
+
+###### **Options:**
+
+* `--yes` — Skip the confirmation prompt
+
+
+
+## `repoverlay marketplace list`
+
+List registered marketplaces
+
+**Usage:** `repoverlay marketplace list`
+
+
+
+## `repoverlay marketplace remove`
+
+Remove a registered marketplace
+
+**Usage:** `repoverlay marketplace remove <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Name of the marketplace to remove
+
+
+
+## `repoverlay profile`
+
+Manage repository profiles
+
+**Usage:** `repoverlay profile <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List configured profiles
+* `show` — Show a configured profile
+* `apply` — Apply a profile persistently
+* `status` — Show applied profile state
+* `remove` — Remove an applied profile
+
+
+
+## `repoverlay profile list`
+
+List configured profiles
+
+**Usage:** `repoverlay profile list [OPTIONS]`
+
+###### **Options:**
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay profile show`
+
+Show a configured profile
+
+**Usage:** `repoverlay profile show [OPTIONS] <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Profile name
+
+###### **Options:**
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay profile apply`
+
+Apply a profile persistently
+
+**Usage:** `repoverlay profile apply [OPTIONS] --harness <HARNESS> <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Profile name
+
+###### **Options:**
+
+* `--harness <HARNESS>`
+
+  Possible values: `copilot`, `claude`
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay profile status`
+
+Show applied profile state
+
+**Usage:** `repoverlay profile status [OPTIONS]`
+
+###### **Options:**
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `--harness <HARNESS>`
+
+  Possible values: `copilot`, `claude`
+
+
+
+
+## `repoverlay profile remove`
+
+Remove an applied profile
+
+**Usage:** `repoverlay profile remove [OPTIONS] --harness <HARNESS> <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Profile name
+
+###### **Options:**
+
+* `--harness <HARNESS>`
+
+  Possible values: `copilot`, `claude`
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
 ## `repoverlay library`
 
 Manage the in-repo overlay library
@@ -535,6 +702,40 @@ Remove an overlay from the library
 ###### **Options:**
 
 * `-f`, `--force` — Force removal even if overlay is currently applied
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay copilot`
+
+Run GitHub Copilot with one or more profiles applied for the process lifetime
+
+**Usage:** `repoverlay copilot [OPTIONS] --profile <PROFILES> [-- <EXTRA_ARGS>...]`
+
+###### **Arguments:**
+
+* `<EXTRA_ARGS>` — Extra arguments forwarded to the Copilot harness
+
+###### **Options:**
+
+* `--profile <PROFILES>` — Profile name to apply while Copilot runs (repeat to apply several)
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay claude`
+
+Run Claude with one or more profiles applied for the process lifetime
+
+**Usage:** `repoverlay claude [OPTIONS] --profile <PROFILES> [-- <EXTRA_ARGS>...]`
+
+###### **Arguments:**
+
+* `<EXTRA_ARGS>` — Extra arguments forwarded to the Claude harness
+
+###### **Options:**
+
+* `--profile <PROFILES>` — Profile name to apply while Claude runs (repeat to apply several)
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 
 
