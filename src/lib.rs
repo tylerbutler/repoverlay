@@ -556,6 +556,19 @@ pub(crate) fn apply_resolved_overlay(
             continue;
         }
 
+        // In symlink mode the whole directory is exposed as-is, so embedded
+        // symlinks must not escape the overlay (copy mode checks during copy).
+        // Vet before conflict resolution so nothing is removed for a bad overlay.
+        if link_type == LinkType::Symlink {
+            crate::overlay_repo::ensure_no_escaping_symlinks(&source_dir).with_context(|| {
+                format!(
+                    "Refusing to apply directory '{}' from overlay '{}'",
+                    dir_path.display(),
+                    overlay_name
+                )
+            })?;
+        }
+
         // Check for conflicts with existing overlays
         let dir_rel_str = dir_path.to_string_lossy().to_string();
         if let Some(conflicting_overlay) = existing_targets.get(&dir_rel_str) {
@@ -674,20 +687,13 @@ pub(crate) fn apply_resolved_overlay(
         // Create directory symlink or copy
         match link_type {
             LinkType::Symlink => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&source_dir, &target_dir).with_context(|| {
-                    format!(
-                        "Failed to create directory symlink: {}",
-                        target_dir.display()
-                    )
-                })?;
-                #[cfg(windows)]
-                std::os::windows::fs::symlink_dir(&source_dir, &target_dir).with_context(|| {
-                    format!(
-                        "Failed to create directory symlink: {}",
-                        target_dir.display()
-                    )
-                })?;
+                fs_util::create_symlink(&source_dir, &target_dir, fs_util::SymlinkKind::Dir)
+                    .with_context(|| {
+                        format!(
+                            "Failed to create directory symlink: {}",
+                            target_dir.display()
+                        )
+                    })?;
             }
             LinkType::Copy | LinkType::Merged => {
                 // For copy/merged mode, create the target directory and recursively copy contents
@@ -916,14 +922,10 @@ pub(crate) fn apply_resolved_overlay(
         );
         match link_type {
             LinkType::Symlink => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&source_file, &target_file).with_context(|| {
-                    format!("Failed to create symlink: {}", target_file.display())
-                })?;
-                #[cfg(windows)]
-                std::os::windows::fs::symlink_file(&source_file, &target_file).with_context(
-                    || format!("Failed to create symlink: {}", target_file.display()),
-                )?;
+                fs_util::create_symlink(&source_file, &target_file, fs_util::SymlinkKind::File)
+                    .with_context(|| {
+                        format!("Failed to create symlink: {}", target_file.display())
+                    })?;
             }
             LinkType::Copy => {
                 fs::copy(&source_file, &target_file)
@@ -3517,6 +3519,86 @@ mod tests {
             assert!(
                 !canonical.join("evil_link").exists(),
                 "symlink should not be copied to target"
+            );
+        }
+
+        #[test]
+        #[cfg(unix)]
+        fn directory_symlink_mode_rejects_escaping_symlink_inside_directory() {
+            let repo = create_test_repo();
+            let parent = TempDir::new().unwrap();
+            let overlay = parent.path().join("overlay");
+            let outside = parent.path().join("outside");
+            fs::create_dir_all(overlay.join(".claude")).unwrap();
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+            fs::write(overlay.join(".claude/CLAUDE.md"), "instructions").unwrap();
+            // Malicious symlink inside the declared directory escaping the overlay
+            std::os::unix::fs::symlink(&outside, overlay.join(".claude/evil")).unwrap();
+            fs::write(
+                overlay.join(CONFIG_FILE),
+                "overlay =\n  name = test\n\ndirectories =\n  = .claude\n",
+            )
+            .unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.clone(),
+                source_info: OverlaySource::local(overlay),
+            };
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_resolved_overlay(
+                &resolved,
+                &canonical,
+                false, // symlink mode: the whole directory would be linked as-is
+                None,
+                ConflictStrategy::default(),
+                false,
+            );
+            let err = result.expect_err("apply should reject directory with escaping symlink");
+            assert!(
+                err.to_string().contains("escape") || format!("{err:#}").contains("escape"),
+                "error should mention symlink escape: {err:#}"
+            );
+            assert!(
+                !canonical.join(".claude").exists(),
+                "directory must not be linked into the target"
+            );
+        }
+
+        #[test]
+        #[cfg(unix)]
+        fn directory_symlink_mode_allows_internal_symlinks() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join(".claude")).unwrap();
+            fs::write(overlay.path().join(".claude/CLAUDE.md"), "instructions").unwrap();
+            // Relative symlink staying inside the declared directory is fine
+            std::os::unix::fs::symlink("CLAUDE.md", overlay.path().join(".claude/alias.md"))
+                .unwrap();
+            fs::write(
+                overlay.path().join(CONFIG_FILE),
+                "overlay =\n  name = test\n\ndirectories =\n  = .claude\n",
+            )
+            .unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay.path().to_path_buf()),
+            };
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_resolved_overlay(
+                &resolved,
+                &canonical,
+                false,
+                None,
+                ConflictStrategy::default(),
+                false,
+            );
+            assert!(result.is_ok(), "apply should succeed: {result:?}");
+            assert!(
+                canonical.join(".claude/CLAUDE.md").exists(),
+                "directory should be linked into the target"
             );
         }
     }

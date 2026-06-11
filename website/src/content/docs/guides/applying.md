@@ -187,5 +187,5 @@ Want to see what overlays are available without applying anything? Use `repoverl
 repoverlay browse tylerbutler
 ```
 
-This fetches and lists available overlays from the source. You can still select and apply from the interactive list, but the source is not saved to your configuration.
+This fetches and lists available overlays from the source. You can still select and apply from the interactive list. As with `apply`, the first time you use a source repoverlay asks whether to save it for future use.
 :::

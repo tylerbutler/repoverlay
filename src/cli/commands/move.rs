@@ -153,28 +153,12 @@ pub(crate) fn handle_move_command(
         }
 
         // Create new symlink
-        match entry.entry_type {
-            EntryType::File => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&new_link_target, &symlink_path).with_context(|| {
-                    format!("Failed to create symlink: {}", symlink_path.display())
-                })?;
-                #[cfg(windows)]
-                std::os::windows::fs::symlink_file(&new_link_target, &symlink_path).with_context(
-                    || format!("Failed to create symlink: {}", symlink_path.display()),
-                )?;
-            }
-            EntryType::Directory => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&new_link_target, &symlink_path).with_context(|| {
-                    format!("Failed to create symlink: {}", symlink_path.display())
-                })?;
-                #[cfg(windows)]
-                std::os::windows::fs::symlink_dir(&new_link_target, &symlink_path).with_context(
-                    || format!("Failed to create symlink: {}", symlink_path.display()),
-                )?;
-            }
-        }
+        let kind = match entry.entry_type {
+            EntryType::File => crate::fs_util::SymlinkKind::File,
+            EntryType::Directory => crate::fs_util::SymlinkKind::Dir,
+        };
+        crate::fs_util::create_symlink(&new_link_target, &symlink_path, kind)
+            .with_context(|| format!("Failed to create symlink: {}", symlink_path.display()))?;
 
         relinked += 1;
     }

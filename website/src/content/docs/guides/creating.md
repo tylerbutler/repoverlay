@@ -136,9 +136,15 @@ Others can then apply your overlays using your GitHub username:
 ```bash
 # Interactive selection
 repoverlay apply tylerbutler
+```
 
-# Direct reference
-repoverlay apply tylerbutler/my-overlays/ai-config
+Direct three-part references use the *target* repository's org and repo plus the overlay name (`<target-org>/<target-repo>/<overlay-name>`), and resolve against configured sources — so consumers add your overlay repository as a source first:
+
+```bash
+repoverlay source add tylerbutler/my-overlays
+
+# Applies the ai-config overlay defined for tylerbutler/tools-monorepo
+repoverlay apply tylerbutler/tools-monorepo/ai-config
 ```
 
 Or browse without applying:
