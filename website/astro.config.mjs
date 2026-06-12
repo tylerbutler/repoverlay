@@ -1,5 +1,6 @@
 import starlight from "@astrojs/starlight";
 import starlightAnnouncement from "starlight-announcement";
+import starlightBlog from "starlight-blog";
 import starlightHeadingBadges from "starlight-heading-badges";
 import starlightCatppuccin from "@catppuccin/starlight";
 import a11yEmoji from "@fec/remark-a11y-emoji";
@@ -44,6 +45,16 @@ export default defineConfig({
 				// 	dark: { flavor: "macchiato", accent: "maroon" },
 				// 	light: { accent: "maroon" },
 				// }),
+				starlightBlog({
+					title: "Blog",
+					authors: {
+						tylerbutler: {
+							name: "Tyler Butler",
+							title: "Author of repoverlay",
+							url: "https://github.com/tylerbutler",
+						},
+					},
+				}),
 				starlightAnnouncement({
 					announcements: [
 						{
