@@ -306,7 +306,7 @@ mod tests {
     mod remove_single_overlay_tests {
         use super::*;
         use crate::state::{FileEntry, LinkType, OverlayState};
-        use crate::{ConflictStrategy, apply_overlay};
+        use crate::{ApplyOptions, apply_overlay};
 
         fn create_test_repo_with_overlay() -> (TempDir, String) {
             let repo = create_test_repo();
@@ -316,14 +316,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true, // copy mode so we don't need to keep overlay dir alive
-                Some("test-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("test-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -421,14 +418,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true, // copy mode
-                Some("nested-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("nested-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -554,7 +548,7 @@ mod tests {
     // Tests for remove_overlay
     mod remove_overlay_tests {
         use super::*;
-        use crate::{ConflictStrategy, apply_overlay};
+        use crate::{ApplyOptions, apply_overlay};
 
         #[test]
         fn remove_all_removes_all_overlays() {
@@ -568,28 +562,22 @@ mod tests {
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("overlay-1".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("overlay-1".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
             apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("overlay-2".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("overlay-2".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -614,14 +602,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("test-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("test-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -650,14 +635,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -681,14 +663,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -712,14 +691,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("only-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("only-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -741,14 +717,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("exclude-cleanup-fails".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("exclude-cleanup-fails".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -789,27 +762,21 @@ mod tests {
             apply_overlay(
                 overlay_one.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("one".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("one".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             apply_overlay(
                 overlay_two.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("two".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("two".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 

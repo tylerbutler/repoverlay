@@ -4,6 +4,7 @@ use log::debug;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::ApplyOptions;
 use crate::ConflictStrategy;
 use crate::OverlayName;
 use crate::apply_overlay;
@@ -139,7 +140,7 @@ pub(crate) fn restore_overlays(
         };
 
         let ref_override = match &state.source {
-            OverlaySource::GitHub { git_ref, .. } => Some(git_ref.as_str()),
+            OverlaySource::GitHub { git_ref, .. } => Some(git_ref.clone()),
             OverlaySource::Local { .. }
             | OverlaySource::Library { .. }
             | OverlaySource::OverlayRepo { .. } => None,
@@ -150,14 +151,14 @@ pub(crate) fn restore_overlays(
         match apply_overlay(
             &source_str,
             &target,
-            false, // Use symlinks by default
-            Some(state.name.clone()),
-            ref_override,
-            true, // Update cache
-            ConflictStrategy::Force,
-            merge,
-            None,  // Use default source resolution for restore
-            false, // Not a dry run
+            &ApplyOptions {
+                name_override: Some(state.name.clone()),
+                ref_override,
+                update_cache: true,
+                conflict_strategy: ConflictStrategy::Force,
+                merge,
+                ..ApplyOptions::default()
+            },
         ) {
             Ok(()) => {
                 println!("  {} Restored '{}'", "✓".green(), state.name);
@@ -392,14 +393,14 @@ pub(crate) fn update_overlays(
             apply_overlay(
                 url,
                 &target,
-                false,
-                Some(state.name.clone()),
-                Some(git_ref.as_str()),
-                true,
-                conflict_strategy,
-                merge,
-                None,  // Use default source resolution for update
-                false, // Not a dry run
+                &ApplyOptions {
+                    name_override: Some(state.name.clone()),
+                    ref_override: Some(git_ref.clone()),
+                    update_cache: true,
+                    conflict_strategy,
+                    merge,
+                    ..ApplyOptions::default()
+                },
             )?;
         }
     }
@@ -835,18 +836,7 @@ pub(crate) fn create_overlay_with_files(
 ///
 /// 1. Remove all existing overlays (if any)
 /// 2. Apply the new overlay
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
-pub(crate) fn switch_overlay(
-    source: &str,
-    target: &Path,
-    copy: bool,
-    name: Option<String>,
-    ref_override: Option<&str>,
-    update_cache: bool,
-    conflict_strategy: ConflictStrategy,
-    merge: bool,
-    dry_run: bool,
-) -> Result<()> {
+pub(crate) fn switch_overlay(source: &str, target: &Path, options: &ApplyOptions) -> Result<()> {
     validate_git_repo(target)?;
 
     // Check if any overlays are currently applied
@@ -856,23 +846,12 @@ pub(crate) fn switch_overlay(
     if has_overlays {
         println!("{} existing overlays...", "Removing".yellow().bold());
         // Remove all existing overlays
-        remove_overlay(target, None, true, dry_run)?;
+        remove_overlay(target, None, true, options.dry_run)?;
     }
 
     // Apply the new overlay
     println!("{} new overlay...", "Applying".blue().bold());
-    apply_overlay(
-        source,
-        target,
-        copy,
-        name,
-        ref_override,
-        update_cache,
-        conflict_strategy,
-        merge,
-        None,
-        dry_run,
-    )?;
+    apply_overlay(source, target, options)?;
 
     Ok(())
 }
@@ -1088,14 +1067,7 @@ mod tests {
             apply_overlay(
                 ctx.overlay_source(),
                 ctx.repo_path(),
-                false, // use symlinks
-                None,  // auto-name
-                None,  // no ref override
-                false, // don't update cache
-                ConflictStrategy::default(),
-                false,
-                None,  // default source resolution
-                false, // not dry run
+                &ApplyOptions::default(),
             )
             .expect("apply should succeed");
 
@@ -1188,14 +1160,7 @@ mod tests {
             apply_overlay(
                 ctx.overlay_source(),
                 ctx.repo_path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .expect("apply should succeed");
 
@@ -1251,27 +1216,19 @@ mod tests {
             apply_overlay(
                 overlay_a.path().to_str().unwrap(),
                 ctx.repo_path(),
-                false,
-                Some("overlay-a".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-a".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .expect("first apply should succeed");
             apply_overlay(
                 overlay_b.path().to_str().unwrap(),
                 ctx.repo_path(),
-                false,
-                Some("overlay-b".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-b".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .expect("second apply should succeed");
 
@@ -1301,27 +1258,19 @@ mod tests {
             apply_overlay(
                 overlay_a.path().to_str().unwrap(),
                 ctx.repo_path(),
-                false,
-                Some("restorable".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("restorable".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .expect("first apply should succeed");
             apply_overlay(
                 overlay_b.path().to_str().unwrap(),
                 ctx.repo_path(),
-                false,
-                Some("missing-source".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("missing-source".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .expect("second apply should succeed");
 
@@ -1365,14 +1314,7 @@ mod tests {
             apply_overlay(
                 ctx.overlay_source(),
                 ctx.repo_path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .expect("apply should succeed");
 
@@ -1399,14 +1341,7 @@ mod tests {
             apply_overlay(
                 ctx.overlay_source(),
                 ctx.repo_path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .expect("re-apply should succeed");
 

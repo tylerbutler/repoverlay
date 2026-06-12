@@ -252,14 +252,10 @@ fn execute_profile_action(
             crate::apply_overlay(
                 &reference,
                 target,
-                false,
-                None,
-                None,
-                true,
-                crate::ConflictStrategy::Fail,
-                false,
-                None,
-                false,
+                &crate::ApplyOptions {
+                    update_cache: true,
+                    ..crate::ApplyOptions::default()
+                },
             )?;
             let after = crate::state::list_applied_overlays(target)?;
             let new_overlays: Vec<_> = after

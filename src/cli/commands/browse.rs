@@ -13,8 +13,8 @@ use crate::sources::list_overlays_in_dir;
 use crate::state::{OverlaySource, ResolvedVia};
 use crate::upstream::detect_repo_identity;
 use crate::{
-    CacheManager, ConflictStrategy, ResolvedSource, apply_multiple_overlays, canonicalize_path,
-    config, get_cached_repo_commit, library, list_applied_overlays, list_overlays_from_cached_repo,
+    CacheManager, ResolvedSource, apply_multiple_overlays, canonicalize_path, config,
+    get_cached_repo_commit, library, list_applied_overlays, list_overlays_from_cached_repo,
     selection::is_interactive, validate_git_repo,
 };
 
@@ -549,10 +549,10 @@ where
     apply_multiple_overlays(
         &sources,
         &target,
-        false,
-        dry_run,
-        ConflictStrategy::default(),
-        false,
+        &crate::ApplyOptions {
+            dry_run,
+            ..crate::ApplyOptions::default()
+        },
     )?;
 
     Ok(())
