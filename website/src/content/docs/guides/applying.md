@@ -30,7 +30,7 @@ repoverlay supports several source types. It determines the type automatically f
 
 - Strings starting with `https://github.com/` are treated as **GitHub URLs**
 - Strings that look like filesystem paths (`./`, `/`, `~/`) are treated as **local directories**
-- Three-part strings like `org/repo/name` are treated as **overlay repository references**
+- Three-part strings like `org/repo/name` are treated as **configured source references**
 - Two-part strings like `owner/repo` enter **browse mode** (interactive selection)
 - Single words like `tylerbutler` are treated as **GitHub usernames**
 
@@ -41,6 +41,8 @@ repoverlay browse tylerbutler
 ```
 
 This fetches a default overlay repository for that user, shows available overlays filtered to your current repo, and lets you pick from an interactive list. The first time you use a source, repoverlay will ask if you want to save it for future use.
+
+A bare username expands to `username/repo-overlays`. To use a different repository name, set the `REPOVERLAY_DEFAULT_REPO_NAME` environment variable — for example, `REPOVERLAY_DEFAULT_REPO_NAME=overlays` expands `tylerbutler` to `tylerbutler/overlays`.
 
 ### GitHub URLs
 
@@ -58,7 +60,7 @@ repoverlay apply https://github.com/owner/repo/tree/main/overlays/rust
 
 GitHub sources are cached locally using shallow clones. Use `repoverlay update` to pull new changes later.
 
-### Overlay repository references
+### Configured source references
 
 If you've used a source before (or added one manually), you can reference a specific overlay by its path:
 
@@ -139,6 +141,8 @@ Deep merge combines objects recursively — overlay keys are added or updated, b
 :::note
 `--merge` can be combined with `--force` or `--skip-conflicts`. When combined with `--force`, JSON files are merged while non-JSON conflicts are overwritten. When combined with `--skip-conflicts`, JSON files are merged while non-JSON conflicts are skipped.
 :::
+
+To enable merging by default, set the `REPOVERLAY_MERGE=true` environment variable. It acts as the default for the `--merge` flag everywhere the flag exists (`apply`, `switch`, `restore`, and `update`).
 
 ## Other options
 
