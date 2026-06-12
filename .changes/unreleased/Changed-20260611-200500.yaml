@@ -1,0 +1,6 @@
+kind: Changed
+body: |-
+    Unify the "not a git repository" error message
+
+    `edit`, `sync`, and `create` now validate the target repository through the same shared check as `apply`, so all commands report `Target is not a git repository: <path>` instead of three slightly different variants.
+time: 2026-06-11T20:05:00-07:00

@@ -52,12 +52,7 @@ pub(crate) fn resolve_overlay_source_path(state: &crate::state::OverlayState) ->
 /// old and new selections and applies adds/removes accordingly.
 fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
-    if !target.join(".git").exists() {
-        bail!(
-            "Target directory is not a git repository: {}",
-            target.display()
-        );
-    }
+    crate::validate_git_repo(&target)?;
 
     // Parse overlay name and verify it's applied
     let overlay_name = extract_overlay_name(name_arg)?;
@@ -258,12 +253,7 @@ pub(crate) fn remove_files_from_overlay(
     dry_run: bool,
 ) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
-    if !target.join(".git").exists() {
-        bail!(
-            "Target directory is not a git repository: {}",
-            target.display()
-        );
-    }
+    crate::validate_git_repo(&target)?;
 
     // Extract overlay name from the argument (handles both short and full forms)
     let overlay_name = extract_overlay_name(name_arg)?;
@@ -459,10 +449,7 @@ pub(crate) fn add_files_to_overlay(
 ) -> Result<()> {
     // Validate target is a git repo
     let target = canonicalize_path(target, "Target directory")?;
-    if !target.join(".git").exists() {
-        let target_display = target.display();
-        bail!("Target directory is not a git repository: {target_display}");
-    }
+    crate::validate_git_repo(&target)?;
 
     // Check that files were provided
     if files.is_empty() {

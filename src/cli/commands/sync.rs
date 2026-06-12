@@ -21,10 +21,7 @@ pub(crate) fn handle_sync(
 ) -> Result<()> {
     // Validate target is a git repo
     let target = canonicalize_path(target, "Target directory")?;
-    if !target.join(".git").exists() {
-        let target_display = target.display();
-        bail!("Target directory is not a git repository: {target_display}");
-    }
+    crate::validate_git_repo(&target)?;
 
     if sync_all {
         let applied_overlays = list_applied_overlays(&target)?;
