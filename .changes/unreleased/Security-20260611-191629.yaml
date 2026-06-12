@@ -1,0 +1,6 @@
+kind: Security
+body: |-
+    Harden git checkout/fetch invocations against pathspec-ambiguous refs
+
+    Internal `git checkout` and `git fetch` invocations now terminate argument parsing with `--`, matching the existing clone invocations. Refs were already validated to never begin with `-`; this is defense-in-depth so a ref that also names a file in the repository cannot be misinterpreted by git.
+time: 2026-06-11T19:16:29-07:00
