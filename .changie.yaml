@@ -43,9 +43,7 @@ components:
     - browse
     - cache
     - create
-    - create-local
     - edit
-    - list
     - move
     - remove
     - restore

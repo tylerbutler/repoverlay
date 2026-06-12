@@ -1,9 +1,24 @@
 {
   "mcpServers": {
+    "context7": {
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ],
+      "command": "npx"
+    },
     "fff": {
       "args": [],
       "command": "fff-mcp",
       "type": "stdio"
+    },
+    "semble": {
+      "args": [
+        "--from",
+        "semble[mcp]",
+        "semble"
+      ],
+      "command": "uvx"
     }
   }
 }

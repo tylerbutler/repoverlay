@@ -122,7 +122,7 @@ Before merging a release PR, ensure:
    just change    # Runs: changie new
    ```
 
-   Select one of the configured kinds (`Added`, `Fixed`, `Performance`, `Changed`, `Reverted`, `Dependencies`, `Security`) and an appropriate component (`features`, `fixes`, `misc`, `library`, or a command name: `apply`, `browse`, `cache`, `create`, `create-local`, `edit`, `list`, `move`, `remove`, `restore`, `source`, `status`, `switch`, `sync`).
+   Select one of the configured kinds (`Breaking`, `Added`, `Fixed`, `Performance`, `Changed`, `Reverted`, `Dependencies`, `Security`) and an appropriate component (`features`, `fixes`, `misc`, `library`, or a command name: `apply`, `browse`, `cache`, `create`, `edit`, `move`, `remove`, `restore`, `source`, `status`, `switch`, `sync`, `update`).
 
    No changelog fragment is needed for CI-only/release-plumbing documentation changes that do not affect the published binary.
 
@@ -224,6 +224,10 @@ Harness identity (`AgentHarness` in `src/profile_applicators/mod.rs`): stable id
 - **Hooks and commands**: plugin bundle `hooks/` and `commands/` are never decomposed for either harness.
 - **Un-hide the CLI**: `profile`, `claude`, and `copilot` are still hidden pending public announcement.
 - **Unmerged docs on the `profiles` branch**: the website profiles guide (`website/src/content/docs/guides/profiles.md`), homepage profile announcements, and the design specs/plans (`docs/superpowers/specs/2026-06-02-profiles-design.md`, `2026-06-03-plugins-design.md`, plans, and the harness-process refactor docs) exist only on the branch. The branch's source code is otherwise fully merged — `main` is *ahead* of it (the branch lacks the cf4114f cross-platform symlink fix), so only the docs need to be brought over. The unmerged guide also predates Claude instruction placement (it documents instructions as Copilot-only), so it needs updating when brought over.
+
+## Vendored Agent Skills
+
+The repository tracks skills for AI coding agents working on this codebase: `.claude/skills/` (Claude Code) and `.agents/skills/` (other harnesses) hold vendored skill copies, and `skills-lock.json` pins each skill's upstream source and version. These are contributor tooling only — they are not part of the published binary and do not appear in user documentation.
 
 ## Project Structure
 
