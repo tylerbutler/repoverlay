@@ -111,13 +111,7 @@ pub(crate) fn create_into_library(
         );
     }
 
-    // Validate target is a git repo
-    if !target.join(".git").exists() {
-        bail!(
-            "Target directory is not a git repository: {}",
-            target.display()
-        );
-    }
+    crate::validate_git_repo(target)?;
 
     let source = canonicalize_path(source, "Source")?;
     let target = canonicalize_path(target, "Target")?;

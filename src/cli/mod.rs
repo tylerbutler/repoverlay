@@ -12,9 +12,8 @@ use std::path::PathBuf;
 use crate::reference::SourceReference;
 use crate::{
     ApplyOptions, ConflictStrategy, apply_overlay, config, repair_git_exclude, restore_overlays,
-    show_status, show_status_json, status_has_overlays, switch_overlay,
-    update::{check_for_updates, version_string},
-    update_overlays,
+    show_status, show_status_json, status_has_overlays, switch_overlay, update_overlays,
+    version::{check_for_updates, version_string},
 };
 
 pub(crate) mod commands;
