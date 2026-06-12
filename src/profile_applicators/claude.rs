@@ -1,12 +1,10 @@
-#![allow(dead_code)]
-
 use anyhow::Result;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::plugin::{InstallMode, PluginBundle, PluginRef, ResolvedPlugin, resolve_plugin};
+use crate::plugin::{InstallMode, PluginRef, ResolvedPlugin, resolve_plugin};
 use crate::profile::{DelegateScope, ProfileConfig, ProfileMode};
-use crate::profile_applicators::{AgentHarness, ProfileApplicator, ProfileContext};
+use crate::profile_applicators::{ProfileApplicator, ProfileContext};
 use crate::profile_plan::{ProfileAction, ProfilePlan, json_pointer};
 
 pub(crate) struct ClaudeApplicator;
@@ -100,59 +98,6 @@ impl ClaudeApplicator {
         }
         Ok(())
     }
-
-    /// Decompose a resolved plugin bundle into native Claude placements,
-    /// appending skill-placement and skip actions and accumulating MCP servers
-    /// for the single project `.mcp.json` merge.
-    fn decompose_bundle(
-        bundle_dir: &Path,
-        plugin_name: &str,
-        actions: &mut Vec<ProfileAction>,
-        mcp_servers: &mut serde_json::Map<String, serde_json::Value>,
-        owned_paths: &mut Vec<String>,
-        repo_target: &Path,
-    ) -> Result<()> {
-        let bundle = PluginBundle::read(bundle_dir)?;
-
-        for skill in &bundle.skills {
-            actions.push(ProfileAction::PlacePluginDir {
-                source: bundle_dir.join("skills").join(skill),
-                target: AgentHarness::Claude.skills_root(repo_target).join(skill),
-            });
-        }
-
-        for agent in &bundle.agents {
-            actions.push(ProfileAction::PlacePluginDir {
-                source: bundle_dir.join("agents").join(agent),
-                target: AgentHarness::Claude.agents_root(repo_target).join(agent),
-            });
-        }
-
-        for (server_name, server) in &bundle.mcp_servers {
-            let pointer = json_pointer(&["mcpServers", server_name]);
-            if owned_paths.contains(&pointer) {
-                anyhow::bail!(
-                    "MCP server '{server_name}' is provided by more than one plugin; \
-                     resolve the conflict before applying"
-                );
-            }
-            let resolved = crate::plugin::substitute_plugin_root(server, bundle_dir)?;
-            mcp_servers.insert(server_name.clone(), resolved);
-            owned_paths.push(pointer);
-        }
-
-        for capability in &bundle.unsupported_capabilities {
-            actions.push(ProfileAction::SkipCapability {
-                capability: format!("plugin:{plugin_name}:{capability}"),
-                reason: format!(
-                    "Claude '{capability}' from plugin '{plugin_name}' cannot be decomposed \
-                     into a repo-local placement"
-                ),
-            });
-        }
-
-        Ok(())
-    }
 }
 
 impl ProfileApplicator for ClaudeApplicator {
@@ -214,13 +159,19 @@ impl ProfileApplicator for ClaudeApplicator {
                     // placements for both persistent and ephemeral applies, so
                     // Claude and Copilot behave identically. (Ephemeral
                     // placements are rolled back when the session ends.)
-                    Self::decompose_bundle(
+                    super::decompose_bundle(
+                        context,
                         &bundle_dir,
                         &name,
                         &mut actions,
                         &mut mcp_servers,
                         &mut owned_paths,
-                        &context.target,
+                        |capability| {
+                            format!(
+                                "Claude '{capability}' from plugin '{name}' cannot be \
+                                 decomposed into a repo-local placement"
+                            )
+                        },
                     )?;
                 }
                 // The source could not be cached/introspected, so fall back to
@@ -280,7 +231,9 @@ mod tests {
     use crate::cache::CacheManager;
     use crate::config::Marketplace;
     use crate::plugin::PluginRef;
+    use crate::profile_applicators::AgentHarness;
     use std::fs;
+    use std::path::Path;
 
     fn local_bundle(dir: &Path, name: &str) -> PathBuf {
         let bundle = dir.join(name);

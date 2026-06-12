@@ -30,6 +30,7 @@ mod sources;
 mod state;
 mod status;
 #[cfg(test)]
+#[path = "../tests/common/mod.rs"]
 mod testutil;
 mod update;
 mod upstream;
@@ -128,6 +129,35 @@ pub(crate) enum ConflictStrategy {
     /// - View a diff between existing and overlay files
     /// - Abort the entire apply operation
     Interactive,
+}
+
+/// Options controlling how an overlay is applied.
+///
+/// `ApplyOptions::default()` matches `repoverlay apply <source>` with no
+/// flags: symlink (not copy), no name/ref override, no cache refresh, fail on
+/// conflict, no JSON merging, default source resolution, and a real (non-dry)
+/// run.
+// The bools mirror independent CLI switches (--copy, --no-update, --merge,
+// --dry-run); collapsing them into enums would only obscure that mapping.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ApplyOptions {
+    /// Copy files instead of symlinking them.
+    pub(crate) force_copy: bool,
+    /// Overlay name override (priority: CLI override > config > directory name).
+    pub(crate) name_override: Option<String>,
+    /// Git ref override for GitHub sources.
+    pub(crate) ref_override: Option<String>,
+    /// Refresh cached GitHub sources before resolving.
+    pub(crate) update_cache: bool,
+    /// How conflicts with existing files and overlays are handled.
+    pub(crate) conflict_strategy: ConflictStrategy,
+    /// Merge JSON files on conflict instead of failing.
+    pub(crate) merge: bool,
+    /// Restrict resolution to the named configured source.
+    pub(crate) source_filter: Option<String>,
+    /// Report what would happen without making changes.
+    pub(crate) dry_run: bool,
 }
 
 /// Result of an interactive conflict prompt.
@@ -298,55 +328,36 @@ fn show_file_diff(existing_path: &Path, overlay_path: &Path, display_path: &Path
 /// - Overlay with same name already exists (unless using `Force` strategy)
 /// - File conflicts with existing overlay or repo file (unless using `Force` or `SkipConflicts`)
 /// - No files found in overlay source
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
-pub(crate) fn apply_overlay(
-    source_str: &str,
-    target: &Path,
-    force_copy: bool,
-    name_override: Option<String>,
-    ref_override: Option<&str>,
-    update_cache: bool,
-    conflict_strategy: ConflictStrategy,
-    merge: bool,
-    source_filter: Option<&str>,
-    dry_run: bool,
-) -> Result<()> {
+pub(crate) fn apply_overlay(source_str: &str, target: &Path, options: &ApplyOptions) -> Result<()> {
     debug!(
         "apply_overlay: source={}, target={}, force_copy={}, name_override={:?}, conflict_strategy={:?}, dry_run={}",
         source_str,
         target.display(),
-        force_copy,
-        name_override,
-        conflict_strategy,
-        dry_run
+        options.force_copy,
+        options.name_override,
+        options.conflict_strategy,
+        options.dry_run
     );
 
     // Resolve source (handles GitHub URLs and local paths)
     // Pass target to enable upstream detection for fork inheritance
     let resolved = resolve_source(
         source_str,
-        ref_override,
-        update_cache,
+        options.ref_override.as_deref(),
+        options.update_cache,
         Some(target),
-        source_filter,
+        options.source_filter.as_deref(),
     )?;
 
     // Handle multi-select from browse mode
     let resolved = match resolved {
         ResolvedSources::Single(single) => single,
         ResolvedSources::Multiple(sources) => {
-            return apply_multiple_overlays(
-                &sources,
-                target,
-                force_copy,
-                dry_run,
-                conflict_strategy,
-                merge,
-            );
+            return apply_multiple_overlays(&sources, target, options);
         }
     };
 
-    if dry_run {
+    if options.dry_run {
         println!("{} Dry run - no changes made.", "Note:".yellow());
         println!("\nWould apply overlay from: {}", resolved.path.display());
         return Ok(());
@@ -356,14 +367,7 @@ pub(crate) fn apply_overlay(
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
 
-    apply_resolved_overlay(
-        &resolved,
-        &target,
-        force_copy,
-        name_override,
-        conflict_strategy,
-        merge,
-    )
+    apply_resolved_overlay(&resolved, &target, options)
 }
 
 /// RAII guard that removes overlay files created during a single
@@ -425,11 +429,15 @@ impl Drop for OverlayApplyGuard {
 pub(crate) fn apply_resolved_overlay(
     resolved: &ResolvedSource,
     target: &Path,
-    force_copy: bool,
-    name_override: Option<String>,
-    conflict_strategy: ConflictStrategy,
-    merge: bool,
+    options: &ApplyOptions,
 ) -> Result<()> {
+    let ApplyOptions {
+        force_copy,
+        conflict_strategy,
+        merge,
+        ..
+    } = *options;
+    let name_override = options.name_override.clone();
     let source = &resolved.path;
     debug!("resolved source path: {}", source.display());
 
@@ -1071,11 +1079,9 @@ fn rollback_created_overlay_entries(target: &Path, state: &OverlayState) {
 pub(crate) fn apply_multiple_overlays(
     sources: &[ResolvedSource],
     target: &Path,
-    force_copy: bool,
-    dry_run: bool,
-    conflict_strategy: ConflictStrategy,
-    merge: bool,
+    options: &ApplyOptions,
 ) -> Result<()> {
+    let conflict_strategy = options.conflict_strategy;
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
 
@@ -1129,7 +1135,7 @@ pub(crate) fn apply_multiple_overlays(
         }
     }
 
-    if dry_run {
+    if options.dry_run {
         println!("\n{} Dry run - no changes made.", "Note:".yellow());
         println!("\nWould apply {} overlay(s):", sources.len());
         for resolved in sources {
@@ -1141,15 +1147,14 @@ pub(crate) fn apply_multiple_overlays(
     // Phase 3: Apply each overlay, tracking for rollback
     let mut applied: Vec<String> = Vec::new();
 
+    // A single name override cannot apply to several overlays.
+    let per_overlay_options = ApplyOptions {
+        name_override: None,
+        ..options.clone()
+    };
+
     for resolved in sources {
-        match apply_resolved_overlay(
-            resolved,
-            &target,
-            force_copy,
-            None,
-            conflict_strategy,
-            merge,
-        ) {
+        match apply_resolved_overlay(resolved, &target, &per_overlay_options) {
             Ok(()) => {
                 let config = load_overlay_config(&resolved.path)?;
                 let name = determine_overlay_name(&config, &resolved.path, None)?;
@@ -2329,14 +2334,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("unsafe".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("unsafe".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_err());
@@ -2693,14 +2694,7 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(
-                &sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_multiple_overlays(&sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "multi-apply should succeed: {result:?}");
 
             // Both overlays should be applied
@@ -2737,14 +2731,7 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(
-                &sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_multiple_overlays(&sources, &canonical, &ApplyOptions::default());
             assert!(result.is_err(), "should fail due to conflict");
 
             // No overlays should be applied
@@ -2777,10 +2764,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                false,
-                true,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    dry_run: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "dry run should succeed");
 
@@ -2816,14 +2803,7 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(
-                &sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_multiple_overlays(&sources, &canonical, &ApplyOptions::default());
             assert!(
                 result.is_err(),
                 "should fail because config.json already exists"
@@ -2873,14 +2853,8 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            let result = apply_multiple_overlays(
-                &first_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result =
+                apply_multiple_overlays(&first_sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
             // Now try to apply both, including the already-applied overlay_a
@@ -2894,14 +2868,8 @@ mod tests {
                     source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
                 },
             ];
-            let result = apply_multiple_overlays(
-                &second_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result =
+                apply_multiple_overlays(&second_sources, &canonical, &ApplyOptions::default());
             assert!(
                 result.is_err(),
                 "should fail because overlay is already applied"
@@ -2937,10 +2905,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                false,
-                true,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    dry_run: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -2992,14 +2960,7 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(
-                &sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_multiple_overlays(&sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "three overlays should succeed: {result:?}");
 
             let applied = list_applied_overlays(&canonical).unwrap();
@@ -3034,10 +2995,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                true,
-                false,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3090,14 +3051,8 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            let result = apply_multiple_overlays(
-                &first_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result =
+                apply_multiple_overlays(&first_sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
             // Now re-apply overlay_a along with overlay_b using Force
@@ -3114,10 +3069,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &second_sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::Force,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3147,10 +3102,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::Force,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3186,10 +3141,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3228,24 +3183,18 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            let result = apply_multiple_overlays(
-                &first_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result =
+                apply_multiple_overlays(&first_sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
             // Try re-applying with SkipConflicts — should still fail for same-name
             let result = apply_multiple_overlays(
                 &first_sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_err(),
@@ -3277,15 +3226,7 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            apply_multiple_overlays(
-                &first_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            )
-            .unwrap();
+            apply_multiple_overlays(&first_sources, &canonical, &ApplyOptions::default()).unwrap();
 
             // Apply overlay_b with SkipConflicts — should skip .envrc but apply unique.txt
             let second_sources = vec![ResolvedSource {
@@ -3295,10 +3236,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &second_sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3336,10 +3277,10 @@ mod tests {
             apply_resolved_overlay(
                 &resolved,
                 &canonical,
-                true,
-                None,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             )
         }
 
@@ -3503,10 +3444,10 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 &canonical,
-                true,
-                None,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "apply should succeed: {result:?}");
 
@@ -3547,14 +3488,7 @@ mod tests {
                 source_info: OverlaySource::local(overlay),
             };
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_resolved_overlay(
-                &resolved,
-                &canonical,
-                false, // symlink mode: the whole directory would be linked as-is
-                None,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_resolved_overlay(&resolved, &canonical, &ApplyOptions::default());
             let err = result.expect_err("apply should reject directory with escaping symlink");
             assert!(
                 err.to_string().contains("escape") || format!("{err:#}").contains("escape"),
@@ -3587,14 +3521,7 @@ mod tests {
                 source_info: OverlaySource::local(overlay.path().to_path_buf()),
             };
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_resolved_overlay(
-                &resolved,
-                &canonical,
-                false,
-                None,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_resolved_overlay(&resolved, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "apply should succeed: {result:?}");
             assert!(
                 canonical.join(".claude/CLAUDE.md").exists(),
@@ -4197,10 +4124,12 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("symlink-target".to_string()),
-                ConflictStrategy::Fail,
-                true,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("symlink-target".to_string()),
+                    merge: true,
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_err());
@@ -4234,10 +4163,12 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("symlink-ancestor".to_string()),
-                ConflictStrategy::Fail,
-                true,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("symlink-ancestor".to_string()),
+                    merge: true,
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_err());
@@ -4275,10 +4206,13 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("write-failure".to_string()),
-                ConflictStrategy::SkipConflicts,
-                true,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("write-failure".to_string()),
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    merge: true,
+                    ..ApplyOptions::default()
+                },
             );
 
             fs::set_permissions(&locked_dir, original_permissions).unwrap();
@@ -4308,10 +4242,11 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("exclude-fails".to_string()),
-                ConflictStrategy::Fail,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("exclude-fails".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_err());
@@ -4346,10 +4281,11 @@ mod tests {
             apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("my-overlay".to_string()),
-                ConflictStrategy::Fail,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("my-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             assert_eq!(
@@ -4369,10 +4305,12 @@ mod tests {
             apply_resolved_overlay(
                 &resolved2,
                 repo.path(),
-                true,
-                Some("my-overlay".to_string()),
-                ConflictStrategy::Interactive,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("my-overlay".to_string()),
+                    conflict_strategy: ConflictStrategy::Interactive,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -4403,10 +4341,11 @@ mod tests {
             apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("batch-test".to_string()),
-                ConflictStrategy::Fail,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("batch-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -4429,10 +4368,11 @@ mod tests {
             apply_multiple_overlays(
                 &[resolved2],
                 repo.path(),
-                true,
-                false,
-                ConflictStrategy::Interactive,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    conflict_strategy: ConflictStrategy::Interactive,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5101,28 +5041,22 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("dup-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("dup-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("dup-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("dup-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("already applied"));
@@ -5137,14 +5071,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("force-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("force-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5155,14 +5086,12 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("force-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("force-test".to_string()),
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5180,14 +5109,12 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("dry-run-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                true, // dry_run
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("dry-run-test".to_string()),
+                    dry_run: true,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5214,14 +5141,10 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                None, // no name override
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5247,14 +5170,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("override-name".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("override-name".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5280,14 +5200,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("mapped".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("mapped".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5315,14 +5232,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("dir-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("dir-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 

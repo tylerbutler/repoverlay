@@ -190,14 +190,11 @@ pub(crate) fn create_into_library(
             crate::apply_overlay(
                 &overlay_source,
                 &target,
-                false,
-                Some(overlay_name),
-                None,
-                false,
-                crate::ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &crate::ApplyOptions {
+                    name_override: Some(overlay_name),
+                    conflict_strategy: crate::ConflictStrategy::Force,
+                    ..crate::ApplyOptions::default()
+                },
             )?;
         }
     }
@@ -256,14 +253,10 @@ pub(crate) fn create_overlay_command(
             crate::apply_overlay(
                 &overlay_source,
                 source,
-                false,
-                None,
-                None,
-                false,
-                crate::ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &crate::ApplyOptions {
+                    conflict_strategy: crate::ConflictStrategy::Force,
+                    ..crate::ApplyOptions::default()
+                },
             )?;
         }
 
@@ -340,14 +333,11 @@ pub(crate) fn create_overlay_command(
         crate::apply_overlay(
             &overlay_source,
             source,
-            false,
-            Some(overlay_name),
-            None,
-            false,
-            crate::ConflictStrategy::Force,
-            false,
-            None,
-            false,
+            &crate::ApplyOptions {
+                name_override: Some(overlay_name),
+                conflict_strategy: crate::ConflictStrategy::Force,
+                ..crate::ApplyOptions::default()
+            },
         )?;
 
         return Ok(());
@@ -380,14 +370,11 @@ pub(crate) fn create_overlay_command(
     crate::apply_overlay(
         &overlay_source,
         source,
-        false,
-        Some(overlay_name),
-        None,
-        false,
-        crate::ConflictStrategy::Force,
-        false,
-        None,
-        false,
+        &crate::ApplyOptions {
+            name_override: Some(overlay_name),
+            conflict_strategy: crate::ConflictStrategy::Force,
+            ..crate::ApplyOptions::default()
+        },
     )?;
 
     Ok(())

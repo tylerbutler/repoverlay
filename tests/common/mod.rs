@@ -1,44 +1,28 @@
-//! Common test utilities for CLI tests.
+//! Common test utilities and helpers for repoverlay tests.
+//!
+//! This file is the single source of truth for test helpers: integration
+//! tests include it as `mod common;` and unit tests reach it through the
+//! `#[path]`-mapped `crate::testutil` module declared in `lib.rs`.
 
 #![allow(dead_code)]
 
-use assert_cmd::Command as AssertCommand;
-use assert_cmd::cargo::cargo_bin_cmd;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
-/// Context for testing source commands with isolated config.
-///
-/// Creates a temporary directory for `XDG_CONFIG_HOME` so tests don't
-/// interfere with each other or the user's real config.
-pub struct SourceTestContext {
-    config_dir: TempDir,
-}
-
-impl SourceTestContext {
-    pub fn new() -> Self {
-        Self {
-            config_dir: TempDir::new().expect("Failed to create temp config dir"),
-        }
-    }
-
-    /// Create a command with the isolated config directory.
-    pub fn cmd(&self) -> AssertCommand {
-        let mut cmd = cargo_bin_cmd!("repoverlay");
-        cmd.env("XDG_CONFIG_HOME", self.config_dir.path());
-        cmd
-    }
-}
-
 /// A test context that provides a temporary git repository and overlay directory.
+///
+/// Provides helper methods to reduce repetitive test setup and assertions.
 pub struct TestContext {
+    /// The temporary git repository (target)
     pub repo: TempDir,
+    /// Optional overlay directory
     overlay: Option<TempDir>,
 }
 
 impl TestContext {
+    /// Create a new test context with an initialized git repository.
     pub fn new() -> Self {
         let repo = TempDir::new().expect("Failed to create temp dir");
         Command::new("git")
@@ -53,14 +37,17 @@ impl TestContext {
         }
     }
 
+    /// Get the path to the test repository.
     pub fn repo_path(&self) -> &Path {
         self.repo.path()
     }
 
+    /// Get the path to the overlay directory (panics if no overlay was created).
     pub fn overlay_path(&self) -> &Path {
         self.overlay.as_ref().expect("No overlay created").path()
     }
 
+    /// Create an overlay with the given files and return self for chaining.
     pub fn with_overlay(mut self, files: &[(&str, &str)]) -> Self {
         self.overlay = Some(create_overlay_dir(files));
         self
@@ -75,16 +62,19 @@ impl TestContext {
         fs::write(file_path, content).expect("Failed to write file");
     }
 
+    /// Write a `.repoverlay/config.ccl` file in the test repository.
     pub fn write_repo_config(&self, content: &str) {
         let config_dir = self.repo.path().join(".repoverlay");
         fs::create_dir_all(&config_dir).expect("Failed to create repo config dir");
         fs::write(config_dir.join("config.ccl"), content).expect("Failed to write repo config");
     }
 
+    /// Check if a file exists in the test repository.
     pub fn file_exists(&self, path: &str) -> bool {
         self.repo.path().join(path).exists()
     }
 
+    /// Check if a path is a symlink in the test repository.
     pub fn is_symlink(&self, path: &str) -> bool {
         self.repo.path().join(path).is_symlink()
     }
@@ -117,8 +107,15 @@ impl TestContext {
             .exists()
     }
 
+    /// Get the overlay source string (path as string).
     pub fn overlay_source(&self) -> &str {
         self.overlay_path().to_str().expect("Invalid overlay path")
+    }
+}
+
+impl Default for TestContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -135,6 +132,78 @@ pub fn create_overlay_dir(files: &[(&str, &str)]) -> TempDir {
     dir
 }
 
+/// Create a test git repository and return the `TempDir`.
+pub fn create_test_repo() -> TempDir {
+    let dir = TempDir::new().expect("Failed to create temp dir");
+    Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .expect("Failed to init git repo");
+    dir
+}
+
+/// Create a test overlay directory with the given files.
+pub fn create_test_overlay(files: &[(&str, &str)]) -> TempDir {
+    create_overlay_dir(files)
+}
+
+/// Common overlay content for a simple .envrc file.
 pub fn envrc_overlay() -> Vec<(&'static str, &'static str)> {
     vec![(".envrc", "export FOO=bar")]
+}
+
+/// Convert a ratatui Buffer to a trimmed string for snapshot testing.
+pub fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
+    let mut s = String::new();
+    for y in 0..buffer.area.height {
+        let mut line = String::new();
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            line.push_str(cell.symbol());
+        }
+        s.push_str(line.trim_end());
+        s.push('\n');
+    }
+    // Trim trailing empty lines
+    while s.ends_with("\n\n") {
+        s.pop();
+    }
+    s
+}
+
+/// Common overlay content for nested files.
+pub fn nested_overlay() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (".envrc", "export FOO=bar"),
+        (".vscode/settings.json", r#"{"editor.tabSize": 2}"#),
+    ]
+}
+
+/// Overlay with a custom config specifying path mappings.
+pub fn mapped_overlay() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (".envrc", "export FOO=bar"),
+        (
+            "repoverlay.ccl",
+            r"mappings =
+  .envrc = .env
+",
+        ),
+    ]
+}
+
+/// Overlay with a custom name in config.
+pub fn named_overlay(name: &str) -> Vec<(String, String)> {
+    vec![
+        (".envrc".to_string(), "export FOO=bar".to_string()),
+        (
+            "repoverlay.ccl".to_string(),
+            format!(
+                r"overlay =
+  name = {name}
+"
+            ),
+        ),
+    ]
 }

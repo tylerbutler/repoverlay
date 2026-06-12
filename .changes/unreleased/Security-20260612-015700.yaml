@@ -1,0 +1,6 @@
+kind: Security
+body: |-
+    Avoid panic on short commit strings when listing available updates
+
+    `repoverlay update` truncated commit hashes to 7 bytes with a byte-range slice, which would panic if persisted overlay state held a commit string shorter than 7 bytes (for example a corrupt or hand-edited state file). The truncation is now length-checked, matching the rest of the codebase.
+time: 2026-06-12T01:57:00-07:00

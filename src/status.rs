@@ -432,7 +432,7 @@ mod tests {
     // Tests for show_status
     mod show_status_tests {
         use super::*;
-        use crate::{ConflictStrategy, apply_overlay};
+        use crate::{ApplyOptions, apply_overlay};
 
         #[test]
         fn status_no_overlays_succeeds() {
@@ -451,14 +451,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("status-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("status-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -475,14 +472,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("filtered-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("filtered-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -499,14 +493,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("real-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("real-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -521,7 +512,7 @@ mod tests {
 
     mod status_has_overlays_tests {
         use super::*;
-        use crate::{ConflictStrategy, apply_overlay};
+        use crate::{ApplyOptions, apply_overlay};
 
         #[test]
         fn no_overlays_returns_false() {
@@ -539,14 +530,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("check-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("check-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -561,7 +549,7 @@ mod tests {
 
     mod show_status_json_tests {
         use super::*;
-        use crate::{ConflictStrategy, apply_overlay};
+        use crate::{ApplyOptions, apply_overlay};
 
         #[test]
         fn json_no_overlays_outputs_empty_array() {
@@ -580,14 +568,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("json-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("json-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -604,14 +589,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("json-filter-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("json-filter-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -628,14 +610,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("real-json".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("real-json".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 

@@ -1,69 +1,11 @@
-#![allow(dead_code)]
-
 use anyhow::Result;
-use std::path::Path;
 
-use crate::plugin::{InstallMode, PluginBundle, PluginRef, ResolvedPlugin, resolve_plugin};
+use crate::plugin::{InstallMode, PluginRef, ResolvedPlugin, resolve_plugin};
 use crate::profile::ProfileConfig;
-use crate::profile_applicators::{AgentHarness, ProfileApplicator, ProfileContext};
-use crate::profile_plan::{ProfileAction, ProfilePlan, json_pointer};
+use crate::profile_applicators::{ProfileApplicator, ProfileContext};
+use crate::profile_plan::{ProfileAction, ProfilePlan};
 
 pub(crate) struct CopilotApplicator;
-
-impl CopilotApplicator {
-    /// Decompose a resolved plugin bundle into Copilot placements, appending
-    /// skill-placement and skip actions and accumulating MCP servers for the
-    /// single Copilot `.mcp.json` merge (Copilot CLI keys servers under
-    /// `mcpServers`, matching `~/.copilot/mcp-config.json`).
-    fn decompose_bundle(
-        bundle_dir: &Path,
-        plugin_name: &str,
-        actions: &mut Vec<ProfileAction>,
-        servers: &mut serde_json::Map<String, serde_json::Value>,
-        owned_paths: &mut Vec<String>,
-        repo_target: &Path,
-    ) -> Result<()> {
-        let bundle = PluginBundle::read(bundle_dir)?;
-
-        for skill in &bundle.skills {
-            actions.push(ProfileAction::PlacePluginDir {
-                source: bundle_dir.join("skills").join(skill),
-                target: AgentHarness::Copilot.skills_root(repo_target).join(skill),
-            });
-        }
-
-        for agent in &bundle.agents {
-            actions.push(ProfileAction::PlacePluginDir {
-                source: bundle_dir.join("agents").join(agent),
-                target: AgentHarness::Copilot.agents_root(repo_target).join(agent),
-            });
-        }
-
-        for (server_name, server) in &bundle.mcp_servers {
-            let pointer = json_pointer(&["mcpServers", server_name]);
-            if owned_paths.contains(&pointer) {
-                anyhow::bail!(
-                    "MCP server '{server_name}' is provided by more than one plugin; \
-                     resolve the conflict before applying"
-                );
-            }
-            let resolved = crate::plugin::substitute_plugin_root(server, bundle_dir)?;
-            servers.insert(server_name.clone(), resolved);
-            owned_paths.push(pointer);
-        }
-
-        for capability in &bundle.unsupported_capabilities {
-            actions.push(ProfileAction::SkipCapability {
-                capability: format!("plugin:{plugin_name}:{capability}"),
-                reason: format!(
-                    "Copilot does not support '{capability}' from plugin '{plugin_name}'"
-                ),
-            });
-        }
-
-        Ok(())
-    }
-}
 
 impl ProfileApplicator for CopilotApplicator {
     fn plan(&self, profile: &ProfileConfig, context: &ProfileContext) -> Result<ProfilePlan> {
@@ -120,13 +62,18 @@ impl ProfileApplicator for CopilotApplicator {
                         reference: plugin.to_string(),
                         resolved_commit,
                     });
-                    Self::decompose_bundle(
+                    // Copilot CLI keys servers under `mcpServers`, matching
+                    // `~/.copilot/mcp-config.json`.
+                    super::decompose_bundle(
+                        context,
                         &bundle_dir,
                         &name,
                         &mut actions,
                         &mut servers,
                         &mut owned_paths,
-                        &context.target,
+                        |capability| {
+                            format!("Copilot does not support '{capability}' from plugin '{name}'")
+                        },
                     )?;
                 }
                 ResolvedPlugin::Delegate { name, .. } => {
@@ -160,7 +107,7 @@ impl ProfileApplicator for CopilotApplicator {
 mod tests {
     use super::*;
     use crate::profile::{InstructionConfig, ProfileConfig};
-    use crate::profile_applicators::{ProfileApplicator, ProfileContext};
+    use crate::profile_applicators::{AgentHarness, ProfileApplicator, ProfileContext};
     use std::path::PathBuf;
 
     #[test]

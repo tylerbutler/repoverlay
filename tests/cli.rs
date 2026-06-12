@@ -13,7 +13,34 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod common;
-use common::{SourceTestContext, TestContext, create_overlay_dir, envrc_overlay};
+use common::{TestContext, create_overlay_dir, envrc_overlay};
+
+/// Context for testing source commands with isolated config.
+///
+/// Creates a temporary directory for `XDG_CONFIG_HOME` so tests don't
+/// interfere with each other or the user's real config.
+///
+/// Lives here (not in `common`) because `cargo_bin_cmd!` requires the
+/// `CARGO_BIN_EXE_*` env vars that cargo only sets for integration tests,
+/// while `common` is also compiled into the library's unit-test build.
+struct SourceTestContext {
+    config_dir: tempfile::TempDir,
+}
+
+impl SourceTestContext {
+    fn new() -> Self {
+        Self {
+            config_dir: tempfile::TempDir::new().expect("Failed to create temp config dir"),
+        }
+    }
+
+    /// Create a command with the isolated config directory.
+    fn cmd(&self) -> assert_cmd::Command {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.env("XDG_CONFIG_HOME", self.config_dir.path());
+        cmd
+    }
+}
 
 #[test]
 fn help_displays() {
