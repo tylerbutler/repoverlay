@@ -30,6 +30,7 @@ mod sources;
 mod state;
 mod status;
 #[cfg(test)]
+#[path = "../tests/common/mod.rs"]
 mod testutil;
 mod update;
 mod upstream;
