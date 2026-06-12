@@ -25,20 +25,23 @@ mod profile_plan;
 mod reference;
 mod remove;
 mod resolve;
+mod restore;
 mod selection;
 mod sources;
 mod state;
 mod status;
+mod switch;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod testutil;
 mod update;
 mod upstream;
+mod version;
 mod widgets;
 
 pub(crate) use create::{
     copy_files_to_overlay, create_overlay, expand_include_globs, generate_overlay_config,
-    print_overlay_created, restore_overlays, switch_overlay, update_overlays,
+    print_overlay_created,
 };
 pub(crate) use git_exclude::{
     ensure_repoverlay_excluded, parse_github_owner_repo, repair_git_exclude, update_git_exclude,
@@ -48,7 +51,10 @@ pub(crate) use resolve::{
     ResolvedSource, ResolvedSources, canonicalize_path, get_cached_repo_commit,
     list_overlays_from_cached_repo, resolve_source, try_upgrade_github_source,
 };
+pub(crate) use restore::restore_overlays;
 pub(crate) use status::{show_status, show_status_json, status_has_overlays};
+pub(crate) use switch::switch_overlay;
+pub(crate) use update::update_overlays;
 
 // Re-exports used only by test modules
 #[cfg(test)]

@@ -242,6 +242,36 @@ impl OverlaySource {
         matches!(self, Self::OverlayRepo { .. })
     }
 
+    /// The source string (and optional ref override) that re-applies this
+    /// overlay through normal source resolution, e.g. for `restore`.
+    ///
+    /// For GitHub sources with a subpath, the subpath is rebuilt into a
+    /// `tree/HEAD/<subpath>` URL so resolution finds the specific overlay
+    /// instead of falling into browse/selection mode.
+    pub(crate) fn reapply_reference(&self) -> (String, Option<&str>) {
+        match self {
+            Self::Local { path, .. } => (path.to_string_lossy().to_string(), None),
+            Self::GitHub {
+                url,
+                owner,
+                repo,
+                git_ref,
+                subpath,
+                ..
+            } => {
+                let reference = subpath.as_ref().map_or_else(
+                    || url.clone(),
+                    |subpath| format!("https://github.com/{owner}/{repo}/tree/HEAD/{subpath}"),
+                );
+                (reference, Some(git_ref))
+            }
+            Self::OverlayRepo {
+                org, repo, name, ..
+            } => (format!("{org}/{repo}/{name}"), None),
+            Self::Library { name } => (name.clone(), None),
+        }
+    }
+
     /// Get the local path for this source (for local sources only).
     #[allow(dead_code)]
     pub(crate) fn local_path(&self) -> Option<&Path> {
@@ -867,6 +897,76 @@ pub(crate) fn format_relative_time(dt: &DateTime<Utc>) -> String {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    mod reapply_reference_tests {
+        use super::*;
+
+        #[test]
+        fn local_reapplies_by_path() {
+            let source = OverlaySource::local(PathBuf::from("/overlays/dev"));
+            let (reference, ref_override) = source.reapply_reference();
+            assert_eq!(reference, "/overlays/dev");
+            assert_eq!(ref_override, None);
+        }
+
+        #[test]
+        fn github_without_subpath_reapplies_by_url() {
+            let source = OverlaySource::github(
+                "https://github.com/owner/repo".to_string(),
+                "owner".to_string(),
+                "repo".to_string(),
+                "main".to_string(),
+                "abc123".to_string(),
+                None,
+            );
+            let (reference, ref_override) = source.reapply_reference();
+            assert_eq!(reference, "https://github.com/owner/repo");
+            assert_eq!(ref_override, Some("main"));
+        }
+
+        #[test]
+        fn github_with_subpath_rebuilds_tree_url() {
+            // The subpath must be encoded in the URL so re-resolution finds
+            // the specific overlay instead of falling into browse mode.
+            let source = OverlaySource::github(
+                "https://github.com/owner/repo".to_string(),
+                "owner".to_string(),
+                "repo".to_string(),
+                "v1.2".to_string(),
+                "abc123".to_string(),
+                Some("overlays/dev".to_string()),
+            );
+            let (reference, ref_override) = source.reapply_reference();
+            assert_eq!(
+                reference,
+                "https://github.com/owner/repo/tree/HEAD/overlays/dev"
+            );
+            assert_eq!(ref_override, Some("v1.2"));
+        }
+
+        #[test]
+        fn overlay_repo_reapplies_three_part_reference() {
+            let source = OverlaySource::overlay_repo_full(
+                "org".to_string(),
+                "repo".to_string(),
+                "dev".to_string(),
+                "abc123".to_string(),
+                ResolvedVia::Direct,
+                "my-source".to_string(),
+            );
+            let (reference, ref_override) = source.reapply_reference();
+            assert_eq!(reference, "org/repo/dev");
+            assert_eq!(ref_override, None);
+        }
+
+        #[test]
+        fn library_reapplies_by_name() {
+            let source = OverlaySource::library("dev".to_string());
+            let (reference, ref_override) = source.reapply_reference();
+            assert_eq!(reference, "dev");
+            assert_eq!(ref_override, None);
+        }
+    }
 
     #[test]
     fn test_format_relative_time_just_now() {
