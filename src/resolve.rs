@@ -818,13 +818,15 @@ fn resolve_three_part(
         );
         return resolve_from_sources_with_suggestions(
             &config.sources,
-            org,
-            repo,
-            name,
-            upstream.as_ref(),
-            source_filter,
-            update,
-            target_path,
+            &SourceLookup {
+                org,
+                repo,
+                name,
+                upstream: upstream.as_ref(),
+                source_filter,
+                update,
+                repo_root: target_path,
+            },
         );
     }
 
@@ -837,18 +839,36 @@ fn resolve_three_part(
     )
 }
 
+/// A three-part overlay lookup (`org/repo/name`) plus the context that shapes
+/// how configured sources are searched.
+struct SourceLookup<'a> {
+    org: &'a str,
+    repo: &'a str,
+    name: &'a str,
+    /// Upstream of a fork, for fallback resolution.
+    upstream: Option<&'a upstream::UpstreamInfo>,
+    /// Restrict resolution to the named configured source.
+    source_filter: Option<&'a str>,
+    /// Refresh sources before resolving.
+    update: bool,
+    /// Repository root, for repo-local source configuration.
+    repo_root: Option<&'a Path>,
+}
+
 /// Resolve an overlay from configured sources with fuzzy suggestions on failure.
-#[allow(clippy::too_many_arguments)]
 fn resolve_from_sources_with_suggestions(
     sources: &[config::Source],
-    org: &str,
-    repo: &str,
-    name: &str,
-    upstream: Option<&upstream::UpstreamInfo>,
-    source_filter: Option<&str>,
-    update: bool,
-    repo_root: Option<&Path>,
+    lookup: &SourceLookup<'_>,
 ) -> Result<ResolvedSource> {
+    let &SourceLookup {
+        org,
+        repo,
+        name,
+        upstream,
+        source_filter,
+        update,
+        repo_root,
+    } = lookup;
     let manager = sources::SourceManager::new(sources.to_vec(), repo_root)?;
 
     prepare_sources_for_resolution(&manager, sources, source_filter, update)?;

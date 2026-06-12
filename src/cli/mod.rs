@@ -11,8 +11,8 @@ use std::path::PathBuf;
 
 use crate::reference::SourceReference;
 use crate::{
-    ConflictStrategy, apply_overlay, config, repair_git_exclude, restore_overlays, show_status,
-    show_status_json, status_has_overlays, switch_overlay,
+    ApplyOptions, ConflictStrategy, apply_overlay, config, repair_git_exclude, restore_overlays,
+    show_status, show_status_json, status_has_overlays, switch_overlay,
     update::{check_for_updates, version_string},
     update_overlays,
 };
@@ -795,14 +795,16 @@ pub(crate) fn run() -> Result<()> {
             apply_overlay(
                 &source,
                 &target,
-                copy,
-                name,
-                r#ref.as_deref(),
-                !no_update,
-                conflict_strategy,
-                merge,
-                from_source.as_deref(),
-                dry_run,
+                &ApplyOptions {
+                    force_copy: copy,
+                    name_override: name,
+                    ref_override: r#ref,
+                    update_cache: !no_update,
+                    conflict_strategy,
+                    merge,
+                    source_filter: from_source,
+                    dry_run,
+                },
             )?;
         }
         Commands::Remove {
@@ -946,13 +948,16 @@ pub(crate) fn run() -> Result<()> {
             switch_overlay(
                 &source,
                 &target,
-                copy,
-                name,
-                r#ref.as_deref(),
-                !no_update, // default: sync before switching
-                conflict_strategy,
-                merge,
-                dry_run,
+                &ApplyOptions {
+                    force_copy: copy,
+                    name_override: name,
+                    ref_override: r#ref,
+                    update_cache: !no_update, // default: sync before switching
+                    conflict_strategy,
+                    merge,
+                    dry_run,
+                    ..ApplyOptions::default()
+                },
             )?;
         }
         Commands::Cache { command } => {
@@ -1180,14 +1185,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -1216,14 +1214,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_ok());
 
@@ -1239,14 +1230,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true, // copy mode
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok());
 
@@ -1266,14 +1253,7 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .unwrap();
 
@@ -1306,14 +1286,7 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .unwrap();
 
@@ -1340,14 +1313,7 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .unwrap();
 
@@ -1366,14 +1332,10 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("custom-name".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("custom-name".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -1389,14 +1351,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 dir.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_err());
             assert!(
@@ -1416,28 +1371,20 @@ mod tests {
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
             let result = apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("already applied"));
@@ -1453,14 +1400,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("Conflict"));
@@ -1475,28 +1415,20 @@ mod tests {
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("first".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("first".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
             let result = apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("second".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("second".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
@@ -1514,14 +1446,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "force should allow overwriting: {result:?}");
 
@@ -1539,14 +1467,10 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -1554,14 +1478,11 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "force should allow re-applying: {result:?}");
         }
@@ -1580,14 +1501,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
 
@@ -1615,14 +1532,10 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -1630,14 +1543,11 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_err(), "skip_conflicts should fail on same-name");
             assert!(result.unwrap_err().to_string().contains("already applied"));
@@ -1662,14 +1572,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -1702,14 +1608,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
 
@@ -1745,14 +1647,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
@@ -1775,14 +1673,10 @@ mod tests {
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("first".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("first".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -1791,14 +1685,11 @@ mod tests {
             let result = apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("second".to_string()),
-                None,
-                false,
-                ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("second".to_string()),
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_err(),
@@ -1820,14 +1711,10 @@ mod tests {
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("first".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("first".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -1837,14 +1724,11 @@ mod tests {
             let result = apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("second".to_string()),
-                None,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("second".to_string()),
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
 
@@ -1872,14 +1756,7 @@ mod tests {
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .unwrap();
 
@@ -1896,14 +1773,10 @@ mod tests {
             let result = apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_err(),
@@ -1933,14 +1806,7 @@ mod tests {
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .unwrap();
 
@@ -1958,14 +1824,10 @@ mod tests {
             let result = apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "skip_conflicts should succeed: {result:?}");
 
@@ -1984,14 +1846,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("No files found"));
@@ -2000,18 +1855,7 @@ mod tests {
         #[test]
         fn fails_on_nonexistent_source() {
             let repo = create_test_repo();
-            let result = apply_overlay(
-                "/nonexistent/path",
-                repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
-            );
+            let result = apply_overlay("/nonexistent/path", repo.path(), &ApplyOptions::default());
             assert!(result.is_err());
         }
 
@@ -2035,14 +1879,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2082,14 +1919,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true, // copy mode
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2126,14 +1959,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2164,14 +1990,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             // Should succeed (just warns about missing directory)
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
@@ -2203,14 +2022,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
 
             assert!(result.is_err());
@@ -2234,14 +2046,7 @@ mod tests {
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .unwrap();
 
@@ -2258,14 +2063,7 @@ mod tests {
             let result = apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
 
             assert!(result.is_err());
@@ -2288,14 +2086,7 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .unwrap();
 
@@ -2324,14 +2115,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_ok());
 
@@ -2362,14 +2146,7 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2412,14 +2189,7 @@ directories =
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_ok(), "apply_overlay failed: {result:?}");
 
@@ -2443,14 +2213,11 @@ directories =
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                true, // dry_run
+                &ApplyOptions {
+                    name_override: Some("test-overlay".to_string()),
+                    dry_run: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "apply_overlay dry_run failed: {result:?}");
 
@@ -2482,14 +2249,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             remove_overlay(repo.path(), Some("test-overlay".to_string()), false, false).unwrap();
@@ -2508,27 +2271,19 @@ directories =
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-a".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-a".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-b".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-b".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2551,27 +2306,19 @@ directories =
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-a".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-a".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-b".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-b".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2590,14 +2337,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             assert!(repo.path().join(".vscode").exists());
@@ -2621,14 +2364,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             remove_overlay(repo.path(), Some("test".to_string()), false, false).unwrap();
@@ -2648,14 +2387,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             remove_overlay(repo.path(), Some("test".to_string()), false, false).unwrap();
@@ -2685,14 +2420,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("real-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("real-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2710,14 +2441,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2748,14 +2475,7 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions::default(),
             )
             .unwrap();
 
@@ -2789,14 +2509,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true, // copy mode
-                None,
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2821,14 +2537,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2856,27 +2568,19 @@ directories =
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-a".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-a".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-b".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-b".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2917,14 +2621,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2948,14 +2648,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -2988,14 +2684,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -3012,27 +2704,19 @@ directories =
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-a".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-a".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-b".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-b".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -3049,27 +2733,19 @@ directories =
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-a".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-a".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-b".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-b".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -3085,14 +2761,10 @@ directories =
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("real".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("real".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -3645,14 +3317,10 @@ directories =
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("first-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("first-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -3663,13 +3331,10 @@ directories =
             let result = switch_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("second-overlay".to_string()),
-                None,
-                false, // no update for local paths
-                ConflictStrategy::default(),
-                false,
-                false,
+                &ApplyOptions {
+                    name_override: Some("second-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "switch_overlay failed: {result:?}");
 
@@ -3694,13 +3359,10 @@ directories =
             let result = switch_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("new-overlay".to_string()),
-                None,
-                false, // no update for local paths
-                ConflictStrategy::default(),
-                false,
-                false,
+                &ApplyOptions {
+                    name_override: Some("new-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok());
 
@@ -3715,13 +3377,7 @@ directories =
             let result = switch_overlay(
                 overlay.path().to_str().unwrap(),
                 target.path(),
-                false,
-                None,
-                None,
-                false, // no update for local paths
-                ConflictStrategy::default(),
-                false,
-                false,
+                &ApplyOptions::default(),
             );
             assert!(result.is_err());
             assert!(
@@ -3743,27 +3399,19 @@ directories =
             apply_overlay(
                 overlay1.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-a".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-a".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             apply_overlay(
                 overlay2.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-b".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-b".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -3775,13 +3423,10 @@ directories =
             switch_overlay(
                 overlay3.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("overlay-c".to_string()),
-                None,
-                false, // no update for local paths
-                ConflictStrategy::default(),
-                false,
-                false,
+                &ApplyOptions {
+                    name_override: Some("overlay-c".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -3804,13 +3449,11 @@ directories =
             let result = switch_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false, // no update for local paths
-                ConflictStrategy::Force,
-                false,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3838,13 +3481,11 @@ directories =
             let result = switch_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false, // no update for local paths
-                ConflictStrategy::SkipConflicts,
-                false,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3878,13 +3519,10 @@ directories =
             let result = switch_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("my-overlay".to_string()),
-                None,
-                false, // no update for local paths
-                ConflictStrategy::default(),
-                false,
-                false,
+                &ApplyOptions {
+                    name_override: Some("my-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_err(),
