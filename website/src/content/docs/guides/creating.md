@@ -73,6 +73,7 @@ Create a `repoverlay.ccl` in the root of your overlay directory to control how f
 ```
 overlay =
   name = my-config
+  description = Shared editor and environment config
 
 /= Rename files when applying
 mappings =
@@ -85,13 +86,21 @@ directories =
   = scratch
 ```
 
-### Overlay name
+### Overlay name and description
 
-The `overlay.name` field sets the name used in `status`, `remove`, and other commands. If omitted, the directory name is used.
+The `overlay.name` field sets the name used in `status`, `remove`, and other commands. If omitted, the directory name is used. The optional `overlay.description` field documents what the overlay is for, for people reading the overlay config.
 
 ### Mappings
 
 The `mappings` section renames files during apply. Each entry maps a source filename to a destination path. This is useful when the overlay uses different filenames than the target repo expects.
+
+One source file can map to multiple destinations — repeat the key with a different destination each time:
+
+```
+mappings =
+  config.json = .vscode/settings.json
+  config.json = .zed/settings.json
+```
 
 ### Directories
 
@@ -100,6 +109,48 @@ The `directories` section lists directories to symlink (or copy) as a unit rathe
 ### Configuration format
 
 repoverlay uses [CCL (Categorical Configuration Language)](https://ccl.tylerbutler.com/) for configuration files. CCL uses `=` for key-value pairs and indentation for nesting. Lines starting with `/=` are comments.
+
+## Composing overlays
+
+Overlays in the [in-repo library](/guides/library/) can build on each other instead of duplicating files. Two keys in `repoverlay.ccl` control this:
+
+### extends
+
+Inherit every file from a single parent overlay:
+
+```
+extends =
+  overlay = base-config
+```
+
+The parent's files, mappings, and directories are all inherited. Chains are allowed (a child can extend a parent that itself extends a grandparent), and repoverlay detects cycles.
+
+### includes
+
+Cherry-pick specific files from other overlays:
+
+```
+includes =
+  =
+    overlay = tools
+    files =
+      = .editorconfig
+      = scripts/lint.sh
+```
+
+You can list several `includes` entries, and included overlays are resolved recursively — they may use `extends` or `includes` themselves.
+
+### Precedence
+
+When the same destination path comes from more than one place, the highest-precedence version wins:
+
+1. The overlay's own files
+2. Files from `extends`
+3. Files from `includes` (later entries override earlier ones)
+
+:::note
+Composition only works between **library overlays** (`.repoverlay/library/`). An overlay applied from GitHub or a local path cannot extend or include another overlay. See [The In-Repo Library](/guides/library/) for how to move overlays into the library.
+:::
 
 ## Overlay repository structure
 
@@ -136,9 +187,15 @@ Others can then apply your overlays using your GitHub username:
 ```bash
 # Interactive selection
 repoverlay apply tylerbutler
+```
 
-# Direct reference
-repoverlay apply tylerbutler/my-overlays/ai-config
+Direct three-part references use the *target* repository's org and repo plus the overlay name (`<target-org>/<target-repo>/<overlay-name>`), and resolve against configured sources — so consumers add your overlay repository as a source first:
+
+```bash
+repoverlay source add tylerbutler/my-overlays
+
+# Applies the ai-config overlay defined for tylerbutler/tools-monorepo
+repoverlay apply tylerbutler/tools-monorepo/ai-config
 ```
 
 Or browse without applying:

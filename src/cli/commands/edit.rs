@@ -52,12 +52,7 @@ pub(crate) fn resolve_overlay_source_path(state: &crate::state::OverlayState) ->
 /// old and new selections and applies adds/removes accordingly.
 fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
-    if !target.join(".git").exists() {
-        bail!(
-            "Target directory is not a git repository: {}",
-            target.display()
-        );
-    }
+    crate::validate_git_repo(&target)?;
 
     // Parse overlay name and verify it's applied
     let overlay_name = extract_overlay_name(name_arg)?;
@@ -258,12 +253,7 @@ pub(crate) fn remove_files_from_overlay(
     dry_run: bool,
 ) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
-    if !target.join(".git").exists() {
-        bail!(
-            "Target directory is not a git repository: {}",
-            target.display()
-        );
-    }
+    crate::validate_git_repo(&target)?;
 
     // Extract overlay name from the argument (handles both short and full forms)
     let overlay_name = extract_overlay_name(name_arg)?;
@@ -459,10 +449,7 @@ pub(crate) fn add_files_to_overlay(
 ) -> Result<()> {
     // Validate target is a git repo
     let target = canonicalize_path(target, "Target directory")?;
-    if !target.join(".git").exists() {
-        let target_display = target.display();
-        bail!("Target directory is not a git repository: {target_display}");
-    }
+    crate::validate_git_repo(&target)?;
 
     // Check that files were provided
     if files.is_empty() {
@@ -643,23 +630,17 @@ pub(crate) fn add_files_to_overlay(
                 // Create symlink/copy from overlay source to target
                 match link_type {
                     LinkType::Symlink => {
-                        #[cfg(unix)]
-                        std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(
-                            || {
-                                format!(
-                                    "Failed to create directory symlink: {}",
-                                    target_file.display()
-                                )
-                            },
-                        )?;
-                        #[cfg(windows)]
-                        std::os::windows::fs::symlink_dir(&overlay_file, &target_file)
-                            .with_context(|| {
-                                format!(
-                                    "Failed to create directory symlink: {}",
-                                    target_file.display()
-                                )
-                            })?;
+                        crate::fs_util::create_symlink(
+                            &overlay_file,
+                            &target_file,
+                            crate::fs_util::SymlinkKind::Dir,
+                        )
+                        .with_context(|| {
+                            format!(
+                                "Failed to create directory symlink: {}",
+                                target_file.display()
+                            )
+                        })?;
                     }
                     LinkType::Copy | LinkType::Merged => {
                         fs::create_dir_all(&target_file).with_context(|| {
@@ -704,15 +685,14 @@ pub(crate) fn add_files_to_overlay(
                 // Create symlink/copy from overlay source to target
                 match link_type {
                     LinkType::Symlink => {
-                        #[cfg(unix)]
-                        std::os::unix::fs::symlink(&overlay_file, &target_file).with_context(
-                            || format!("Failed to create symlink: {}", target_file.display()),
-                        )?;
-                        #[cfg(windows)]
-                        std::os::windows::fs::symlink_file(&overlay_file, &target_file)
-                            .with_context(|| {
-                                format!("Failed to create symlink: {}", target_file.display())
-                            })?;
+                        crate::fs_util::create_symlink(
+                            &overlay_file,
+                            &target_file,
+                            crate::fs_util::SymlinkKind::File,
+                        )
+                        .with_context(|| {
+                            format!("Failed to create symlink: {}", target_file.display())
+                        })?;
                     }
                     LinkType::Copy | LinkType::Merged => {
                         fs::copy(&overlay_file, &target_file).with_context(|| {

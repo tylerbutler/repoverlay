@@ -543,8 +543,8 @@ Manage repository profiles
 
 
 
-## `repoverlay profile list`
 
+## `repoverlay profile list`
 List configured profiles
 
 **Usage:** `repoverlay profile list [OPTIONS]`

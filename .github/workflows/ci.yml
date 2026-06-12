@@ -12,7 +12,7 @@ jobs:
     name: Test
     runs-on: ${{ vars.RUNS_ON_TEST || vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # ratchet:actions/checkout@v6
       - uses: ./.github/actions/setup-rust
       - run: cargo test --all-features
 
@@ -20,7 +20,7 @@ jobs:
     name: Clippy
     runs-on: ${{ vars.RUNS_ON_LINT || vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # ratchet:actions/checkout@v6
       - uses: ./.github/actions/setup-rust
         with:
           components: clippy
@@ -30,7 +30,7 @@ jobs:
     name: Format
     runs-on: ${{ vars.RUNS_ON_FORMAT || vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # ratchet:actions/checkout@v6
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
@@ -40,7 +40,7 @@ jobs:
     name: Documentation
     runs-on: ${{ vars.RUNS_ON_DOCS || vars.RUNS_ON || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # ratchet:actions/checkout@v6
       - uses: ./.github/actions/setup-rust
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
@@ -50,7 +50,7 @@ jobs:
     runs-on: ${{ vars.RUNS_ON_BINARY_SIZE || vars.RUNS_ON || 'ubuntu-latest' }}
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # ratchet:actions/checkout@v6
       - uses: ./.github/actions/setup-rust
       - name: Build release binary
         run: cargo build --release

@@ -25,19 +25,23 @@ mod profile_plan;
 mod reference;
 mod remove;
 mod resolve;
+mod restore;
 mod selection;
 mod sources;
 mod state;
 mod status;
+mod switch;
 #[cfg(test)]
+#[path = "../tests/common/mod.rs"]
 mod testutil;
 mod update;
 mod upstream;
+mod version;
 mod widgets;
 
 pub(crate) use create::{
     copy_files_to_overlay, create_overlay, expand_include_globs, generate_overlay_config,
-    print_overlay_created, restore_overlays, switch_overlay, update_overlays,
+    print_overlay_created,
 };
 pub(crate) use git_exclude::{
     ensure_repoverlay_excluded, parse_github_owner_repo, repair_git_exclude, update_git_exclude,
@@ -47,7 +51,10 @@ pub(crate) use resolve::{
     ResolvedSource, ResolvedSources, canonicalize_path, get_cached_repo_commit,
     list_overlays_from_cached_repo, resolve_source, try_upgrade_github_source,
 };
+pub(crate) use restore::restore_overlays;
 pub(crate) use status::{show_status, show_status_json, status_has_overlays};
+pub(crate) use switch::switch_overlay;
+pub(crate) use update::update_overlays;
 
 // Re-exports used only by test modules
 #[cfg(test)]
@@ -128,6 +135,35 @@ pub(crate) enum ConflictStrategy {
     /// - View a diff between existing and overlay files
     /// - Abort the entire apply operation
     Interactive,
+}
+
+/// Options controlling how an overlay is applied.
+///
+/// `ApplyOptions::default()` matches `repoverlay apply <source>` with no
+/// flags: symlink (not copy), no name/ref override, no cache refresh, fail on
+/// conflict, no JSON merging, default source resolution, and a real (non-dry)
+/// run.
+// The bools mirror independent CLI switches (--copy, --no-update, --merge,
+// --dry-run); collapsing them into enums would only obscure that mapping.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ApplyOptions {
+    /// Copy files instead of symlinking them.
+    pub(crate) force_copy: bool,
+    /// Overlay name override (priority: CLI override > config > directory name).
+    pub(crate) name_override: Option<String>,
+    /// Git ref override for GitHub sources.
+    pub(crate) ref_override: Option<String>,
+    /// Refresh cached GitHub sources before resolving.
+    pub(crate) update_cache: bool,
+    /// How conflicts with existing files and overlays are handled.
+    pub(crate) conflict_strategy: ConflictStrategy,
+    /// Merge JSON files on conflict instead of failing.
+    pub(crate) merge: bool,
+    /// Restrict resolution to the named configured source.
+    pub(crate) source_filter: Option<String>,
+    /// Report what would happen without making changes.
+    pub(crate) dry_run: bool,
 }
 
 /// Result of an interactive conflict prompt.
@@ -298,55 +334,36 @@ fn show_file_diff(existing_path: &Path, overlay_path: &Path, display_path: &Path
 /// - Overlay with same name already exists (unless using `Force` strategy)
 /// - File conflicts with existing overlay or repo file (unless using `Force` or `SkipConflicts`)
 /// - No files found in overlay source
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
-pub(crate) fn apply_overlay(
-    source_str: &str,
-    target: &Path,
-    force_copy: bool,
-    name_override: Option<String>,
-    ref_override: Option<&str>,
-    update_cache: bool,
-    conflict_strategy: ConflictStrategy,
-    merge: bool,
-    source_filter: Option<&str>,
-    dry_run: bool,
-) -> Result<()> {
+pub(crate) fn apply_overlay(source_str: &str, target: &Path, options: &ApplyOptions) -> Result<()> {
     debug!(
         "apply_overlay: source={}, target={}, force_copy={}, name_override={:?}, conflict_strategy={:?}, dry_run={}",
         source_str,
         target.display(),
-        force_copy,
-        name_override,
-        conflict_strategy,
-        dry_run
+        options.force_copy,
+        options.name_override,
+        options.conflict_strategy,
+        options.dry_run
     );
 
     // Resolve source (handles GitHub URLs and local paths)
     // Pass target to enable upstream detection for fork inheritance
     let resolved = resolve_source(
         source_str,
-        ref_override,
-        update_cache,
+        options.ref_override.as_deref(),
+        options.update_cache,
         Some(target),
-        source_filter,
+        options.source_filter.as_deref(),
     )?;
 
     // Handle multi-select from browse mode
     let resolved = match resolved {
         ResolvedSources::Single(single) => single,
         ResolvedSources::Multiple(sources) => {
-            return apply_multiple_overlays(
-                &sources,
-                target,
-                force_copy,
-                dry_run,
-                conflict_strategy,
-                merge,
-            );
+            return apply_multiple_overlays(&sources, target, options);
         }
     };
 
-    if dry_run {
+    if options.dry_run {
         println!("{} Dry run - no changes made.", "Note:".yellow());
         println!("\nWould apply overlay from: {}", resolved.path.display());
         return Ok(());
@@ -356,14 +373,7 @@ pub(crate) fn apply_overlay(
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
 
-    apply_resolved_overlay(
-        &resolved,
-        &target,
-        force_copy,
-        name_override,
-        conflict_strategy,
-        merge,
-    )
+    apply_resolved_overlay(&resolved, &target, options)
 }
 
 /// RAII guard that removes overlay files created during a single
@@ -412,9 +422,190 @@ impl Drop for OverlayApplyGuard {
                     let _ = fs::remove_file(path);
                 }
             }
+            prune_empty_parents(&self.target, path);
         }
         // Best-effort: drop any exclude section written before the failure.
         let _ = update_git_exclude(&self.target, &self.overlay_name, &[], false);
+    }
+}
+
+/// Remove now-empty ancestor directories of `path`, stopping at the
+/// repository root `target`. Best-effort: stops at the first non-empty or
+/// unremovable directory.
+fn prune_empty_parents(target: &Path, path: &Path) {
+    let mut parent = path.parent();
+    while let Some(dir) = parent {
+        if dir == target {
+            break;
+        }
+        if dir
+            .read_dir()
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false)
+        {
+            if fs::remove_dir(dir).is_err() {
+                break;
+            }
+            parent = dir.parent();
+        } else {
+            break;
+        }
+    }
+}
+
+/// Outcome of conflict resolution for a single overlay entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConflictOutcome {
+    /// Continue applying this entry; the caller clears any existing path first.
+    Proceed,
+    /// Skip this entry and continue with the rest of the overlay.
+    Skip,
+}
+
+/// Noun used in conflict messages for an entry type.
+const fn entry_noun(entry_type: EntryType) -> &'static str {
+    match entry_type {
+        EntryType::File => "file",
+        EntryType::Directory => "directory",
+    }
+}
+
+/// Resolve a conflict with a path already managed by another overlay.
+///
+/// Overwriting is never allowed across overlays — `Force` and an interactive
+/// "overwrite" answer both fail so one overlay cannot break another — so the
+/// only non-error outcome is [`ConflictOutcome::Skip`].
+fn resolve_cross_overlay_conflict(
+    rel_path: &Path,
+    target_path: &Path,
+    source_path: &Path,
+    conflicting_overlay: &str,
+    strategy: ConflictStrategy,
+    entry_type: EntryType,
+) -> Result<ConflictOutcome> {
+    let noun = entry_noun(entry_type);
+    match strategy {
+        ConflictStrategy::SkipConflicts => {
+            eprintln!(
+                "  {} Skipping {noun} '{}' (managed by overlay '{}')",
+                "Skip:".yellow(),
+                rel_path.display(),
+                conflicting_overlay
+            );
+            Ok(ConflictOutcome::Skip)
+        }
+        ConflictStrategy::Interactive => {
+            let context = format!("(managed by overlay '{conflicting_overlay}')");
+            match prompt_conflict_interactive(rel_path, target_path, source_path, &context)? {
+                InteractiveChoice::Skip => Ok(ConflictOutcome::Skip),
+                InteractiveChoice::Abort => bail!("Aborted by user"),
+                InteractiveChoice::Overwrite => {
+                    // Cross-overlay conflicts still fail even in interactive mode
+                    bail!(
+                        "Conflict: {noun} '{}' is already managed by overlay '{}'\n\
+                         Remove that overlay first to overwrite.",
+                        rel_path.display(),
+                        conflicting_overlay
+                    );
+                }
+            }
+        }
+        ConflictStrategy::Fail | ConflictStrategy::Force => {
+            bail!(
+                "Conflict: {noun} '{}' is already managed by overlay '{}'\n\
+                 Remove that overlay first, use --skip-conflicts, or use different file mappings.",
+                rel_path.display(),
+                conflicting_overlay
+            );
+        }
+    }
+}
+
+/// Resolve a conflict with an existing unmanaged path in the repository.
+///
+/// On [`ConflictOutcome::Proceed`] the caller validates the target path and
+/// removes the existing entry before linking.
+fn resolve_existing_path_conflict(
+    rel_path: &Path,
+    target_path: &Path,
+    source_path: &Path,
+    strategy: ConflictStrategy,
+    entry_type: EntryType,
+) -> Result<ConflictOutcome> {
+    match strategy {
+        ConflictStrategy::Force => Ok(ConflictOutcome::Proceed),
+        ConflictStrategy::Interactive => {
+            match prompt_conflict_interactive(
+                rel_path,
+                target_path,
+                source_path,
+                "(already exists)",
+            )? {
+                InteractiveChoice::Skip => Ok(ConflictOutcome::Skip),
+                InteractiveChoice::Abort => bail!("Aborted by user"),
+                InteractiveChoice::Overwrite => Ok(ConflictOutcome::Proceed),
+            }
+        }
+        ConflictStrategy::SkipConflicts => {
+            eprintln!(
+                "  {} Skipping {} '{}' (already exists)",
+                "Skip:".yellow(),
+                entry_noun(entry_type),
+                rel_path.display()
+            );
+            Ok(ConflictOutcome::Skip)
+        }
+        ConflictStrategy::Fail => match entry_type {
+            EntryType::Directory => bail!(
+                "Conflict: target path already exists: {}\n\
+                 Remove it first, use --force, or use --skip-conflicts.",
+                target_path.display()
+            ),
+            EntryType::File => bail!(
+                "Conflict: target file already exists: {}\n\
+                 Remove it first, use --force, or use --skip-conflicts.",
+                target_path.display()
+            ),
+        },
+    }
+}
+
+/// Create the overlay link (symlink or copy) for a single entry.
+fn link_entry(
+    source_path: &Path,
+    target_path: &Path,
+    link_type: LinkType,
+    entry_type: EntryType,
+) -> Result<()> {
+    match (entry_type, link_type) {
+        (EntryType::Directory, LinkType::Symlink) => {
+            fs_util::create_symlink(source_path, target_path, fs_util::SymlinkKind::Dir)
+                .with_context(|| {
+                    format!(
+                        "Failed to create directory symlink: {}",
+                        target_path.display()
+                    )
+                })
+        }
+        (EntryType::Directory, LinkType::Copy | LinkType::Merged) => {
+            // For copy/merged mode, create the target directory and recursively copy contents
+            fs::create_dir_all(target_path).with_context(|| {
+                format!("Failed to create directory: {}", target_path.display())
+            })?;
+            copy_dir_recursive(source_path, target_path)
+                .with_context(|| format!("Failed to copy directory: {}", target_path.display()))
+        }
+        (EntryType::File, LinkType::Symlink) => {
+            fs_util::create_symlink(source_path, target_path, fs_util::SymlinkKind::File)
+                .with_context(|| format!("Failed to create symlink: {}", target_path.display()))
+        }
+        (EntryType::File, LinkType::Copy) => fs::copy(source_path, target_path)
+            .map(|_| ())
+            .with_context(|| format!("Failed to copy file: {}", target_path.display())),
+        (EntryType::File, LinkType::Merged) => {
+            // Merged files are handled earlier in the conflict resolution path.
+            unreachable!("Merged link type should not reach file copy path")
+        }
     }
 }
 
@@ -425,11 +616,15 @@ impl Drop for OverlayApplyGuard {
 pub(crate) fn apply_resolved_overlay(
     resolved: &ResolvedSource,
     target: &Path,
-    force_copy: bool,
-    name_override: Option<String>,
-    conflict_strategy: ConflictStrategy,
-    merge: bool,
+    options: &ApplyOptions,
 ) -> Result<()> {
+    let ApplyOptions {
+        force_copy,
+        conflict_strategy,
+        merge,
+        ..
+    } = *options;
+    let name_override = options.name_override.clone();
     let source = &resolved.path;
     debug!("resolved source path: {}", source.display());
 
@@ -556,57 +751,49 @@ pub(crate) fn apply_resolved_overlay(
             continue;
         }
 
-        // Check for conflicts with existing overlays
-        let dir_rel_str = dir_path.to_string_lossy().to_string();
-        if let Some(conflicting_overlay) = existing_targets.get(&dir_rel_str) {
-            match conflict_strategy {
-                ConflictStrategy::SkipConflicts => {
-                    eprintln!(
-                        "  {} Skipping directory '{}' (managed by overlay '{}')",
-                        "Skip:".yellow(),
-                        dir_path.display(),
-                        conflicting_overlay
-                    );
-                    continue;
-                }
-                ConflictStrategy::Interactive => {
-                    let context = format!("(managed by overlay '{conflicting_overlay}')");
-                    match prompt_conflict_interactive(
-                        &dir_path,
-                        &target.join(&dir_path),
-                        &source_dir,
-                        &context,
-                    )? {
-                        InteractiveChoice::Skip => continue,
-                        InteractiveChoice::Abort => bail!("Aborted by user"),
-                        InteractiveChoice::Overwrite => {
-                            // Cross-overlay conflicts still fail even in interactive mode
-                            bail!(
-                                "Conflict: directory '{}' is already managed by overlay '{}'\n\
-                                 Remove that overlay first to overwrite.",
-                                dir_path.display(),
-                                conflicting_overlay
-                            );
-                        }
-                    }
-                }
-                ConflictStrategy::Fail | ConflictStrategy::Force => {
-                    bail!(
-                        "Conflict: directory '{}' is already managed by overlay '{}'\n\
-                         Remove that overlay first, use --skip-conflicts, or use different file mappings.",
-                        dir_path.display(),
-                        conflicting_overlay
-                    );
-                }
-            }
+        // In symlink mode the whole directory is exposed as-is, so embedded
+        // symlinks must not escape the overlay (copy mode checks during copy).
+        // Vet before conflict resolution so nothing is removed for a bad overlay.
+        if link_type == LinkType::Symlink {
+            crate::overlay_repo::ensure_no_escaping_symlinks(&source_dir).with_context(|| {
+                format!(
+                    "Refusing to apply directory '{}' from overlay '{}'",
+                    dir_path.display(),
+                    overlay_name
+                )
+            })?;
         }
 
         let target_dir = target.join(&dir_path);
 
+        // Check for conflicts with existing overlays
+        let dir_rel_str = dir_path.to_string_lossy().to_string();
+        if let Some(conflicting_overlay) = existing_targets.get(&dir_rel_str) {
+            match resolve_cross_overlay_conflict(
+                &dir_path,
+                &target_dir,
+                &source_dir,
+                conflicting_overlay,
+                conflict_strategy,
+                EntryType::Directory,
+            )? {
+                ConflictOutcome::Skip => continue,
+                // Cross-overlay conflicts never proceed; arm kept for exhaustiveness.
+                ConflictOutcome::Proceed => {}
+            }
+        }
+
         // Check for conflicts with existing files/dirs in repo
         if target_dir.exists() {
-            match conflict_strategy {
-                ConflictStrategy::Force => {
+            match resolve_existing_path_conflict(
+                &dir_path,
+                &target_dir,
+                &source_dir,
+                conflict_strategy,
+                EntryType::Directory,
+            )? {
+                ConflictOutcome::Skip => continue,
+                ConflictOutcome::Proceed => {
                     validate_managed_target_path(target, &dir_path)?;
                     eprintln!(
                         "  {} Overwriting existing directory: {}",
@@ -620,46 +807,6 @@ pub(crate) fn apply_resolved_overlay(
                         )
                     })?;
                 }
-                ConflictStrategy::Interactive => {
-                    match prompt_conflict_interactive(
-                        &dir_path,
-                        &target_dir,
-                        &source_dir,
-                        "(already exists)",
-                    )? {
-                        InteractiveChoice::Skip => continue,
-                        InteractiveChoice::Abort => bail!("Aborted by user"),
-                        InteractiveChoice::Overwrite => {
-                            validate_managed_target_path(target, &dir_path)?;
-                            eprintln!(
-                                "  {} Overwriting existing directory: {}",
-                                "Force:".yellow(),
-                                dir_path.display()
-                            );
-                            fs::remove_dir_all(&target_dir).with_context(|| {
-                                format!(
-                                    "Failed to remove existing directory: {}",
-                                    target_dir.display()
-                                )
-                            })?;
-                        }
-                    }
-                }
-                ConflictStrategy::SkipConflicts => {
-                    eprintln!(
-                        "  {} Skipping directory '{}' (already exists)",
-                        "Skip:".yellow(),
-                        dir_path.display()
-                    );
-                    continue;
-                }
-                ConflictStrategy::Fail => {
-                    bail!(
-                        "Conflict: target path already exists: {}\n\
-                         Remove it first, use --force, or use --skip-conflicts.",
-                        target_dir.display()
-                    );
-                }
             }
         }
 
@@ -671,34 +818,7 @@ pub(crate) fn apply_resolved_overlay(
                 .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
         }
 
-        // Create directory symlink or copy
-        match link_type {
-            LinkType::Symlink => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&source_dir, &target_dir).with_context(|| {
-                    format!(
-                        "Failed to create directory symlink: {}",
-                        target_dir.display()
-                    )
-                })?;
-                #[cfg(windows)]
-                std::os::windows::fs::symlink_dir(&source_dir, &target_dir).with_context(|| {
-                    format!(
-                        "Failed to create directory symlink: {}",
-                        target_dir.display()
-                    )
-                })?;
-            }
-            LinkType::Copy | LinkType::Merged => {
-                // For copy/merged mode, create the target directory and recursively copy contents
-                fs::create_dir_all(&target_dir).with_context(|| {
-                    format!("Failed to create directory: {}", target_dir.display())
-                })?;
-                copy_dir_recursive(&source_dir, &target_dir).with_context(|| {
-                    format!("Failed to copy directory: {}", target_dir.display())
-                })?;
-            }
-        }
+        link_entry(&source_dir, &target_dir, link_type, EntryType::Directory)?;
 
         println!("  {} {}/", "+".green(), dir_path.display());
 
@@ -768,45 +888,17 @@ pub(crate) fn apply_resolved_overlay(
                 }
                 // Merge failed; fall through to existing conflict handling
             }
-            match conflict_strategy {
-                ConflictStrategy::SkipConflicts => {
-                    eprintln!(
-                        "  {} Skipping file '{}' (managed by overlay '{}')",
-                        "Skip:".yellow(),
-                        target_rel.display(),
-                        conflicting_overlay
-                    );
-                    continue;
-                }
-                ConflictStrategy::Interactive => {
-                    let context = format!("(managed by overlay '{conflicting_overlay}')");
-                    match prompt_conflict_interactive(
-                        &target_rel,
-                        &target_file,
-                        &source_file,
-                        &context,
-                    )? {
-                        InteractiveChoice::Skip => continue,
-                        InteractiveChoice::Abort => bail!("Aborted by user"),
-                        InteractiveChoice::Overwrite => {
-                            // Cross-overlay conflicts still fail even in interactive mode
-                            bail!(
-                                "Conflict: file '{}' is already managed by overlay '{}'\n\
-                                 Remove that overlay first to overwrite.",
-                                target_rel.display(),
-                                conflicting_overlay
-                            );
-                        }
-                    }
-                }
-                ConflictStrategy::Fail | ConflictStrategy::Force => {
-                    bail!(
-                        "Conflict: file '{}' is already managed by overlay '{}'\n\
-                         Remove that overlay first, use --skip-conflicts, or use different file mappings.",
-                        target_rel.display(),
-                        conflicting_overlay
-                    );
-                }
+            match resolve_cross_overlay_conflict(
+                &target_rel,
+                &target_file,
+                &source_file,
+                conflicting_overlay,
+                conflict_strategy,
+                EntryType::File,
+            )? {
+                ConflictOutcome::Skip => continue,
+                // Cross-overlay conflicts never proceed; arm kept for exhaustiveness.
+                ConflictOutcome::Proceed => {}
             }
         }
 
@@ -827,8 +919,15 @@ pub(crate) fn apply_resolved_overlay(
                 }
                 // Merge failed; fall through to existing conflict handling
             }
-            match conflict_strategy {
-                ConflictStrategy::Force => {
+            match resolve_existing_path_conflict(
+                &target_rel,
+                &target_file,
+                &source_file,
+                conflict_strategy,
+                EntryType::File,
+            )? {
+                ConflictOutcome::Skip => continue,
+                ConflictOutcome::Proceed => {
                     validate_managed_target_path(target, &target_rel).with_context(|| {
                         format!(
                             "Unsafe target path for mapping '{}' -> '{}': target paths must stay within the repository and must not contain symlinks",
@@ -844,51 +943,6 @@ pub(crate) fn apply_resolved_overlay(
                     fs::remove_file(&target_file).with_context(|| {
                         format!("Failed to remove existing file: {}", target_file.display())
                     })?;
-                }
-                ConflictStrategy::Interactive => {
-                    match prompt_conflict_interactive(
-                        &target_rel,
-                        &target_file,
-                        &source_file,
-                        "(already exists)",
-                    )? {
-                        InteractiveChoice::Skip => continue,
-                        InteractiveChoice::Abort => bail!("Aborted by user"),
-                        InteractiveChoice::Overwrite => {
-                            validate_managed_target_path(target, &target_rel).with_context(
-                                || {
-                                    format!(
-                                        "Unsafe target path for mapping '{}' -> '{}': target paths must stay within the repository and must not contain symlinks",
-                                        rel_str,
-                                        target_rel.display()
-                                    )
-                                },
-                            )?;
-                            eprintln!(
-                                "  {} Overwriting existing file: {}",
-                                "Force:".yellow(),
-                                target_rel.display()
-                            );
-                            fs::remove_file(&target_file).with_context(|| {
-                                format!("Failed to remove existing file: {}", target_file.display())
-                            })?;
-                        }
-                    }
-                }
-                ConflictStrategy::SkipConflicts => {
-                    eprintln!(
-                        "  {} Skipping file '{}' (already exists)",
-                        "Skip:".yellow(),
-                        target_rel.display()
-                    );
-                    continue;
-                }
-                ConflictStrategy::Fail => {
-                    bail!(
-                        "Conflict: target file already exists: {}\n\
-                         Remove it first, use --force, or use --skip-conflicts.",
-                        target_file.display()
-                    );
                 }
             }
         }
@@ -914,26 +968,7 @@ pub(crate) fn apply_resolved_overlay(
             target_file.display(),
             link_type
         );
-        match link_type {
-            LinkType::Symlink => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&source_file, &target_file).with_context(|| {
-                    format!("Failed to create symlink: {}", target_file.display())
-                })?;
-                #[cfg(windows)]
-                std::os::windows::fs::symlink_file(&source_file, &target_file).with_context(
-                    || format!("Failed to create symlink: {}", target_file.display()),
-                )?;
-            }
-            LinkType::Copy => {
-                fs::copy(&source_file, &target_file)
-                    .with_context(|| format!("Failed to copy file: {}", target_file.display()))?;
-            }
-            LinkType::Merged => {
-                // Merged files are handled earlier in the conflict resolution path.
-                unreachable!("Merged link type should not reach file copy path");
-            }
-        }
+        link_entry(&source_file, &target_file, link_type, EntryType::File)?;
 
         println!("  {} {}", "+".green(), target_rel.display());
 
@@ -955,13 +990,11 @@ pub(crate) fn apply_resolved_overlay(
     }
 
     // Update .git/info/exclude with this overlay's entries. This must succeed:
-    // otherwise managed files could be committed accidentally.
-    if let Err(e) = update_git_exclude(target, &normalized_name, &exclude_entries, true) {
-        rollback_created_overlay_entries(target, &state);
-        return Err(e).context(
-            "Failed to update git exclude; rolled back created overlay files where practical",
-        );
-    }
+    // otherwise managed files could be committed accidentally. On failure the
+    // uncommitted apply_guard rolls back the created entries on drop.
+    update_git_exclude(target, &normalized_name, &exclude_entries, true).context(
+        "Failed to update git exclude; rolled back created overlay files where practical",
+    )?;
 
     // Ensure state directories exist
     fs::create_dir_all(&overlays_dir)?;
@@ -1000,67 +1033,6 @@ pub(crate) fn apply_resolved_overlay(
     Ok(())
 }
 
-fn rollback_created_overlay_entries(target: &Path, state: &OverlayState) {
-    for entry in state.file_entries().iter().rev() {
-        let path = target.join(&entry.target);
-        let result = match entry.entry_type {
-            EntryType::Directory => {
-                if path.is_symlink() {
-                    #[cfg(unix)]
-                    {
-                        fs::remove_file(&path)
-                    }
-                    #[cfg(windows)]
-                    {
-                        fs::remove_dir(&path)
-                    }
-                } else if path.exists() {
-                    fs::remove_dir_all(&path)
-                } else {
-                    Ok(())
-                }
-            }
-            EntryType::File => {
-                if entry.link_type == LinkType::Merged {
-                    Ok(())
-                } else if path.exists() || path.is_symlink() {
-                    fs::remove_file(&path)
-                } else {
-                    Ok(())
-                }
-            }
-        };
-
-        if let Err(e) = result {
-            eprintln!(
-                "  {} Could not roll back '{}': {}",
-                "Warning:".yellow(),
-                entry.target.display(),
-                e
-            );
-        }
-
-        let mut parent = path.parent();
-        while let Some(dir) = parent {
-            if dir == target {
-                break;
-            }
-            if dir
-                .read_dir()
-                .map(|mut entries| entries.next().is_none())
-                .unwrap_or(false)
-            {
-                if fs::remove_dir(dir).is_err() {
-                    break;
-                }
-                parent = dir.parent();
-            } else {
-                break;
-            }
-        }
-    }
-}
-
 /// Apply multiple overlays atomically.
 ///
 /// Pre-checks for conflicts between the selected overlays and with existing overlays,
@@ -1069,11 +1041,9 @@ fn rollback_created_overlay_entries(target: &Path, state: &OverlayState) {
 pub(crate) fn apply_multiple_overlays(
     sources: &[ResolvedSource],
     target: &Path,
-    force_copy: bool,
-    dry_run: bool,
-    conflict_strategy: ConflictStrategy,
-    merge: bool,
+    options: &ApplyOptions,
 ) -> Result<()> {
+    let conflict_strategy = options.conflict_strategy;
     let target = canonicalize_path(target, "Target directory")?;
     validate_git_repo(&target)?;
 
@@ -1127,7 +1097,7 @@ pub(crate) fn apply_multiple_overlays(
         }
     }
 
-    if dry_run {
+    if options.dry_run {
         println!("\n{} Dry run - no changes made.", "Note:".yellow());
         println!("\nWould apply {} overlay(s):", sources.len());
         for resolved in sources {
@@ -1139,15 +1109,14 @@ pub(crate) fn apply_multiple_overlays(
     // Phase 3: Apply each overlay, tracking for rollback
     let mut applied: Vec<String> = Vec::new();
 
+    // A single name override cannot apply to several overlays.
+    let per_overlay_options = ApplyOptions {
+        name_override: None,
+        ..options.clone()
+    };
+
     for resolved in sources {
-        match apply_resolved_overlay(
-            resolved,
-            &target,
-            force_copy,
-            None,
-            conflict_strategy,
-            merge,
-        ) {
+        match apply_resolved_overlay(resolved, &target, &per_overlay_options) {
             Ok(()) => {
                 let config = load_overlay_config(&resolved.path)?;
                 let name = determine_overlay_name(&config, &resolved.path, None)?;
@@ -2327,14 +2296,10 @@ mod tests {
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                false,
-                Some("unsafe".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    name_override: Some("unsafe".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_err());
@@ -2691,14 +2656,7 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(
-                &sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_multiple_overlays(&sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "multi-apply should succeed: {result:?}");
 
             // Both overlays should be applied
@@ -2735,14 +2693,7 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(
-                &sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_multiple_overlays(&sources, &canonical, &ApplyOptions::default());
             assert!(result.is_err(), "should fail due to conflict");
 
             // No overlays should be applied
@@ -2775,10 +2726,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                false,
-                true,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    dry_run: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "dry run should succeed");
 
@@ -2814,14 +2765,7 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(
-                &sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_multiple_overlays(&sources, &canonical, &ApplyOptions::default());
             assert!(
                 result.is_err(),
                 "should fail because config.json already exists"
@@ -2871,14 +2815,8 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            let result = apply_multiple_overlays(
-                &first_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result =
+                apply_multiple_overlays(&first_sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
             // Now try to apply both, including the already-applied overlay_a
@@ -2892,14 +2830,8 @@ mod tests {
                     source_info: OverlaySource::local(overlay_b.path().to_path_buf()),
                 },
             ];
-            let result = apply_multiple_overlays(
-                &second_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result =
+                apply_multiple_overlays(&second_sources, &canonical, &ApplyOptions::default());
             assert!(
                 result.is_err(),
                 "should fail because overlay is already applied"
@@ -2935,10 +2867,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                false,
-                true,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    dry_run: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -2990,14 +2922,7 @@ mod tests {
             ];
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = apply_multiple_overlays(
-                &sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result = apply_multiple_overlays(&sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "three overlays should succeed: {result:?}");
 
             let applied = list_applied_overlays(&canonical).unwrap();
@@ -3032,10 +2957,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                true,
-                false,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3088,14 +3013,8 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            let result = apply_multiple_overlays(
-                &first_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result =
+                apply_multiple_overlays(&first_sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
             // Now re-apply overlay_a along with overlay_b using Force
@@ -3112,10 +3031,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &second_sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::Force,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3145,10 +3064,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::Force,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3184,10 +3103,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3226,24 +3145,18 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            let result = apply_multiple_overlays(
-                &first_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            );
+            let result =
+                apply_multiple_overlays(&first_sources, &canonical, &ApplyOptions::default());
             assert!(result.is_ok(), "first apply should succeed: {result:?}");
 
             // Try re-applying with SkipConflicts — should still fail for same-name
             let result = apply_multiple_overlays(
                 &first_sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_err(),
@@ -3275,15 +3188,7 @@ mod tests {
                 path: overlay_a.path().to_path_buf(),
                 source_info: OverlaySource::local(overlay_a.path().to_path_buf()),
             }];
-            apply_multiple_overlays(
-                &first_sources,
-                &canonical,
-                false,
-                false,
-                ConflictStrategy::default(),
-                false,
-            )
-            .unwrap();
+            apply_multiple_overlays(&first_sources, &canonical, &ApplyOptions::default()).unwrap();
 
             // Apply overlay_b with SkipConflicts — should skip .envrc but apply unique.txt
             let second_sources = vec![ResolvedSource {
@@ -3293,10 +3198,10 @@ mod tests {
             let result = apply_multiple_overlays(
                 &second_sources,
                 &canonical,
-                false,
-                false,
-                ConflictStrategy::SkipConflicts,
-                false,
+                &ApplyOptions {
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(
                 result.is_ok(),
@@ -3334,10 +3239,10 @@ mod tests {
             apply_resolved_overlay(
                 &resolved,
                 &canonical,
-                true,
-                None,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             )
         }
 
@@ -3501,10 +3406,10 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 &canonical,
-                true,
-                None,
-                ConflictStrategy::default(),
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_ok(), "apply should succeed: {result:?}");
 
@@ -3517,6 +3422,72 @@ mod tests {
             assert!(
                 !canonical.join("evil_link").exists(),
                 "symlink should not be copied to target"
+            );
+        }
+
+        #[test]
+        #[cfg(unix)]
+        fn directory_symlink_mode_rejects_escaping_symlink_inside_directory() {
+            let repo = create_test_repo();
+            let parent = TempDir::new().unwrap();
+            let overlay = parent.path().join("overlay");
+            let outside = parent.path().join("outside");
+            fs::create_dir_all(overlay.join(".claude")).unwrap();
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+            fs::write(overlay.join(".claude/CLAUDE.md"), "instructions").unwrap();
+            // Malicious symlink inside the declared directory escaping the overlay
+            std::os::unix::fs::symlink(&outside, overlay.join(".claude/evil")).unwrap();
+            fs::write(
+                overlay.join(CONFIG_FILE),
+                "overlay =\n  name = test\n\ndirectories =\n  = .claude\n",
+            )
+            .unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.clone(),
+                source_info: OverlaySource::local(overlay),
+            };
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_resolved_overlay(&resolved, &canonical, &ApplyOptions::default());
+            let err = result.expect_err("apply should reject directory with escaping symlink");
+            assert!(
+                err.to_string().contains("escape") || format!("{err:#}").contains("escape"),
+                "error should mention symlink escape: {err:#}"
+            );
+            assert!(
+                !canonical.join(".claude").exists(),
+                "directory must not be linked into the target"
+            );
+        }
+
+        #[test]
+        #[cfg(unix)]
+        fn directory_symlink_mode_allows_internal_symlinks() {
+            let repo = create_test_repo();
+            let overlay = TempDir::new().unwrap();
+            fs::create_dir_all(overlay.path().join(".claude")).unwrap();
+            fs::write(overlay.path().join(".claude/CLAUDE.md"), "instructions").unwrap();
+            // Relative symlink staying inside the declared directory is fine
+            std::os::unix::fs::symlink("CLAUDE.md", overlay.path().join(".claude/alias.md"))
+                .unwrap();
+            fs::write(
+                overlay.path().join(CONFIG_FILE),
+                "overlay =\n  name = test\n\ndirectories =\n  = .claude\n",
+            )
+            .unwrap();
+
+            let resolved = ResolvedSource {
+                path: overlay.path().to_path_buf(),
+                source_info: OverlaySource::local(overlay.path().to_path_buf()),
+            };
+            let canonical = repo.path().canonicalize().unwrap();
+            let result = apply_resolved_overlay(&resolved, &canonical, &ApplyOptions::default());
+            assert!(result.is_ok(), "apply should succeed: {result:?}");
+            assert!(
+                canonical.join(".claude/CLAUDE.md").exists(),
+                "directory should be linked into the target"
             );
         }
     }
@@ -4115,10 +4086,12 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("symlink-target".to_string()),
-                ConflictStrategy::Fail,
-                true,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("symlink-target".to_string()),
+                    merge: true,
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_err());
@@ -4152,10 +4125,12 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("symlink-ancestor".to_string()),
-                ConflictStrategy::Fail,
-                true,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("symlink-ancestor".to_string()),
+                    merge: true,
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_err());
@@ -4193,10 +4168,13 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("write-failure".to_string()),
-                ConflictStrategy::SkipConflicts,
-                true,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("write-failure".to_string()),
+                    conflict_strategy: ConflictStrategy::SkipConflicts,
+                    merge: true,
+                    ..ApplyOptions::default()
+                },
             );
 
             fs::set_permissions(&locked_dir, original_permissions).unwrap();
@@ -4226,10 +4204,11 @@ mod tests {
             let result = apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("exclude-fails".to_string()),
-                ConflictStrategy::Fail,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("exclude-fails".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
 
             assert!(result.is_err());
@@ -4264,10 +4243,11 @@ mod tests {
             apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("my-overlay".to_string()),
-                ConflictStrategy::Fail,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("my-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
             assert_eq!(
@@ -4287,10 +4267,12 @@ mod tests {
             apply_resolved_overlay(
                 &resolved2,
                 repo.path(),
-                true,
-                Some("my-overlay".to_string()),
-                ConflictStrategy::Interactive,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("my-overlay".to_string()),
+                    conflict_strategy: ConflictStrategy::Interactive,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -4321,10 +4303,11 @@ mod tests {
             apply_resolved_overlay(
                 &resolved,
                 repo.path(),
-                true,
-                Some("batch-test".to_string()),
-                ConflictStrategy::Fail,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("batch-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -4347,10 +4330,11 @@ mod tests {
             apply_multiple_overlays(
                 &[resolved2],
                 repo.path(),
-                true,
-                false,
-                ConflictStrategy::Interactive,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    conflict_strategy: ConflictStrategy::Interactive,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5019,28 +5003,22 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("dup-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("dup-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
             let result = apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("dup-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("dup-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("already applied"));
@@ -5055,14 +5033,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("force-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("force-test".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5073,14 +5048,12 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("force-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::Force,
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("force-test".to_string()),
+                    conflict_strategy: ConflictStrategy::Force,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5098,14 +5071,12 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("dry-run-test".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                true, // dry_run
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("dry-run-test".to_string()),
+                    dry_run: true,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5132,14 +5103,10 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                None, // no name override
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5165,14 +5132,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("override-name".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("override-name".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5198,14 +5162,11 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("mapped".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("mapped".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
@@ -5233,20 +5194,243 @@ mod tests {
             apply_overlay(
                 overlay.path().to_str().unwrap(),
                 repo.path(),
-                true,
-                Some("dir-overlay".to_string()),
-                None,
-                false,
-                ConflictStrategy::default(),
-                false,
-                None,
-                false,
+                &ApplyOptions {
+                    force_copy: true,
+                    name_override: Some("dir-overlay".to_string()),
+                    ..ApplyOptions::default()
+                },
             )
             .unwrap();
 
             let canonical = repo.path().canonicalize().unwrap();
             assert!(canonical.join(".vscode").exists());
             assert!(canonical.join(".vscode/settings.json").exists());
+        }
+    }
+
+    mod conflict_resolution_tests {
+        use super::*;
+        use tempfile::TempDir;
+
+        const KINDS: [EntryType; 2] = [EntryType::File, EntryType::Directory];
+
+        #[test]
+        fn cross_overlay_skip_conflicts_skips() {
+            for kind in KINDS {
+                let outcome = resolve_cross_overlay_conflict(
+                    Path::new(".envrc"),
+                    Path::new("/repo/.envrc"),
+                    Path::new("/overlay/.envrc"),
+                    "other-overlay",
+                    ConflictStrategy::SkipConflicts,
+                    kind,
+                )
+                .unwrap();
+                assert_eq!(outcome, ConflictOutcome::Skip);
+            }
+        }
+
+        #[test]
+        fn cross_overlay_fail_and_force_error() {
+            for strategy in [ConflictStrategy::Fail, ConflictStrategy::Force] {
+                for kind in KINDS {
+                    let err = resolve_cross_overlay_conflict(
+                        Path::new(".envrc"),
+                        Path::new("/repo/.envrc"),
+                        Path::new("/overlay/.envrc"),
+                        "other-overlay",
+                        strategy,
+                        kind,
+                    )
+                    .unwrap_err();
+                    let message = err.to_string();
+                    assert!(
+                        message.contains("already managed by overlay 'other-overlay'"),
+                        "unexpected message for {strategy:?}/{kind:?}: {message}"
+                    );
+                    assert!(message.contains(entry_noun(kind)));
+                }
+            }
+        }
+
+        #[test]
+        fn existing_path_force_proceeds() {
+            for kind in KINDS {
+                let outcome = resolve_existing_path_conflict(
+                    Path::new(".envrc"),
+                    Path::new("/repo/.envrc"),
+                    Path::new("/overlay/.envrc"),
+                    ConflictStrategy::Force,
+                    kind,
+                )
+                .unwrap();
+                assert_eq!(outcome, ConflictOutcome::Proceed);
+            }
+        }
+
+        #[test]
+        fn existing_path_skip_conflicts_skips() {
+            for kind in KINDS {
+                let outcome = resolve_existing_path_conflict(
+                    Path::new(".envrc"),
+                    Path::new("/repo/.envrc"),
+                    Path::new("/overlay/.envrc"),
+                    ConflictStrategy::SkipConflicts,
+                    kind,
+                )
+                .unwrap();
+                assert_eq!(outcome, ConflictOutcome::Skip);
+            }
+        }
+
+        #[test]
+        fn existing_path_fail_errors_with_kind_specific_message() {
+            let err = resolve_existing_path_conflict(
+                Path::new(".envrc"),
+                Path::new("/repo/.envrc"),
+                Path::new("/overlay/.envrc"),
+                ConflictStrategy::Fail,
+                EntryType::File,
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("target file already exists"));
+
+            let err = resolve_existing_path_conflict(
+                Path::new(".vscode"),
+                Path::new("/repo/.vscode"),
+                Path::new("/overlay/.vscode"),
+                ConflictStrategy::Fail,
+                EntryType::Directory,
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("target path already exists"));
+        }
+
+        #[test]
+        fn link_entry_copies_file() {
+            let temp = TempDir::new().unwrap();
+            let source = temp.path().join("src.txt");
+            let target = temp.path().join("dst.txt");
+            fs::write(&source, "content").unwrap();
+
+            link_entry(&source, &target, LinkType::Copy, EntryType::File).unwrap();
+
+            assert_eq!(fs::read_to_string(&target).unwrap(), "content");
+            assert!(!target.is_symlink());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn link_entry_symlinks_file() {
+            let temp = TempDir::new().unwrap();
+            let source = temp.path().join("src.txt");
+            let target = temp.path().join("dst.txt");
+            fs::write(&source, "content").unwrap();
+
+            link_entry(&source, &target, LinkType::Symlink, EntryType::File).unwrap();
+
+            assert!(target.is_symlink());
+            assert_eq!(fs::read_to_string(&target).unwrap(), "content");
+        }
+
+        #[test]
+        fn link_entry_copies_directory_recursively() {
+            let temp = TempDir::new().unwrap();
+            let source = temp.path().join("srcdir");
+            let target = temp.path().join("dstdir");
+            fs::create_dir_all(source.join("nested")).unwrap();
+            fs::write(source.join("nested/file.txt"), "deep").unwrap();
+
+            link_entry(&source, &target, LinkType::Copy, EntryType::Directory).unwrap();
+
+            assert_eq!(
+                fs::read_to_string(target.join("nested/file.txt")).unwrap(),
+                "deep"
+            );
+            assert!(!target.is_symlink());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn link_entry_symlinks_directory() {
+            let temp = TempDir::new().unwrap();
+            let source = temp.path().join("srcdir");
+            let target = temp.path().join("dstdir");
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("file.txt"), "content").unwrap();
+
+            link_entry(&source, &target, LinkType::Symlink, EntryType::Directory).unwrap();
+
+            assert!(target.is_symlink());
+            assert_eq!(
+                fs::read_to_string(target.join("file.txt")).unwrap(),
+                "content"
+            );
+        }
+    }
+
+    mod apply_rollback_tests {
+        use super::*;
+        use crate::testutil::{TestContext, create_overlay_dir};
+
+        #[test]
+        fn failed_apply_prunes_empty_parent_directories() {
+            let ctx = TestContext::new();
+            // The conflicting file sorts after the nested entry, so the nested
+            // symlink (and its parent directory) is created before the apply
+            // fails under the default Fail strategy.
+            ctx.create_repo_file("zz-conflict.txt", "existing");
+            let overlay = create_overlay_dir(&[
+                (".vscode/settings.json", "{}"),
+                ("zz-conflict.txt", "overlay"),
+            ]);
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                ctx.repo_path(),
+                &ApplyOptions::default(),
+            );
+
+            assert!(result.is_err(), "conflicting apply should fail");
+            assert!(
+                !ctx.file_exists(".vscode/settings.json"),
+                "created overlay file should be rolled back"
+            );
+            assert!(
+                !ctx.repo_path().join(".vscode").exists(),
+                "empty parent directory should be pruned after rollback"
+            );
+        }
+
+        #[test]
+        fn failed_exclude_update_rolls_back_and_prunes_parents() {
+            let ctx = TestContext::new();
+            let overlay = create_overlay_dir(&[(".vscode/settings.json", "{}")]);
+            // Invalid UTF-8 in .git/info/exclude makes update_git_exclude fail
+            // after the overlay links have been created.
+            let exclude = ctx.repo_path().join(".git/info/exclude");
+            fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+            fs::write(&exclude, [0xFF, 0xFE, 0x00]).unwrap();
+
+            let result = apply_overlay(
+                overlay.path().to_str().unwrap(),
+                ctx.repo_path(),
+                &ApplyOptions::default(),
+            );
+
+            assert!(result.is_err(), "apply should fail on exclude update");
+            assert!(
+                !ctx.file_exists(".vscode/settings.json"),
+                "created overlay file should be rolled back"
+            );
+            assert!(
+                !ctx.repo_path().join(".vscode").exists(),
+                "empty parent directory should be pruned after rollback"
+            );
+            assert!(
+                !ctx.state_dir_exists(),
+                "no overlay state should be left behind"
+            );
         }
     }
 }

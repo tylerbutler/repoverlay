@@ -122,7 +122,7 @@ Before merging a release PR, ensure:
    just change    # Runs: changie new
    ```
 
-   Select one of the configured kinds (`Added`, `Fixed`, `Performance`, `Changed`, `Reverted`, `Dependencies`, `Security`) and an appropriate component (`features`, `fixes`, `misc`, `library`, or a command name: `apply`, `browse`, `cache`, `create`, `create-local`, `edit`, `list`, `move`, `remove`, `restore`, `source`, `status`, `switch`, `sync`).
+   Select one of the configured kinds (`Breaking`, `Added`, `Fixed`, `Performance`, `Changed`, `Reverted`, `Dependencies`, `Security`) and an appropriate component (`features`, `fixes`, `misc`, `library`, or a command name: `apply`, `browse`, `cache`, `create`, `edit`, `move`, `remove`, `restore`, `source`, `status`, `switch`, `sync`, `update`).
 
    No changelog fragment is needed for CI-only/release-plumbing documentation changes that do not affect the published binary.
 
@@ -224,6 +224,10 @@ Harness identity (`AgentHarness` in `src/profile_applicators/mod.rs`): stable id
 - **Hooks and commands**: plugin bundle `hooks/` and `commands/` are never decomposed for either harness.
 
 The website profiles guide, homepage announcements, design specs (`docs/superpowers/specs/`), and unreleased changelog fragments were brought over from the `profiles` branch in the v0.16.0 announcement PR, with revision notes where the shipped behavior diverged from the specs. The branch's implementation plans (`docs/superpowers/plans/`) and the `Fixed` fragment for never-released behavior were intentionally not brought over; they remain in git history on the `profiles` branch.
+
+## Vendored Agent Skills
+
+The repository tracks skills for AI coding agents working on this codebase: `.claude/skills/` (Claude Code) and `.agents/skills/` (other harnesses) hold vendored skill copies, and `skills-lock.json` pins each skill's upstream source and version. These are contributor tooling only — they are not part of the published binary and do not appear in user documentation.
 
 ## Project Structure
 

@@ -114,6 +114,10 @@ export default defineConfig({
 							slug: "guides/managing",
 						},
 						{
+							label: "The In-Repo Library",
+							slug: "guides/library",
+						},
+						{
 							label: "Restoring After Git Clean",
 							slug: "guides/restoring",
 						},

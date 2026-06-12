@@ -95,13 +95,15 @@ repoverlay cache remove owner/repo # Remove a specific cached repo
 repoverlay cache remove --all      # Remove all cached repos
 ```
 
+Configured sources (added with `repoverlay source add`) are cloned separately, to `~/.cache/repoverlay/sources/<name>/`. The `cache` subcommands operate only on the `github/` directory; source clones are refreshed automatically by commands that resolve from them (such as `browse` and `update`) and can be deleted manually — they are re-cloned on next use.
+
 ## Fork inheritance
 
 When you work on a **fork** of a repository, repoverlay can automatically inherit overlays from the **upstream** (parent) repository.
 
 ### Resolution order
 
-When you apply an overlay from a shared overlay repository, repoverlay checks:
+When you apply an overlay using a configured source reference (`org/repo/name`), repoverlay checks:
 
 1. **Direct match** — an overlay matching your fork's `org/repo`
 2. **Upstream fallback** — if no direct match exists and an `upstream` remote is configured, an overlay matching the upstream's `org/repo`

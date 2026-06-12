@@ -1,5 +1,4 @@
 //! Profile applicators provide profile-specific integration behavior.
-#![allow(dead_code)]
 
 pub(crate) mod claude;
 pub(crate) mod copilot;
@@ -13,8 +12,9 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use crate::config::Marketplace;
+use crate::plugin::PluginBundle;
 use crate::profile::{ProfileConfig, ProfileMode};
-use crate::profile_plan::ProfilePlan;
+use crate::profile_plan::{ProfileAction, ProfilePlan, json_pointer};
 
 /// The agent harness a profile is being applied to.
 ///
@@ -230,14 +230,81 @@ fn plan_instruction_region(
     ))
 }
 
+/// Decompose a resolved plugin bundle into repo-local placements for the
+/// context's harness, appending skill/agent placement and skip actions and
+/// accumulating MCP servers for the harness's single project `.mcp.json`
+/// merge.
+///
+/// Shared by every applicator: placement roots come from
+/// [`AgentHarness::skills_root`]/[`AgentHarness::agents_root`], and
+/// `skip_reason` renders the harness-specific reason for a capability that
+/// cannot be decomposed.
+fn decompose_bundle(
+    context: &ProfileContext,
+    bundle_dir: &Path,
+    plugin_name: &str,
+    actions: &mut Vec<ProfileAction>,
+    mcp_servers: &mut serde_json::Map<String, serde_json::Value>,
+    owned_paths: &mut Vec<String>,
+    skip_reason: impl Fn(&str) -> String,
+) -> Result<()> {
+    let bundle = PluginBundle::read(bundle_dir)?;
+    let harness = context.harness;
+    let repo_target = &context.target;
+
+    for skill in &bundle.skills {
+        actions.push(ProfileAction::PlacePluginDir {
+            source: bundle_dir.join("skills").join(skill),
+            target: harness.skills_root(repo_target).join(skill),
+        });
+    }
+
+    for agent in &bundle.agents {
+        actions.push(ProfileAction::PlacePluginDir {
+            source: bundle_dir.join("agents").join(agent),
+            target: harness.agents_root(repo_target).join(agent),
+        });
+    }
+
+    for (server_name, server) in &bundle.mcp_servers {
+        let pointer = json_pointer(&["mcpServers", server_name]);
+        if owned_paths.contains(&pointer) {
+            anyhow::bail!(
+                "MCP server '{server_name}' is provided by more than one plugin; \
+                 resolve the conflict before applying"
+            );
+        }
+        let resolved = crate::plugin::substitute_plugin_root(server, bundle_dir)?;
+        mcp_servers.insert(server_name.clone(), resolved);
+        owned_paths.push(pointer);
+    }
+
+    for capability in &bundle.unsupported_capabilities {
+        actions.push(ProfileAction::SkipCapability {
+            capability: format!("plugin:{plugin_name}:{capability}"),
+            reason: skip_reason(capability),
+        });
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ProfileContext {
     pub(crate) profile_name: String,
     pub(crate) harness: AgentHarness,
     pub(crate) target: PathBuf,
     pub(crate) profile_asset_dir: PathBuf,
+    /// Resolved harness config home (honors `REPOVERLAY_*_HOME`). No applicator
+    /// reads it yet, but it is the sandboxed conduit for future actions that
+    /// place files in the harness home, and integration tests already rely on
+    /// the override env vars.
+    #[allow(dead_code)]
     pub(crate) harness_home: PathBuf,
     pub(crate) mode: ProfileMode,
+    /// Ephemeral session identifier, persisted in `ProfileState`; available to
+    /// applicators that need to brand session-scoped placements.
+    #[allow(dead_code)]
     pub(crate) session_id: Option<String>,
     /// Marketplace registry used to resolve `marketplace/plugin` references.
     pub(crate) marketplaces: Vec<Marketplace>,
@@ -252,6 +319,116 @@ pub(crate) trait ProfileApplicator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile_plan::ProfileAction;
+    use std::fs;
+
+    /// Both applicators must decompose the same plugin bundle into structurally
+    /// identical plans: the same placements (relative to each harness's
+    /// skills/agents roots), the same MCP-server merge, and the same skipped
+    /// capabilities (the human-readable skip reason may differ).
+    #[test]
+    fn applicators_decompose_identical_bundles_equivalently() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("repo");
+        fs::create_dir_all(&target).unwrap();
+
+        let bundle = target.join("rust-dev");
+        fs::create_dir_all(bundle.join(".claude-plugin")).unwrap();
+        fs::write(
+            bundle.join(".claude-plugin/plugin.json"),
+            r#"{"name":"rust-dev"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(bundle.join("skills/fmt")).unwrap();
+        fs::write(bundle.join("skills/fmt/SKILL.md"), "# fmt").unwrap();
+        fs::create_dir_all(bundle.join("agents")).unwrap();
+        fs::write(
+            bundle.join("agents/reviewer.md"),
+            "---\nname: reviewer\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            bundle.join(".mcp.json"),
+            r#"{"mcpServers":{"rust":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/server"}}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(bundle.join("hooks")).unwrap();
+        fs::write(bundle.join("hooks/pre.sh"), "echo hi").unwrap();
+
+        let profile = ProfileConfig {
+            plugins: vec![crate::plugin::PluginRef::Local {
+                source: PathBuf::from("./rust-dev"),
+            }],
+            ..ProfileConfig::default()
+        };
+
+        let plan_for = |harness: AgentHarness| {
+            let context = ProfileContext {
+                profile_name: "rust-dev".to_string(),
+                harness,
+                target: target.clone(),
+                profile_asset_dir: target.clone(),
+                harness_home: temp.path().join("harness-home"),
+                mode: ProfileMode::Persistent,
+                session_id: None,
+                marketplaces: Vec::new(),
+                cache: crate::cache::CacheManager::new().unwrap(),
+            };
+            harness.applicator().plan(&profile, &context).unwrap()
+        };
+
+        let claude = plan_for(AgentHarness::Claude);
+        let copilot = plan_for(AgentHarness::Copilot);
+
+        // Placements: identical sources and identical targets relative to each
+        // harness's placement roots.
+        let placements = |plan: &crate::profile_plan::ProfilePlan, harness: AgentHarness| {
+            plan.actions
+                .iter()
+                .filter_map(|a| match a {
+                    ProfileAction::PlacePluginDir { source, target: t } => {
+                        let rel = t
+                            .strip_prefix(harness.skills_root(&target))
+                            .or_else(|_| t.strip_prefix(harness.agents_root(&target)))
+                            .expect("placement target must be under a harness root");
+                        Some((source.clone(), rel.to_path_buf()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            placements(&claude, AgentHarness::Claude),
+            placements(&copilot, AgentHarness::Copilot)
+        );
+
+        // MCP merge: identical resolved value and owned paths.
+        let merge = |plan: &crate::profile_plan::ProfilePlan| {
+            plan.actions
+                .iter()
+                .find_map(|a| match a {
+                    ProfileAction::MergeJson {
+                        value, owned_paths, ..
+                    } => Some((value.clone(), owned_paths.clone())),
+                    _ => None,
+                })
+                .expect("expected an mcp merge action")
+        };
+        assert_eq!(merge(&claude), merge(&copilot));
+
+        // Skips: identical capability identifiers.
+        let skips = |plan: &crate::profile_plan::ProfilePlan| {
+            plan.actions
+                .iter()
+                .filter_map(|a| match a {
+                    ProfileAction::SkipCapability { capability, .. } => Some(capability.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(skips(&claude), skips(&copilot));
+        assert_eq!(skips(&claude), vec!["plugin:rust-dev:hooks".to_string()]);
+    }
 
     #[test]
     fn claude_home_defaults_to_dot_claude() {
