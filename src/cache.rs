@@ -246,23 +246,26 @@ impl CacheManager {
     }
 
     /// Perform the actual checkout.
+    ///
+    /// The trailing `--` marks the ref as a revision, not a pathspec, so a ref
+    /// that also names a file in the worktree cannot be misinterpreted.
     fn do_checkout(&self, repo_path: &Path, ref_spec: &str) -> Result<()> {
-        git_run(repo_path, &["checkout", ref_spec])
+        git_run(repo_path, &["checkout", ref_spec, "--"])
             .with_context(|| format!("Failed to checkout {ref_spec}"))
     }
 
     /// Fetch a specific commit.
     fn fetch_commit(&self, repo_path: &Path, sha: &str) -> Result<()> {
         // First, unshallow if needed to access the commit (ignore errors - might already be complete)
-        let _ = git_in_dir(repo_path, &["fetch", "--unshallow", "origin"]);
+        let _ = git_in_dir(repo_path, &["fetch", "--unshallow", "origin", "--"]);
 
         // Fetch the specific commit
         let short_sha = &sha[..12.min(sha.len())];
-        git_run(repo_path, &["fetch", "origin", sha])
+        git_run(repo_path, &["fetch", "origin", sha, "--"])
             .with_context(|| format!("Failed to fetch commit {short_sha}"))?;
 
         // Checkout the commit
-        git_run(repo_path, &["checkout", sha])
+        git_run(repo_path, &["checkout", sha, "--"])
             .with_context(|| format!("Failed to checkout commit {short_sha}"))
     }
 
@@ -449,6 +452,58 @@ pub(crate) fn cache_dir() -> Result<PathBuf> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Run a git command in `repo`, asserting success.
+    fn git_ok(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .expect("failed to run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn checkout_ref_succeeds_when_branch_name_matches_a_file_path() {
+        // A ref that is simultaneously a valid pathspec must not be
+        // misinterpreted by git; checkout invocations disambiguate with `--`.
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path();
+        git_ok(repo, &["init", "--initial-branch=main"]);
+        fs::write(repo.join("dual"), "content").unwrap();
+        git_ok(repo, &["add", "dual"]);
+        git_ok(
+            repo,
+            &[
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "init",
+            ],
+        );
+        // Branch name shadows the committed file path.
+        git_ok(repo, &["branch", "dual"]);
+
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+        let source = GitHubSource {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            git_ref: GitRef::Branch("dual".to_string()),
+            subpath: None,
+        };
+        manager
+            .checkout_ref(repo, &source)
+            .expect("checkout of pathspec-ambiguous branch should succeed");
+    }
 
     #[test]
     fn test_cache_manager_creation() {
