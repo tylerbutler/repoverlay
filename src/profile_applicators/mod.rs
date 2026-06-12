@@ -1,5 +1,4 @@
 //! Profile applicators provide profile-specific integration behavior.
-#![allow(dead_code)]
 
 pub(crate) mod claude;
 pub(crate) mod copilot;
@@ -236,8 +235,16 @@ pub(crate) struct ProfileContext {
     pub(crate) harness: AgentHarness,
     pub(crate) target: PathBuf,
     pub(crate) profile_asset_dir: PathBuf,
+    /// Resolved harness config home (honors `REPOVERLAY_*_HOME`). No applicator
+    /// reads it yet, but it is the sandboxed conduit for future actions that
+    /// place files in the harness home, and integration tests already rely on
+    /// the override env vars.
+    #[allow(dead_code)]
     pub(crate) harness_home: PathBuf,
     pub(crate) mode: ProfileMode,
+    /// Ephemeral session identifier, persisted in `ProfileState`; available to
+    /// applicators that need to brand session-scoped placements.
+    #[allow(dead_code)]
     pub(crate) session_id: Option<String>,
     /// Marketplace registry used to resolve `marketplace/plugin` references.
     pub(crate) marketplaces: Vec<Marketplace>,

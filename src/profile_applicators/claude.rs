@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
