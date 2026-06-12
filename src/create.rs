@@ -364,7 +364,11 @@ pub(crate) fn update_overlays(
 
     for (_, name, url, old_commit, new_commit) in &updates_available {
         println!("  {} {}", "↑".cyan(), name);
-        println!("    {}  →  {}", &old_commit[..7], &new_commit[..7]);
+        println!(
+            "    {}  →  {}",
+            &old_commit[..7.min(old_commit.len())],
+            &new_commit[..7.min(new_commit.len())]
+        );
         println!("    {}", url.dimmed());
     }
 
