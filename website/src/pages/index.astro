@@ -7,9 +7,10 @@ import "@fontsource/metropolis/800.css";
 import logo from "../assets/repoverlay.svg";
 
 const description =
-	"Overlay AI configs, editor settings, and dev tooling into any git repo. Symlinked and auto-excluded from version control.";
+	"Overlay AI configs, editor settings, and dev tooling into any git repo. Files are linked into place and excluded through .git/info/exclude.";
 const ghUrl = "https://github.com/tylerbutler/repoverlay";
 const release = "0.14.2";
+const firstRunCommand = "brew install tylerbutler/tap/repoverlay\nrepoverlay browse owner/repo";
 
 const features = [
 	{
@@ -43,19 +44,19 @@ const features = [
 
 const steps = [
 	{
+		key: "Install",
+		body: "Install the binary once with Homebrew, Cargo, or the shell installer.",
+		cmd: "brew install tylerbutler/tap/repoverlay",
+	},
+	{
 		key: "Browse",
-		body: "Discover overlays from a shared source and pick interactively.",
-		cmd: "repoverlay browse tylerbutler",
+		body: "Point at a source, see available overlays, and apply one from the picker.",
+		cmd: "repoverlay browse owner/repo",
 	},
 	{
-		key: "Apply",
-		body: "Link the overlay into your repo, excluded from git automatically.",
+		key: "Apply directly",
+		body: "Already know the overlay name? Skip the picker and apply it by name.",
 		cmd: "repoverlay apply claude-config",
-	},
-	{
-		key: "Restore",
-		body: "Wiped by git clean? Bring everything back in one command.",
-		cmd: "repoverlay restore",
 	},
 ];
 ---
@@ -116,7 +117,7 @@ const steps = [
 					<p class="lede">{description}</p>
 					<div class="cta-row">
 						<a class="btn btn--primary" href="/quick-start/">
-							Get started
+							Open Quick Start
 							<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 								><path
 									fill="none"
@@ -132,19 +133,23 @@ const steps = [
 				</div>
 
 				<div class="hero__panel reveal" style="--delay:90ms">
-					<div class="shell" aria-label="Example shell session">
+					<div class="shell" aria-label="First-run shell session">
 						<div class="shell__bar">
 							<span class="shell__name">zsh</span>
-							<button class="copy" type="button" data-copy="repoverlay apply claude-config">
+							<button
+								class="copy"
+								type="button"
+								data-copy={firstRunCommand}
+								aria-label="Copy first-run commands"
+							>
 								<span class="copy__label">Copy</span>
 							</button>
 						</div>
-						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> repoverlay apply claude-config</span>
-<span class="ln"><span class="ok">Applying</span> overlay: claude-config</span>
-<span class="ln dim">  <span class="ok">+</span> .claude/</span>
-<span class="ln dim">  <span class="ok">+</span> CLAUDE.md</span>
-<span class="ln"> </span>
-<span class="ln"><span class="ok">✓</span> Applied 2 file(s) from 'claude-config'</span>
+						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> brew install tylerbutler/tap/repoverlay</span>
+<span class="ln"><span class="pr">$</span> repoverlay browse owner/repo</span>
+<span class="ln dim">  Browse overlays, choose one, and apply it.</span>
+<span class="ln dim">  Files are linked into the repo working tree.</span>
+<span class="ln"><span class="ok">✓</span> Excluded from git via .git/info/exclude</span>
 <span class="ln"><span class="pr">$</span> <span class="caret">▍</span></span></code></pre>
 					</div>
 				</div>
@@ -189,7 +194,7 @@ const steps = [
 
 			<!-- HOW IT WORKS: command flow -->
 			<section class="flow reveal">
-				<h2 class="section-head">Three commands, end to end.</h2>
+				<h2 class="section-head">First run, then fast repeat.</h2>
 				<ol class="flow__track">
 					{
 						steps.map((s) => (
@@ -211,7 +216,7 @@ const steps = [
 				<p>Define your overlays once, apply them anywhere, recover them anytime.</p>
 				<div class="cta-row cta-row--center">
 					<a class="btn btn--primary" href="/quick-start/">
-						Get started
+						Open Quick Start
 						<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 							><path
 								fill="none"

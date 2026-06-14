@@ -106,8 +106,8 @@
       "name": "Shell Panel",
       "kind": "custom",
       "refersTo": "shell-panel",
-      "description": "The signature command artifact used as the hero object.",
-      "html": "<div class=\"ds-shell\"><div class=\"ds-shell-bar\"><span>zsh</span><button>Copy</button></div><pre><code><span><b>$</b> repoverlay apply claude-config</span><span><em>Applying</em> overlay: claude-config</span><span class=\"ds-dim\">  + .claude/</span><span><em>✓</em> Applied 2 file(s)</span></code></pre></div>",
+      "description": "The signature command artifact used as the hero object. Prefer first-run commands over assumed overlay names.",
+      "html": "<div class=\"ds-shell\"><div class=\"ds-shell-bar\"><span>zsh</span><button>Copy</button></div><pre><code><span><b>$</b> brew install tylerbutler/tap/repoverlay</span><span><b>$</b> repoverlay browse owner/repo</span><span class=\"ds-dim\">  Browse overlays, choose one, and apply it.</span><span><em>✓</em> Excluded from git via .git/info/exclude</span></code></pre></div>",
       "css": ".ds-shell{overflow:hidden;border:1px solid var(--border-strong,rgba(235,237,249,.18));border-radius:16px;background:var(--surface,#1d1f2c);color:var(--text,#ebedf9);box-shadow:0 24px 60px rgba(8,9,16,.45);font-family:ui-monospace,SFMono-Regular,JetBrains Mono,Menlo,Consolas,monospace}.ds-shell-bar{display:flex;align-items:center;justify-content:space-between;padding:.6rem .85rem;border-bottom:1px solid var(--border,rgba(235,237,249,.1));background:color-mix(in srgb,var(--surface,#1d1f2c) 70%,var(--bg,#14151f));font-size:.78rem;color:var(--muted,#8789a4)}.ds-shell-bar button{padding:.25rem .6rem;border:1px solid var(--border-strong,rgba(235,237,249,.18));border-radius:7px;background:transparent;color:var(--text-2,#b7bace)}.ds-shell pre{margin:0;padding:1.1rem 1.2rem 1.3rem;font-size:.86rem;line-height:1.85}.ds-shell span{display:block}.ds-shell b,.ds-shell em{color:var(--accent,#cf6242);font-style:normal}.ds-shell .ds-dim{color:var(--muted,#8789a4)}"
     },
     {
