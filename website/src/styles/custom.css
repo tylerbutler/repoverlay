@@ -3,6 +3,7 @@
 	--sl-color-accent-low: #371b14;
 	--sl-color-accent: #aa462c;
 	--sl-color-accent-high: #e5bfb4;
+	--sl-color-success: #5fb98b;
 	--sl-color-white: #ffffff;
 	--sl-color-gray-1: #ebedf9;
 	--sl-color-gray-2: #bfc1cf;
@@ -18,6 +19,7 @@
 	--sl-color-accent-low: #edcfc8;
 	--sl-color-accent: #ac482e;
 	--sl-color-accent-high: #4f2418;
+	--sl-color-success: #24794d;
 	--sl-color-white: #161721;
 	--sl-color-gray-1: #23243a;
 	--sl-color-gray-2: #34364d;
@@ -27,4 +29,9 @@
 	--sl-color-gray-6: #ebedf9;
 	--sl-color-gray-7: #f5f6fc;
 	--sl-color-black: #ffffff;
+}
+
+.sl-markdown-content .expressive-code .copy button {
+	width: 2.75rem;
+	height: 2.75rem;
 }
