@@ -27,10 +27,10 @@ colors:
 typography:
   display:
     fontFamily: "Metropolis, system-ui, sans-serif"
-    fontSize: "clamp(2.6rem, 6vw, 4.2rem)"
+    fontSize: "clamp(3rem, 7.8vw, 5.4rem)"
     fontWeight: 800
     lineHeight: 1.05
-    letterSpacing: "-0.035em"
+    letterSpacing: "-0.04em"
   headline:
     fontFamily: "Metropolis, system-ui, sans-serif"
     fontSize: "clamp(1.9rem, 3.6vw, 2.8rem)"
@@ -95,6 +95,11 @@ components:
     typography: "{typography.mono}"
     rounded: "{rounded.lg}"
     padding: "0"
+  overlay-stack:
+    backgroundColor: "{colors.accent-dark}"
+    textColor: "{colors.text-dark}"
+    rounded: "{rounded.lg}"
+    padding: "0.7rem 0.82rem"
   feature-card:
     backgroundColor: "{colors.surface-dark}"
     textColor: "{colors.text-dark}"
@@ -132,7 +137,8 @@ showing concrete files, commands, exclusions, and restore flows.
 - Clay-orange accent used as a working signal for action, success-path emphasis, and command
   prompts.
 - Tonal layering, borders, and a single structural shell shadow instead of decorative depth.
-- Real workflow objects as imagery: command panels, config file names, overlay flow steps.
+- Real workflow objects as imagery: command panels, config file names, overlay flow steps, and
+  stacked source/worktree/exclude artifacts.
 
 ## 2. Colors
 
@@ -186,8 +192,8 @@ terminal. Monospace is used functionally for commands and file paths, not as a c
 
 ### Hierarchy
 
-- **Display** (800, `clamp(2.6rem, 6vw, 4.2rem)`, 1.05): Hero headlines and the strongest landing
-  statements. Keep letter spacing at or above `-0.035em`.
+- **Display** (800, `clamp(3rem, 7.8vw, 5.4rem)`, 1.05): Hero headlines and the strongest landing
+  statements. Keep letter spacing at or above `-0.04em`.
 - **Headline** (800, `clamp(1.9rem, 3.6vw, 2.8rem)`, 1.05): Section-level arguments such as the
   problem statement and final CTA.
 - **Title** (700, `1.18rem` to `1.25rem`, 1.05): Feature cards and flow steps.
@@ -262,8 +268,15 @@ physical object. Ordinary feature cells stay flat and use borders plus tonal con
 
 The shell panel is the signature brand object. It should show real commands, real output, and
 file paths using the monospace stack, with Clay marking prompts and success-path emphasis. Copy
-buttons are small, bordered, and utility-like; the copied state changes text to Clay rather than
-triggering a toast.
+buttons are small, bordered, and utility-like; success changes text to Clay, while clipboard
+failure must be visible and announced so users know to copy the commands manually.
+
+### Overlay Stack
+
+The overlay stack is the bolder hero-only artifact: small physical labels for overlay source,
+working tree, restore state, and `.git/info/exclude` sit behind the shell panel on a Clay backing
+plate. Use it when the page needs the mechanics to feel tangible; do not repeat it as generic card
+decoration elsewhere.
 
 ### Motion
 
@@ -271,6 +284,14 @@ Motion is restrained and functional: hover lifts on actionable elements, enhance
 reveals for landing sections, and a blinking caret inside the shell. Reveal motion must never
 gate readability; content is visible by default and JavaScript adds animation only when motion is
 allowed and supported. Reduced motion removes the caret blink, reveal animation, and hover lifts.
+
+### Production Hardening
+
+The homepage release banner reads the version from root `Cargo.toml` at build time, not from a
+hand-maintained string. Code and file-path treatments must allow emergency wrapping or horizontal
+scrolling so long owner/repo names, translated labels, and generated paths do not create page-level
+overflow. Forced-colors mode removes decorative hero layers and keeps bordered functional objects
+visible.
 
 ## 6. Do's and Don'ts
 
@@ -286,6 +307,8 @@ allowed and supported. Reduced motion removes the caret blink, reveal animation,
   dark surfaces.
 - **Do** make reduced-motion behavior visible and complete; content must be readable before any
   animation enhancement runs.
+- **Do** surface clipboard failures and keep release/version text sourced from build-time project
+  metadata.
 
 ### Don't:
 
