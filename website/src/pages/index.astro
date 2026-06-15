@@ -2,7 +2,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import "@fontsource/metropolis/400.css";
-import "@fontsource/metropolis/500.css";
 import "@fontsource/metropolis/600.css";
 import "@fontsource/metropolis/700.css";
 import "@fontsource/metropolis/800.css";
@@ -85,7 +84,7 @@ const steps = [
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<link rel="icon" href={logo.src} type="image/svg+xml" />
 		<title>repoverlay: share configs across repos, commit nothing</title>
 		<meta name="description" content={description} />
@@ -498,7 +497,6 @@ const steps = [
 				font-family: var(--font);
 				font-size: 17px;
 				line-height: 1.6;
-				overflow-x: clip;
 				-webkit-font-smoothing: antialiased;
 				text-rendering: optimizeLegibility;
 			}
@@ -561,7 +559,8 @@ const steps = [
 				justify-content: center;
 				gap: 0.55rem;
 				flex-wrap: wrap;
-				padding: 0.5rem 1rem;
+				min-height: 44px;
+				padding: 0 1rem;
 				font-size: 0.85rem;
 				color: var(--text-2);
 				background: var(--bg-2);
@@ -574,6 +573,10 @@ const steps = [
 				background: var(--accent);
 			}
 			.release a {
+				display: inline-flex;
+				align-items: center;
+				min-height: 44px;
+				padding-inline: 0.15rem;
 				color: var(--accent);
 				font-weight: 600;
 			}
@@ -594,7 +597,8 @@ const steps = [
 				max-width: var(--maxw);
 				margin: 0 auto;
 				height: 64px;
-				padding: 0 1.5rem;
+				padding-left: max(1.5rem, env(safe-area-inset-left));
+				padding-right: max(1.5rem, env(safe-area-inset-right));
 				display: flex;
 				align-items: center;
 				justify-content: space-between;
@@ -603,6 +607,9 @@ const steps = [
 				display: inline-flex;
 				align-items: center;
 				gap: 0.55rem;
+				justify-content: center;
+				min-width: 44px;
+				min-height: 44px;
 				font-weight: 700;
 				letter-spacing: -0.01em;
 			}
@@ -616,11 +623,20 @@ const steps = [
 				font-size: 0.95rem;
 				color: var(--text-2);
 			}
+			.nav__links a {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				min-width: 44px;
+				min-height: 44px;
+			}
 			.nav__links a:hover {
 				color: var(--text);
 			}
 			.nav__gh {
 				display: inline-flex;
+				justify-content: center;
+				width: 44px;
 				color: var(--text-2);
 			}
 			.nav__gh:hover {
@@ -631,7 +647,8 @@ const steps = [
 			main {
 				max-width: calc(var(--maxw) + 40px);
 				margin: 0 auto;
-				padding: 0 1.5rem;
+				padding-left: max(1.5rem, env(safe-area-inset-left));
+				padding-right: max(1.5rem, env(safe-area-inset-right));
 			}
 			section {
 				padding-block: clamp(4.5rem, 9vw, 8rem);
@@ -709,16 +726,22 @@ const steps = [
 				gap: clamp(2.4rem, 6vw, 5.5rem);
 				align-items: center;
 				padding-top: clamp(3rem, 6vw, 5.5rem);
+				overflow: clip;
+			}
+			.hero__copy,
+			.hero__panel {
+				min-width: 0;
+				max-width: 100%;
 			}
 			.hero h1 {
-				max-width: 12ch;
+				max-width: min(12ch, 100%);
 				font-size: clamp(3rem, 7.8vw, 5.4rem);
 				letter-spacing: -0.04em;
 				text-wrap: balance;
 			}
 			.lede {
 				margin-top: 1.4rem;
-				max-width: 38ch;
+				max-width: min(38ch, 100%);
 				color: var(--text-2);
 				font-size: clamp(1.05rem, 1.6vw, 1.2rem);
 			}
@@ -726,7 +749,7 @@ const steps = [
 				margin-top: 2rem;
 			}
 			.hero__note {
-				max-width: 42ch;
+				max-width: min(42ch, 100%);
 				margin-top: 0.95rem;
 				color: var(--text-2);
 				font-size: 0.95rem;
@@ -741,7 +764,7 @@ const steps = [
 			.mechanics {
 				display: grid;
 				grid-template-columns: repeat(3, minmax(0, 1fr));
-				max-width: 45rem;
+				max-width: min(45rem, 100%);
 				margin: 2.6rem 0 0;
 				padding: 0;
 				border: 1px solid var(--border-strong);
@@ -885,8 +908,8 @@ const steps = [
 				flex: 0 0 auto;
 				font-family: var(--font);
 				font-size: 0.78rem;
-				min-width: 2.35rem;
-				min-height: 2.35rem;
+				min-width: 44px;
+				min-height: 44px;
 				color: var(--text-2);
 				background: transparent;
 				border: 1px solid var(--border-strong);
@@ -1226,10 +1249,12 @@ const steps = [
 				margin-bottom: 0.9rem;
 			}
 			.foot__cols a {
-				display: block;
+				display: flex;
+				align-items: center;
+				min-height: 44px;
 				color: var(--text-2);
 				font-size: 0.95rem;
-				padding: 0.2rem 0;
+				padding: 0.25rem 0;
 			}
 			.foot__cols a:hover {
 				color: var(--accent);
@@ -1314,8 +1339,8 @@ const steps = [
 					grid-template-columns: 1fr;
 				}
 				.hero h1 {
-					max-width: 13ch;
-					font-size: clamp(2.75rem, 10vw, 4.6rem);
+					max-width: min(13ch, 100%);
+					font-size: clamp(2.55rem, 10vw, 4.6rem);
 				}
 				.bento {
 					grid-template-columns: 1fr 1fr;
@@ -1345,8 +1370,16 @@ const steps = [
 				body {
 					font-size: 16px;
 				}
+				main {
+					padding-left: max(1rem, env(safe-area-inset-left));
+					padding-right: max(1rem, env(safe-area-inset-right));
+				}
+				.nav__inner {
+					padding-left: max(1rem, env(safe-area-inset-left));
+					padding-right: max(1rem, env(safe-area-inset-right));
+				}
 				.nav__links {
-					gap: 1rem;
+					gap: 0.5rem;
 					font-size: 0.9rem;
 				}
 				.nav__links a[href="/cli-reference/"] {
@@ -1375,7 +1408,7 @@ const steps = [
 					padding-block: 1rem;
 				}
 				.hero__panel::after {
-					inset: 1.2rem -0.35rem 0.15rem 0.75rem;
+					inset: 1.2rem 0 0.15rem 0.75rem;
 				}
 				.shell__body {
 					font-size: 0.78rem;
@@ -1390,8 +1423,13 @@ const steps = [
 					gap: 0.2rem;
 				}
 				.cta-row .btn {
-					flex: 1 1 auto;
+					flex: 1 1 13rem;
 					justify-content: center;
+				}
+			}
+			@media (max-width: 360px) {
+				.nav .brand span {
+					display: none;
 				}
 			}
 		</style>
