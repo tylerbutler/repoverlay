@@ -5,6 +5,7 @@ import "@fontsource/metropolis/400.css";
 import "@fontsource/metropolis/600.css";
 import "@fontsource/metropolis/700.css";
 import "@fontsource/metropolis/800.css";
+import "../styles/tokens.css";
 import logo from "../assets/repoverlay.svg";
 
 const description =
@@ -92,6 +93,20 @@ const steps = [
 		<meta property="og:description" content={description} />
 		<meta property="og:type" content="website" />
 		<meta name="generator" content={Astro.generator} />
+		<script is:inline>
+			(() => {
+				const query = window.matchMedia?.("(prefers-color-scheme: light)");
+				let savedTheme = null;
+				try {
+					const stored = window.localStorage.getItem("starlight-theme");
+					if (stored === "dark" || stored === "light") savedTheme = stored;
+				} catch {
+					/* localStorage can be blocked; fall back to OS preference. */
+				}
+				document.documentElement.dataset.theme =
+					savedTheme ?? (query?.matches ? "light" : "dark");
+			})();
+		</script>
 	</head>
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
@@ -333,6 +348,34 @@ const steps = [
 		</footer>
 
 		<script>
+			const themeStorageKey = "starlight-theme";
+			const colorSchemeQuery = window.matchMedia?.("(prefers-color-scheme: light)");
+			const readSavedTheme = () => {
+				try {
+					const stored = window.localStorage.getItem(themeStorageKey);
+					return stored === "dark" || stored === "light" ? stored : null;
+				} catch {
+					return null;
+				}
+			};
+			const applyPreferredTheme = () => {
+				document.documentElement.dataset.theme =
+					readSavedTheme() ?? (colorSchemeQuery?.matches ? "light" : "dark");
+			};
+			const applyAutoTheme = () => {
+				if (readSavedTheme() === null) applyPreferredTheme();
+			};
+			if (colorSchemeQuery) {
+				if (typeof colorSchemeQuery.addEventListener === "function") {
+					colorSchemeQuery.addEventListener("change", applyAutoTheme);
+				} else {
+					colorSchemeQuery.onchange = applyAutoTheme;
+				}
+			}
+			window.addEventListener("storage", (event) => {
+				if (event.key === themeStorageKey) applyPreferredTheme();
+			});
+
 			// Copy-to-clipboard for the shell example.
 			const copyToClipboard = async (text: string) => {
 				if (text.length === 0) {
@@ -433,50 +476,27 @@ const steps = [
 
 		<style is:global>
 			:root {
-				color-scheme: dark;
-				--bg: #14151f;
-				--bg-2: #181a26;
-				--surface: #1d1f2c;
-				--surface-2: #23253480;
-				--border: rgba(235, 237, 249, 0.1);
-				--border-strong: rgba(235, 237, 249, 0.18);
-				--text: #ebedf9;
-				--text-2: #b7bace;
-				--muted: #8789a4;
-				--accent: #cf6242;
-				--accent-2: #aa462c;
-				--accent-soft: rgba(207, 98, 66, 0.14);
-				--accent-line: rgba(207, 98, 66, 0.4);
-				--success: var(--sl-color-success, #5fb98b);
-				--on-accent: #1a0f0b;
-				--radius: 16px;
-				--radius-sm: 10px;
-				--maxw: 1180px;
-				--font: "Metropolis", system-ui, sans-serif;
-				--mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo,
-					Consolas, monospace;
-				--ease: cubic-bezier(0.16, 1, 0.3, 1);
-			}
-
-			@media (prefers-color-scheme: light) {
-				:root {
-					color-scheme: light;
-					--bg: #f6f7fc;
-					--bg-2: #eef0f8;
-					--surface: #ffffff;
-					--surface-2: #ffffff;
-					--border: rgba(22, 23, 33, 0.1);
-					--border-strong: rgba(22, 23, 33, 0.16);
-					--text: #161721;
-					--text-2: #3a3c52;
-					--muted: #6b6e87;
-					--accent: #ac482e;
-					--accent-2: #8f371f;
-					--accent-soft: rgba(172, 72, 46, 0.1);
-					--accent-line: rgba(172, 72, 46, 0.35);
-					--success: var(--sl-color-success, #24794d);
-					--on-accent: #ffffff;
-				}
+				color-scheme: var(--rv-color-scheme);
+				--bg: var(--rv-bg);
+				--bg-2: var(--rv-bg-raised);
+				--surface: var(--rv-surface);
+				--border: var(--rv-border);
+				--border-strong: var(--rv-border-strong);
+				--text: var(--rv-text);
+				--text-2: var(--rv-text-secondary);
+				--muted: var(--rv-text-muted);
+				--accent: var(--rv-accent);
+				--accent-2: var(--rv-accent-deep);
+				--accent-soft: var(--rv-accent-soft);
+				--accent-line: var(--rv-accent-line);
+				--success: var(--rv-success);
+				--on-accent: var(--rv-on-accent);
+				--radius: var(--rv-radius-lg);
+				--radius-sm: var(--rv-radius-md);
+				--maxw: var(--rv-layout-max);
+				--font: var(--rv-font);
+				--mono: var(--rv-mono);
+				--ease: var(--rv-ease);
 			}
 
 			* {
@@ -688,7 +708,7 @@ const steps = [
 			}
 			.btn--primary:hover {
 				transform: translateY(-2px);
-				background: color-mix(in srgb, var(--accent) 88%, #fff);
+				background: color-mix(in srgb, var(--accent) 88%, var(--rv-hover-tint));
 			}
 			.btn--primary:hover svg {
 				transform: translateX(3px);
@@ -755,12 +775,6 @@ const steps = [
 				font-size: 0.95rem;
 				text-wrap: pretty;
 			}
-			.quickfacts {
-				margin: 2.6rem 0 0;
-				display: flex;
-				flex-wrap: wrap;
-				gap: 2rem;
-			}
 			.mechanics {
 				display: grid;
 				grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -793,23 +807,6 @@ const steps = [
 				overflow-wrap: anywhere;
 				white-space: normal;
 			}
-			.quickfacts div {
-				display: flex;
-				flex-direction: column;
-				gap: 0.2rem;
-			}
-			.quickfacts dt {
-				font-size: 0.72rem;
-				text-transform: uppercase;
-				letter-spacing: 0.14em;
-				color: var(--muted);
-			}
-			.quickfacts dd {
-				margin: 0;
-				font-weight: 600;
-				font-size: 0.95rem;
-			}
-
 			/* Shell panel */
 			.hero__panel {
 				position: relative;
@@ -887,7 +884,7 @@ const steps = [
 				border: 1px solid var(--border-strong);
 				border-radius: var(--radius);
 				background: var(--surface);
-				box-shadow: 0 24px 60px rgba(8, 9, 16, 0.45);
+				box-shadow: var(--rv-shadow-shell);
 				overflow: hidden;
 			}
 			.shell__bar {
