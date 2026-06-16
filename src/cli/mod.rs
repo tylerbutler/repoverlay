@@ -753,7 +753,7 @@ pub(crate) fn run() -> Result<()> {
 
     // Handle markdown help generation (for documentation)
     if cli.markdown_help {
-        clap_markdown::print_help_markdown::<Cli>();
+        print!("{}", markdown_help());
         return Ok(());
     }
 
@@ -1063,6 +1063,13 @@ pub(crate) fn run() -> Result<()> {
     check_for_updates();
 
     Ok(())
+}
+
+fn markdown_help() -> String {
+    clap_markdown::help_markdown::<Cli>()
+        .replace("###### **Subcommands:**", "### Subcommands")
+        .replace("###### **Arguments:**", "### Arguments")
+        .replace("###### **Options:**", "### Options")
 }
 
 /// Build a conflict strategy from the mutually-exclusive CLI flags.

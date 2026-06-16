@@ -1,6 +1,6 @@
+import { readFileSync } from "node:fs";
 import starlight from "@astrojs/starlight";
 import starlightAnnouncement from "starlight-announcement";
-import starlightCatppuccin from "@catppuccin/starlight";
 import a11yEmoji from "@fec/remark-a11y-emoji";
 import { includeMarkdown } from "@hashicorp/platform-remark-plugins";
 import { defineConfig } from "astro/config";
@@ -10,6 +10,12 @@ import starlightLlmsTxt from "starlight-llms-txt";
 
 // Get the directory name from the script URL
 const rootDir = new URL(".", import.meta.url).pathname;
+const cargoToml = readFileSync(new URL("../Cargo.toml", import.meta.url), "utf8");
+const releaseVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+if (!releaseVersion) {
+	throw new Error("Could not read repoverlay version from Cargo.toml");
+}
+const releaseAnnouncementId = `v${releaseVersion.replaceAll(".", "-")}`;
 
 // https://astro.build/config
 export default defineConfig({
@@ -39,20 +45,16 @@ export default defineConfig({
 				"./src/styles/custom.css",
 			],
 			plugins: [
-				// starlightCatppuccin({
-				// 	dark: { flavor: "macchiato", accent: "maroon" },
-				// 	light: { accent: "maroon" },
-				// }),
 				starlightAnnouncement({
 					announcements: [
 						{
-							id: "v0-14-2",
-							content: "repoverlay 0.14.2 is out now.",
+							id: releaseAnnouncementId,
+							content: `repoverlay ${releaseVersion} is out now.`,
 							variant: "tip",
 							dismissible: true,
 							link: {
 								text: "Release notes",
-								href: "https://github.com/tylerbutler/repoverlay/releases/tag/v0.14.2",
+								href: `https://github.com/tylerbutler/repoverlay/releases/tag/v${releaseVersion}`,
 							},
 						},
 					],

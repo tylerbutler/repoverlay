@@ -43,7 +43,7 @@ Overlay config files into git repositories without committing them
 
 **Usage:** `repoverlay [COMMAND]`
 
-###### **Subcommands:**
+### Subcommands
 
 * `apply` — Apply an overlay to a git repository (scripting / power-user)
 * `remove` — Remove applied overlay(s)
@@ -74,13 +74,13 @@ For interactive discovery and application, use `repoverlay browse` instead — i
 
 **Usage:** `repoverlay apply [OPTIONS] <SOURCE>`
 
-###### **Arguments:**
+### Arguments
 
 * `<SOURCE>` — Overlay source: local path, GitHub URL, or configured source reference
 
    Supported formats: ./my-overlay             (local path) /absolute/path           (local absolute path) <https://github.com/owner/repo> <https://github.com/owner/repo/tree/main/overlays/rust> org/repo/overlay-name    (configured source reference)
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--copy` — Force copy mode instead of symlinks (default on Windows)
@@ -102,11 +102,11 @@ Remove applied overlay(s)
 
 **Usage:** `repoverlay remove [OPTIONS] [NAME]`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Name of the overlay to remove
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--all` — Remove all applied overlays
@@ -121,7 +121,7 @@ Show the status of applied overlays
 
 **Usage:** `repoverlay status [OPTIONS]`
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `-n`, `--name <NAME>` — Show only a specific overlay
@@ -136,7 +136,7 @@ Restore overlays after git clean or other removal
 
 **Usage:** `repoverlay restore [OPTIONS]`
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--dry-run` — Show what would be restored without applying
@@ -153,11 +153,11 @@ Update applied overlays from remote sources
 
 **Usage:** `repoverlay update [OPTIONS] [NAME]`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Name of the overlay to update (updates all GitHub overlays if not specified)
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--dry-run` — Check for updates without applying them
@@ -176,13 +176,13 @@ Examples: repoverlay create my-overlay              # Detects org/repo from git 
 
 **Usage:** `repoverlay create [OPTIONS] [NAME]`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Overlay name or full path (org/repo/name)
 
    Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit target Omit when using --output for local directory output
 
-###### **Options:**
+### Options
 
 * `-i`, `--include <INCLUDE>` — Include files/directories or glob patterns (can be specified multiple times)
 * `-s`, `--source <SOURCE>` — Source repository to extract files from (defaults to current directory)
@@ -206,11 +206,11 @@ Examples: repoverlay move my-overlay --to library repoverlay move my-overlay --t
 
 **Usage:** `repoverlay move [OPTIONS] --to <TO> <OVERLAY>`
 
-###### **Arguments:**
+### Arguments
 
 * `<OVERLAY>` — Name of the applied overlay to move
 
-###### **Options:**
+### Options
 
 * `--to <TO>` — Destination: "library", "source:<name>", or a filesystem path
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
@@ -229,11 +229,11 @@ Switch to a different overlay (removes all existing overlays first)
 
 **Usage:** `repoverlay switch [OPTIONS] <SOURCE>`
 
-###### **Arguments:**
+### Arguments
 
 * `<SOURCE>` — Path to overlay source directory OR GitHub URL
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--copy` — Force copy mode instead of symlinks (default on Windows)
@@ -254,7 +254,7 @@ Manage the overlay cache
 
 **Usage:** `repoverlay cache <COMMAND>`
 
-###### **Subcommands:**
+### Subcommands
 
 * `list` — List cached repositories
 * `remove` — Remove cached repositories
@@ -276,11 +276,11 @@ Remove cached repositories
 
 **Usage:** `repoverlay cache remove [OPTIONS] [REPO]`
 
-###### **Arguments:**
+### Arguments
 
 * `<REPO>` — Repository to remove (format: owner/repo)
 
-###### **Options:**
+### Options
 
 * `-a`, `--all` — Remove all cached repositories
 * `-y`, `--yes` — Skip confirmation prompt (used with --all)
@@ -303,13 +303,13 @@ Lists available overlays from configured sources and lets you select which to ap
 
 **Usage:** `repoverlay browse [OPTIONS] [SOURCE]`
 
-###### **Arguments:**
+### Arguments
 
 * `<SOURCE>` — Overlay source (GitHub username, owner/repo, or URL)
 
    Browse overlays from this source without adding it as a configured source. If omitted, uses configured sources.
 
-###### **Options:**
+### Options
 
 * `-f`, `--filter <FILTER>` — Filter by target repository (format: org/repo)
 * `--no-update` — Skip updating overlay repo before listing
@@ -328,13 +328,13 @@ Examples: repoverlay sync my-overlay          # Detects org/repo from git remote
 
 **Usage:** `repoverlay sync [OPTIONS] [NAME]`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Overlay name or full path (org/repo/name)
 
    Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit values
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--all` — Sync all applied overlays from the overlay repo
@@ -353,18 +353,18 @@ Examples: repoverlay edit                                     # Pick overlay, th
 **Usage:** `repoverlay edit [OPTIONS] [NAME]
        edit <COMMAND>`
 
-###### **Subcommands:**
+### Subcommands
 
 * `add` — Add files to an applied overlay
 * `remove` — Remove files from an applied overlay
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Overlay name or full path (org/repo/name)
 
    Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit values
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--dry-run` — Show what would change without making changes
@@ -379,14 +379,14 @@ Examples: repoverlay edit add my-overlay newfile.txt repoverlay edit add my-over
 
 **Usage:** `repoverlay edit add [OPTIONS] <NAME> [FILES]...`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Overlay name or full path (org/repo/name)
 
    Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit values
 * `<FILES>` — Files to add to the overlay
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--dry-run` — Show what would change without making changes
@@ -401,14 +401,14 @@ Examples: repoverlay edit remove my-overlay oldfile.txt repoverlay edit remove m
 
 **Usage:** `repoverlay edit remove [OPTIONS] <NAME> [FILES]...`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Overlay name or full path (org/repo/name)
 
    Short form: `my-overlay` - detects org/repo from git remote Full form: `org/repo/name` - uses explicit values
 * `<FILES>` — Files to remove from the overlay
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--dry-run` — Show what would change without making changes
@@ -421,7 +421,7 @@ Manage overlay sources (for multi-source configurations)
 
 **Usage:** `repoverlay source <COMMAND>`
 
-###### **Subcommands:**
+### Subcommands
 
 * `add` — Add a new overlay source
 * `list` — List configured overlay sources
@@ -435,11 +435,11 @@ Add a new overlay source
 
 **Usage:** `repoverlay source add [OPTIONS] <SOURCE>`
 
-###### **Arguments:**
+### Arguments
 
 * `<SOURCE>` — Source: Git URL, GitHub shorthand (owner/repo), GitHub username, or local path (./path)
 
-###### **Options:**
+### Options
 
 * `--name <NAME>` — Name for this source (defaults to repo/directory name)
 
@@ -459,7 +459,7 @@ Remove an overlay source
 
 **Usage:** `repoverlay source remove <NAME>`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Name of the source to remove
 
@@ -471,7 +471,7 @@ Manage plugin marketplaces
 
 **Usage:** `repoverlay marketplace <COMMAND>`
 
-###### **Subcommands:**
+### Subcommands
 
 * `add` — Register a plugin marketplace
 * `list` — List registered marketplaces
@@ -485,12 +485,12 @@ Register a plugin marketplace
 
 **Usage:** `repoverlay marketplace add [OPTIONS] <NAME> <URL>`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Name for this marketplace (used in `marketplace/plugin` references)
 * `<URL>` — Marketplace git URL or GitHub shorthand (owner/repo)
 
-###### **Options:**
+### Options
 
 * `--yes` — Skip the confirmation prompt
 
@@ -510,7 +510,7 @@ Remove a registered marketplace
 
 **Usage:** `repoverlay marketplace remove <NAME>`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Name of the marketplace to remove
 
@@ -522,7 +522,7 @@ Manage the in-repo overlay library
 
 **Usage:** `repoverlay library <COMMAND>`
 
-###### **Subcommands:**
+### Subcommands
 
 * `list` — List overlays in the library
 * `import` — Import an overlay into the library
@@ -537,7 +537,7 @@ List overlays in the library
 
 **Usage:** `repoverlay library list [OPTIONS]`
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 
@@ -549,11 +549,11 @@ Import an overlay into the library
 
 **Usage:** `repoverlay library import [OPTIONS] <SOURCE>`
 
-###### **Arguments:**
+### Arguments
 
 * `<SOURCE>` — Overlay source (path, GitHub URL, or org/repo/name)
 
-###### **Options:**
+### Options
 
 * `--name <NAME>` — Name for the imported overlay (defaults to source name)
 * `-f`, `--force` — Force overwrite if overlay already exists
@@ -567,11 +567,11 @@ Export an overlay from the library
 
 **Usage:** `repoverlay library export [OPTIONS] --to <DEST> <OVERLAY>`
 
-###### **Arguments:**
+### Arguments
 
 * `<OVERLAY>` — Name of the overlay to export
 
-###### **Options:**
+### Options
 
 * `--to <DEST>` — Destination path
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
@@ -584,11 +584,11 @@ Remove an overlay from the library
 
 **Usage:** `repoverlay library remove [OPTIONS] <OVERLAY>`
 
-###### **Arguments:**
+### Arguments
 
 * `<OVERLAY>` — Name of the overlay to remove
 
-###### **Options:**
+### Options
 
 * `-f`, `--force` — Force removal even if overlay is currently applied
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
@@ -601,7 +601,7 @@ Generate shell completions
 
 **Usage:** `repoverlay completions <SHELL>`
 
-###### **Arguments:**
+### Arguments
 
 * `<SHELL>` — Shell to generate completions for
 
@@ -616,4 +616,3 @@ Generate shell completions
     This document was generated automatically by
     <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
 </i></small>
-
