@@ -25,6 +25,11 @@ if (!versionMatch) {
 }
 const release = versionMatch[1];
 
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site).href;
+const ogImageUrl = new URL("/og.png", Astro.site).href;
+const ogImageAlt =
+	"repoverlay: share configs across repos, commit nothing. Terminal showing files excluded via .git/info/exclude.";
+
 const features = [
 	{
 		title: "Overlay without committing",
@@ -86,12 +91,26 @@ const steps = [
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-		<link rel="icon" href={logo.src} type="image/svg+xml" />
+		<meta name="theme-color" content="#14151f" media="(prefers-color-scheme: dark)" />
+			<meta name="theme-color" content="#f6f7fc" media="(prefers-color-scheme: light)" />
+			<link rel="icon" href={logo.src} type="image/svg+xml" />
+			<link rel="canonical" href={canonicalUrl} />
 		<title>repoverlay: share configs across repos, commit nothing</title>
 		<meta name="description" content={description} />
 		<meta property="og:title" content="repoverlay" />
 		<meta property="og:description" content={description} />
 		<meta property="og:type" content="website" />
+			<meta property="og:url" content={canonicalUrl} />
+			<meta property="og:site_name" content="repoverlay" />
+			<meta property="og:image" content={ogImageUrl} />
+			<meta property="og:image:width" content="2400" />
+			<meta property="og:image:height" content="1260" />
+			<meta property="og:image:alt" content={ogImageAlt} />
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:title" content="repoverlay" />
+			<meta name="twitter:description" content={description} />
+			<meta name="twitter:image" content={ogImageUrl} />
+			<meta name="twitter:image:alt" content={ogImageAlt} />
 		<meta name="generator" content={Astro.generator} />
 		<script is:inline>
 			(() => {
@@ -1153,8 +1172,7 @@ const steps = [
 				display: grid;
 				grid-template-columns: repeat(3, 1fr);
 				gap: 1.2rem;
-				counter-reset: step;
-			}
+				}
 			.flow__step {
 				position: relative;
 				min-width: 0;
