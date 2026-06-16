@@ -333,8 +333,8 @@ function isInsideProject(filePath, cwd) {
 function cursorBlockMessage(findings, filePath, config, cwd) {
   const rendered = renderTemplate(findings, filePath, config, { cwd });
   const blocked = rendered.replace(
-    '[impeccable@1] Required design corrections',
-    '[impeccable@1] Impeccable design hook blocked this write before it landed. Required design corrections',
+    '[impeccable@1] Design hook findings requiring review',
+    '[impeccable@1] Impeccable design hook blocked this write before it landed. Design hook findings requiring review',
   );
   return blocked.length > 4000 ? `${blocked.slice(0, 3984)}\n...(truncated)` : blocked;
 }

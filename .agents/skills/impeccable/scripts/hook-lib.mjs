@@ -453,16 +453,22 @@ function isIgnoredFindingValue(finding, ignoreValues) {
 export function extractFindingIgnoreValue(finding) {
   if (!finding || typeof finding !== 'object') return '';
   const rule = normalizeIgnoreRule(finding.antipattern);
-  if (rule !== 'overused-font') return '';
-  return normalizeIgnoreValue(extractFindingIgnoreValueRaw(finding));
+  if (rule !== 'overused-font' && rule !== 'bounce-easing') return '';
+  return normalizeIgnoreValue(extractFindingIgnoreValueRaw(finding, rule));
 }
 
-function extractFindingIgnoreValueRaw(finding) {
+function extractFindingIgnoreValueRaw(finding, rule = normalizeIgnoreRule(finding?.antipattern)) {
   const direct = cleanIgnoreValueDisplay(finding.ignoreValue || finding.value || '');
   if (direct) return direct;
 
   const candidates = [finding.detail, finding.snippet].filter((v) => typeof v === 'string' && v);
   for (const text of candidates) {
+    if (rule === 'bounce-easing') {
+      const motion = extractMotionIgnoreValue(text);
+      if (motion) return motion;
+      continue;
+    }
+
     const primary = text.match(/Primary font:\s*([^()\n;]+)/i);
     if (primary) return cleanIgnoreValueDisplay(primary[1]);
 
@@ -477,6 +483,24 @@ function extractFindingIgnoreValueRaw(finding) {
         return cleanIgnoreValueDisplay(google[1]);
       }
     }
+  }
+
+  return '';
+}
+
+function extractMotionIgnoreValue(text) {
+  const tailwind = text.match(/\banimate-bounce\b/i);
+  if (tailwind) return cleanIgnoreValueDisplay(tailwind[0]);
+
+  const bezier = text.match(/cubic-bezier\([^)]+\)/i);
+  if (bezier) return cleanIgnoreValueDisplay(bezier[0]);
+
+  const animation = text.match(/animation(?:-name)?\s*:\s*([^;\n]+)/i);
+  if (animation) {
+    const token = animation[1]
+      .split(/[,\s]+/)
+      .find((part) => /bounce|elastic|wobble|jiggle|spring/i.test(part));
+    if (token) return cleanIgnoreValueDisplay(token);
   }
 
   return '';
@@ -524,7 +548,7 @@ export function renderTemplate(findings, filePath, config, opts = {}) {
   const shown = findings.slice(0, cap);
   const remaining = total - shown.length;
 
-  const header = `${ENVELOPE_PREFIX} Required design corrections in ${display} (${total} issue(s)):`;
+  const header = `${ENVELOPE_PREFIX} Design hook findings requiring review in ${display} (${total} issue(s)):`;
   const lines = shown.map((f) => formatFindingLine(f));
   const more = remaining > 0
     ? `... and ${remaining} more (see /impeccable audit).`
@@ -556,7 +580,7 @@ function renderGroupedTemplate(groups, config, opts = {}) {
   const maxChars = Math.max(500, limits.maxChars || DEFAULT_CONFIG.limits.maxChars);
   const cwd = opts.cwd || process.cwd();
   const total = realGroups.reduce((sum, group) => sum + group.findings.length, 0);
-  const header = `${ENVELOPE_PREFIX} Required design corrections across ${realGroups.length} files (${total} issue(s)):`;
+  const header = `${ENVELOPE_PREFIX} Design hook findings requiring review across ${realGroups.length} files (${total} issue(s)):`;
   const lines = [];
   let shownCount = 0;
 
@@ -968,7 +992,7 @@ export function renderPendingAck(filePath, knownFindings, opts = {}) {
   // `knownFindings` here are the cache strings like "side-tab:3".
   const sample = knownFindings.slice(0, 3).join(', ');
   const more = count > 3 ? `, +${count - 3} more` : '';
-  return `${ENVELOPE_PREFIX} Design hook scanned ${display}. Still has ${count} issue(s) flagged earlier this session (${sample}${more}). Address them before finalizing — the previous reminder still applies.`;
+  return `${ENVELOPE_PREFIX} Design hook scanned ${display}. Still has ${count} finding(s) flagged earlier this session (${sample}${more}). Handle them before finalizing — the previous reminder still applies.`;
 }
 
 export function shouldEmitAckForFile(filePath) {
@@ -977,28 +1001,28 @@ export function shouldEmitAckForFile(filePath) {
 
 // The directive footer is the part of the hook output that steers model
 // behavior. Three intentional moves:
-//   1. **Imperative, not advisory.** "Fix these..." beats "Consider
+//   1. **Imperative, not advisory.** "Handle these..." beats "Consider
 //      revising..." which the model treats as a soft suggestion it can
 //      override when the user asked for any kind of throwaway / demo UI.
-//   2. **Explicit exception clause.** Without it, the model will try to
-//      "fix" intentional bad fixtures, anti-pattern examples in docs, or
-//      test cases. Naming the exception inline beats hoping the model
-//      infers it from context.
+//   2. **Explicit judgment clause.** Without it, the model will try to
+//      "fix" intentional motion, bad fixtures, anti-pattern examples in
+//      docs, or test cases. Naming the judgment inline beats hoping the
+//      model infers it from context.
 //   3. **Acknowledgement instruction.** Hook output is injected as
 //      developer-role context, not a chat turn, so the user never sees the
-//      raw envelope. Asking the model to surface the fix in its reply is
-//      the cheapest way to make the feedback loop visible to the user.
+//      raw envelope. Asking the model to surface the resolution in its
+//      reply is the cheapest way to make the feedback loop visible.
 function directiveFooter(display, opts = {}) {
   const ignoreFileCommand = `/impeccable hooks ignore-file ${quoteCommandArg(display)}`;
   const fileIgnoreGuidance = opts.grouped
     ? 'run `/impeccable hooks ignore-file <path>` for the specific file'
     : `run \`${ignoreFileCommand}\``;
   return [
-    'Fix these in your next reply before finalizing. Acknowledge what you changed so the user sees the correction.',
+    'Handle these before finalizing: fix findings that are real design problems, or explicitly classify contextually intentional findings as false positives. Acknowledge what you changed or why you are leaving a finding unchanged.',
     '',
-    'Skip the fix only if the user explicitly asked for an intentionally bad UI, an anti-pattern example, a test fixture, or documentation of bad design. In that case, say so and continue.',
+    'Use context judgment before editing. A finding is not automatically a defect; literal or domain-appropriate motion, intentional demos or fixtures, documentation of bad design, and user-confirmed choices can be valid as-is.',
     '',
-    `Do not add source comments such as \`impeccable: ignore\`; those pollute the code and do not suppress hook findings. Do not add hook ignores unless the user explicitly confirms the finding is intentional. Prefer the narrowest persisted exception: run the exact \`/impeccable hooks ignore-value ... --shared\` command shown next to a value-specific finding. For \`overused-font\`, use \`ignore-value\` for a specific font and use \`/impeccable hooks ignore-rule overused-font --all-values\` only when the user asks to ignore overused fonts generally. For file-specific findings without an ignore-value command, ${fileIgnoreGuidance}; use \`/impeccable hooks ignore-rule <id>\` only when the user asks to suppress the whole non-value-specific rule. Run /impeccable audit for the full pass.`,
+    `Do not change intentional design just to satisfy the hook. Do not add source comments such as \`impeccable: ignore\`; those pollute the code and do not suppress hook findings. Persist hook ignores only after the user explicitly confirms the finding is intentional. Prefer the narrowest persisted exception: run the exact \`/impeccable hooks ignore-value ... --shared\` command shown next to a value-specific finding. For \`overused-font\`, use \`ignore-value\` for a specific font and use \`/impeccable hooks ignore-rule overused-font --all-values\` only when the user asks to ignore overused fonts generally. For file-specific findings without an ignore-value command, ${fileIgnoreGuidance}; use \`/impeccable hooks ignore-rule <id>\` only when the user asks to suppress the whole non-value-specific rule. Run /impeccable audit for the full pass.`,
   ].join('\n');
 }
 

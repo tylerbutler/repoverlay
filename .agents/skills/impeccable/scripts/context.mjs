@@ -27,7 +27,7 @@ const FALLBACK_DIRS = ['.agents/context', 'docs'];
 // ─── Update check ──────────────────────────────────────────────────────────
 // Piggyback a lightweight skill-version check on the once-per-session boot.
 // When a newer skill ships, append an UPDATE_AVAILABLE directive so the agent
-// can offer `npx impeccable skills update`. Everything here is best-effort and
+// can offer `npx impeccable update`. Everything here is best-effort and
 // silent on failure: a network problem, sandbox, or missing cache must never
 // block context output or print an error.
 
@@ -172,8 +172,8 @@ function buildUpdateDirective(localVersion, latestVersion) {
     `UPDATE_AVAILABLE: A newer Impeccable skill is available ` +
     `(installed v${localVersion}, latest v${latestVersion}). ` +
     `Before continuing, ask the user once: "A newer Impeccable (v${latestVersion}) is available. ` +
-    `Update now? It runs \`npx impeccable skills update\`." ` +
-    `If they agree, run \`npx impeccable skills update\` (the update applies to the next session, not this one). ` +
+    `Update now? It runs \`npx impeccable update\`." ` +
+    `If they agree, run \`npx impeccable update\` (the update applies to the next session, not this one). ` +
     `Either way, continue the current task without waiting, and do not raise this again.`
   );
 }
