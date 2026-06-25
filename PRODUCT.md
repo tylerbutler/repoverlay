@@ -6,28 +6,48 @@ brand
 
 ## Users
 
-Developers and AI-tool power users who move between repositories and need local configuration, assistant instructions, editor settings, and tooling files to appear in the right checkout without polluting project history. They are usually in a terminal, evaluating whether repoverlay is safe enough to trust in real repositories and fast enough to adopt without ceremony.
+repoverlay is for developers who work across multiple git repositories and carry local
+configuration with them: AI assistant instructions, editor settings, environment files, and
+shared dev-tooling preferences. They are usually working inside an existing project, often a
+fork or a short-lived checkout, and need their preferred files present without polluting the
+repository's committed history.
 
 ## Product Purpose
 
-repoverlay overlays config files into git repositories without committing them. The website should make the mechanism feel portable, recoverable, and low-friction: define an overlay once, apply it anywhere, keep git history clean, and recover after destructive cleanup.
+repoverlay overlays config files into git repositories without committing them. It lets users
+define portable overlay sources, apply them by name or path, keep the applied files excluded
+through `.git/info/exclude`, and restore them after cleanup. Success means a developer can move
+between repos with the right local setup in place, understand exactly what changed, and undo or
+recover those changes confidently.
 
 ## Brand Personality
 
-Precise, pragmatic, technical, and non-hype. The interface should feel like a sharp developer tool with confidence earned through concrete commands and implementation detail, not marketing gloss.
+Clear, practical, and quietly opinionated. The brand should feel like a reliable command-line
+tool made by someone who understands the friction of real development workflows: precise,
+unhyped, and willing to make a strong call when that makes the workflow safer.
 
 ## Anti-references
 
-Avoid generic SaaS landing pages with polished but interchangeable card grids, vague productivity promises, hero-metric templates, and ornamental gradients. Avoid feeling like a dense CLI manual that explains everything before giving users a confident first action.
+Do not make repoverlay look like a generic SaaS landing page with gradient cards, hero metrics,
+floating dashboard mockups, or vague productivity promises. Avoid terminal-only hacker cosplay,
+overly playful mascots, and decorative AI-assistant tropes that distract from the concrete file
+and git mechanics.
 
 ## Design Principles
 
-1. Lead with the mechanism: show the terminal reality and git behavior instead of abstract benefits.
-2. Make safety visible: exclusion, recoverability, and repo-local scope should be easy to understand at a glance.
-3. Respect expert readers: concise copy, real commands, and no hype filler.
-4. Use structure as trust: the page should feel engineered, stable, and inspectable.
-5. Keep the path short: every major section should move users closer to install, quick start, or docs.
+- Make the invisible mechanics visible: show the actual files, commands, exclusions, and state
+  transitions that make the workflow trustworthy.
+- Prefer developer confidence over marketing spectacle: concrete examples should carry more
+  weight than abstract claims.
+- Keep portability central: multi-repo use, shared sources, forks, restore, and update flows
+  should feel like one coherent system rather than separate features.
+- Respect local ownership: the interface should reinforce that personal config stays local,
+  reversible, and outside committed history.
+- Be distinct without shouting: use committed typography, color, and layout choices, but avoid
+  patterns that collapse into the average developer-tool landing page.
 
 ## Accessibility & Inclusion
 
-Target WCAG AA contrast and keyboard access. Preserve readable line lengths, visible focus states, reduced-motion behavior, and clear labels for command examples and navigation.
+Target WCAG 2.2 AA. Preserve keyboard-first navigation, visible focus states, strong text
+contrast, reduced-motion alternatives, and copy that explains workflows without relying only on
+color, icons, or animation.

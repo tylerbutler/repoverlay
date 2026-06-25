@@ -1,47 +1,87 @@
 ---
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import "@fontsource/metropolis/400.css";
-import "@fontsource/metropolis/500.css";
 import "@fontsource/metropolis/600.css";
 import "@fontsource/metropolis/700.css";
 import "@fontsource/metropolis/800.css";
+import "../styles/tokens.css";
 import logo from "../assets/repoverlay.svg";
 
 const description =
-	"Overlay AI configs, editor settings, and dev tooling into any git repo. Symlinked and auto-excluded from version control.";
+	"Overlay AI configs, editor settings, and dev tooling into any git repo. Files are linked into place and excluded through .git/info/exclude.";
 const ghUrl = "https://github.com/tylerbutler/repoverlay";
-const release = "0.16.0";
+const firstRunCommand = "brew install tylerbutler/tap/repoverlay\nrepoverlay browse owner/repo";
+const cargoTomlPath = [resolve(process.cwd(), "Cargo.toml"), resolve(process.cwd(), "../Cargo.toml")].find(
+	existsSync,
+);
+if (!cargoTomlPath) {
+	throw new Error("Could not find repoverlay Cargo.toml");
+}
+const cargoToml = readFileSync(cargoTomlPath, "utf8");
+const versionMatch = cargoToml.match(/^version\s*=\s*"([^"]+)"/m);
+if (!versionMatch) {
+	throw new Error("Could not read repoverlay version from Cargo.toml");
+}
+const release = versionMatch[1];
 
-const installs = [
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site).href;
+const ogImageUrl = new URL("/og.png", Astro.site).href;
+const ogImageAlt =
+	"repoverlay: share configs across repos, commit nothing. Terminal showing files excluded via .git/info/exclude.";
+
+const features = [
 	{
-		label: "Homebrew",
-		cmd: "brew install tylerbutler/tap/repoverlay",
+		title: "Overlay without committing",
+		body: "Apply shared files to any git repo. They're excluded through .git/info/exclude, so .gitignore stays untouched.",
+		code: ".git/info/exclude",
+		variant: "accent",
 	},
 	{
-		label: "Cargo",
-		cmd: "cargo binstall repoverlay",
+		title: "Symlink or copy",
+		body: "Symlinked by default for instant updates. Reach for --copy when symlinks aren't an option.",
+		variant: "plain",
+	},
+	{
+		title: "GitHub-aware",
+		body: "Pull overlays from repos, branches, tags, or subdirectories. Cached locally with shallow clones.",
+		variant: "plain",
+	},
+	{
+		title: "Fork inheritance",
+		body: "Working on a fork? repoverlay falls back to the upstream repo's overlays until yours exist.",
+		variant: "plain",
+	},
+	{
+		title: "Survives git clean",
+		body: "State is backed up outside the repo, so repoverlay restore brings every overlaid file back.",
+		code: "repoverlay restore",
+		variant: "recovery",
 	},
 ];
 
-const mechanism = [
+const stateMap = [
+	{ label: "Source", value: "owner/repo/claude" },
+	{ label: "Placed file", value: ".claude/settings.json" },
+	{ label: "Local git guard", value: ".git/info/exclude" },
+	{ label: "Restore state", value: "~/.local/share/repoverlay" },
+];
+
+const steps = [
 	{
-		title: "Source",
-		body: "Keep overlays in a local directory, a GitHub repo, or a shared overlay library.",
-		code: "repoverlay browse tylerbutler",
+		key: "Install",
+		body: "Install the binary once with Homebrew, Cargo, or the shell installer.",
+		cmd: "brew install tylerbutler/tap/repoverlay",
 	},
 	{
-		title: "Apply",
-		body: "repoverlay links or copies the selected files into the current working tree.",
-		code: "repoverlay apply claude-config",
+		key: "Browse",
+		body: "Point at a source, see available overlays, and apply one from the picker.",
+		cmd: "repoverlay browse owner/repo",
 	},
 	{
-		title: "Exclude",
-		body: "Managed paths go into .git/info/exclude, so .gitignore and commits stay clean.",
-		code: ".git/info/exclude",
-	},
-	{
-		title: "Recover",
-		body: "State is backed up outside the repo, so restore can rebuild files after git clean.",
-		code: "repoverlay restore",
+		key: "Apply directly",
+		body: "Already know the overlay name? Skip the picker and apply it by name.",
+		cmd: "repoverlay apply claude-config",
 	},
 ];
 ---
@@ -50,28 +90,50 @@ const mechanism = [
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<link rel="icon" href={logo.src} type="image/svg+xml" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="theme-color" content="#14151f" media="(prefers-color-scheme: dark)" />
+			<meta name="theme-color" content="#f6f7fc" media="(prefers-color-scheme: light)" />
+			<link rel="icon" href={logo.src} type="image/svg+xml" />
+			<link rel="canonical" href={canonicalUrl} />
 		<title>repoverlay: share configs across repos, commit nothing</title>
 		<meta name="description" content={description} />
 		<meta property="og:title" content="repoverlay" />
 		<meta property="og:description" content={description} />
 		<meta property="og:type" content="website" />
+			<meta property="og:url" content={canonicalUrl} />
+			<meta property="og:site_name" content="repoverlay" />
+			<meta property="og:image" content={ogImageUrl} />
+			<meta property="og:image:width" content="2400" />
+			<meta property="og:image:height" content="1260" />
+			<meta property="og:image:alt" content={ogImageAlt} />
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta name="twitter:title" content="repoverlay" />
+			<meta name="twitter:description" content={description} />
+			<meta name="twitter:image" content={ogImageUrl} />
+			<meta name="twitter:image:alt" content={ogImageAlt} />
 		<meta name="generator" content={Astro.generator} />
+		<script is:inline>
+			(() => {
+				const query = window.matchMedia?.("(prefers-color-scheme: light)");
+				let savedTheme = null;
+				try {
+					const stored = window.localStorage.getItem("starlight-theme");
+					if (stored === "dark" || stored === "light") savedTheme = stored;
+				} catch {
+					/* localStorage can be blocked; fall back to OS preference. */
+				}
+				document.documentElement.dataset.theme =
+					savedTheme ?? (query?.matches ? "light" : "dark");
+			})();
+		</script>
 	</head>
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
-		<span
-			class="copy-status"
-			data-copy-status
-			aria-live="polite"
-			aria-atomic="true"
-		></span>
 
 		<div class="release" role="note">
 			<span class="release__dot" aria-hidden="true"></span>
-			<span>repoverlay {release} is out: meet profiles.</span>
-			<a href="/guides/profiles/">Read the profiles guide</a>
+			<span>Current release: repoverlay {release}.</span>
+			<a href={`${ghUrl}/releases`}>Release notes</a>
 		</div>
 
 		<header class="nav">
@@ -108,7 +170,7 @@ const mechanism = [
 					<p class="lede">{description}</p>
 					<div class="cta-row">
 						<a class="btn btn--primary" href="/quick-start/">
-							Get started
+							Start with Quick Start
 							<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 								><path
 									fill="none"
@@ -121,45 +183,66 @@ const mechanism = [
 						</a>
 						<a class="btn btn--ghost" href="/introduction/">Read the docs</a>
 					</div>
-					<div class="install-strip" aria-label="Install commands">
-						{
-							installs.map((install) => (
-								<div class="install-strip__item">
-									<span>{install.label}</span>
-									<code>{install.cmd}</code>
-									<button
-										class="copy"
-										type="button"
-										data-copy={install.cmd}
-										aria-label={`Copy ${install.label} install command`}
-									>
-										<span class="copy__label">Copy</span>
-									</button>
-								</div>
-							))
-						}
-					</div>
+					<p class="hero__note">
+						New checkout? Install once, browse an overlay source, and apply from the
+						picker before reaching for direct commands.
+					</p>
+					<dl class="mechanics" aria-label="repoverlay overlay mechanics">
+						<div>
+							<dt>Source</dt>
+							<dd><code>owner/repo</code></dd>
+						</div>
+						<div>
+							<dt>Working tree</dt>
+							<dd><code>.claude/</code></dd>
+						</div>
+						<div>
+							<dt>Git ignore stays clean</dt>
+							<dd><code>.git/info/exclude</code></dd>
+						</div>
+					</dl>
 				</div>
 
 				<div class="hero__panel reveal" style="--delay:90ms">
-					<div class="shell" aria-label="Example shell session">
+					<div class="overlay-stack" aria-hidden="true">
+						<span class="stack-card stack-card--source">
+							<span>Overlay source</span>
+							<code>owner/repo</code>
+						</span>
+						<span class="stack-card stack-card--exclude">
+							<span>Git exclude</span>
+							<code>.git/info/exclude</code>
+						</span>
+						<span class="stack-card stack-card--state">
+							<span>Restore state</span>
+							<code>~/.local/share</code>
+						</span>
+					</div>
+					<div class="shell" aria-label="First-run shell session">
 						<div class="shell__bar">
 							<span class="shell__name">zsh</span>
 							<button
 								class="copy"
 								type="button"
-								data-copy="repoverlay apply claude-config"
-								aria-label="Copy example apply command"
+								data-copy={firstRunCommand}
+								aria-label="Copy first-run commands"
+								aria-describedby="first-run-copy-status"
 							>
-								<span class="copy__label">Copy</span>
+								<span class="copy__label">Copy commands</span>
 							</button>
+							<span
+								id="first-run-copy-status"
+								class="copy__status sr-only"
+								role="status"
+								aria-live="polite"
+								aria-atomic="true"
+							></span>
 						</div>
-						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> repoverlay apply claude-config</span>
-<span class="ln"><span class="ok">Applying</span> overlay: claude-config</span>
-<span class="ln dim">  <span class="ok">+</span> .claude/</span>
-<span class="ln dim">  <span class="ok">+</span> CLAUDE.md</span>
-<span class="ln"> </span>
-<span class="ln"><span class="ok">✓</span> Applied 2 file(s) from 'claude-config'</span>
+						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> brew install tylerbutler/tap/repoverlay</span>
+<span class="ln"><span class="pr">$</span> repoverlay browse owner/repo</span>
+<span class="ln dim">  Choose an overlay, apply it, and keep Git clean.</span>
+<span class="ln dim">  Files are linked into the repo working tree.</span>
+<span class="ln"><span class="ok">✓</span> Excluded from git via .git/info/exclude</span>
 <span class="ln"><span class="pr">$</span> <span class="caret">▍</span></span></code></pre>
 					</div>
 				</div>
@@ -183,26 +266,47 @@ const mechanism = [
 				</ul>
 			</section>
 
-			<!-- MECHANISM: source to recovery -->
-			<section class="mechanism">
-				<div class="mechanism__intro">
-					<h2>One overlay, four safety rails.</h2>
-					<p>
-						repoverlay keeps definitions portable and applications repo-local.
-						You can see where files come from, where they land, why git ignores
-						them, and how to recover them.
-					</p>
-				</div>
-				<ol class="mechanism__map" aria-label="How repoverlay applies files safely">
+			<!-- FEATURES: bento -->
+			<section class="features">
+				<h2 class="section-head reveal">Local state, visible on purpose</h2>
+				<div class="bento">
 					{
-						mechanism.map((item, i) => (
-							<li class="mechanism__node" style={`--delay:${i * 70}ms`}>
-								<span class="mechanism__index">{i + 1}</span>
-								<div>
-									<h3>{item.title}</h3>
-									<p>{item.body}</p>
-									<code class="chip">{item.code}</code>
-								</div>
+						features.map((f, i) => (
+							<article
+								class:list={["cell", `cell--${f.variant}`, `cell--${i}`, "reveal"]}
+								style={`--delay:${i * 60}ms`}
+							>
+								<h3>{f.title}</h3>
+								<p>{f.body}</p>
+								{f.variant === "accent" && (
+									<div class="state-map" role="list" aria-label="Overlay state path">
+										{stateMap.map((item) => (
+											<div class="state-map__item" role="listitem">
+												<span>{item.label}</span>
+												<code>{item.value}</code>
+											</div>
+										))}
+									</div>
+								)}
+								{f.code && <code class="chip">{f.code}</code>}
+							</article>
+						))
+					}
+				</div>
+			</section>
+
+			<!-- HOW IT WORKS: command flow -->
+			<section class="flow reveal">
+				<h2 class="section-head">First run, then fast repeat.</h2>
+				<ol class="flow__track">
+					{
+						steps.map((s) => (
+							<li class="flow__step">
+								<h3>{s.key}</h3>
+								<p>{s.body}</p>
+								<code class="flow__cmd">
+									<span class="pr">$</span> {s.cmd}
+								</code>
 							</li>
 						))
 					}
@@ -212,10 +316,10 @@ const mechanism = [
 			<!-- FINAL CTA -->
 			<section class="final reveal">
 				<h2>Stop copying configs by hand.</h2>
-				<p>Keep repo-local config out of commits, then restore it when cleanup gets rough.</p>
+				<p>Define your overlays once, apply them anywhere, recover them anytime.</p>
 				<div class="cta-row cta-row--center">
 					<a class="btn btn--primary" href="/quick-start/">
-						Get started
+						Open Quick Start
 						<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 							><path
 								fill="none"
@@ -263,119 +367,155 @@ const mechanism = [
 		</footer>
 
 		<script>
-			// Copy-to-clipboard for install and shell commands.
-			const pageStatus = document.querySelector<HTMLElement>("[data-copy-status]");
-			const copyTimers = new WeakMap<HTMLButtonElement, number>();
-			let statusTimer: number | undefined;
-			const setCopyStatus = (message: string, timeout: number) => {
-				if (!pageStatus) return;
-				if (statusTimer) window.clearTimeout(statusTimer);
-				pageStatus.textContent = message;
-				statusTimer = window.setTimeout(() => {
-					if (pageStatus.textContent === message) pageStatus.textContent = "";
-					statusTimer = undefined;
-				}, timeout);
+			const themeStorageKey = "starlight-theme";
+			const colorSchemeQuery = window.matchMedia?.("(prefers-color-scheme: light)");
+			const readSavedTheme = () => {
+				try {
+					const stored = window.localStorage.getItem(themeStorageKey);
+					return stored === "dark" || stored === "light" ? stored : null;
+				} catch {
+					return null;
+				}
 			};
+			const applyPreferredTheme = () => {
+				document.documentElement.dataset.theme =
+					readSavedTheme() ?? (colorSchemeQuery?.matches ? "light" : "dark");
+			};
+			const applyAutoTheme = () => {
+				if (readSavedTheme() === null) applyPreferredTheme();
+			};
+			if (colorSchemeQuery) {
+				if (typeof colorSchemeQuery.addEventListener === "function") {
+					colorSchemeQuery.addEventListener("change", applyAutoTheme);
+				} else {
+					colorSchemeQuery.onchange = applyAutoTheme;
+				}
+			}
+			window.addEventListener("storage", (event) => {
+				if (event.key === themeStorageKey) applyPreferredTheme();
+			});
+
+			// Copy-to-clipboard for the shell example.
+			const copyToClipboard = async (text: string) => {
+				if (text.length === 0) {
+					throw new Error("No text available to copy");
+				}
+				if (!window.isSecureContext || !navigator.clipboard?.writeText) {
+					throw new Error("Clipboard API unavailable");
+				}
+				await navigator.clipboard.writeText(text);
+			};
+
 			document.querySelectorAll<HTMLButtonElement>(".copy").forEach((btn) => {
+				let resetTimer: number | undefined;
 				btn.addEventListener("click", async () => {
 					const text = btn.dataset.copy ?? "";
 					const label = btn.querySelector(".copy__label");
-					const prev = "Copy";
-					const existingTimer = copyTimers.get(btn);
-					if (existingTimer) {
-						window.clearTimeout(existingTimer);
-						copyTimers.delete(btn);
-					}
+					const status = btn
+						.closest(".shell__bar")
+						?.querySelector<HTMLElement>(".copy__status");
+					const prev = label?.textContent ?? "Copy";
+					const reset = () => {
+						if (label) label.textContent = prev;
+						if (status) status.textContent = "";
+						btn.classList.remove("is-copied", "is-failed");
+					};
+					if (resetTimer) window.clearTimeout(resetTimer);
 					try {
-						await navigator.clipboard.writeText(text);
-						if (label) {
-							label.textContent = "Copied";
-							btn.classList.add("is-copied");
-							setCopyStatus(`Copied ${text}`, 1400);
-							const resetTimer = window.setTimeout(() => {
-								label.textContent = prev;
-								btn.classList.remove("is-copied");
-								copyTimers.delete(btn);
-							}, 1400);
-							copyTimers.set(btn, resetTimer);
-						}
+						await copyToClipboard(text);
+						if (label) label.textContent = "Copied";
+						if (status) status.textContent = "First-run commands copied.";
+						btn.classList.add("is-copied");
 					} catch {
 						if (label) label.textContent = "Copy failed";
-						setCopyStatus(`Copy failed for ${text}`, 1800);
-						const resetTimer = window.setTimeout(() => {
-							if (label) label.textContent = prev;
-							copyTimers.delete(btn);
-						}, 1800);
-						copyTimers.set(btn, resetTimer);
+						if (status) {
+							status.textContent =
+								"Copy failed. Select and copy the commands manually.";
+						}
+						btn.classList.add("is-failed");
 					}
+					resetTimer = window.setTimeout(reset, 1800);
 				});
 			});
 
-			// Scroll-reveal via IntersectionObserver (no scroll listeners).
+			// Enhancement-only reveals: content stays readable if JS or animations fail.
 			const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-			const reveals = document.querySelectorAll(".reveal");
-			if (reduce || !("IntersectionObserver" in window)) {
-				reveals.forEach((el) => el.classList.add("in"));
-			} else {
+			const reveals = Array.from(document.querySelectorAll<HTMLElement>(".reveal"));
+			const canAnimate =
+				!reduce && "IntersectionObserver" in window && "animate" in Element.prototype;
+
+			const parseDelay = (el: HTMLElement) => {
+				const delay = getComputedStyle(el).getPropertyValue("--delay").trim();
+				if (delay.endsWith("ms")) return Number.parseFloat(delay);
+				if (delay.endsWith("s")) return Number.parseFloat(delay) * 1000;
+				return 0;
+			};
+
+			const playReveal = (el: HTMLElement) => {
+				if (el.dataset.revealed === "true") return;
+				el.dataset.revealed = "true";
+				el.classList.add("in");
+				const animation = el.animate(
+					[
+						{ opacity: 0, transform: "translateY(18px)", filter: "blur(6px)" },
+						{ opacity: 1, transform: "translateY(0)", filter: "blur(0)" },
+					],
+					{
+						duration: 620,
+						delay: parseDelay(el),
+						easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+					},
+				);
+				animation.finished.then(
+					() => el.classList.remove("is-queued"),
+					() => el.classList.remove("is-queued"),
+				);
+			};
+
+			if (canAnimate) {
 				const io = new IntersectionObserver(
 					(entries) => {
 						for (const entry of entries) {
 							if (entry.isIntersecting) {
-								entry.target.classList.add("in");
+								playReveal(entry.target as HTMLElement);
 								io.unobserve(entry.target);
 							}
 						}
 					},
 					{ threshold: 0.18, rootMargin: "0px 0px -8% 0px" },
 				);
-				reveals.forEach((el) => io.observe(el));
+				reveals.forEach((el) => {
+					el.classList.add("is-queued");
+					io.observe(el);
+				});
+			} else {
+				reveals.forEach((el) => el.classList.add("in"));
 			}
 		</script>
 
 		<style is:global>
 			:root {
-				color-scheme: dark;
-				--bg: #14151f;
-				--bg-2: #181a26;
-				--surface: #1d1f2c;
-				--surface-2: #23253480;
-				--border: rgba(235, 237, 249, 0.1);
-				--border-strong: rgba(235, 237, 249, 0.18);
-				--text: #ebedf9;
-				--text-2: #b7bace;
-				--muted: #8789a4;
-				--accent: #cf6242;
-				--accent-2: #aa462c;
-				--accent-soft: rgba(207, 98, 66, 0.14);
-				--accent-line: rgba(207, 98, 66, 0.4);
-				--on-accent: #1a0f0b;
-				--radius: 16px;
-				--radius-sm: 10px;
-				--maxw: 1180px;
-				--font: "Metropolis", system-ui, sans-serif;
-				--mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo,
-					Consolas, monospace;
-				--ease: cubic-bezier(0.16, 1, 0.3, 1);
-			}
-
-			@media (prefers-color-scheme: light) {
-				:root {
-					color-scheme: light;
-					--bg: #f6f7fc;
-					--bg-2: #eef0f8;
-					--surface: #ffffff;
-					--surface-2: #ffffff;
-					--border: rgba(22, 23, 33, 0.1);
-					--border-strong: rgba(22, 23, 33, 0.16);
-					--text: #161721;
-					--text-2: #3a3c52;
-					--muted: #6b6e87;
-					--accent: #ac482e;
-					--accent-2: #8f371f;
-					--accent-soft: rgba(172, 72, 46, 0.1);
-					--accent-line: rgba(172, 72, 46, 0.35);
-					--on-accent: #ffffff;
-				}
+				color-scheme: var(--rv-color-scheme);
+				--bg: var(--rv-bg);
+				--bg-2: var(--rv-bg-raised);
+				--surface: var(--rv-surface);
+				--border: var(--rv-border);
+				--border-strong: var(--rv-border-strong);
+				--text: var(--rv-text);
+				--text-2: var(--rv-text-secondary);
+				--muted: var(--rv-text-muted);
+				--accent: var(--rv-accent);
+				--accent-2: var(--rv-accent-deep);
+				--accent-soft: var(--rv-accent-soft);
+				--accent-line: var(--rv-accent-line);
+				--success: var(--rv-success);
+				--on-accent: var(--rv-on-accent);
+				--radius: var(--rv-radius-lg);
+				--radius-sm: var(--rv-radius-md);
+				--maxw: var(--rv-layout-max);
+				--font: var(--rv-font);
+				--mono: var(--rv-mono);
+				--ease: var(--rv-ease);
 			}
 
 			* {
@@ -433,6 +573,17 @@ const mechanism = [
 				left: 1rem;
 				top: 1rem;
 			}
+			.sr-only {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				padding: 0;
+				margin: -1px;
+				overflow: hidden;
+				clip: rect(0, 0, 0, 0);
+				white-space: nowrap;
+				border: 0;
+			}
 
 			:focus-visible {
 				outline: 2px solid var(--accent);
@@ -447,7 +598,8 @@ const mechanism = [
 				justify-content: center;
 				gap: 0.55rem;
 				flex-wrap: wrap;
-				padding: 0.5rem 1rem;
+				min-height: 44px;
+				padding: 0 1rem;
 				font-size: 0.85rem;
 				color: var(--text-2);
 				background: var(--bg-2);
@@ -460,6 +612,10 @@ const mechanism = [
 				background: var(--accent);
 			}
 			.release a {
+				display: inline-flex;
+				align-items: center;
+				min-height: 44px;
+				padding-inline: 0.15rem;
 				color: var(--accent);
 				font-weight: 600;
 			}
@@ -480,7 +636,8 @@ const mechanism = [
 				max-width: var(--maxw);
 				margin: 0 auto;
 				height: 64px;
-				padding: 0 1.5rem;
+				padding-left: max(1.5rem, env(safe-area-inset-left));
+				padding-right: max(1.5rem, env(safe-area-inset-right));
 				display: flex;
 				align-items: center;
 				justify-content: space-between;
@@ -489,6 +646,9 @@ const mechanism = [
 				display: inline-flex;
 				align-items: center;
 				gap: 0.55rem;
+				justify-content: center;
+				min-width: 44px;
+				min-height: 44px;
 				font-weight: 700;
 				letter-spacing: -0.01em;
 			}
@@ -502,11 +662,20 @@ const mechanism = [
 				font-size: 0.95rem;
 				color: var(--text-2);
 			}
+			.nav__links a {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				min-width: 44px;
+				min-height: 44px;
+			}
 			.nav__links a:hover {
 				color: var(--text);
 			}
 			.nav__gh {
 				display: inline-flex;
+				justify-content: center;
+				width: 44px;
 				color: var(--text-2);
 			}
 			.nav__gh:hover {
@@ -515,12 +684,17 @@ const mechanism = [
 
 			/* Shared */
 			main {
-				max-width: var(--maxw);
+				max-width: calc(var(--maxw) + 40px);
 				margin: 0 auto;
-				padding: 0 1.5rem;
+				padding-left: max(1.5rem, env(safe-area-inset-left));
+				padding-right: max(1.5rem, env(safe-area-inset-right));
 			}
 			section {
 				padding-block: clamp(4.5rem, 9vw, 8rem);
+			}
+			.section-head {
+				font-size: clamp(1.6rem, 3.2vw, 2.3rem);
+				margin-bottom: 2.5rem;
 			}
 			.accentword {
 				color: var(--accent);
@@ -530,7 +704,10 @@ const mechanism = [
 				display: inline-flex;
 				align-items: center;
 				gap: 0.5rem;
-				white-space: nowrap;
+				min-height: 44px;
+				min-width: 0;
+				white-space: normal;
+				text-align: center;
 				padding: 0.8rem 1.4rem;
 				border-radius: 999px;
 				font-weight: 600;
@@ -550,7 +727,7 @@ const mechanism = [
 			}
 			.btn--primary:hover {
 				transform: translateY(-2px);
-				background: color-mix(in srgb, var(--accent) 88%, #fff);
+				background: color-mix(in srgb, var(--accent) 88%, var(--rv-hover-tint));
 			}
 			.btn--primary:hover svg {
 				transform: translateX(3px);
@@ -584,89 +761,156 @@ const mechanism = [
 			/* Hero */
 			.hero {
 				display: grid;
-				grid-template-columns: 1.05fr 0.95fr;
-				gap: clamp(2rem, 5vw, 4.5rem);
+				grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1.08fr);
+				gap: clamp(2.4rem, 6vw, 5.5rem);
 				align-items: center;
 				padding-top: clamp(3rem, 6vw, 5.5rem);
+				overflow: clip;
+			}
+			.hero__copy,
+			.hero__panel {
+				min-width: 0;
+				max-width: 100%;
 			}
 			.hero h1 {
-				font-size: clamp(2.6rem, 6vw, 4.2rem);
-				letter-spacing: -0.035em;
+				max-width: min(12ch, 100%);
+				font-size: clamp(3rem, 7.8vw, 5.4rem);
+				letter-spacing: -0.04em;
+				text-wrap: balance;
 			}
 			.lede {
 				margin-top: 1.4rem;
-				max-width: 34ch;
+				max-width: min(38ch, 100%);
 				color: var(--text-2);
 				font-size: clamp(1.05rem, 1.6vw, 1.2rem);
 			}
 			.cta-row {
 				margin-top: 2rem;
 			}
-			.install-strip {
-				position: relative;
-				margin-top: 2rem;
-				display: grid;
-				gap: 0.55rem;
-				max-width: 42rem;
+			.hero__note {
+				max-width: min(42ch, 100%);
+				margin-top: 0.95rem;
+				color: var(--text-2);
+				font-size: 0.95rem;
+				text-wrap: pretty;
 			}
-			.install-strip__item {
+			.mechanics {
 				display: grid;
-				grid-template-columns: 5.5rem minmax(0, 1fr) auto;
-				align-items: center;
-				gap: 0.75rem;
-				padding: 0.55rem 0.65rem 0.55rem 0.85rem;
-				border: 1px solid var(--border);
-				border-radius: var(--radius-sm);
-				background: color-mix(in srgb, var(--surface) 62%, transparent);
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				max-width: min(45rem, 100%);
+				margin: 2.6rem 0 0;
+				padding: 0;
+				border: 1px solid var(--border-strong);
+				border-radius: var(--radius);
+				background: color-mix(in srgb, var(--surface) 84%, var(--bg));
+				overflow: hidden;
 			}
-			.install-strip__item span {
+			.mechanics div {
+				min-width: 0;
+				padding: 0.9rem 1rem 1rem;
+			}
+			.mechanics div + div {
+				border-left: 1px solid var(--border);
+			}
+			.mechanics dt {
 				color: var(--muted);
-				font-size: 0.78rem;
+				font-size: 0.76rem;
 				font-weight: 700;
 			}
-			.install-strip__item code {
-				min-width: 0;
-				overflow-x: auto;
+			.mechanics dd {
+				margin: 0.35rem 0 0;
+			}
+			.mechanics code {
 				color: var(--text);
-				font-size: 0.84rem;
-				white-space: nowrap;
+				font-size: 0.78rem;
+				overflow-wrap: anywhere;
+				white-space: normal;
 			}
-			.copy-status {
-				position: absolute;
-				width: 1px;
-				height: 1px;
-				overflow: hidden;
-				clip: rect(0 0 0 0);
-				white-space: nowrap;
-			}
-
 			/* Shell panel */
 			.hero__panel {
 				position: relative;
+				isolation: isolate;
+				padding-block: clamp(1.5rem, 3.6vw, 2.7rem);
 			}
 			.hero__panel::before {
 				content: "";
 				position: absolute;
-				inset: -14% -10% -22% 6%;
+				inset: -12% -16% -20% 10%;
 				background: radial-gradient(
 					60% 60% at 70% 25%,
 					var(--accent-soft),
 					transparent 70%
 				);
 				filter: blur(8px);
+				z-index: -3;
+			}
+			.hero__panel::after {
+				content: "";
+				position: absolute;
+				inset: 18% -3% 8% 16%;
+				border-radius: calc(var(--radius) + 6px);
+				background: color-mix(in srgb, var(--accent) 86%, var(--accent-2));
+				transform: rotate(2.4deg);
+				z-index: -2;
+			}
+			.overlay-stack {
+				position: absolute;
+				inset: 0;
 				z-index: -1;
+				pointer-events: none;
+			}
+			.stack-card {
+				position: absolute;
+				display: flex;
+				flex-direction: column;
+				gap: 0.18rem;
+				min-width: min(11rem, 100%);
+				padding: 0.7rem 0.82rem;
+				border: 1px solid var(--border-strong);
+				border-radius: 12px;
+				background: color-mix(in srgb, var(--surface) 88%, var(--bg));
+				color: var(--text);
+			}
+			.stack-card span {
+				color: var(--muted);
+				font-size: 0.74rem;
+				font-weight: 700;
+			}
+			.stack-card code {
+				color: var(--text);
+				font-size: 0.78rem;
+				overflow-wrap: anywhere;
+				white-space: normal;
+			}
+			.stack-card--source {
+				top: 0.2rem;
+				left: -0.75rem;
+				transform: rotate(-4deg);
+			}
+			.stack-card--exclude {
+				right: -0.35rem;
+				bottom: 0.5rem;
+				transform: rotate(3deg);
+			}
+			.stack-card--state {
+				top: -0.3rem;
+				right: 4.5rem;
+				transform: rotate(1.5deg);
 			}
 			.shell {
+				position: relative;
+				z-index: 1;
 				border: 1px solid var(--border-strong);
 				border-radius: var(--radius);
 				background: var(--surface);
-				box-shadow: 0 24px 60px rgba(8, 9, 16, 0.45);
+				box-shadow: var(--rv-shadow-shell);
 				overflow: hidden;
 			}
 			.shell__bar {
 				display: flex;
 				align-items: center;
 				justify-content: space-between;
+				gap: 0.8rem;
 				padding: 0.6rem 0.85rem;
 				border-bottom: 1px solid var(--border);
 				background: color-mix(in srgb, var(--surface) 70%, var(--bg));
@@ -677,13 +921,16 @@ const mechanism = [
 				color: var(--muted);
 			}
 			.copy {
+				flex: 0 0 auto;
 				font-family: var(--font);
 				font-size: 0.78rem;
+				min-width: 44px;
+				min-height: 44px;
 				color: var(--text-2);
 				background: transparent;
 				border: 1px solid var(--border-strong);
 				border-radius: 7px;
-				padding: 0.25rem 0.6rem;
+				padding: 0.35rem 0.7rem;
 				cursor: pointer;
 				transition:
 					color 0.15s var(--ease),
@@ -696,6 +943,11 @@ const mechanism = [
 			.copy.is-copied {
 				color: var(--accent);
 				border-color: var(--accent-line);
+			}
+			.copy.is-failed {
+				color: var(--text);
+				border-color: var(--accent);
+				background: var(--accent-soft);
 			}
 			.shell__body {
 				margin: 0;
@@ -717,7 +969,7 @@ const mechanism = [
 				color: var(--muted);
 			}
 			.shell__body .ok {
-				color: #5fb98b;
+				color: var(--success);
 			}
 			.caret {
 				color: var(--accent);
@@ -763,6 +1015,7 @@ const mechanism = [
 				overflow: hidden;
 			}
 			.configs li {
+				min-width: 0;
 				background: var(--surface);
 				padding: 1.2rem 1.25rem;
 				display: flex;
@@ -778,95 +1031,187 @@ const mechanism = [
 			.configs code {
 				font-size: 0.9rem;
 				color: var(--text);
+				overflow-wrap: anywhere;
 			}
 
-			/* Mechanism */
-			.mechanism {
+			/* Bento */
+			.bento {
 				display: grid;
-				grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
-				gap: clamp(2rem, 5vw, 4rem);
-				border-top: 1px solid var(--border);
-			}
-			.mechanism__intro {
-				position: sticky;
-				top: 6rem;
-				align-self: start;
-			}
-			.mechanism__intro h2 {
-				font-size: clamp(1.9rem, 3.6vw, 2.8rem);
-			}
-			.mechanism__intro p {
-				margin-top: 1rem;
-				max-width: 35ch;
-				color: var(--text-2);
-			}
-			.mechanism__map {
-				list-style: none;
-				margin: 0;
-				padding: 0;
-				display: grid;
-				gap: 0.85rem;
-			}
-			.mechanism__node {
-				position: relative;
-				display: grid;
-				grid-template-columns: auto minmax(0, 1fr);
+				grid-template-columns: repeat(3, 1fr);
+				grid-auto-rows: 1fr;
 				gap: 1rem;
-				padding: 1.2rem;
+			}
+			.cell {
+				min-width: 0;
 				border: 1px solid var(--border);
 				border-radius: var(--radius);
+				padding: 1.6rem 1.6rem 1.7rem;
 				background: var(--surface);
+				display: flex;
+				flex-direction: column;
+				gap: 0.7rem;
+				transition:
+					transform 0.2s var(--ease),
+					border-color 0.2s var(--ease);
 			}
-			.mechanism__node:not(:last-child)::after {
-				content: "";
-				position: absolute;
-				left: 2rem;
-				bottom: -0.9rem;
-				width: 1px;
-				height: 0.9rem;
-				background: var(--accent-line);
+			.cell:hover {
+				transform: translateY(-4px);
+				border-color: var(--accent-line);
 			}
-			.mechanism__index {
-				display: inline-grid;
-				place-items: center;
-				width: 1.65rem;
-				height: 1.65rem;
-				border-radius: 50%;
-				background: var(--accent-soft);
-				color: var(--accent);
-				font-size: 0.78rem;
-				font-weight: 800;
-			}
-			.mechanism__node h3 {
+			.cell h3 {
 				font-size: 1.18rem;
 				font-weight: 700;
 			}
-			.mechanism__node p {
-				margin-top: 0.35rem;
+			.cell p {
 				color: var(--text-2);
 				font-size: 0.97rem;
+				overflow-wrap: anywhere;
 			}
 			.chip {
 				align-self: flex-start;
-				display: inline-block;
-				margin-top: 0.8rem;
+				max-width: 100%;
+				margin-top: auto;
 				font-size: 0.8rem;
 				padding: 0.3rem 0.6rem;
 				border-radius: 7px;
 				background: var(--bg-2);
 				border: 1px solid var(--border);
 				color: var(--text-2);
+				overflow-wrap: anywhere;
+				white-space: normal;
 			}
-			.mechanism__node:nth-child(3) {
-				border-color: var(--accent-line);
+			/* cell 0: big accent feature */
+			.cell--0 {
+				grid-column: span 2;
+				grid-row: span 2;
 				background:
-					radial-gradient(70% 90% at 100% 0%, var(--accent-soft), transparent 65%),
+					radial-gradient(
+						80% 90% at 100% 0%,
+						var(--accent-soft),
+						transparent 60%
+					),
 					var(--surface);
+				border-color: var(--accent-line);
 			}
-			.mechanism__node:nth-child(3) .chip {
+			.cell--0 h3 {
+				font-size: 1.7rem;
+			}
+			.cell--0 p {
+				font-size: 1.05rem;
+				max-width: 40ch;
+			}
+			.state-map {
+				position: relative;
+				display: grid;
+				gap: 0.65rem;
+				margin-top: 0.3rem;
+			}
+			.state-map__item {
+				position: relative;
+				display: grid;
+				grid-template-columns: minmax(6rem, 0.32fr) minmax(0, 1fr);
+				gap: 0.8rem;
+				align-items: center;
+				padding: 0.62rem 0.72rem;
+				border: 1px solid color-mix(in srgb, var(--accent-line) 70%, var(--border));
+				border-radius: var(--radius-sm);
+				background: color-mix(in srgb, var(--bg-2) 76%, transparent);
+			}
+			.state-map__item + .state-map__item::before {
+				content: "";
+				position: absolute;
+				top: -0.66rem;
+				left: 1.1rem;
+				width: 1px;
+				height: 0.65rem;
+				background: var(--accent-line);
+			}
+			.state-map__item span {
+				color: var(--muted);
+				font-size: 0.72rem;
+				font-weight: 700;
+			}
+			.state-map__item code {
+				min-width: 0;
+				color: var(--text);
+				font-size: 0.8rem;
+				overflow-wrap: anywhere;
+			}
+			.cell--0 .chip {
 				background: var(--accent-soft);
 				border-color: var(--accent-line);
 				color: var(--accent);
+			}
+			/* cell 4: clay recovery feature */
+			.cell--4 {
+				grid-column: span 2;
+				background: var(--accent);
+				border-color: transparent;
+				color: var(--on-accent);
+			}
+			.cell--4:hover {
+				border-color: transparent;
+			}
+			.cell--4 p {
+				color: var(--on-accent);
+			}
+			.cell--4 .chip {
+				background: color-mix(in srgb, var(--on-accent) 10%, transparent);
+				border-color: color-mix(in srgb, var(--on-accent) 24%, transparent);
+				color: var(--on-accent);
+			}
+
+			/* Flow */
+			.flow {
+				border-top: 1px solid var(--border);
+			}
+			.flow__track {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: grid;
+				grid-template-columns: repeat(3, 1fr);
+				gap: 1.2rem;
+				}
+			.flow__step {
+				position: relative;
+				min-width: 0;
+				padding-top: 1.6rem;
+				border-top: 2px solid var(--border-strong);
+			}
+			.flow__step::before {
+				content: "";
+				position: absolute;
+				top: -2px;
+				left: 0;
+				width: 38%;
+				height: 2px;
+				background: var(--accent);
+			}
+			.flow__step h3 {
+				font-size: 1.25rem;
+				font-weight: 700;
+			}
+			.flow__step p {
+				margin-top: 0.5rem;
+				color: var(--text-2);
+				font-size: 0.97rem;
+				min-height: 3.4em;
+			}
+			.flow__cmd {
+				display: block;
+				margin-top: 1rem;
+				font-size: 0.85rem;
+				padding: 0.7rem 0.85rem;
+				border-radius: var(--radius-sm);
+				background: var(--surface);
+				border: 1px solid var(--border);
+				overflow-x: auto;
+				white-space: nowrap;
+			}
+			.flow__cmd .pr {
+				color: var(--accent);
+				font-weight: 700;
 			}
 
 			/* Final CTA */
@@ -919,10 +1264,12 @@ const mechanism = [
 				margin-bottom: 0.9rem;
 			}
 			.foot__cols a {
-				display: block;
+				display: flex;
+				align-items: center;
+				min-height: 44px;
 				color: var(--text-2);
 				font-size: 0.95rem;
-				padding: 0.2rem 0;
+				padding: 0.25rem 0;
 			}
 			.foot__cols a:hover {
 				color: var(--accent);
@@ -940,24 +1287,58 @@ const mechanism = [
 				color: var(--muted);
 			}
 
-			/* Reveal motion */
+			/* Reveal motion is progressive enhancement; content is visible by default. */
 			.reveal {
-				opacity: 0;
-				transform: translateY(18px);
-				transition:
-					opacity 0.6s var(--ease),
-					transform 0.6s var(--ease);
-				transition-delay: var(--delay, 0ms);
-			}
-			.reveal.in {
 				opacity: 1;
 				transform: none;
 			}
+			@media (prefers-reduced-motion: no-preference) {
+				.reveal.is-queued {
+					will-change: opacity, transform, filter;
+				}
+				.reveal.in {
+					will-change: auto;
+				}
+			}
 			@media (prefers-reduced-motion: reduce) {
 				.reveal {
-					opacity: 1;
 					transform: none;
 					transition: none;
+				}
+				.btn,
+				.btn svg,
+				.copy,
+				.cell {
+					transition: none;
+				}
+				.btn--primary:hover,
+				.btn--ghost:hover,
+				.cell:hover,
+				.btn--primary:hover svg {
+					transform: none;
+				}
+			}
+			@media (forced-colors: active) {
+				.release__dot {
+					background: CanvasText;
+				}
+				.hero__panel::before,
+				.hero__panel::after,
+				.overlay-stack {
+					display: none;
+				}
+				.btn,
+				.copy,
+				.shell,
+				.mechanics,
+				.configs,
+				.cell,
+				.flow__cmd {
+					border-color: CanvasText;
+				}
+				.btn--primary {
+					background: ButtonText;
+					color: ButtonFace;
 				}
 			}
 
@@ -965,60 +1346,105 @@ const mechanism = [
 			@media (max-width: 900px) {
 				.hero,
 				.problem,
-				.mechanism,
 				.foot__inner {
 					grid-template-columns: 1fr;
 				}
 				.hero {
 					gap: 2.5rem;
+					grid-template-columns: 1fr;
 				}
-				.mechanism__intro {
-					position: static;
+				.hero h1 {
+					max-width: min(13ch, 100%);
+					font-size: clamp(2.55rem, 10vw, 4.6rem);
 				}
-			}
-			@media (pointer: coarse) {
-				.copy {
-					min-height: 44px;
-					padding: 0.55rem 0.8rem;
+				.bento {
+					grid-template-columns: 1fr 1fr;
+				}
+				.cell--0,
+				.cell--4 {
+					grid-column: span 2;
+					grid-row: auto;
+				}
+				.flow__track {
+					grid-template-columns: 1fr;
+				}
+				.flow__step p {
+					min-height: 0;
+				}
+				.stack-card--source {
+					left: 0.4rem;
+				}
+				.stack-card--exclude {
+					right: 0.4rem;
+				}
+				.stack-card--state {
+					right: 2rem;
 				}
 			}
 			@media (max-width: 600px) {
 				body {
 					font-size: 16px;
 				}
-				.nav__links {
-					gap: 0.65rem;
-					font-size: 0.84rem;
+				main {
+					padding-left: max(1rem, env(safe-area-inset-left));
+					padding-right: max(1rem, env(safe-area-inset-right));
 				}
+				.nav__inner {
+					padding-left: max(1rem, env(safe-area-inset-left));
+					padding-right: max(1rem, env(safe-area-inset-right));
+				}
+				.nav__links {
+					gap: 0.5rem;
+					font-size: 0.9rem;
+				}
+				.nav__links a[href="/cli-reference/"] {
+					display: none;
+				}
+				.bento,
 				.configs,
 				.foot__cols {
 					grid-template-columns: 1fr;
 				}
-				.nav__inner {
-					padding: 0 1rem;
+				.cell--0,
+				.cell--4 {
+					grid-column: span 1;
 				}
-				.brand {
-					gap: 0.4rem;
+				.mechanics {
+					grid-template-columns: 1fr;
 				}
-				.brand span {
-					font-size: 0.95rem;
+				.mechanics div + div {
+					border-top: 1px solid var(--border);
+					border-left: 0;
 				}
-				.nav__gh {
+				.overlay-stack {
 					display: none;
 				}
-				.install-strip__item {
-					grid-template-columns: 1fr auto;
+				.hero__panel {
+					padding-block: 1rem;
 				}
-				.install-strip__item span {
-					grid-column: 1 / -1;
+				.hero__panel::after {
+					inset: 1.2rem 0 0.15rem 0.75rem;
+				}
+				.shell__body {
+					font-size: 0.78rem;
 				}
 				.copy {
+					min-width: 44px;
 					min-height: 44px;
-					padding: 0.55rem 0.8rem;
+					padding-inline: 0.8rem;
+				}
+				.state-map__item {
+					grid-template-columns: 1fr;
+					gap: 0.2rem;
 				}
 				.cta-row .btn {
-					flex: 1 1 auto;
+					flex: 1 1 13rem;
 					justify-content: center;
+				}
+			}
+			@media (max-width: 360px) {
+				.nav .brand span {
+					display: none;
 				}
 			}
 		</style>

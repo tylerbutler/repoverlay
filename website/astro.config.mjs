@@ -1,8 +1,8 @@
+import { readFileSync } from "node:fs";
 import starlight from "@astrojs/starlight";
 import starlightAnnouncement from "starlight-announcement";
 import starlightBlog from "starlight-blog";
 import starlightHeadingBadges from "starlight-heading-badges";
-import starlightCatppuccin from "@catppuccin/starlight";
 import a11yEmoji from "@fec/remark-a11y-emoji";
 import { includeMarkdown } from "@hashicorp/platform-remark-plugins";
 import { defineConfig } from "astro/config";
@@ -12,6 +12,12 @@ import starlightLlmsTxt from "starlight-llms-txt";
 
 // Get the directory name from the script URL
 const rootDir = new URL(".", import.meta.url).pathname;
+const cargoToml = readFileSync(new URL("../Cargo.toml", import.meta.url), "utf8");
+const releaseVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+if (!releaseVersion) {
+	throw new Error("Could not read repoverlay version from Cargo.toml");
+}
+const releaseAnnouncementId = `v${releaseVersion.replaceAll(".", "-")}`;
 
 // https://astro.build/config
 export default defineConfig({
@@ -41,10 +47,6 @@ export default defineConfig({
 				"./src/styles/custom.css",
 			],
 			plugins: [
-				// starlightCatppuccin({
-				// 	dark: { flavor: "macchiato", accent: "maroon" },
-				// 	light: { accent: "maroon" },
-				// }),
 				starlightBlog({
 					title: "Blog",
 					authors: {
@@ -58,13 +60,13 @@ export default defineConfig({
 				starlightAnnouncement({
 					announcements: [
 						{
-							id: "v0-16-0",
-							content: "repoverlay 0.16.0 is out — meet profiles.",
+							id: releaseAnnouncementId,
+							content: `repoverlay ${releaseVersion} is out now.`,
 							variant: "tip",
 							dismissible: true,
 							link: {
-								text: "Read the profiles guide",
-								href: "/guides/profiles/",
+								text: "Release notes",
+								href: `https://github.com/tylerbutler/repoverlay/releases/tag/v${releaseVersion}`,
 							},
 						},
 					],

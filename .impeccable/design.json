@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-14T23:06:32.729Z",
+  "title": "Design System: repoverlay",
+  "extensions": {
+    "colorMeta": {
+      "bg-dark": {
+        "role": "neutral",
+        "displayName": "Bench Black",
+        "canonical": "#14151f",
+        "tonalRamp": ["oklch(15% 0.018 278)", "oklch(22% 0.02 278)", "oklch(30% 0.022 278)", "oklch(40% 0.022 278)", "oklch(52% 0.02 278)", "oklch(66% 0.016 278)", "oklch(80% 0.012 278)", "oklch(94% 0.006 278)"]
+      },
+      "surface-dark": {
+        "role": "neutral",
+        "displayName": "Tool Surface",
+        "canonical": "#1d1f2c",
+        "tonalRamp": ["oklch(17% 0.02 278)", "oklch(24% 0.022 278)", "oklch(32% 0.024 278)", "oklch(43% 0.024 278)", "oklch(55% 0.02 278)", "oklch(68% 0.016 278)", "oklch(82% 0.012 278)", "oklch(95% 0.006 278)"]
+      },
+      "accent-dark": {
+        "role": "primary",
+        "displayName": "Workbench Clay",
+        "canonical": "#cf6242",
+        "tonalRamp": ["oklch(18% 0.05 35)", "oklch(28% 0.07 35)", "oklch(38% 0.09 35)", "oklch(50% 0.11 35)", "oklch(62% 0.12 35)", "oklch(74% 0.09 35)", "oklch(86% 0.055 35)", "oklch(95% 0.025 35)"]
+      },
+      "text-dark": {
+        "role": "neutral",
+        "displayName": "Ink White",
+        "canonical": "#ebedf9",
+        "tonalRamp": ["oklch(18% 0.012 278)", "oklch(30% 0.014 278)", "oklch(42% 0.014 278)", "oklch(54% 0.012 278)", "oklch(66% 0.01 278)", "oklch(78% 0.008 278)", "oklch(90% 0.006 278)", "oklch(97% 0.003 278)"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Hero headlines and strongest landing statements."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section-level arguments and final calls to action."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Readable explanatory prose for developer workflows."
+      },
+      "mono": {
+        "displayName": "Command",
+        "purpose": "Literal commands, file paths, and shell output only."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shell-object",
+        "value": "0 24px 60px rgba(8, 9, 16, 0.45)",
+        "purpose": "Reserved for the hero shell or an equally important command/workflow artifact."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out-expo",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Default easing for hover lifts, border transitions, and reveal motion."
+      },
+      {
+        "name": "reveal",
+        "value": "Web Animations API: opacity/translateY/filter, 620ms, cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Enhancement-only landing section reveal. Content is visible by default; reduced motion and unsupported JS skip animation."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "tablet-stack",
+        "value": "900px"
+      },
+      {
+        "name": "mobile-simplify",
+        "value": "600px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The primary action pill for starting or advancing a docs flow.",
+      "html": "<button class=\"ds-button-primary\">Open Quick Start<svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" aria-hidden=\"true\"><path fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M5 12h14M13 6l6 6-6 6\"></path></svg></button>",
+      "css": ".ds-button-primary{display:inline-flex;align-items:center;gap:.5rem;padding:.8rem 1.4rem;border:1px solid transparent;border-radius:999px;background:var(--accent,#cf6242);color:var(--on-accent,#1a0f0b);font:600 1rem/1.2 Metropolis,system-ui,sans-serif;transition:transform .18s cubic-bezier(.16,1,.3,1),background .18s cubic-bezier(.16,1,.3,1)}.ds-button-primary svg{transition:transform .18s cubic-bezier(.16,1,.3,1)}.ds-button-primary:hover{transform:translateY(-2px);background:color-mix(in srgb,var(--accent,#cf6242) 88%,#fff)}.ds-button-primary:hover svg{transform:translateX(3px)}.ds-button-primary:focus-visible{outline:2px solid var(--accent,#cf6242);outline-offset:3px}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "The secondary action for docs or source links.",
+      "html": "<button class=\"ds-button-ghost\">Read the docs</button>",
+      "css": ".ds-button-ghost{display:inline-flex;align-items:center;gap:.5rem;padding:.8rem 1.4rem;border:1px solid var(--border-strong,rgba(235,237,249,.18));border-radius:999px;background:transparent;color:var(--text,#ebedf9);font:600 1rem/1.2 Metropolis,system-ui,sans-serif;transition:transform .18s cubic-bezier(.16,1,.3,1),background .18s cubic-bezier(.16,1,.3,1),border-color .18s cubic-bezier(.16,1,.3,1)}.ds-button-ghost:hover{transform:translateY(-2px);border-color:var(--accent-line,rgba(207,98,66,.4));background:var(--accent-soft,rgba(207,98,66,.14))}.ds-button-ghost:focus-visible{outline:2px solid var(--accent,#cf6242);outline-offset:3px}"
+    },
+    {
+      "name": "Copy Button",
+      "kind": "button",
+      "refersTo": "copy-button",
+      "description": "A compact utility button inside command panels. It needs explicit copied and failed states; clipboard failure is not silent.",
+      "html": "<button class=\"ds-copy-button\"><span>Copy</span></button><span class=\"ds-sr-only\" aria-live=\"polite\" aria-atomic=\"true\"></span>",
+      "css": ".ds-copy-button{flex:0 0 auto;padding:.25rem .6rem;border:1px solid var(--border-strong,rgba(235,237,249,.18));border-radius:7px;background:transparent;color:var(--text-2,#b7bace);font:400 .78rem/1.2 Metropolis,system-ui,sans-serif;transition:color .15s cubic-bezier(.16,1,.3,1),border-color .15s cubic-bezier(.16,1,.3,1),background .15s cubic-bezier(.16,1,.3,1)}.ds-copy-button:hover{color:var(--text,#ebedf9);border-color:var(--accent-line,rgba(207,98,66,.4))}.ds-copy-button.is-copied{color:var(--accent,#cf6242);border-color:var(--accent-line,rgba(207,98,66,.4))}.ds-copy-button.is-failed{color:var(--text,#ebedf9);border-color:var(--accent,#cf6242);background:var(--accent-soft,rgba(207,98,66,.14))}.ds-copy-button:focus-visible{outline:2px solid var(--accent,#cf6242);outline-offset:3px}.ds-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}"
+    },
+    {
+      "name": "Shell Panel",
+      "kind": "custom",
+      "refersTo": "shell-panel",
+      "description": "The signature command artifact used as the hero object. Prefer first-run commands over assumed overlay names.",
+      "html": "<div class=\"ds-shell\"><div class=\"ds-shell-bar\"><span>zsh</span><button>Copy</button><span class=\"ds-sr-only\" aria-live=\"polite\" aria-atomic=\"true\"></span></div><pre><code><span><b>$</b> brew install tylerbutler/tap/repoverlay</span><span><b>$</b> repoverlay browse owner/repo</span><span class=\"ds-dim\">  Browse overlays, choose one, and apply it.</span><span><em>✓</em> Excluded from git via .git/info/exclude</span></code></pre></div>",
+      "css": ".ds-shell{overflow:hidden;border:1px solid var(--border-strong,rgba(235,237,249,.18));border-radius:16px;background:var(--surface,#1d1f2c);color:var(--text,#ebedf9);box-shadow:0 24px 60px rgba(8,9,16,.45);font-family:ui-monospace,SFMono-Regular,JetBrains Mono,Menlo,Consolas,monospace}.ds-shell-bar{display:flex;align-items:center;justify-content:space-between;gap:.8rem;padding:.6rem .85rem;border-bottom:1px solid var(--border,rgba(235,237,249,.1));background:color-mix(in srgb,var(--surface,#1d1f2c) 70%,var(--bg,#14151f));font-size:.78rem;color:var(--muted,#8789a4)}.ds-shell-bar button{flex:0 0 auto;padding:.25rem .6rem;border:1px solid var(--border-strong,rgba(235,237,249,.18));border-radius:7px;background:transparent;color:var(--text-2,#b7bace)}.ds-shell pre{margin:0;padding:1.1rem 1.2rem 1.3rem;font-size:.86rem;line-height:1.85;overflow-x:auto}.ds-shell span{display:block}.ds-shell b,.ds-shell em{color:var(--accent,#cf6242);font-style:normal}.ds-shell .ds-dim{color:var(--muted,#8789a4)}.ds-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}"
+    },
+    {
+      "name": "Feature Card",
+      "kind": "card",
+      "refersTo": "feature-card",
+      "description": "A flat feature cell with border-defined structure.",
+      "html": "<article class=\"ds-feature-card\"><h3>Fork inheritance</h3><p>Working on a fork? repoverlay falls back to upstream overlays until yours exist.</p></article>",
+      "css": ".ds-feature-card{display:flex;flex-direction:column;gap:.7rem;padding:1.6rem 1.6rem 1.7rem;border:1px solid var(--border,rgba(235,237,249,.1));border-radius:16px;background:var(--surface,#1d1f2c);color:var(--text,#ebedf9);font-family:Metropolis,system-ui,sans-serif;transition:transform .2s cubic-bezier(.16,1,.3,1),border-color .2s cubic-bezier(.16,1,.3,1)}.ds-feature-card:hover{transform:translateY(-4px);border-color:var(--accent-line,rgba(207,98,66,.4))}.ds-feature-card h3{margin:0;font-size:1.18rem;line-height:1.05;letter-spacing:-.02em}.ds-feature-card p{margin:0;color:var(--text-2,#b7bace);font-size:.97rem;line-height:1.6}"
+    },
+    {
+      "name": "Overlay Stack",
+      "kind": "custom",
+      "refersTo": "overlay-stack",
+      "description": "A bolder hero-only artifact that makes source, worktree, restore state, and git exclusion feel physical behind the shell panel.",
+      "html": "<div class=\"ds-overlay-stack\" aria-hidden=\"true\"><span><b>Overlay source</b><code>owner/repo</code></span><span><b>Git exclude</b><code>.git/info/exclude</code></span><span><b>Restore state</b><code>~/.local/share</code></span></div>",
+      "css": ".ds-overlay-stack{position:relative;isolation:isolate;min-height:13rem}.ds-overlay-stack:before{content:\"\";position:absolute;inset:22% 0 8% 18%;border-radius:22px;background:color-mix(in srgb,var(--accent,#cf6242) 86%,var(--accent-2,#aa462c));transform:rotate(2.4deg);z-index:-1}.ds-overlay-stack span{position:absolute;display:flex;flex-direction:column;gap:.18rem;min-width:min(11rem,100%);padding:.7rem .82rem;border:1px solid var(--border-strong,rgba(235,237,249,.18));border-radius:12px;background:color-mix(in srgb,var(--surface,#1d1f2c) 88%,var(--bg,#14151f));color:var(--text,#ebedf9)}.ds-overlay-stack span:nth-child(1){top:.2rem;left:-.75rem;transform:rotate(-4deg)}.ds-overlay-stack span:nth-child(2){right:-.35rem;bottom:.5rem;transform:rotate(3deg)}.ds-overlay-stack span:nth-child(3){top:-.3rem;right:4.5rem;transform:rotate(1.5deg)}.ds-overlay-stack b{color:var(--muted,#8789a4);font:700 .74rem/1.2 Metropolis,system-ui,sans-serif}.ds-overlay-stack code{color:var(--text,#ebedf9);font:400 .78rem/1.2 ui-monospace,SFMono-Regular,JetBrains Mono,Menlo,Consolas,monospace;overflow-wrap:anywhere;white-space:normal}@media (forced-colors:active){.ds-overlay-stack{display:none}}"
+    },
+    {
+      "name": "Code Chip",
+      "kind": "chip",
+      "refersTo": "code-chip",
+      "description": "A compact file-path or command label.",
+      "html": "<code class=\"ds-code-chip\">.git/info/exclude</code>",
+      "css": ".ds-code-chip{display:inline-flex;padding:.3rem .6rem;border:1px solid var(--border,rgba(235,237,249,.1));border-radius:7px;background:var(--bg-2,#181a26);color:var(--text-2,#b7bace);font:400 .8rem/1.2 ui-monospace,SFMono-Regular,JetBrains Mono,Menlo,Consolas,monospace}.ds-code-chip.ds-accent{border-color:var(--accent-line,rgba(207,98,66,.4));background:var(--accent-soft,rgba(207,98,66,.14));color:var(--accent,#cf6242)}"
+    },
+    {
+      "name": "Sticky Nav",
+      "kind": "nav",
+      "description": "The restrained top navigation used by the landing page.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-brand\" href=\"#\">repoverlay</a><span><a href=\"#\">Docs</a><a href=\"#\">Quick Start</a><a href=\"#\">CLI</a></span></nav>",
+      "css": ".ds-nav{display:flex;align-items:center;justify-content:space-between;gap:1.5rem;padding:1rem 1.5rem;border-bottom:1px solid var(--border,rgba(235,237,249,.1));background:color-mix(in srgb,var(--bg,#14151f) 82%,transparent);backdrop-filter:saturate(160%) blur(12px);font-family:Metropolis,system-ui,sans-serif}.ds-nav a{color:var(--text-2,#b7bace);text-decoration:none;font-size:.95rem}.ds-nav a:hover{color:var(--text,#ebedf9)}.ds-nav .ds-brand{font-weight:700;color:var(--text,#ebedf9);letter-spacing:-.01em}.ds-nav span{display:flex;gap:1.6rem}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Local Workbench",
+    "overview": "repoverlay's visual system should feel like the bench where a developer keeps the tools they trust: close at hand, clearly labeled, and built for repeatable work. The current site uses a dark technical surface, a clay-orange accent, and compact command examples to make invisible git mechanics feel tangible rather than abstract.\n\nThe system is brand-first because the primary frontend surface is a docs and landing site, but it should not perform like a generic marketing page. It rejects floating SaaS dashboards, hero metrics, ornamental gradient-card grids, and vague productivity copy. The design earns trust by showing concrete files, commands, exclusions, and restore flows.",
+    "keyCharacteristics": [
+      "Dark-by-default developer environment with a complete light-mode counterpart.",
+      "Metropolis-driven type system: wide, sturdy, and readable rather than trendy.",
+      "Clay-orange accent used as a working signal for action, success-path emphasis, and command prompts.",
+      "Tonal layering, borders, and a single structural shell shadow instead of decorative depth.",
+      "Real workflow objects as imagery: command panels, config file names, overlay flow steps, and stacked source/worktree/exclude artifacts."
+    ],
+    "rules": [
+      {
+        "name": "The One-Tool Accent Rule",
+        "body": "Clay is the only brand accent. Do not introduce blue, purple, or rainbow developer-tool gradients unless the product itself gains a new semantic state that requires them.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Cream Rule",
+        "body": "Light mode stays cool and neutral. Warmth comes from the clay accent, not from sand, bone, parchment, or ivory backgrounds.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono Earns Its Place Rule",
+        "body": "Monospace appears only when the content is literally code, commands, file paths, or terminal output. Do not use monospace as a generic technical decoration.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-Until-Physical Rule",
+        "body": "A surface gets a shadow only when it is meant to read as a physical object. Ordinary feature cells stay flat and use borders plus tonal contrast.",
+        "section": "elevation"
+      },
+      {
+        "name": "The No Silent Failure Rule",
+        "body": "Interactive utilities must surface failure states. The homepage copy button announces copied and failed states, and release text is sourced from build-time Cargo metadata.",
+        "section": "hardening"
+      }
+    ],
+    "dos": [
+      "Do show real workflow objects: `.git/info/exclude`, `repoverlay apply`, `repoverlay restore`, overlay state, and file paths.",
+      "Do keep Clay rare enough to remain meaningful; use it for actions, prompts, release markers, and the most important command artifact.",
+      "Do use the existing 16px container radius and 7-10px utility radii before inventing new shape values.",
+      "Do keep text contrast strong in both color schemes, especially secondary prose on tinted dark surfaces.",
+      "Do make reduced-motion behavior visible and complete; content must be readable before any animation enhancement runs."
+    ],
+    "donts": [
+      "Don't make repoverlay look like a generic SaaS landing page with gradient cards, hero metrics, floating dashboard mockups, or vague productivity promises.",
+      "Don't use terminal-only hacker cosplay. Commands are evidence, not a whole aesthetic.",
+      "Don't add overly playful mascots or decorative AI-assistant tropes.",
+      "Don't use gradient text, colored side-stripe borders, nested glass cards, or repeated uppercase eyebrows above every section.",
+      "Don't replace the cool light-mode palette with cream, sand, parchment, bone, ivory, or other warm-neutral defaults."
+    ]
+  }
+}
