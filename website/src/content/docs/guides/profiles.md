@@ -24,9 +24,9 @@ The key thing to understand is the difference between a **definition** and its *
 | Role | Ingredient (files) | Recipe (overlays + capabilities) |
 | Payload | A file tree applied to a repo | A composition of overlays + harness capabilities |
 | Owns | Symlinks, git excludes, conflict handling | Instructions, plugins (skills + agents + MCP servers) |
-| Portable across harnesses? | N/A (files only) | Yes — placement lives in the harness applicator |
+| Portable across harnesses? | N/A (files only) | Mostly — managed/cacheable capabilities are portable; delegate support is harness-specific |
 
-Everything a profile applies lands **inside the target repo's working tree** (git-excluded, never committed). There is no user- or machine-global scope — a profile only ever touches the repo you apply it to.
+Profile capabilities are applied to the **target repo**, not installed globally for the user or machine. New repo-local files are git-excluded when possible, but profiles can also update existing repo files through managed regions or JSON merges. repoverlay also keeps cache and recovery snapshots outside the repo so profiles can be restored after cleanup.
 
 ## Capabilities come from plugins
 
@@ -37,7 +37,7 @@ Profiles do not define MCP servers or skills directly. Instead, those capabiliti
 - **MCP servers** — merged into the repo's `.mcp.json`
 - plugin metadata in `.claude-plugin/plugin.json`
 
-This keeps a single, portable bundling unit. When a profile is applied — persistently or for an ephemeral session — repoverlay **decomposes** each plugin bundle into its parts and lays them down with the harness's own placement paths. The mechanism is identical for both Claude and Copilot; only the destination directories differ. Ephemeral placements are rolled back when the session ends.
+This keeps a single, portable bundling unit. When a profile is applied — persistently or for an ephemeral session — repoverlay **decomposes** managed/cacheable plugin bundles into their parts and lays them down with the harness's own placement paths. Claude can also delegate plugin loading to Claude's native settings; Copilot skips delegate or non-cacheable plugins with a warning. Ephemeral placements are rolled back when the session ends.
 
 ## Defining a profile
 
@@ -103,7 +103,7 @@ Each entry in `plugins` is one of:
   | --- | --- |
   | `marketplace` | Marketplace name from the registry. |
   | `name` | Plugin name within the marketplace. |
-  | `ref` | Optional git ref (tag/branch/commit) to pin. |
+  | `ref` | Optional git ref (tag/branch/commit) that pins the marketplace repository checkout. External plugin source refs are defined by the marketplace manifest. |
   | `install` | `managed` (default) or `delegate`. |
   | `scope` | Delegate only: `project` or `local`. |
 
@@ -113,8 +113,8 @@ Each entry in `plugins` is one of:
 
 | Install mode | Behavior |
 | --- | --- |
-| `managed` (default) | repoverlay caches the plugin bundle and places its skills/MCP servers into the repo itself. Works for both Copilot and Claude. |
-| `delegate` | repoverlay records the plugin in the harness's own enablement config and lets the harness load it. Currently meaningful for Claude. |
+| `managed` (default) | repoverlay caches the plugin bundle when it can be introspected and places its skills, agents, and MCP servers into the repo itself. Works for both Copilot and Claude when the plugin source is cacheable. |
+| `delegate` | repoverlay records the plugin in the harness's own enablement config and lets the harness load it. Currently meaningful for Claude; Copilot skips delegate plugins with a warning. |
 
 For `delegate` plugins on Claude, the `scope` selects which settings file records the enablement:
 
@@ -251,7 +251,7 @@ repoverlay claude --profile rust-dev --profile docs-dev -- --help
 
 Profiles compose: shared instruction files (`CLAUDE.md` for Claude, `AGENTS.md` for Copilot) accumulate one managed region per profile, and `.mcp.json` servers are merged with per-server ownership. If applying one profile fails, any profiles already applied in the same invocation are rolled back, so the repository is never left half-configured. A profile name may not be repeated in the same command.
 
-For both Claude and Copilot, managed plugin bundles are decomposed into repo-local placements (skills, agents, and merged `.mcp.json` servers) — the same way for persistent applies and ephemeral sessions. Ephemeral placements are removed when the session exits.
+For both Claude and Copilot, managed/cacheable plugin bundles are decomposed into repo-local placements (skills, agents, and merged `.mcp.json` servers) — the same way for persistent applies and ephemeral sessions. Delegate or non-cacheable plugins are Claude-delegated and Copilot-skipped with a warning. Ephemeral placements are removed when the session exits.
 
 :::note
 A profile that is already applied persistently (or already running an ephemeral session) cannot be launched ephemerally at the same time. Remove it first, or wait for the running session to finish. A lock file guards against concurrent sessions and is recovered automatically if a previous session was killed.
@@ -267,10 +267,10 @@ Each capability in a profile is translated into a concrete, **repo-local** actio
 | plugin skills | `<repo>/.claude/skills/<skill>` | `<repo>/.agents/skills/<skill>` |
 | plugin agents | `<repo>/.claude/agents/<agent>` | `<repo>/.github/agents/<agent>` |
 | plugin MCP servers | Merged into `<repo>/.mcp.json` (`mcpServers` key). | Merged into `<repo>/.mcp.json` (`mcpServers` key). |
-| delegate plugins | Recorded in `.claude/settings.json` / `.claude/settings.local.json`. | n/a |
+| delegate plugins | Recorded in `.claude/settings.json` / `.claude/settings.local.json`. | Skipped with a warning. |
 | `instructions` | Each entry's `source` file or inline `content` is concatenated into the profile's managed region of `<repo>/CLAUDE.md`. | Same, targeting `<repo>/AGENTS.md`. |
 
-Everything is placed inside the target repo and git-excluded; nothing is written to a user- or machine-global location.
+Capabilities are applied to the target repo rather than installed globally for the user or machine. New repo-local files are git-excluded when possible; existing repo files may be updated through managed regions or JSON merges, and repoverlay keeps cache and recovery snapshots outside the repo.
 
 Instruction `source` paths must be relative and stay within the directory of the config file that defines them — paths that escape that directory (for example `../secret.md`) or absolute paths are rejected. A repo profile's sources therefore live next to `<repo>/.repoverlay/config.ccl`; a global profile's live next to the global config. Use inline `content` to avoid companion files entirely.
 

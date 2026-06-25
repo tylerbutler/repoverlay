@@ -173,7 +173,7 @@ repoverlay remove my-overlay
 ### Profiles (experimental)
 
 > [!WARNING]
-> Profiles, plugins, and the harness commands are **experimental**. The `profile`, `claude`, and `copilot` commands work but are hidden from `--help` and the CLI reference, and their interface may change before they are announced.
+> Profiles, plugins, and the harness commands are **experimental**. The `profile`, `claude`, and `copilot` commands work, but their interface may change before they are announced as stable.
 
 Profiles can declare overlays and AI harness configuration. Define them under the `profiles` key of the global config (`~/.config/repoverlay/config.ccl`) or the repo-local config (`.repoverlay/config.ccl`):
 

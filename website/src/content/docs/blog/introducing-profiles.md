@@ -27,9 +27,14 @@ ingredients and layers harness capabilities on top.
 
 ## How they work
 
-You define a profile in your repoverlay CCL config, alongside `sources`:
+You define marketplaces and profiles in your repoverlay CCL config, alongside `sources`:
 
 ```ccl
+marketplaces =
+  =
+    name = playground
+    url = obra/claude-plugins
+
 profiles =
   rust-dev =
     description = Rust development profile
@@ -58,13 +63,16 @@ repoverlay copilot --profile rust-dev
 
 Profiles carry capabilities through **plugins**, the same Claude-style plugin
 format the Claude Code ecosystem uses. A plugin ships skills, agents, and MCP
-servers. When you apply a profile, repoverlay decomposes each plugin and places
-its parts using each harness's own paths: skills land under `.agents/skills/` for
-Copilot and `.claude/skills/` for Claude, and MCP servers merge into `.mcp.json`.
-The same bundle works across both harnesses; only the destinations differ.
+servers. When you apply a profile, repoverlay decomposes managed/cacheable
+plugins and places their parts using each harness's own paths: skills land under
+`.agents/skills/` for Copilot and `.claude/skills/` for Claude, and MCP servers
+merge into `.mcp.json`. Delegate or non-cacheable plugins are Claude-delegated
+and Copilot-skipped with a warning.
 
-Everything a profile applies lands inside the target repo's working tree,
-git-excluded and never committed. Overlays give you the same guarantee.
+Profile capabilities are applied to the target repo, not installed globally for
+the user or machine. New repo-local files are git-excluded when possible, but
+profiles can also update existing repo files through managed regions or JSON
+merges, and repoverlay keeps cache and recovery snapshots outside the repo.
 
 ## Current limitations
 
@@ -74,10 +82,10 @@ Profiles are new. These limits stand today:
   agent is supported yet.
 - **Delegate install is Claude-only.** The `delegate` install mode, which records
   a plugin in the harness's own enablement config, currently means something only
-  for Claude. Copilot ignores it.
+  for Claude. Copilot skips delegate plugins with a warning.
 - **Repo scope only.** A profile touches just the repo you apply it to. There is
-  no user- or machine-global scope, so capabilities you want everywhere need a
-  profile applied per repo.
+  no user- or machine-global profile install, so capabilities you want everywhere
+  need a profile applied per repo.
 - **One mode at a time per profile.** A profile already applied persistently
   cannot also run as an ephemeral session, and vice versa. A lock file guards
   against concurrent ephemeral sessions and recovers automatically if a previous

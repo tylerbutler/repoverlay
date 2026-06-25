@@ -9,7 +9,7 @@ import "../styles/tokens.css";
 import logo from "../assets/repoverlay.svg";
 
 const description =
-	"Overlay AI configs, editor settings, and dev tooling into any git repo. Files are linked into place and excluded through .git/info/exclude.";
+	"Overlay AI configs, editor settings, and dev tooling into any git repo. Files are symlinked or copied into place and excluded through .git/info/exclude.";
 const ghUrl = "https://github.com/tylerbutler/repoverlay";
 const firstRunCommand = "brew install tylerbutler/tap/repoverlay\nrepoverlay browse owner/repo";
 const cargoTomlPath = [resolve(process.cwd(), "Cargo.toml"), resolve(process.cwd(), "../Cargo.toml")].find(
@@ -39,7 +39,7 @@ const features = [
 	},
 	{
 		title: "Symlink or copy",
-		body: "Symlinked by default for instant updates. Reach for --copy when symlinks aren't an option.",
+		body: "Symlinked by default on macOS/Linux for instant updates. Copied on Windows or with --copy.",
 		variant: "plain",
 	},
 	{
@@ -54,7 +54,7 @@ const features = [
 	},
 	{
 		title: "Survives git clean",
-		body: "State is backed up outside the repo, so repoverlay restore brings every overlaid file back.",
+		body: "State is backed up outside the repo, so repoverlay restore can re-apply previously applied overlays.",
 		code: "repoverlay restore",
 		variant: "recovery",
 	},
@@ -64,7 +64,7 @@ const stateMap = [
 	{ label: "Source", value: "owner/repo/claude" },
 	{ label: "Placed file", value: ".claude/settings.json" },
 	{ label: "Local git guard", value: ".git/info/exclude" },
-	{ label: "Restore state", value: "~/.local/share/repoverlay" },
+	{ label: "Restore state", value: "~/.local/share/repoverlay/applied/" },
 ];
 
 const steps = [
@@ -80,8 +80,8 @@ const steps = [
 	},
 	{
 		key: "Apply directly",
-		body: "Already know the overlay name? Skip the picker and apply it by name.",
-		cmd: "repoverlay apply claude-config",
+		body: "Already know the full overlay reference? Skip the picker and apply it directly.",
+		cmd: "repoverlay apply owner/repo/claude-config",
 	},
 ];
 ---
@@ -215,7 +215,7 @@ const steps = [
 						</span>
 						<span class="stack-card stack-card--state">
 							<span>Restore state</span>
-							<code>~/.local/share</code>
+							<code>~/.local/share/repoverlay/applied/</code>
 						</span>
 					</div>
 					<div class="shell" aria-label="First-run shell session">
@@ -241,7 +241,7 @@ const steps = [
 						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> brew install tylerbutler/tap/repoverlay</span>
 <span class="ln"><span class="pr">$</span> repoverlay browse owner/repo</span>
 <span class="ln dim">  Choose an overlay, apply it, and keep Git clean.</span>
-<span class="ln dim">  Files are linked into the repo working tree.</span>
+<span class="ln dim">  Files are symlinked or copied into the repo working tree.</span>
 <span class="ln"><span class="ok">✓</span> Excluded from git via .git/info/exclude</span>
 <span class="ln"><span class="pr">$</span> <span class="caret">▍</span></span></code></pre>
 					</div>
