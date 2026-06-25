@@ -11,57 +11,37 @@ const description =
 const ghUrl = "https://github.com/tylerbutler/repoverlay";
 const release = "0.16.0";
 
-const features = [
+const installs = [
 	{
-		title: "Overlay without committing",
-		body: "Apply shared files to any git repo. They're excluded through .git/info/exclude, so .gitignore stays untouched.",
-		code: ".git/info/exclude",
-		variant: "accent",
+		label: "Homebrew",
+		cmd: "brew install tylerbutler/tap/repoverlay",
 	},
 	{
-		title: "Symlink or copy",
-		body: "Symlinked by default for instant updates. Reach for --copy when symlinks aren't an option.",
-		variant: "plain",
-	},
-	{
-		title: "GitHub-aware",
-		body: "Pull overlays from repos, branches, tags, or subdirectories. Cached locally with shallow clones.",
-		variant: "plain",
-	},
-	{
-		title: "Fork inheritance",
-		body: "Working on a fork? repoverlay falls back to the upstream repo's overlays until yours exist.",
-		variant: "plain",
-	},
-	{
-		title: "Profiles for AI agents",
-		body: "Compose overlays with instructions, skills, and MCP servers, then launch Claude or Copilot with everything applied for just that session.",
-		code: "repoverlay claude --profile rust-dev",
-		variant: "plain",
-	},
-	{
-		title: "Survives git clean",
-		body: "State is backed up outside the repo, so repoverlay restore brings every overlaid file back.",
-		code: "repoverlay restore",
-		variant: "gradient",
+		label: "Cargo",
+		cmd: "cargo binstall repoverlay",
 	},
 ];
 
-const steps = [
+const mechanism = [
 	{
-		key: "Browse",
-		body: "Discover overlays from a shared source and pick interactively.",
-		cmd: "repoverlay browse tylerbutler",
+		title: "Source",
+		body: "Keep overlays in a local directory, a GitHub repo, or a shared overlay library.",
+		code: "repoverlay browse tylerbutler",
 	},
 	{
-		key: "Apply",
-		body: "Link the overlay into your repo, excluded from git automatically.",
-		cmd: "repoverlay apply claude-config",
+		title: "Apply",
+		body: "repoverlay links or copies the selected files into the current working tree.",
+		code: "repoverlay apply claude-config",
 	},
 	{
-		key: "Restore",
-		body: "Wiped by git clean? Bring everything back in one command.",
-		cmd: "repoverlay restore",
+		title: "Exclude",
+		body: "Managed paths go into .git/info/exclude, so .gitignore and commits stay clean.",
+		code: ".git/info/exclude",
+	},
+	{
+		title: "Recover",
+		body: "State is backed up outside the repo, so restore can rebuild files after git clean.",
+		code: "repoverlay restore",
 	},
 ];
 ---
@@ -81,10 +61,16 @@ const steps = [
 	</head>
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
+		<span
+			class="copy-status"
+			data-copy-status
+			aria-live="polite"
+			aria-atomic="true"
+		></span>
 
 		<div class="release" role="note">
 			<span class="release__dot" aria-hidden="true"></span>
-			<span>repoverlay {release} is out — meet profiles.</span>
+			<span>repoverlay {release} is out: meet profiles.</span>
 			<a href="/guides/profiles/">Read the profiles guide</a>
 		</div>
 
@@ -135,13 +121,36 @@ const steps = [
 						</a>
 						<a class="btn btn--ghost" href="/introduction/">Read the docs</a>
 					</div>
+					<div class="install-strip" aria-label="Install commands">
+						{
+							installs.map((install) => (
+								<div class="install-strip__item">
+									<span>{install.label}</span>
+									<code>{install.cmd}</code>
+									<button
+										class="copy"
+										type="button"
+										data-copy={install.cmd}
+										aria-label={`Copy ${install.label} install command`}
+									>
+										<span class="copy__label">Copy</span>
+									</button>
+								</div>
+							))
+						}
+					</div>
 				</div>
 
 				<div class="hero__panel reveal" style="--delay:90ms">
 					<div class="shell" aria-label="Example shell session">
 						<div class="shell__bar">
 							<span class="shell__name">zsh</span>
-							<button class="copy" type="button" data-copy="repoverlay apply claude-config">
+							<button
+								class="copy"
+								type="button"
+								data-copy="repoverlay apply claude-config"
+								aria-label="Copy example apply command"
+							>
 								<span class="copy__label">Copy</span>
 							</button>
 						</div>
@@ -174,37 +183,26 @@ const steps = [
 				</ul>
 			</section>
 
-			<!-- FEATURES: bento -->
-			<section class="features">
-				<h2 class="section-head reveal">What you get</h2>
-				<div class="bento">
-					{
-						features.map((f, i) => (
-							<article
-								class:list={["cell", `cell--${f.variant}`, `cell--${i}`, "reveal"]}
-								style={`--delay:${i * 60}ms`}
-							>
-								<h3>{f.title}</h3>
-								<p>{f.body}</p>
-								{f.code && <code class="chip">{f.code}</code>}
-							</article>
-						))
-					}
+			<!-- MECHANISM: source to recovery -->
+			<section class="mechanism">
+				<div class="mechanism__intro">
+					<h2>One overlay, four safety rails.</h2>
+					<p>
+						repoverlay keeps definitions portable and applications repo-local.
+						You can see where files come from, where they land, why git ignores
+						them, and how to recover them.
+					</p>
 				</div>
-			</section>
-
-			<!-- HOW IT WORKS: command flow -->
-			<section class="flow reveal">
-				<h2 class="section-head">Three commands, end to end.</h2>
-				<ol class="flow__track">
+				<ol class="mechanism__map" aria-label="How repoverlay applies files safely">
 					{
-						steps.map((s) => (
-							<li class="flow__step">
-								<h3>{s.key}</h3>
-								<p>{s.body}</p>
-								<code class="flow__cmd">
-									<span class="pr">$</span> {s.cmd}
-								</code>
+						mechanism.map((item, i) => (
+							<li class="mechanism__node" style={`--delay:${i * 70}ms`}>
+								<span class="mechanism__index">{i + 1}</span>
+								<div>
+									<h3>{item.title}</h3>
+									<p>{item.body}</p>
+									<code class="chip">{item.code}</code>
+								</div>
 							</li>
 						))
 					}
@@ -214,7 +212,7 @@ const steps = [
 			<!-- FINAL CTA -->
 			<section class="final reveal">
 				<h2>Stop copying configs by hand.</h2>
-				<p>Define your overlays once, apply them anywhere, recover them anytime.</p>
+				<p>Keep repo-local config out of commits, then restore it when cleanup gets rough.</p>
 				<div class="cta-row cta-row--center">
 					<a class="btn btn--primary" href="/quick-start/">
 						Get started
@@ -265,24 +263,50 @@ const steps = [
 		</footer>
 
 		<script>
-			// Copy-to-clipboard for the shell example.
+			// Copy-to-clipboard for install and shell commands.
+			const pageStatus = document.querySelector<HTMLElement>("[data-copy-status]");
+			const copyTimers = new WeakMap<HTMLButtonElement, number>();
+			let statusTimer: number | undefined;
+			const setCopyStatus = (message: string, timeout: number) => {
+				if (!pageStatus) return;
+				if (statusTimer) window.clearTimeout(statusTimer);
+				pageStatus.textContent = message;
+				statusTimer = window.setTimeout(() => {
+					if (pageStatus.textContent === message) pageStatus.textContent = "";
+					statusTimer = undefined;
+				}, timeout);
+			};
 			document.querySelectorAll<HTMLButtonElement>(".copy").forEach((btn) => {
 				btn.addEventListener("click", async () => {
 					const text = btn.dataset.copy ?? "";
+					const label = btn.querySelector(".copy__label");
+					const prev = "Copy";
+					const existingTimer = copyTimers.get(btn);
+					if (existingTimer) {
+						window.clearTimeout(existingTimer);
+						copyTimers.delete(btn);
+					}
 					try {
 						await navigator.clipboard.writeText(text);
-						const label = btn.querySelector(".copy__label");
 						if (label) {
-							const prev = label.textContent;
 							label.textContent = "Copied";
 							btn.classList.add("is-copied");
-							setTimeout(() => {
+							setCopyStatus(`Copied ${text}`, 1400);
+							const resetTimer = window.setTimeout(() => {
 								label.textContent = prev;
 								btn.classList.remove("is-copied");
+								copyTimers.delete(btn);
 							}, 1400);
+							copyTimers.set(btn, resetTimer);
 						}
 					} catch {
-						/* clipboard unavailable */
+						if (label) label.textContent = "Copy failed";
+						setCopyStatus(`Copy failed for ${text}`, 1800);
+						const resetTimer = window.setTimeout(() => {
+							if (label) label.textContent = prev;
+							copyTimers.delete(btn);
+						}, 1800);
+						copyTimers.set(btn, resetTimer);
 					}
 				});
 			});
@@ -498,10 +522,6 @@ const steps = [
 			section {
 				padding-block: clamp(4.5rem, 9vw, 8rem);
 			}
-			.section-head {
-				font-size: clamp(1.6rem, 3.2vw, 2.3rem);
-				margin-bottom: 2.5rem;
-			}
 			.accentword {
 				color: var(--accent);
 			}
@@ -582,27 +602,42 @@ const steps = [
 			.cta-row {
 				margin-top: 2rem;
 			}
-			.quickfacts {
-				margin: 2.6rem 0 0;
-				display: flex;
-				flex-wrap: wrap;
-				gap: 2rem;
+			.install-strip {
+				position: relative;
+				margin-top: 2rem;
+				display: grid;
+				gap: 0.55rem;
+				max-width: 42rem;
 			}
-			.quickfacts div {
-				display: flex;
-				flex-direction: column;
-				gap: 0.2rem;
+			.install-strip__item {
+				display: grid;
+				grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+				align-items: center;
+				gap: 0.75rem;
+				padding: 0.55rem 0.65rem 0.55rem 0.85rem;
+				border: 1px solid var(--border);
+				border-radius: var(--radius-sm);
+				background: color-mix(in srgb, var(--surface) 62%, transparent);
 			}
-			.quickfacts dt {
-				font-size: 0.72rem;
-				text-transform: uppercase;
-				letter-spacing: 0.14em;
+			.install-strip__item span {
 				color: var(--muted);
+				font-size: 0.78rem;
+				font-weight: 700;
 			}
-			.quickfacts dd {
-				margin: 0;
-				font-weight: 600;
-				font-size: 0.95rem;
+			.install-strip__item code {
+				min-width: 0;
+				overflow-x: auto;
+				color: var(--text);
+				font-size: 0.84rem;
+				white-space: nowrap;
+			}
+			.copy-status {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				overflow: hidden;
+				clip: rect(0 0 0 0);
+				white-space: nowrap;
 			}
 
 			/* Shell panel */
@@ -745,40 +780,76 @@ const steps = [
 				color: var(--text);
 			}
 
-			/* Bento */
-			.bento {
+			/* Mechanism */
+			.mechanism {
 				display: grid;
-				grid-template-columns: repeat(3, 1fr);
-				grid-auto-rows: 1fr;
-				gap: 1rem;
+				grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+				gap: clamp(2rem, 5vw, 4rem);
+				border-top: 1px solid var(--border);
 			}
-			.cell {
+			.mechanism__intro {
+				position: sticky;
+				top: 6rem;
+				align-self: start;
+			}
+			.mechanism__intro h2 {
+				font-size: clamp(1.9rem, 3.6vw, 2.8rem);
+			}
+			.mechanism__intro p {
+				margin-top: 1rem;
+				max-width: 35ch;
+				color: var(--text-2);
+			}
+			.mechanism__map {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: grid;
+				gap: 0.85rem;
+			}
+			.mechanism__node {
+				position: relative;
+				display: grid;
+				grid-template-columns: auto minmax(0, 1fr);
+				gap: 1rem;
+				padding: 1.2rem;
 				border: 1px solid var(--border);
 				border-radius: var(--radius);
-				padding: 1.6rem 1.6rem 1.7rem;
 				background: var(--surface);
-				display: flex;
-				flex-direction: column;
-				gap: 0.7rem;
-				transition:
-					transform 0.2s var(--ease),
-					border-color 0.2s var(--ease);
 			}
-			.cell:hover {
-				transform: translateY(-4px);
-				border-color: var(--accent-line);
+			.mechanism__node:not(:last-child)::after {
+				content: "";
+				position: absolute;
+				left: 2rem;
+				bottom: -0.9rem;
+				width: 1px;
+				height: 0.9rem;
+				background: var(--accent-line);
 			}
-			.cell h3 {
+			.mechanism__index {
+				display: inline-grid;
+				place-items: center;
+				width: 1.65rem;
+				height: 1.65rem;
+				border-radius: 50%;
+				background: var(--accent-soft);
+				color: var(--accent);
+				font-size: 0.78rem;
+				font-weight: 800;
+			}
+			.mechanism__node h3 {
 				font-size: 1.18rem;
 				font-weight: 700;
 			}
-			.cell p {
+			.mechanism__node p {
+				margin-top: 0.35rem;
 				color: var(--text-2);
 				font-size: 0.97rem;
 			}
 			.chip {
 				align-self: flex-start;
-				margin-top: auto;
+				display: inline-block;
+				margin-top: 0.8rem;
 				font-size: 0.8rem;
 				padding: 0.3rem 0.6rem;
 				border-radius: 7px;
@@ -786,94 +857,16 @@ const steps = [
 				border: 1px solid var(--border);
 				color: var(--text-2);
 			}
-			/* cell 0: big accent feature */
-			.cell--0 {
-				grid-column: span 2;
-				grid-row: span 2;
-				background:
-					radial-gradient(
-						80% 90% at 100% 0%,
-						var(--accent-soft),
-						transparent 60%
-					),
-					var(--surface);
+			.mechanism__node:nth-child(3) {
 				border-color: var(--accent-line);
+				background:
+					radial-gradient(70% 90% at 100% 0%, var(--accent-soft), transparent 65%),
+					var(--surface);
 			}
-			.cell--0 h3 {
-				font-size: 1.7rem;
-			}
-			.cell--0 p {
-				font-size: 1.05rem;
-				max-width: 40ch;
-			}
-			.cell--0 .chip {
+			.mechanism__node:nth-child(3) .chip {
 				background: var(--accent-soft);
 				border-color: var(--accent-line);
 				color: var(--accent);
-			}
-			/* cell 4: gradient wide */
-			.cell--4 {
-				grid-column: span 2;
-				background: linear-gradient(
-					120deg,
-					color-mix(in srgb, var(--accent-2) 22%, var(--surface)),
-					var(--surface) 70%
-				);
-			}
-			.cell--4 .chip {
-				background: rgba(0, 0, 0, 0.12);
-			}
-
-			/* Flow */
-			.flow {
-				border-top: 1px solid var(--border);
-			}
-			.flow__track {
-				list-style: none;
-				margin: 0;
-				padding: 0;
-				display: grid;
-				grid-template-columns: repeat(3, 1fr);
-				gap: 1.2rem;
-				counter-reset: step;
-			}
-			.flow__step {
-				position: relative;
-				padding-top: 1.6rem;
-				border-top: 2px solid var(--border-strong);
-			}
-			.flow__step::before {
-				content: "";
-				position: absolute;
-				top: -2px;
-				left: 0;
-				width: 38%;
-				height: 2px;
-				background: var(--accent);
-			}
-			.flow__step h3 {
-				font-size: 1.25rem;
-				font-weight: 700;
-			}
-			.flow__step p {
-				margin-top: 0.5rem;
-				color: var(--text-2);
-				font-size: 0.97rem;
-				min-height: 3.4em;
-			}
-			.flow__cmd {
-				display: block;
-				margin-top: 1rem;
-				font-size: 0.85rem;
-				padding: 0.7rem 0.85rem;
-				border-radius: var(--radius-sm);
-				background: var(--surface);
-				border: 1px solid var(--border);
-				overflow-x: auto;
-			}
-			.flow__cmd .pr {
-				color: var(--accent);
-				font-weight: 700;
 			}
 
 			/* Final CTA */
@@ -972,25 +965,21 @@ const steps = [
 			@media (max-width: 900px) {
 				.hero,
 				.problem,
+				.mechanism,
 				.foot__inner {
 					grid-template-columns: 1fr;
 				}
 				.hero {
 					gap: 2.5rem;
 				}
-				.bento {
-					grid-template-columns: 1fr 1fr;
+				.mechanism__intro {
+					position: static;
 				}
-				.cell--0,
-				.cell--4 {
-					grid-column: span 2;
-					grid-row: auto;
-				}
-				.flow__track {
-					grid-template-columns: 1fr;
-				}
-				.flow__step p {
-					min-height: 0;
+			}
+			@media (pointer: coarse) {
+				.copy {
+					min-height: 44px;
+					padding: 0.55rem 0.8rem;
 				}
 			}
 			@media (max-width: 600px) {
@@ -998,20 +987,34 @@ const steps = [
 					font-size: 16px;
 				}
 				.nav__links {
-					gap: 1rem;
-					font-size: 0.9rem;
+					gap: 0.65rem;
+					font-size: 0.84rem;
 				}
-				.nav__links a[href="/cli-reference/"] {
-					display: none;
-				}
-				.bento,
 				.configs,
 				.foot__cols {
 					grid-template-columns: 1fr;
 				}
-				.cell--0,
-				.cell--4 {
-					grid-column: span 1;
+				.nav__inner {
+					padding: 0 1rem;
+				}
+				.brand {
+					gap: 0.4rem;
+				}
+				.brand span {
+					font-size: 0.95rem;
+				}
+				.nav__gh {
+					display: none;
+				}
+				.install-strip__item {
+					grid-template-columns: 1fr auto;
+				}
+				.install-strip__item span {
+					grid-column: 1 / -1;
+				}
+				.copy {
+					min-height: 44px;
+					padding: 0.55rem 0.8rem;
 				}
 				.cta-row .btn {
 					flex: 1 1 auto;
