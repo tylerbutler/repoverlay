@@ -11,7 +11,7 @@ import logo from "../assets/repoverlay.svg";
 const description =
 	"Overlay AI configs, editor settings, and dev tooling into any git repo. Files are symlinked or copied into place and excluded through .git/info/exclude.";
 const ghUrl = "https://github.com/tylerbutler/repoverlay";
-const firstRunCommand = "brew install tylerbutler/tap/repoverlay\nrepoverlay browse owner/repo";
+const firstRunCommand = "repoverlay browse owner/repo";
 const cargoTomlPath = [resolve(process.cwd(), "Cargo.toml"), resolve(process.cwd(), "../Cargo.toml")].find(
 	existsSync,
 );
@@ -184,51 +184,40 @@ const steps = [
 						<a class="btn btn--ghost" href="/introduction/">Read the docs</a>
 					</div>
 					<p class="hero__note">
-						New checkout? Install once, browse an overlay source, and apply from the
-						picker before reaching for direct commands.
+						New checkout? Install once, browse an overlay source, then apply from the
+						picker.
 					</p>
-					<dl class="mechanics" aria-label="repoverlay overlay mechanics">
-						<div>
-							<dt>Source</dt>
-							<dd><code>owner/repo</code></dd>
-						</div>
-						<div>
-							<dt>Working tree</dt>
-							<dd><code>.claude/</code></dd>
-						</div>
-						<div>
-							<dt>Git ignore stays clean</dt>
-							<dd><code>.git/info/exclude</code></dd>
-						</div>
-					</dl>
 				</div>
 
 				<div class="hero__panel reveal" style="--delay:90ms">
-					<div class="overlay-stack" aria-hidden="true">
-						<span class="stack-card stack-card--source">
-							<span>Overlay source</span>
-							<code>owner/repo</code>
-						</span>
-						<span class="stack-card stack-card--exclude">
-							<span>Git exclude</span>
-							<code>.git/info/exclude</code>
-						</span>
-						<span class="stack-card stack-card--state">
-							<span>Restore state</span>
-							<code>~/.local/share/repoverlay/applied/</code>
-						</span>
-					</div>
-					<div class="shell" aria-label="First-run shell session">
+					<div class="overlay-stack">
+						<ol class="deck" aria-label="How repoverlay places an overlay">
+							<li class="layer" style="--i:3">
+								<span class="layer__tag">Overlay source</span>
+								<code>owner/repo/claude</code>
+							</li>
+							<li class="layer" style="--i:2">
+								<span class="layer__tag">Working tree</span>
+								<code>.claude/settings.json</code>
+							</li>
+							<li class="layer layer--guard" style="--i:1">
+								<span class="layer__tag">Git guard</span>
+								<code>.git/info/exclude</code>
+							</li>
+						</ol>
+						<div class="shell-wrap">
+							<span class="shell-plate" aria-hidden="true"></span>
+							<div class="shell" aria-label="First-run shell session">
 						<div class="shell__bar">
-							<span class="shell__name">zsh</span>
+							<span class="shell__name">after install</span>
 							<button
 								class="copy"
 								type="button"
 								data-copy={firstRunCommand}
-								aria-label="Copy first-run commands"
+								aria-label="Copy browse command"
 								aria-describedby="first-run-copy-status"
 							>
-								<span class="copy__label">Copy commands</span>
+								<span class="copy__label">Copy command</span>
 							</button>
 							<span
 								id="first-run-copy-status"
@@ -238,12 +227,14 @@ const steps = [
 								aria-atomic="true"
 							></span>
 						</div>
-						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> brew install tylerbutler/tap/repoverlay</span>
+						<pre class="shell__body"><code><span class="ln dim">  Install with Homebrew, Cargo, or the shell installer.</span>
 <span class="ln"><span class="pr">$</span> repoverlay browse owner/repo</span>
 <span class="ln dim">  Choose an overlay, apply it, and keep Git clean.</span>
 <span class="ln dim">  Files are symlinked or copied into the repo working tree.</span>
 <span class="ln"><span class="ok">✓</span> Excluded from git via .git/info/exclude</span>
 <span class="ln"><span class="pr">$</span> <span class="caret">▍</span></span></code></pre>
+							</div>
+						</div>
 					</div>
 				</div>
 			</section>
@@ -424,13 +415,13 @@ const steps = [
 					try {
 						await copyToClipboard(text);
 						if (label) label.textContent = "Copied";
-						if (status) status.textContent = "First-run commands copied.";
+						if (status) status.textContent = "Browse command copied.";
 						btn.classList.add("is-copied");
 					} catch {
 						if (label) label.textContent = "Copy failed";
 						if (status) {
 							status.textContent =
-								"Copy failed. Select and copy the commands manually.";
+								"Copy failed. Select and copy the command manually.";
 						}
 						btn.classList.add("is-failed");
 					}
@@ -588,7 +579,7 @@ const steps = [
 			:focus-visible {
 				outline: 2px solid var(--accent);
 				outline-offset: 3px;
-				border-radius: 6px;
+				border-radius: var(--radius-sm);
 			}
 
 			/* Release banner */
@@ -690,11 +681,11 @@ const steps = [
 				padding-right: max(1.5rem, env(safe-area-inset-right));
 			}
 			section {
-				padding-block: clamp(4.5rem, 9vw, 8rem);
+				padding-block: clamp(3rem, 6.5vw, 5.5rem);
 			}
 			.section-head {
 				font-size: clamp(1.6rem, 3.2vw, 2.3rem);
-				margin-bottom: 2.5rem;
+				margin-bottom: 1.8rem;
 			}
 			.accentword {
 				color: var(--accent);
@@ -788,49 +779,17 @@ const steps = [
 				margin-top: 2rem;
 			}
 			.hero__note {
-				max-width: min(42ch, 100%);
+				max-width: min(36ch, 100%);
 				margin-top: 0.95rem;
 				color: var(--text-2);
 				font-size: 0.95rem;
 				text-wrap: pretty;
 			}
-			.mechanics {
-				display: grid;
-				grid-template-columns: repeat(3, minmax(0, 1fr));
-				max-width: min(45rem, 100%);
-				margin: 2.6rem 0 0;
-				padding: 0;
-				border: 1px solid var(--border-strong);
-				border-radius: var(--radius);
-				background: color-mix(in srgb, var(--surface) 84%, var(--bg));
-				overflow: hidden;
-			}
-			.mechanics div {
-				min-width: 0;
-				padding: 0.9rem 1rem 1rem;
-			}
-			.mechanics div + div {
-				border-left: 1px solid var(--border);
-			}
-			.mechanics dt {
-				color: var(--muted);
-				font-size: 0.76rem;
-				font-weight: 700;
-			}
-			.mechanics dd {
-				margin: 0.35rem 0 0;
-			}
-			.mechanics code {
-				color: var(--text);
-				font-size: 0.78rem;
-				overflow-wrap: anywhere;
-				white-space: normal;
-			}
 			/* Shell panel */
 			.hero__panel {
 				position: relative;
 				isolation: isolate;
-				padding-block: clamp(1.5rem, 3.6vw, 2.7rem);
+				padding-block: clamp(1.2rem, 3vw, 2.2rem);
 			}
 			.hero__panel::before {
 				content: "";
@@ -847,55 +806,11 @@ const steps = [
 			.hero__panel::after {
 				content: "";
 				position: absolute;
-				inset: 18% -3% 8% 16%;
-				border-radius: calc(var(--radius) + 6px);
+				inset: 1.9rem -0.75rem 0.25rem 0.9rem;
+				border-radius: var(--radius);
 				background: color-mix(in srgb, var(--accent) 86%, var(--accent-2));
-				transform: rotate(2.4deg);
+				opacity: 0.18;
 				z-index: -2;
-			}
-			.overlay-stack {
-				position: absolute;
-				inset: 0;
-				z-index: -1;
-				pointer-events: none;
-			}
-			.stack-card {
-				position: absolute;
-				display: flex;
-				flex-direction: column;
-				gap: 0.18rem;
-				min-width: min(11rem, 100%);
-				padding: 0.7rem 0.82rem;
-				border: 1px solid var(--border-strong);
-				border-radius: 12px;
-				background: color-mix(in srgb, var(--surface) 88%, var(--bg));
-				color: var(--text);
-			}
-			.stack-card span {
-				color: var(--muted);
-				font-size: 0.74rem;
-				font-weight: 700;
-			}
-			.stack-card code {
-				color: var(--text);
-				font-size: 0.78rem;
-				overflow-wrap: anywhere;
-				white-space: normal;
-			}
-			.stack-card--source {
-				top: 0.2rem;
-				left: -0.75rem;
-				transform: rotate(-4deg);
-			}
-			.stack-card--exclude {
-				right: -0.35rem;
-				bottom: 0.5rem;
-				transform: rotate(3deg);
-			}
-			.stack-card--state {
-				top: -0.3rem;
-				right: 4.5rem;
-				transform: rotate(1.5deg);
 			}
 			.shell {
 				position: relative;
@@ -956,6 +871,72 @@ const steps = [
 				font-size: 0.86rem;
 				line-height: 1.85;
 				overflow-x: auto;
+			}
+			/* Overlay stack: a deterministic, orderly cascade that feeds into the shell.
+			   Offsets are driven by --i so every layer reveals its full label. */
+			.overlay-stack {
+				--step-x: 1.5rem;
+				--overlap: 0.5rem;
+				position: relative;
+				z-index: 1;
+			}
+			.deck {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: flex;
+				flex-direction: column;
+				align-items: flex-start;
+			}
+			.layer {
+				position: relative;
+				z-index: calc(4 - var(--i));
+				width: fit-content;
+				max-width: 100%;
+				margin-left: calc((var(--i) - 1) * var(--step-x));
+				padding: 0.6rem 0.85rem;
+				border: 1px solid var(--border-strong);
+				border-radius: var(--radius-sm);
+				background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+				box-shadow: 0 8px 20px rgba(8, 9, 16, 0.22);
+			}
+			.layer + .layer {
+				margin-top: calc(-1 * var(--overlap));
+			}
+			.layer__tag {
+				display: block;
+				color: var(--muted);
+				font-size: 0.7rem;
+				font-weight: 700;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+			}
+			.layer code {
+				display: block;
+				margin-top: 0.18rem;
+				color: var(--text);
+				font-size: 0.82rem;
+				overflow-wrap: anywhere;
+			}
+			.layer--guard {
+				border-color: var(--accent-line);
+				background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface));
+			}
+			.layer--guard .layer__tag {
+				color: var(--text);
+			}
+			/* The shell is the result: it sits in front, on a square clay backing plate. */
+			.shell-wrap {
+				position: relative;
+				z-index: 5;
+				margin-top: calc(-1 * var(--overlap));
+			}
+			.shell-plate {
+				position: absolute;
+				inset: 0.85rem -0.6rem -0.55rem 1.15rem;
+				border-radius: var(--radius);
+				background: color-mix(in srgb, var(--accent) 86%, var(--accent-2));
+				z-index: 0;
 			}
 			.shell__body .ln {
 				display: block;
@@ -1039,40 +1020,33 @@ const steps = [
 				display: grid;
 				grid-template-columns: repeat(3, 1fr);
 				grid-auto-rows: 1fr;
-				gap: 1rem;
+				gap: 0.8rem;
 			}
 			.cell {
 				min-width: 0;
 				border: 1px solid var(--border);
 				border-radius: var(--radius);
-				padding: 1.6rem 1.6rem 1.7rem;
+				padding: 1.15rem 1.2rem 1.25rem;
 				background: var(--surface);
 				display: flex;
 				flex-direction: column;
-				gap: 0.7rem;
-				transition:
-					transform 0.2s var(--ease),
-					border-color 0.2s var(--ease);
-			}
-			.cell:hover {
-				transform: translateY(-4px);
-				border-color: var(--accent-line);
+				gap: 0.5rem;
 			}
 			.cell h3 {
-				font-size: 1.18rem;
+				font-size: 1.05rem;
 				font-weight: 700;
 			}
 			.cell p {
 				color: var(--text-2);
-				font-size: 0.97rem;
+				font-size: 0.92rem;
 				overflow-wrap: anywhere;
 			}
 			.chip {
 				align-self: flex-start;
 				max-width: 100%;
 				margin-top: auto;
-				font-size: 0.8rem;
-				padding: 0.3rem 0.6rem;
+				font-size: 0.74rem;
+				padding: 0.28rem 0.55rem;
 				border-radius: 7px;
 				background: var(--bg-2);
 				border: 1px solid var(--border);
@@ -1094,10 +1068,10 @@ const steps = [
 				border-color: var(--accent-line);
 			}
 			.cell--0 h3 {
-				font-size: 1.7rem;
+				font-size: 1.35rem;
 			}
 			.cell--0 p {
-				font-size: 1.05rem;
+				font-size: 0.98rem;
 				max-width: 40ch;
 			}
 			.state-map {
@@ -1171,12 +1145,12 @@ const steps = [
 				padding: 0;
 				display: grid;
 				grid-template-columns: repeat(3, 1fr);
-				gap: 1.2rem;
+				gap: 1rem;
 				}
 			.flow__step {
 				position: relative;
 				min-width: 0;
-				padding-top: 1.6rem;
+				padding-top: 1.2rem;
 				border-top: 2px solid var(--border-strong);
 			}
 			.flow__step::before {
@@ -1189,20 +1163,20 @@ const steps = [
 				background: var(--accent);
 			}
 			.flow__step h3 {
-				font-size: 1.25rem;
+				font-size: 1.1rem;
 				font-weight: 700;
 			}
 			.flow__step p {
-				margin-top: 0.5rem;
+				margin-top: 0.45rem;
 				color: var(--text-2);
-				font-size: 0.97rem;
-				min-height: 3.4em;
+				font-size: 0.92rem;
+				min-height: 3.2em;
 			}
 			.flow__cmd {
 				display: block;
-				margin-top: 1rem;
-				font-size: 0.85rem;
-				padding: 0.7rem 0.85rem;
+				margin-top: 0.85rem;
+				font-size: 0.82rem;
+				padding: 0.6rem 0.75rem;
 				border-radius: var(--radius-sm);
 				background: var(--surface);
 				border: 1px solid var(--border);
@@ -1307,13 +1281,11 @@ const steps = [
 				}
 				.btn,
 				.btn svg,
-				.copy,
-				.cell {
+				.copy {
 					transition: none;
 				}
 				.btn--primary:hover,
 				.btn--ghost:hover,
-				.cell:hover,
 				.btn--primary:hover svg {
 					transform: none;
 				}
@@ -1324,13 +1296,13 @@ const steps = [
 				}
 				.hero__panel::before,
 				.hero__panel::after,
-				.overlay-stack {
+				.shell-plate {
 					display: none;
 				}
 				.btn,
 				.copy,
 				.shell,
-				.mechanics,
+				.layer,
 				.configs,
 				.cell,
 				.flow__cmd {
@@ -1360,6 +1332,9 @@ const steps = [
 				.bento {
 					grid-template-columns: 1fr 1fr;
 				}
+				.overlay-stack {
+					--step-x: 1rem;
+				}
 				.cell--0,
 				.cell--4 {
 					grid-column: span 2;
@@ -1370,15 +1345,6 @@ const steps = [
 				}
 				.flow__step p {
 					min-height: 0;
-				}
-				.stack-card--source {
-					left: 0.4rem;
-				}
-				.stack-card--exclude {
-					right: 0.4rem;
-				}
-				.stack-card--state {
-					right: 2rem;
 				}
 			}
 			@media (max-width: 600px) {
@@ -1409,16 +1375,6 @@ const steps = [
 				.cell--4 {
 					grid-column: span 1;
 				}
-				.mechanics {
-					grid-template-columns: 1fr;
-				}
-				.mechanics div + div {
-					border-top: 1px solid var(--border);
-					border-left: 0;
-				}
-				.overlay-stack {
-					display: none;
-				}
 				.hero__panel {
 					padding-block: 1rem;
 				}
@@ -1427,6 +1383,16 @@ const steps = [
 				}
 				.shell__body {
 					font-size: 0.78rem;
+				}
+				.overlay-stack {
+					--step-x: 0;
+					--overlap: 0.4rem;
+				}
+				.layer {
+					width: 100%;
+				}
+				.shell-plate {
+					display: none;
 				}
 				.copy {
 					min-width: 44px;
