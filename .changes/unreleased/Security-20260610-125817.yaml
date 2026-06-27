@@ -1,6 +1,0 @@
-kind: Security
-body: |-
-    Reject overlay directories containing symlinks that escape the overlay
-
-    In symlink mode, a directory declared in an overlay is linked into the target repo as-is, so a malicious overlay could embed a symlink exposing arbitrary host paths (for example `.claude/evil -> ~/.ssh`) through the target repository. Directories are now vetted before anything is applied: applying fails with a "Symlink escape detected" error and the target repo is left untouched. Symlinks that stay within the overlay directory continue to work. Copy mode already had equivalent protection.
-time: 2026-06-10T12:58:17-07:00

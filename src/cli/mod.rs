@@ -247,6 +247,13 @@ enum Commands {
         #[arg(long, requires = "into")]
         no_apply: bool,
 
+        /// Create a global overlay (applies to any repository)
+        ///
+        /// Scaffolds into the `@global/<name>/` namespace of the overlay repo
+        /// instead of `org/repo/<name>/`, skipping git-remote target detection.
+        #[arg(long, conflicts_with_all = ["output", "into"])]
+        global: bool,
+
         /// Show what would be created without creating files
         #[arg(long)]
         dry_run: bool,
@@ -890,6 +897,7 @@ pub(crate) fn run() -> Result<()> {
             output,
             into,
             no_apply,
+            global,
             dry_run,
             yes,
             force,
@@ -903,7 +911,9 @@ pub(crate) fn run() -> Result<()> {
             } else if let Some(dest) = &into {
                 bail!("Unknown --into destination: {dest}. Valid values: library");
             } else {
-                create_overlay_command(&source, name, output, &include, dry_run, yes, force)?;
+                create_overlay_command(
+                    &source, name, output, &include, global, dry_run, yes, force,
+                )?;
             }
         }
         Commands::Move {

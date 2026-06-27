@@ -153,6 +153,69 @@ fn browse_local_flat_dotfile_root_lists_single_overlay() {
 }
 
 #[test]
+fn browse_local_source_lists_global_overlay_under_global_heading() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let source_dir = ctx.repo_path().join("overlays");
+    let global_dir = source_dir.join("@global").join("dotfiles");
+    fs::create_dir_all(&global_dir).unwrap();
+    fs::write(global_dir.join(".gitconfig"), "x").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "browse",
+            "./overlays",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+            "--no-interactive",
+        ])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Global"))
+        .stdout(predicate::str::contains("dotfiles"));
+}
+
+#[test]
+fn apply_global_overlay_from_configured_local_source() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let source_dir = ctx.repo_path().join("overlays");
+    let global_dir = source_dir.join("@global").join("dotfiles");
+    fs::create_dir_all(&global_dir).unwrap();
+    fs::write(global_dir.join(".gitconfig"), "[core]\n").unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./overlays", "--name", "local"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    // The global overlay applies even though the target repo matches no org/repo.
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "apply",
+            "dotfiles",
+            "--from",
+            "local",
+            "--target",
+            ctx.repo_path().to_str().unwrap(),
+        ])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    assert!(ctx.file_exists(".gitconfig"));
+    assert!(ctx.overlay_state_exists("dotfiles"));
+}
+
+#[test]
 fn browse_rejects_nonexistent_local_path_source() {
     cargo_bin_cmd!("repoverlay")
         .args(["browse", "./my-overlay"])
@@ -5844,6 +5907,34 @@ fn create_into_library_conflicts_with_output() {
         .args(["create", "--into", "library", "--output", "./out", "-y"])
         .assert()
         .failure();
+}
+
+#[test]
+fn create_global_conflicts_with_output() {
+    cargo_bin_cmd!("repoverlay")
+        .args(["create", "name", "--global", "--output", "./out", "-y"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn create_global_rejects_slash_in_name() {
+    let ctx = TestContext::new();
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "create",
+            "org/repo/name",
+            "--global",
+            "--source",
+            ctx.repo_path().to_str().unwrap(),
+            "-y",
+        ])
+        .current_dir(ctx.repo_path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("bare name"));
 }
 
 #[test]

@@ -173,6 +173,40 @@ my-overlays/
 
 The structure is `<target-org>/<target-repo>/<overlay-name>/`. When someone runs `repoverlay apply org/repo/overlay-name`, repoverlay resolves the overlay from this directory structure.
 
+## Global overlays
+
+A **global overlay** applies to *any* repository, regardless of its git remote. Global overlays live in a reserved `@global/` namespace alongside the per-project `<org>/<repo>/` directories:
+
+```
+my-overlays/
+├── microsoft/
+│   └── FluidFramework/
+│       └── claude-config/
+└── @global/
+    └── dotfiles/
+        └── .gitconfig
+```
+
+Create one with the `--global` flag (it takes a bare name and skips git-remote detection):
+
+```bash
+repoverlay create dotfiles --global
+```
+
+Global overlays are listed for every repository under a **Global** heading in `repoverlay browse`, displayed as `*/<name>`, and applied by their bare name:
+
+```bash
+repoverlay apply dotfiles
+```
+
+When a global overlay and a repo-scoped overlay share a name, the repo-scoped overlay wins (structured `org/repo/name` resolves before `@global/name` within a source; sources are still tried in priority order).
+
+Global overlays don't change how overlays work — *any* overlay is technically applicable to any repository. You can apply an overlay defined for repo A onto repo B; resolution only cares about file paths and conflicts, not which repo an overlay was created for. The `@global` namespace simply makes that intent explicit and lets an overlay resolve for every repository without needing an `org/repo` match.
+
+:::caution[Minimum version]
+Global overlays rely on the reserved `@global` namespace. Clients that predate it (repoverlay **0.15.0** and earlier) do not understand `@global` and will mis-parse or ignore global overlays. The first release with full support — both consuming sources that use global overlays and creating/applying them — is repoverlay **0.16.0**. Make sure everyone sharing a source is on 0.16.0 or newer.
+:::
+
 ## Sharing overlays
 
 Once you've created overlays in a repository, push it to GitHub:

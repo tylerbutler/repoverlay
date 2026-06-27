@@ -20,12 +20,18 @@ const OVERLAY_REPO_DIR: &str = "overlay-repo";
 
 /// Validate that a path component (org, repo, or overlay name) does not contain
 /// path traversal characters that could escape the overlay repository directory.
+///
+/// Reserved namespaces (e.g. `@global`, `@library`) are rejected so they cannot
+/// be addressed as literal `org`/`repo`/`name` segments.
 fn validate_path_component(s: &str, label: &str) -> Result<()> {
     if s.is_empty() {
         bail!("Invalid {label}: must not be empty");
     }
     if s == "." || s == ".." || s.contains('/') || s.contains('\\') {
         bail!("Invalid {label}: '{s}' contains path traversal characters");
+    }
+    if crate::library::is_reserved_namespace(s) {
+        bail!("Invalid {label}: '{s}' is a reserved namespace");
     }
     Ok(())
 }
@@ -59,13 +65,18 @@ pub(crate) struct AvailableOverlay {
     ///
     /// Flat overlays use a simpler directory structure without org/repo nesting.
     flat: bool,
+    /// Whether this is a global overlay (lives in the `@global/` namespace and
+    /// applies to any repository).
+    global: bool,
     /// Source-relative path to the overlay directory.
     source_relative_path: PathBuf,
 }
 
 impl std::fmt::Display for AvailableOverlay {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_flat() {
+        if self.is_global() {
+            write!(f, "*/{}", self.name)
+        } else if self.is_flat() {
             write!(f, "{}", self.name)
         } else {
             write!(f, "{}/{}/{}", self.org, self.repo, self.name)
@@ -77,7 +88,9 @@ impl AvailableOverlay {
     /// Format the overlay path for display with the overlay name in bold.
     pub(crate) fn display_bold(&self) -> String {
         use colored::Colorize;
-        if self.is_flat() {
+        if self.is_global() {
+            format!("{}/{}", "*".yellow(), self.name.bold())
+        } else if self.is_flat() {
             self.name.bold().to_string()
         } else {
             format!("{}/{}/{}", self.org, self.repo, self.name.bold())
@@ -93,6 +106,7 @@ impl AvailableOverlay {
             name,
             has_config,
             flat: false,
+            global: false,
             source_relative_path,
         }
     }
@@ -109,6 +123,7 @@ impl AvailableOverlay {
             name,
             has_config,
             flat: true,
+            global: false,
             source_relative_path,
         }
     }
@@ -126,6 +141,24 @@ impl AvailableOverlay {
             name,
             has_config,
             flat: true,
+            global: false,
+            source_relative_path,
+        }
+    }
+
+    /// Create metadata for a global overlay (in the `@global/` namespace).
+    ///
+    /// The `org` is set to the reserved [`GLOBAL_NAMESPACE`][crate::library::GLOBAL_NAMESPACE]
+    /// so callers can distinguish global overlays; `repo` is empty.
+    pub(crate) fn global(name: String, has_config: bool) -> Self {
+        let source_relative_path = PathBuf::from(crate::library::GLOBAL_NAMESPACE).join(&name);
+        Self {
+            org: crate::library::GLOBAL_NAMESPACE.to_string(),
+            repo: String::new(),
+            name,
+            has_config,
+            flat: false,
+            global: true,
             source_relative_path,
         }
     }
@@ -135,6 +168,11 @@ impl AvailableOverlay {
         self.flat
     }
 
+    /// Whether this is a global overlay (applies to any repository).
+    pub(crate) const fn is_global(&self) -> bool {
+        self.global
+    }
+
     /// Returns the relative path from the source base directory to this overlay.
     ///
     /// For structured overlays: `org/repo/name`
@@ -142,6 +180,43 @@ impl AvailableOverlay {
     pub(crate) fn source_relative_path(&self) -> PathBuf {
         self.source_relative_path.clone()
     }
+}
+
+/// Scan the reserved `@global/` namespace in a source base directory.
+///
+/// Each immediate visible subdirectory of `<base>/@global/` that contains at
+/// least one file is returned as a global [`AvailableOverlay`]. Returns an empty
+/// vector when the `@global` directory is absent.
+pub(crate) fn scan_global_overlays(base: &Path) -> Result<Vec<AvailableOverlay>> {
+    let global_dir = base.join(crate::library::GLOBAL_NAMESPACE);
+    if !global_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut overlays = Vec::new();
+    for entry in
+        fs::read_dir(&global_dir).with_context(|| format!("reading {}", global_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if name.starts_with('.') {
+            continue;
+        }
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("reading file type for {}", path.display()))?;
+        if !file_type.is_dir() || !crate::sources::contains_any_file(&path)? {
+            continue;
+        }
+
+        let has_config = path.join("repoverlay.ccl").exists();
+        overlays.push(AvailableOverlay::global(name, has_config));
+    }
+
+    overlays.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(overlays)
 }
 
 /// Wraps an [`AvailableOverlay`] with context about which overlays are already applied,
@@ -338,8 +413,12 @@ impl OverlayRepoManager {
             let org_entry = org_entry?;
             let org_path = org_entry.path();
 
-            // Skip non-directories and hidden files
-            if !org_path.is_dir() || org_entry.file_name().to_string_lossy().starts_with('.') {
+            // Skip non-directories, hidden files, and reserved namespaces (e.g.
+            // @global) so older clients tolerate sources that use them.
+            if !org_path.is_dir()
+                || org_entry.file_name().to_string_lossy().starts_with('.')
+                || crate::library::is_reserved_namespace(&org_entry.file_name().to_string_lossy())
+            {
                 continue;
             }
 
@@ -383,10 +462,16 @@ impl OverlayRepoManager {
         // Sort by org/repo/name
         overlays.sort_by(|a, b| (&a.org, &a.repo, &a.name).cmp(&(&b.org, &b.repo, &b.name)));
 
+        // Surface overlays in the reserved @global namespace.
+        overlays.extend(scan_global_overlays(&self.repo_path)?);
+
         Ok(overlays)
     }
 
     /// List overlays for a specific target repository.
+    ///
+    /// Global overlays (in the `@global/` namespace) are always included, since
+    /// they apply to any repository.
     pub(crate) fn list_overlays_for_repo(
         &self,
         org: &str,
@@ -395,7 +480,10 @@ impl OverlayRepoManager {
         let all = self.list_overlays()?;
         Ok(all
             .into_iter()
-            .filter(|o| o.org.eq_ignore_ascii_case(org) && o.repo.eq_ignore_ascii_case(repo))
+            .filter(|o| {
+                o.is_global()
+                    || (o.org.eq_ignore_ascii_case(org) && o.repo.eq_ignore_ascii_case(repo))
+            })
             .collect())
     }
 
@@ -411,6 +499,23 @@ impl OverlayRepoManager {
         }
 
         Ok(path)
+    }
+
+    /// Get the path to a global overlay in the `@global/` namespace.
+    ///
+    /// Returns `Ok(None)` when the overlay is absent. The overlay name is
+    /// validated for path safety.
+    pub(crate) fn get_global_overlay_path(&self, name: &str) -> Result<Option<PathBuf>> {
+        validate_path_component(name, "overlay name")?;
+        let path = self
+            .repo_path
+            .join(crate::library::GLOBAL_NAMESPACE)
+            .join(name);
+        if path.is_dir() {
+            Ok(Some(path))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Find the path to a specific overlay with upstream fallback.
@@ -825,6 +930,77 @@ mod tests {
     }
 
     #[test]
+    fn available_overlay_global_renders_star_prefix() {
+        let overlay = AvailableOverlay::global("dotfiles".to_string(), true);
+
+        assert_eq!(overlay.to_string(), "*/dotfiles");
+        assert_eq!(overlay.org, crate::library::GLOBAL_NAMESPACE);
+        assert!(overlay.repo.is_empty());
+        assert!(overlay.is_global());
+        assert!(!overlay.is_flat());
+        assert_eq!(
+            overlay.source_relative_path(),
+            PathBuf::from(crate::library::GLOBAL_NAMESPACE).join("dotfiles")
+        );
+    }
+
+    #[test]
+    fn list_overlays_for_repo_includes_globals_for_any_repo() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        // One repo-scoped overlay and one global overlay.
+        fs::create_dir_all(repo_path.join("acme/widget/cfg")).unwrap();
+        fs::write(repo_path.join("acme/widget/cfg/.envrc"), "x").unwrap();
+        fs::create_dir_all(repo_path.join("@global/dotfiles")).unwrap();
+        fs::write(repo_path.join("@global/dotfiles/.gitconfig"), "x").unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        // The global appears regardless of which repo we ask for.
+        let matching = manager.list_overlays_for_repo("acme", "widget").unwrap();
+        assert!(matching.iter().any(|o| o.name == "cfg" && !o.is_global()));
+        assert!(
+            matching
+                .iter()
+                .any(|o| o.name == "dotfiles" && o.is_global())
+        );
+
+        let unrelated = manager.list_overlays_for_repo("other", "thing").unwrap();
+        assert_eq!(unrelated.len(), 1);
+        assert!(unrelated[0].is_global());
+        assert_eq!(unrelated[0].name, "dotfiles");
+    }
+
+    #[test]
+    fn get_global_overlay_path_resolves_present_and_absent() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join("@global/dotfiles")).unwrap();
+        fs::write(repo_path.join("@global/dotfiles/.gitconfig"), "x").unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path.clone()),
+        };
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        let found = manager.get_global_overlay_path("dotfiles").unwrap();
+        assert_eq!(found, Some(repo_path.join("@global").join("dotfiles")));
+        assert!(
+            manager
+                .get_global_overlay_path("missing")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn test_overlay_repo_manager_needs_clone_no_path() {
         let temp = TempDir::new().unwrap();
         let config = OverlayRepoConfig {
@@ -1105,6 +1281,58 @@ mod tests {
         assert_eq!(overlays[0].org, "org");
         assert_eq!(overlays[0].repo, "repo");
         assert_eq!(overlays[0].name, "overlay");
+    }
+
+    #[test]
+    fn test_list_overlays_surfaces_global_namespace() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        // A normal overlay plus a reserved @global namespace entry.
+        fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+        fs::create_dir_all(repo_path.join("@global/my-global")).unwrap();
+        fs::write(repo_path.join("@global/my-global/.envrc"), "export FOO=1").unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        // @global must never be mis-parsed as a literal org; instead it is
+        // surfaced as a global overlay via the dedicated scan pass.
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager.list_overlays().unwrap();
+
+        assert_eq!(overlays.len(), 2);
+        assert!(overlays.iter().all(|o| o.is_global() || o.org != "@global"));
+        let structured = overlays.iter().find(|o| !o.is_global()).unwrap();
+        assert_eq!(structured.org, "org");
+        assert_eq!(structured.repo, "repo");
+        assert_eq!(structured.name, "overlay");
+        let global = overlays.iter().find(|o| o.is_global()).unwrap();
+        assert_eq!(global.name, "my-global");
+        assert!(global.is_global());
+    }
+
+    #[test]
+    fn test_get_overlay_path_rejects_reserved_namespace() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join("@global/repo/name")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        assert!(manager.get_overlay_path("@global", "repo", "name").is_err());
+        assert!(
+            manager
+                .get_overlay_path("@library", "repo", "name")
+                .is_err()
+        );
     }
 
     #[test]
