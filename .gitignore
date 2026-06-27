@@ -10,3 +10,6 @@ mutants.out/
 *.cdx.json
 
 .codegraph
+
+# impeccable design-skill artifacts (local only)
+.impeccable/
