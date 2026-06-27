@@ -18,6 +18,18 @@ const DEFAULT_LIBRARY_DIR: &str = "library";
 /// Reserved source name for the library.
 pub(crate) const LIBRARY_SOURCE_NAME: &str = "@library";
 
+/// Reserved namespace for global overlays (overlays that apply to any repository).
+///
+/// On disk, global overlays live at `<source>/@global/<name>/`, a sibling of the
+/// `org/` directories in a structured source.
+pub(crate) const GLOBAL_NAMESPACE: &str = "@global";
+
+/// Returns `true` if `name` is a reserved namespace segment that must not be used
+/// as a literal `org`, `repo`, or overlay-name directory in a source.
+pub(crate) fn is_reserved_namespace(name: &str) -> bool {
+    name == LIBRARY_SOURCE_NAME || name == GLOBAL_NAMESPACE
+}
+
 /// Resolve the library path for a given repository root, loading repo config automatically.
 pub(crate) fn get_library_path(repo_root: &Path) -> Result<PathBuf> {
     let repo_config = config::load_repo_config(repo_root)?;

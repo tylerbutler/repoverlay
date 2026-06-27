@@ -443,12 +443,16 @@ fn get_flat_overlay_path_in_dir(base: &Path, name: &str) -> Option<PathBuf> {
 }
 
 /// Validate path component safety for org/repo/overlay segments.
+///
+/// Reserved namespaces (e.g. `@global`, `@library`) are rejected so they cannot
+/// be addressed as literal `org`/`repo`/`name` segments.
 fn is_valid_path_component(component: &str) -> bool {
     !component.is_empty()
         && component != "."
         && component != ".."
         && !component.contains('/')
         && !component.contains('\\')
+        && !crate::library::is_reserved_namespace(component)
 }
 
 /// The detected layout of a local overlay source directory.
@@ -509,7 +513,9 @@ pub(crate) fn detect_source_layout(base: &Path) -> Result<SourceLayout> {
 }
 
 fn is_visible_candidate_dir(entry: &fs::DirEntry) -> Result<bool> {
-    if entry.file_name().to_string_lossy().starts_with('.') {
+    let name = entry.file_name();
+    let name = name.to_string_lossy();
+    if name.starts_with('.') || crate::library::is_reserved_namespace(&name) {
         return Ok(false);
     }
 
@@ -559,6 +565,12 @@ fn list_overlays_in_flat_dir(base: &Path) -> Result<Vec<AvailableOverlay>> {
             if path.is_file() {
                 has_root_files = true;
             }
+            continue;
+        }
+
+        // Reserved namespaces (e.g. @global) are not flat overlays; skip them so
+        // older clients tolerate sources that use them instead of mis-listing.
+        if crate::library::is_reserved_namespace(&name) {
             continue;
         }
 
@@ -1912,6 +1924,53 @@ mod tests {
         let overlays = list_overlays_in_dir(base).unwrap();
         assert_eq!(overlays.len(), 1);
         assert_eq!(overlays[0].name, "visible");
+    }
+
+    #[test]
+    fn test_list_overlays_in_dir_skips_global_namespace() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+
+        // A normal repo-scoped overlay alongside a reserved @global overlay.
+        create_local_source_dir(base, &[("org", "repo", "visible")]);
+        let global_overlay = base.join("@global").join("my-global");
+        fs::create_dir_all(&global_overlay).unwrap();
+        fs::write(global_overlay.join(".envrc"), "export FOO=bar").unwrap();
+
+        // Phase 0 tolerance: the @global namespace is skipped entirely, so only
+        // the repo-scoped overlay is listed (never mis-parsed as org/repo/name).
+        let overlays = list_overlays_in_dir(base).unwrap();
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0].name, "visible");
+        assert!(overlays.iter().all(|o| o.org != "@global"));
+    }
+
+    #[test]
+    fn test_global_namespace_not_treated_as_structured_layout() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+
+        // A source containing ONLY a @global overlay must not be detected as a
+        // structured org/repo/name source via the reserved namespace.
+        let global_overlay = base.join("@global").join("my-global");
+        fs::create_dir_all(&global_overlay).unwrap();
+        fs::write(global_overlay.join(".envrc"), "export FOO=bar").unwrap();
+
+        assert_eq!(detect_source_layout(base).unwrap(), SourceLayout::Flat);
+        assert!(list_overlays_in_dir(base).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_get_overlay_path_rejects_reserved_namespace_org() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path();
+        let global_overlay = base.join("@global").join("repo").join("name");
+        fs::create_dir_all(&global_overlay).unwrap();
+        fs::write(global_overlay.join(".envrc"), "export FOO=bar").unwrap();
+
+        // @global / @library cannot be addressed as a literal org segment.
+        assert!(get_overlay_path_in_dir(base, "@global", "repo", "name").is_none());
+        assert!(get_overlay_path_in_dir(base, "@library", "repo", "name").is_none());
     }
 
     #[test]

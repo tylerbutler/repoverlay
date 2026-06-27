@@ -20,12 +20,18 @@ const OVERLAY_REPO_DIR: &str = "overlay-repo";
 
 /// Validate that a path component (org, repo, or overlay name) does not contain
 /// path traversal characters that could escape the overlay repository directory.
+///
+/// Reserved namespaces (e.g. `@global`, `@library`) are rejected so they cannot
+/// be addressed as literal `org`/`repo`/`name` segments.
 fn validate_path_component(s: &str, label: &str) -> Result<()> {
     if s.is_empty() {
         bail!("Invalid {label}: must not be empty");
     }
     if s == "." || s == ".." || s.contains('/') || s.contains('\\') {
         bail!("Invalid {label}: '{s}' contains path traversal characters");
+    }
+    if crate::library::is_reserved_namespace(s) {
+        bail!("Invalid {label}: '{s}' is a reserved namespace");
     }
     Ok(())
 }
@@ -338,8 +344,12 @@ impl OverlayRepoManager {
             let org_entry = org_entry?;
             let org_path = org_entry.path();
 
-            // Skip non-directories and hidden files
-            if !org_path.is_dir() || org_entry.file_name().to_string_lossy().starts_with('.') {
+            // Skip non-directories, hidden files, and reserved namespaces (e.g.
+            // @global) so older clients tolerate sources that use them.
+            if !org_path.is_dir()
+                || org_entry.file_name().to_string_lossy().starts_with('.')
+                || crate::library::is_reserved_namespace(&org_entry.file_name().to_string_lossy())
+            {
                 continue;
             }
 
@@ -1105,6 +1115,51 @@ mod tests {
         assert_eq!(overlays[0].org, "org");
         assert_eq!(overlays[0].repo, "repo");
         assert_eq!(overlays[0].name, "overlay");
+    }
+
+    #[test]
+    fn test_list_overlays_skips_global_namespace() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join(".git")).unwrap();
+
+        // A normal overlay plus a reserved @global namespace entry.
+        fs::create_dir_all(repo_path.join("org/repo/overlay")).unwrap();
+        fs::create_dir_all(repo_path.join("@global/my-global")).unwrap();
+        fs::write(repo_path.join("@global/my-global/.envrc"), "export FOO=1").unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+
+        // Phase 0 tolerance: @global is skipped at the org level, never mis-parsed.
+        let manager = OverlayRepoManager::new(config).unwrap();
+        let overlays = manager.list_overlays().unwrap();
+
+        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays[0].org, "org");
+        assert!(overlays.iter().all(|o| o.org != "@global"));
+    }
+
+    #[test]
+    fn test_get_overlay_path_rejects_reserved_namespace() {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("overlay-repo");
+        fs::create_dir_all(repo_path.join("@global/repo/name")).unwrap();
+
+        let config = OverlayRepoConfig {
+            url: "https://github.com/org/overlays".to_string(),
+            local_path: Some(repo_path),
+        };
+        let manager = OverlayRepoManager::new(config).unwrap();
+
+        assert!(manager.get_overlay_path("@global", "repo", "name").is_err());
+        assert!(
+            manager
+                .get_overlay_path("@library", "repo", "name")
+                .is_err()
+        );
     }
 
     #[test]
