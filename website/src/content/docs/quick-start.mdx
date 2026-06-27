@@ -2,27 +2,88 @@
 title: Quick Start
 ---
 
-import { Steps } from '@astrojs/starlight/components';
+import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Get up and running with repoverlay in under two minutes.
+Get up and running with repoverlay in a couple of minutes. First install the
+binary, then pick a path: **profiles** compose a whole agent setup at once, while
+**overlays** place a single bundle of files.
+
+## Install
+
+See [Installation](/installation/) for all options. The quickest way:
+
+```bash
+# macOS/Linux
+brew install tylerbutler/tap/repoverlay
+
+# Or with cargo
+cargo binstall repoverlay
+```
+
+<Tabs>
+<TabItem label="Profiles (recommended)">
+
+A **profile** composes overlays and AI-harness capabilities — instructions,
+skills, agents, and MCP servers — into one named unit you apply to a repo for a
+specific agent (Claude Code or GitHub Copilot).
 
 <Steps>
 
-1. **Install repoverlay**
+1. **Define a profile**
 
-   See [Installation](/installation/) for all options. The quickest way:
+   Profiles live in your repoverlay config under a `profiles` key. Add one to your
+   global config at `~/.config/repoverlay/config.ccl`:
 
-   ```bash
-   # macOS/Linux
-   brew install tylerbutler/tap/repoverlay
-
-   # Or with cargo
-   cargo binstall repoverlay
+   ```ccl
+   profiles =
+     rust-dev =
+       description = Rust development profile
+       overlays =
+         = rust-base
+       instructions =
+         =
+           content =
+             Be concise in all responses.
    ```
 
-2. **Check that nothing is applied yet**
+   See the [Profiles guide](/guides/profiles/) for overlays, plugins, and
+   marketplaces.
 
-   Navigate to a git repository and check the current status:
+2. **Apply it to a repo**
+
+   Pick the harness for your agent — `claude` or `copilot`:
+
+   ```bash
+   cd ~/projects/my-repo
+   repoverlay profile apply rust-dev --harness claude
+   ```
+
+   repoverlay places each capability where the harness expects it and git-excludes
+   any new repo-local files.
+
+3. **Check what was applied**
+
+   ```bash
+   repoverlay profile status
+   ```
+
+4. **Remove when done**
+
+   ```bash
+   repoverlay profile remove rust-dev --harness claude
+   ```
+
+</Steps>
+
+</TabItem>
+<TabItem label="Overlays">
+
+An **overlay** is a named bundle of files placed directly into a repo's working
+tree and excluded from git.
+
+<Steps>
+
+1. **Check that nothing is applied yet**
 
    ```bash
    cd ~/projects/my-repo
@@ -31,17 +92,16 @@ Get up and running with repoverlay in under two minutes.
 
    You should see: `Status: No overlays are currently applied.`
 
-3. **Browse and apply an overlay**
-
-   Browse overlays from a shared source. repoverlay lists what's available and lets you pick:
+2. **Browse and apply an overlay**
 
    ```bash
    repoverlay browse tylerbutler
    ```
 
-   Select an overlay from the interactive list. repoverlay will ask if you want to save the source for future use.
+   Select an overlay from the interactive list. repoverlay will ask if you want to
+   save the source for future use.
 
-4. **Check status again**
+3. **Check status again**
 
    ```bash
    repoverlay status
@@ -49,7 +109,7 @@ Get up and running with repoverlay in under two minutes.
 
    You'll see the applied overlay, its source, and the files it manages.
 
-5. **Remove when done**
+4. **Remove when done**
 
    ```bash
    repoverlay remove my-overlay
@@ -57,8 +117,12 @@ Get up and running with repoverlay in under two minutes.
 
 </Steps>
 
+</TabItem>
+</Tabs>
+
 ## Next steps
 
+- Compose a full agent setup with [Profiles](/guides/profiles/)
 - Learn about [applying overlays](/guides/applying/) from different sources
 - [Create and share](/guides/creating/) your own overlays
 - Understand [how it works](/guides/how-it-works/)
