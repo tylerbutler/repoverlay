@@ -577,7 +577,7 @@ fn is_valid_structured_overlay_leaf(path: &Path) -> Result<bool> {
     contains_any_file(path)
 }
 
-fn contains_any_file(path: &Path) -> Result<bool> {
+pub(crate) fn contains_any_file(path: &Path) -> Result<bool> {
     for entry in fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
         let entry = entry.with_context(|| format!("reading entry in {}", path.display()))?;
         let entry_path = entry.path();

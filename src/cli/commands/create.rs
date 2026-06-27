@@ -61,6 +61,15 @@ pub(crate) fn extract_overlay_name(name_arg: &str) -> Result<String> {
     }
 }
 
+/// Human-readable overlay label: `org/name` for globals (empty repo), else `org/repo/name`.
+fn overlay_label(org: &str, repo: &str, name: &str) -> String {
+    if repo.is_empty() {
+        format!("{org}/{name}")
+    } else {
+        format!("{org}/{repo}/{name}")
+    }
+}
+
 /// Parse an overlay name argument.
 ///
 /// Returns (org, repo, name) tuple.
@@ -290,11 +299,7 @@ pub(crate) fn create_overlay_command(
     };
 
     // Human-readable target label (`@global/name` for globals, else `org/repo/name`).
-    let target_label = if repo.is_empty() {
-        format!("{org}/{overlay_name}")
-    } else {
-        format!("{org}/{repo}/{overlay_name}")
-    };
+    let target_label = overlay_label(&org, &repo, &overlay_name);
 
     // Load overlay repo config
     let config = load_config(None)?;
@@ -305,12 +310,8 @@ pub(crate) fn create_overlay_command(
     manager.ensure_cloned()?;
     manager.pull()?;
 
-    // Determine output path in overlay repo
-    let output_path = if repo.is_empty() {
-        manager.path().join(&org).join(&overlay_name)
-    } else {
-        manager.path().join(&org).join(&repo).join(&overlay_name)
-    };
+    // Determine output path in overlay repo (empty repo segment is a no-op for globals)
+    let output_path = manager.path().join(&org).join(&repo).join(&overlay_name);
 
     // Check if overlay already exists
     if output_path.exists() && !force {
@@ -472,11 +473,7 @@ pub(crate) fn auto_commit_overlay(
     }
 
     let action = if is_new { "Add" } else { "Update" };
-    let label = if repo.is_empty() {
-        format!("{org}/{name}")
-    } else {
-        format!("{org}/{repo}/{name}")
-    };
+    let label = overlay_label(org, repo, name);
     let commit_msg = format!("{action} overlay: {label}");
 
     println!("{} changes...", "Committing".blue().bold());

@@ -207,7 +207,7 @@ pub(crate) fn scan_global_overlays(base: &Path) -> Result<Vec<AvailableOverlay>>
         let file_type = entry
             .file_type()
             .with_context(|| format!("reading file type for {}", path.display()))?;
-        if !file_type.is_dir() || !dir_contains_any_file(&path)? {
+        if !file_type.is_dir() || !crate::sources::contains_any_file(&path)? {
             continue;
         }
 
@@ -217,21 +217,6 @@ pub(crate) fn scan_global_overlays(base: &Path) -> Result<Vec<AvailableOverlay>>
 
     overlays.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(overlays)
-}
-
-/// Recursively check whether `path` contains at least one regular file.
-fn dir_contains_any_file(path: &Path) -> Result<bool> {
-    for entry in fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
-        let entry = entry?;
-        let entry_path = entry.path();
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("reading file type for {}", entry_path.display()))?;
-        if file_type.is_file() || (file_type.is_dir() && dir_contains_any_file(&entry_path)?) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 /// Wraps an [`AvailableOverlay`] with context about which overlays are already applied,
