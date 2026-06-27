@@ -4,15 +4,15 @@ sidebar:
   order: 5
 ---
 
-:::note[New in v0.16.0]
-Profiles were introduced in repoverlay **v0.16.0**. See the [release notes](https://github.com/tylerbutler/repoverlay/releases/tag/v0.16.0) for details.
+:::note[New in v0.17.0]
+Profiles were introduced in repoverlay **v0.17.0**. See the [release notes](https://github.com/tylerbutler/repoverlay/releases/tag/v0.17.0) for details.
 :::
 
 A **profile** is a named, agent-centric configuration that composes overlays together with AI harness capabilities — instruction files and plugins — into a single loadable unit.
 
 Where an overlay describes *files to place in a repo*, a profile describes *intent*: "give me everything I need to do Rust development with this agent." Applying a profile always happens for a specific agent harness (currently GitHub Copilot and Claude Code), and the harness decides where each capability is placed.
 
-## Profiles vs. overlays :badge[v0.16.0]{variant=tip}
+## Profiles vs. overlays :badge[v0.17.0]{variant=tip}
 
 The key thing to understand is the difference between a **definition** and its **application**:
 
@@ -240,7 +240,7 @@ Pass extra arguments straight through to the agent after `--`:
 repoverlay copilot --profile rust-dev -- --help
 ```
 
-#### Applying several profiles at once :badge[v0.16.0]{variant=tip}
+#### Applying several profiles at once :badge[v0.17.0]{variant=tip}
 
 Repeat `--profile` to stack multiple profiles into a single ephemeral session. Each profile is applied (and locked) independently, and all of them are torn down when the agent exits:
 

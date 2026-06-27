@@ -204,7 +204,7 @@ When a global overlay and a repo-scoped overlay share a name, the repo-scoped ov
 Global overlays don't change how overlays work — *any* overlay is technically applicable to any repository. You can apply an overlay defined for repo A onto repo B; resolution only cares about file paths and conflicts, not which repo an overlay was created for. The `@global` namespace simply makes that intent explicit and lets an overlay resolve for every repository without needing an `org/repo` match.
 
 :::caution[Minimum version]
-Global overlays rely on the reserved `@global` namespace. Clients that predate it (repoverlay **0.15.0** and earlier) do not understand `@global` and will mis-parse or ignore global overlays. The first release with full support — both consuming sources that use global overlays and creating/applying them — is repoverlay **0.16.0**. Make sure everyone sharing a source is on 0.16.0 or newer.
+Global overlays rely on the reserved `@global` namespace. Clients that predate it (repoverlay **0.15.0** and earlier) do not understand `@global` and will mis-parse or ignore global overlays. repoverlay **0.16.0** reserves the namespace, so it safely tolerates sources that use global overlays; full support — creating and applying them — arrives in repoverlay **0.17.0**. Make sure everyone sharing a source is on 0.16.0 or newer, and on 0.17.0 to create or apply global overlays themselves.
 :::
 
 ## Sharing overlays

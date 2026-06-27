@@ -181,7 +181,7 @@ The GitHub App configured by `RELEASE_APP_ID`/`RELEASE_APP_PRIVATE_KEY` must be 
 
 *Snapshot: 2026-06-10.*
 
-The full profiles + plugins implementation landed on `main` in #347 (squash of the `profiles` branch) and shipped hidden in **v0.15.0**. All profile-related tests pass on `main` (46 tests via `cargo test profile`). The feature is **public as of v0.16.0**: the `profile`, `claude`, and `copilot` commands appear in `--help` and the CLI reference alongside `marketplace`.
+The full profiles + plugins implementation landed on `main` in #347 (squash of the `profiles` branch) and shipped hidden in **v0.15.0**. All profile-related tests pass on `main` (46 tests via `cargo test profile`). The feature is **public as of v0.17.0**: the `profile`, `claude`, and `copilot` commands appear in `--help` and the CLI reference alongside `marketplace`.
 
 ### CLI surface
 
@@ -223,7 +223,7 @@ Harness identity (`AgentHarness` in `src/profile_applicators/mod.rs`): stable id
 
 - **Hooks and commands**: plugin bundle `hooks/` and `commands/` are never decomposed for either harness.
 
-The website profiles guide, homepage announcements, design specs (`docs/superpowers/specs/`), and unreleased changelog fragments were brought over from the `profiles` branch in the v0.16.0 announcement PR, with revision notes where the shipped behavior diverged from the specs. The branch's implementation plans (`docs/superpowers/plans/`) and the `Fixed` fragment for never-released behavior were intentionally not brought over; they remain in git history on the `profiles` branch.
+The website profiles guide, homepage announcements, design specs (`docs/superpowers/specs/`), and unreleased changelog fragments were brought over from the `profiles` branch in the v0.17.0 announcement PR, with revision notes where the shipped behavior diverged from the specs. The branch's implementation plans (`docs/superpowers/plans/`) and the `Fixed` fragment for never-released behavior were intentionally not brought over; they remain in git history on the `profiles` branch.
 
 ## Vendored Agent Skills
 

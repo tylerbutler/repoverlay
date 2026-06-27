@@ -9,7 +9,7 @@ tags:
   - profiles
 ---
 
-repoverlay 0.16.0 ships **profiles**, the biggest feature I've added since the
+repoverlay 0.17.0 ships **profiles**, the biggest feature I've added since the
 project began. A profile bundles overlays with AI harness capabilities
 (instruction files and plugins) into a single named unit you apply to a repo.
 
