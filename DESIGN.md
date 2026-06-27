@@ -261,8 +261,9 @@ physical object. Ordinary feature cells stay flat and use borders plus tonal con
 - **Typography:** Compact Metropolis links with secondary text color at rest.
 - **States:** Hover shifts links to primary text or Clay for icon links. The nav should stay calm;
   do not add badge clutter or dropdown theatrics.
-- **Mobile:** Preserve the brand and primary docs links; hide the CLI link below 600px as the
-  current site does.
+- **Mobile:** Keep the brand and all primary docs links (Docs, Quick Start, CLI) reachable; below
+  600px tighten link spacing and type rather than dropping the CLI link, and hide the brand
+  wordmark only below 360px.
 
 ### Shell Panel
 

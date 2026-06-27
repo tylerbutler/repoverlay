@@ -91,6 +91,19 @@ const placed = [
 	{ kind: "rules", name: "Rust house style", path: "CLAUDE.md" },
 ];
 
+const reversible = [
+	{
+		cmd: "repoverlay restore",
+		body: "Re-applies every overlay after git clean wipes the working tree. State is backed up outside the repo, so nothing is lost.",
+	},
+	{
+		cmd: "repoverlay remove rust-dev",
+		body: "Pulls a profile's files back out and clears its .git/info/exclude entries. Your committed history never changes.",
+	},
+];
+
+const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.json"];
+
 ---
 
 <!doctype html>
@@ -158,7 +171,7 @@ const placed = [
 				</a>
 				<nav class="nav__links" aria-label="Primary">
 					<a href="/introduction/">Docs</a>
-					<a href="/quick-start/">Quick Start</a>
+					<a class="nav__primary" href="/quick-start/">Quick Start</a>
 					<a href="/cli-reference/">CLI</a>
 					<button
 						class="nav__theme"
@@ -216,7 +229,7 @@ const placed = [
 					</p>
 					<div class="cta-row">
 						<a class="btn btn--primary" href="/quick-start/">
-							Quick start
+							Quick Start
 							<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 								><path
 									fill="none"
@@ -231,7 +244,7 @@ const placed = [
 					</div>
 					<p class="hero__note">
 						Clone a repo, apply a profile, and your agent has its tools and
-						conventions — scoped to that checkout.
+						conventions, scoped to that checkout.
 					</p>
 				</div>
 
@@ -248,7 +261,7 @@ const placed = [
 								<span class="copy__label">Copy command</span>
 							</button>
 						</div>
-						<pre class="shell__body"><code><span class="ln dim">  One profile bundles overlays and agent capabilities.</span>
+						<pre class="shell__body" tabindex="0"><code><span class="ln dim">  One profile bundles overlays and agent capabilities.</span>
 <span class="ln"><span class="pr">$</span> repoverlay profile apply rust-dev <span class="dim">--harness claude</span></span>
 <span class="ln dim">  Placing skills, an agent, an MCP server, and instructions.</span>
 <span class="ln dim">  Repo-local files excluded via .git/info/exclude.</span>
@@ -295,7 +308,7 @@ const placed = [
 						installs.map((opt) => (
 							<li class="cmdline">
 								<span class="cmdline__manager">{opt.label}</span>
-								<code class="cmdline__text"><span class="pr">$</span> {opt.cmd}</code>
+								<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {opt.cmd}</code>
 								<CopyButton command={opt.cmd} label={`Copy ${opt.label} install command`} />
 							</li>
 						))
@@ -330,7 +343,7 @@ const placed = [
 						Browse a source to see what's available:
 					</p>
 					<div class="cmdline cmdline--browse">
-						<code class="cmdline__text"><span class="pr">$</span> {browseExample}</code>
+						<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {browseExample}</code>
 						<CopyButton command={browseExample} label="Copy browse command" />
 					</div>
 				</div>
@@ -352,7 +365,7 @@ const placed = [
 						<p>Skip the browser and apply it directly.</p>
 					</div>
 					<div class="cmdline cmdline--apply">
-						<code class="cmdline__text"><span class="pr">$</span> {applyExample}</code>
+						<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {applyExample}</code>
 						<CopyButton command={applyExample} label="Copy example apply command" />
 					</div>
 				</div>
@@ -374,6 +387,50 @@ const placed = [
 						))
 					}
 				</ul>
+			</section>
+
+			<!-- REVERSIBLE: nothing you can't undo -->
+			<section class="reversible reveal" aria-label="How to undo overlays">
+				<div class="reversible__head">
+					<h2 class="section-head">Nothing you can't undo.</h2>
+					<p class="reversible__sub">
+						Overlays live outside committed history, so you can pull them back
+						out or rebuild them at any time. Two commands cover the whole
+						lifecycle:
+					</p>
+				</div>
+				<div class="reversible__grid">
+					<ul class="reversible__actions">
+						{
+							reversible.map((action) => (
+								<li class="reversible__action">
+									<div class="cmdline cmdline--undo">
+										<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {action.cmd}</code>
+										<CopyButton command={action.cmd} label={`Copy ${action.cmd} command`} />
+									</div>
+									<p>{action.body}</p>
+								</li>
+							))
+						}
+					</ul>
+					<figure class="exclude">
+						<figcaption class="exclude__cap">.git/info/exclude</figcaption>
+						<div class="exclude__diff">
+							{
+								excludeEntries.map((entry) => (
+									<span class="exclude__line">
+										<span class="exclude__sign" aria-hidden="true">+</span>
+										{entry}
+									</span>
+								))
+							}
+						</div>
+						<p class="exclude__note">
+							Added on apply, stripped on remove. Your committed .gitignore is
+							never touched.
+						</p>
+					</figure>
+				</div>
 			</section>
 
 			<!-- FINAL CTA -->
@@ -702,11 +759,15 @@ const placed = [
 				align-items: center;
 				min-height: 44px;
 				padding-inline: 0.15rem;
-				color: var(--accent);
-				font-weight: 600;
+				color: var(--text-2);
+				font-weight: 500;
+				text-decoration: underline;
+				text-decoration-color: var(--border-strong);
+				text-underline-offset: 3px;
 			}
 			.release a:hover {
-				text-decoration: underline;
+				color: var(--text);
+				text-decoration-color: currentColor;
 			}
 
 			/* Nav */
@@ -757,6 +818,13 @@ const placed = [
 			}
 			.nav__links a:hover {
 				color: var(--text);
+			}
+			.nav__primary {
+				color: var(--accent);
+				font-weight: 600;
+			}
+			.nav__primary:hover {
+				color: var(--accent-deep);
 			}
 			.nav__gh {
 				display: inline-flex;
@@ -1045,11 +1113,10 @@ const placed = [
 				background: color-mix(in srgb, var(--surface) 70%, var(--bg));
 			}
 			.manifest__title {
-				font-size: 0.72rem;
-				font-weight: 700;
-				letter-spacing: 0.13em;
-				text-transform: uppercase;
-				color: var(--muted);
+				font-family: var(--mono);
+				font-size: 0.78rem;
+				font-weight: 600;
+				color: var(--text-2);
 			}
 			.manifest__guard {
 				display: inline-flex;
@@ -1197,11 +1264,9 @@ const placed = [
 				border-top: 1px solid var(--border);
 			}
 			.install-strip__eyebrow {
-				display: inline-block;
-				font-size: 0.72rem;
-				text-transform: uppercase;
-				letter-spacing: 0.13em;
-				color: var(--muted);
+				display: block;
+				font-size: 0.95rem;
+				color: var(--text);
 				font-weight: 700;
 			}
 			.install-strip__line {
@@ -1231,11 +1296,9 @@ const placed = [
 			}
 			.cmdline__manager {
 				flex: 0 0 auto;
-				font-size: 0.7rem;
-				text-transform: uppercase;
-				letter-spacing: 0.1em;
-				font-weight: 700;
-				color: var(--muted);
+				font-size: 0.78rem;
+				font-weight: 600;
+				color: var(--text-2);
 				padding-right: 0.75rem;
 				margin-right: 0.1rem;
 				border-right: 1px solid var(--border);
@@ -1262,6 +1325,13 @@ const placed = [
 			}
 			.cmdline__text::-webkit-scrollbar {
 				display: none;
+			}
+			.cmdline__text:focus-visible {
+				outline: 2px solid var(--accent);
+				outline-offset: 2px;
+				border-radius: var(--radius-sm);
+				-webkit-mask-image: none;
+				mask-image: none;
 			}
 			.cmdline .pr {
 				color: var(--accent);
@@ -1353,12 +1423,10 @@ const placed = [
 				border: 1px solid var(--accent-line);
 			}
 			.mechanism__apply-eyebrow {
-				display: inline-block;
-				font-size: 0.72rem;
-				text-transform: uppercase;
-				letter-spacing: 0.12em;
+				display: block;
+				font-size: 0.95rem;
 				font-weight: 700;
-				color: var(--accent);
+				color: var(--text);
 			}
 			.mechanism__apply-copy p {
 				margin-top: 0.4rem;
@@ -1411,6 +1479,82 @@ const placed = [
 				margin-top: 0.6rem;
 				color: var(--text-2);
 				font-size: 0.9rem;
+			}
+
+						/* Reversible: nothing you can't undo */
+			.reversible {
+				border-top: 1px solid var(--border);
+			}
+			.reversible__head {
+				display: grid;
+				gap: 1rem;
+				max-width: 60ch;
+			}
+			.reversible__sub {
+				color: var(--text-2);
+				font-size: 1rem;
+			}
+			.reversible__grid {
+				margin-top: clamp(2rem, 4vw, 3rem);
+				display: grid;
+				grid-template-columns: 1.1fr 0.9fr;
+				gap: clamp(1.5rem, 3vw, 2.5rem);
+				align-items: start;
+			}
+			.reversible__actions {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: grid;
+				gap: 1.4rem;
+			}
+			.cmdline--undo {
+				max-width: 30rem;
+			}
+			.reversible__action p {
+				margin-top: 0.55rem;
+				color: var(--text-2);
+				font-size: 0.92rem;
+				max-width: 48ch;
+			}
+			.exclude {
+				margin: 0;
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				background: var(--surface);
+				overflow: hidden;
+			}
+			.exclude__cap {
+				font-family: var(--mono);
+				font-size: 0.78rem;
+				color: var(--text-2);
+				padding: 0.6rem 0.9rem;
+				border-bottom: 1px solid var(--border);
+				background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+			}
+			.exclude__diff {
+				display: grid;
+				padding: 0.7rem 0.9rem;
+				font-family: var(--mono);
+				font-size: 0.82rem;
+				line-height: 1.9;
+				color: var(--text);
+			}
+			.exclude__line {
+				display: flex;
+				gap: 0.5rem;
+				overflow-wrap: anywhere;
+			}
+			.exclude__sign {
+				flex: 0 0 auto;
+				color: var(--success);
+				font-weight: 700;
+			}
+			.exclude__note {
+				margin: 0;
+				padding: 0 0.9rem 0.8rem;
+				color: var(--muted);
+				font-size: 0.78rem;
 			}
 
 						/* Final CTA */
@@ -1531,7 +1675,8 @@ const placed = [
 				.cmdline,
 				.mechanism__stage,
 				.mechanism__apply,
-				.capability {
+				.capability,
+				.exclude {
 					border-color: CanvasText;
 				}
 				.btn--primary {
@@ -1575,6 +1720,9 @@ const placed = [
 				.capabilities__list {
 					grid-template-columns: 1fr;
 				}
+				.reversible__grid {
+					grid-template-columns: 1fr;
+				}
 				.capability {
 					padding-inline: 0;
 				}
@@ -1597,6 +1745,12 @@ const placed = [
 				.nav__links {
 					gap: 0.5rem;
 					font-size: 0.9rem;
+				}
+				.cmdline__text {
+					white-space: normal;
+					overflow-x: visible;
+					-webkit-mask-image: none;
+					mask-image: none;
 				}
 				.configs,
 				.foot__cols {
