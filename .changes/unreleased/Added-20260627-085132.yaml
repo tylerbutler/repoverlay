@@ -1,0 +1,6 @@
+kind: Added
+body: |-
+    Global overlays that apply to any repository
+
+    Overlays placed in a source's reserved `@global/` namespace now apply to every repository, regardless of its git remote. Create one with `repoverlay create <name> --global`, and apply it by its bare name (for example `repoverlay apply dotfiles`). Global overlays are listed for every repo under a `Global` heading in `repoverlay browse` and displayed as `*/<name>`. Repo-scoped overlays still take precedence over a global overlay of the same name.
+time: 2026-06-27T08:51:32-07:00

@@ -173,6 +173,38 @@ my-overlays/
 
 The structure is `<target-org>/<target-repo>/<overlay-name>/`. When someone runs `repoverlay apply org/repo/overlay-name`, repoverlay resolves the overlay from this directory structure.
 
+## Global overlays
+
+A **global overlay** applies to *any* repository, regardless of its git remote. Global overlays live in a reserved `@global/` namespace alongside the per-project `<org>/<repo>/` directories:
+
+```
+my-overlays/
+├── microsoft/
+│   └── FluidFramework/
+│       └── claude-config/
+└── @global/
+    └── dotfiles/
+        └── .gitconfig
+```
+
+Create one with the `--global` flag (it takes a bare name and skips git-remote detection):
+
+```bash
+repoverlay create dotfiles --global
+```
+
+Global overlays are listed for every repository under a **Global** heading in `repoverlay browse`, displayed as `*/<name>`, and applied by their bare name:
+
+```bash
+repoverlay apply dotfiles
+```
+
+When a global overlay and a repo-scoped overlay share a name, the repo-scoped overlay wins (structured `org/repo/name` resolves before `@global/name` within a source; sources are still tried in priority order).
+
+:::caution[Minimum version]
+Global overlays rely on the reserved `@global` namespace. Clients that predate that namespace being reserved (repoverlay **0.15.0** and earlier) do not understand `@global` and will mis-parse or ignore global overlays. To **consume** a source that uses global overlays, use the tolerance release (the first patch after 0.15.0) or newer; to **create and apply** them you need the release that introduces the feature. Make sure everyone sharing a source is on a supported version.
+:::
+
 ## Sharing overlays
 
 Once you've created overlays in a repository, push it to GitHub:

@@ -877,7 +877,15 @@ fn resolve_from_sources_with_suggestions(
     if let Some(resolved) = manager.resolve(org, repo, name, upstream, source_filter)? {
         if resolved.source.is_local() {
             let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
-            if resolved.flat {
+            if resolved.global {
+                println!(
+                    "{} overlay: {}/{}{}",
+                    "Resolving".blue().bold(),
+                    "*".yellow(),
+                    name,
+                    source_suffix,
+                );
+            } else if resolved.flat {
                 println!(
                     "{} overlay: {}{}",
                     "Resolving".blue().bold(),
@@ -897,6 +905,30 @@ fn resolve_from_sources_with_suggestions(
             return Ok(ResolvedSource {
                 path: resolved.path.clone(),
                 source_info: OverlaySource::configured_local(resolved.path, resolved.source.name),
+            });
+        }
+
+        // Global overlays are addressed via the @global namespace, independent of
+        // the target repository's org/repo.
+        if resolved.global {
+            let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
+            println!(
+                "{} overlay: {}/{}{}",
+                "Resolving".blue().bold(),
+                "*".yellow(),
+                name,
+                source_suffix,
+            );
+            return Ok(ResolvedSource {
+                path: resolved.path,
+                source_info: OverlaySource::overlay_repo_full(
+                    crate::library::GLOBAL_NAMESPACE.to_string(),
+                    String::new(),
+                    name.to_string(),
+                    resolved.commit,
+                    resolved.resolved_via,
+                    resolved.source.name,
+                ),
             });
         }
 
@@ -971,8 +1003,36 @@ fn resolve_one_part_from_configured_source(
         .and_then(|identity| identity.origin.or(identity.upstream))
         && let Some(resolved) =
             manager.resolve(&org, &repo, name, upstream.as_ref(), source_filter)?
-        && !resolved.flat
+        && (!resolved.flat || resolved.global)
     {
+        let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
+
+        if resolved.global {
+            println!(
+                "{} overlay: {}/{}{}",
+                "Resolving".blue().bold(),
+                "*".yellow(),
+                name,
+                source_suffix,
+            );
+            let source_info = if resolved.source.is_local() {
+                OverlaySource::configured_local(resolved.path.clone(), resolved.source.name)
+            } else {
+                OverlaySource::overlay_repo_full(
+                    crate::library::GLOBAL_NAMESPACE.to_string(),
+                    String::new(),
+                    name.to_string(),
+                    resolved.commit,
+                    resolved.resolved_via,
+                    resolved.source.name,
+                )
+            };
+            return Ok(ResolvedSource {
+                path: resolved.path,
+                source_info,
+            });
+        }
+
         let via_upstream = resolved.resolved_via == state::ResolvedVia::Upstream;
         let (actual_org, actual_repo) = match (upstream.as_ref(), via_upstream) {
             (Some(up), true) => (up.org.clone(), up.repo.clone()),
@@ -983,7 +1043,6 @@ fn resolve_one_part_from_configured_source(
         } else {
             String::new()
         };
-        let source_suffix = format!(" [{}]", resolved.source.name).cyan().to_string();
         println!(
             "{} overlay: {}/{}/{}{}{}",
             "Resolving".blue().bold(),

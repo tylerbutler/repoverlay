@@ -45,8 +45,10 @@ fn auto_filter_overlays(
     let matching: Vec<_> = overlays
         .iter()
         .filter(|o| {
-            // Library overlays always pass through the auto-filter
-            o.org == library::LIBRARY_SOURCE_NAME || identity.matches(&o.org, &o.repo)
+            // Library and global overlays always pass through the auto-filter
+            o.is_global()
+                || o.org == library::LIBRARY_SOURCE_NAME
+                || identity.matches(&o.org, &o.repo)
         })
         .cloned()
         .collect();
@@ -64,15 +66,34 @@ fn auto_filter_overlays(
 fn print_overlay_list(overlays: &[AvailableOverlay], filtered: bool) {
     println!("{}\n", "Available overlays:".bold());
 
+    // Cluster overlays so each group is contiguous: structured (by org/repo)
+    // first, then flat, then global.
+    let mut ordered: Vec<&AvailableOverlay> = overlays.iter().collect();
+    ordered.sort_by_key(|o| {
+        let rank: u8 = match (o.is_global(), o.is_flat()) {
+            (true, _) => 2,
+            (false, true) => 1,
+            (false, false) => 0,
+        };
+        (
+            rank,
+            o.org.to_ascii_lowercase(),
+            o.repo.to_ascii_lowercase(),
+            o.name.to_ascii_lowercase(),
+        )
+    });
+
     // Group by org/repo
     let mut current_group: Option<(String, String)> = None;
-    for overlay in overlays {
+    for overlay in ordered {
         let group = (overlay.org.clone(), overlay.repo.clone());
         if current_group.as_ref() != Some(&group) {
             if current_group.is_some() {
                 println!();
             }
-            if overlay.is_flat() {
+            if overlay.is_global() {
+                println!("{}:", "Global".yellow().bold());
+            } else if overlay.is_flat() {
                 println!("{}:", "(flat)".dimmed());
             } else {
                 println!("{}{}{}:", overlay.org.cyan(), "/".dimmed(), overlay.repo);
