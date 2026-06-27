@@ -40,16 +40,19 @@ const features = [
 	{
 		title: "Symlink or copy",
 		body: "Symlinked by default on macOS/Linux for instant updates. Copied on Windows, or anywhere you ask it to.",
+		code: "--copy",
 		variant: "plain",
 	},
 	{
 		title: "GitHub-aware",
 		body: "Pull overlays from repos, branches, tags, or subdirectories. Cached locally with shallow clones.",
+		code: "owner/repo@tag",
 		variant: "plain",
 	},
 	{
 		title: "Fork inheritance",
 		body: "Working on a fork? repoverlay falls back to the upstream repo's overlays until yours exist.",
+		code: "origin → upstream",
 		variant: "plain",
 	},
 	{
@@ -136,6 +139,13 @@ const steps = [
 	</head>
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
+		<div
+			class="sr-only"
+			role="status"
+			aria-live="polite"
+			aria-atomic="true"
+			data-copy-status
+		></div>
 
 		<div class="release" role="note">
 			<span class="release__dot" aria-hidden="true"></span>
@@ -153,6 +163,34 @@ const steps = [
 					<a href="/introduction/">Docs</a>
 					<a href="/quick-start/">Quick Start</a>
 					<a href="/cli-reference/">CLI</a>
+					<button
+						class="nav__theme"
+						type="button"
+						data-theme-toggle
+						aria-label="Switch color theme"
+					>
+						<span class="nav__theme-icon nav__theme-icon--moon" aria-hidden="true">
+							<svg viewBox="0 0 24 24" width="18" height="18"
+								><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg
+							>
+						</span>
+						<span class="nav__theme-icon nav__theme-icon--sun" aria-hidden="true">
+							<svg viewBox="0 0 24 24" width="18" height="18"
+								><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"></circle><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg
+							>
+						</span>
+					</button>
 					<a class="nav__gh" href={ghUrl} aria-label="repoverlay on GitHub">
 						<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"
 							><path
@@ -209,24 +247,16 @@ const steps = [
 								type="button"
 								data-copy={firstRunCommand}
 								aria-label="Copy profile apply command"
-								aria-describedby="first-run-copy-status"
 							>
 								<span class="copy__label">Copy command</span>
 							</button>
-							<span
-								id="first-run-copy-status"
-								class="copy__status sr-only"
-								role="status"
-								aria-live="polite"
-								aria-atomic="true"
-							></span>
 						</div>
 						<pre class="shell__body"><code><span class="ln dim">  One profile composes overlays and agent capabilities.</span>
 <span class="ln"><span class="pr">$</span> repoverlay profile apply rust-dev <span class="dim">--harness claude</span></span>
 <span class="ln dim">  Placing skills, an agent, an MCP server, and instructions.</span>
 <span class="ln dim">  Repo-local files excluded via .git/info/exclude.</span>
 <span class="ln"><span class="ok">✓</span> Applied rust-dev · 4 capabilities, 0 files committed</span>
-<span class="ln"><span class="pr">$</span> <span class="caret">▍</span></span></code></pre>
+<span class="ln"><span class="pr">$</span> <span class="caret" aria-hidden="true">▍</span></span></code></pre>
 						</div>
 					<div class="manifest">
 						<div class="manifest__head">
@@ -311,9 +341,40 @@ const steps = [
 							<li class="flow__step">
 								<h3>{s.key}</h3>
 								<p>{s.body}</p>
-								<code class="flow__cmd">
-									<span class="pr">$</span> {s.cmd}
-								</code>
+								<div class="flow__cmd">
+									<code class="flow__cmd-text">
+										<span class="pr">$</span> {s.cmd}
+									</code>
+									<button
+										class="copy copy--inline"
+										type="button"
+										data-copy={s.cmd}
+										aria-label={`Copy command: ${s.cmd}`}
+									>
+										<span class="copy__icon copy__icon--idle" aria-hidden="true">
+											<svg viewBox="0 0 24 24" width="16" height="16"
+												><path
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													d="M9 9V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-4M5 9h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"></path></svg
+											>
+										</span>
+										<span class="copy__icon copy__icon--done" aria-hidden="true">
+											<svg viewBox="0 0 24 24" width="16" height="16"
+												><path
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													d="M20 6 9 17l-5-5"></path></svg
+											>
+										</span>
+									</button>
+								</div>
 							</li>
 						))
 					}
@@ -376,6 +437,17 @@ const steps = [
 		<script>
 			const themeStorageKey = "starlight-theme";
 			const colorSchemeQuery = window.matchMedia?.("(prefers-color-scheme: light)");
+			const themeToggle =
+				document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
+			const syncThemeToggle = () => {
+				if (!themeToggle) return;
+				const isDark = document.documentElement.dataset.theme !== "light";
+				themeToggle.setAttribute(
+					"aria-label",
+					isDark ? "Switch to light theme" : "Switch to dark theme",
+				);
+				themeToggle.setAttribute("aria-pressed", String(!isDark));
+			};
 			const readSavedTheme = () => {
 				try {
 					const stored = window.localStorage.getItem(themeStorageKey);
@@ -387,10 +459,23 @@ const steps = [
 			const applyPreferredTheme = () => {
 				document.documentElement.dataset.theme =
 					readSavedTheme() ?? (colorSchemeQuery?.matches ? "light" : "dark");
+				syncThemeToggle();
 			};
 			const applyAutoTheme = () => {
 				if (readSavedTheme() === null) applyPreferredTheme();
 			};
+			syncThemeToggle();
+			themeToggle?.addEventListener("click", () => {
+				const next =
+					document.documentElement.dataset.theme === "light" ? "dark" : "light";
+				document.documentElement.dataset.theme = next;
+				try {
+					window.localStorage.setItem(themeStorageKey, next);
+				} catch {
+					/* localStorage can be blocked; the in-page toggle still works. */
+				}
+				syncThemeToggle();
+			});
 			if (colorSchemeQuery) {
 				if (typeof colorSchemeQuery.addEventListener === "function") {
 					colorSchemeQuery.addEventListener("change", applyAutoTheme);
@@ -402,7 +487,12 @@ const steps = [
 				if (event.key === themeStorageKey) applyPreferredTheme();
 			});
 
-			// Copy-to-clipboard for the shell example.
+			// Copy-to-clipboard for shell and command examples.
+			const copyStatus =
+				document.querySelector<HTMLElement>("[data-copy-status]");
+			const announceCopy = (message: string) => {
+				if (copyStatus) copyStatus.textContent = message;
+			};
 			const copyToClipboard = async (text: string) => {
 				if (text.length === 0) {
 					throw new Error("No text available to copy");
@@ -418,27 +508,21 @@ const steps = [
 				btn.addEventListener("click", async () => {
 					const text = btn.dataset.copy ?? "";
 					const label = btn.querySelector(".copy__label");
-					const status = btn
-						.closest(".shell__bar")
-						?.querySelector<HTMLElement>(".copy__status");
-					const prev = label?.textContent ?? "Copy";
+					const prev = label?.textContent ?? "Copy command";
 					const reset = () => {
 						if (label) label.textContent = prev;
-						if (status) status.textContent = "";
+						announceCopy("");
 						btn.classList.remove("is-copied", "is-failed");
 					};
 					if (resetTimer) window.clearTimeout(resetTimer);
 					try {
 						await copyToClipboard(text);
 						if (label) label.textContent = "Copied";
-						if (status) status.textContent = "Browse command copied.";
+						announceCopy(`Copied to clipboard: ${text}`);
 						btn.classList.add("is-copied");
 					} catch {
 						if (label) label.textContent = "Copy failed";
-						if (status) {
-							status.textContent =
-								"Copy failed. Select and copy the command manually.";
-						}
+						announceCopy("Copy failed. Select and copy the command manually.");
 						btn.classList.add("is-failed");
 					}
 					resetTimer = window.setTimeout(reset, 1800);
@@ -688,6 +772,32 @@ const steps = [
 			.nav__gh:hover {
 				color: var(--accent);
 			}
+			.nav__theme {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				width: 44px;
+				min-height: 44px;
+				padding: 0;
+				color: var(--text-2);
+				background: transparent;
+				border: 0;
+				border-radius: var(--radius-sm);
+				cursor: pointer;
+			}
+			.nav__theme:hover {
+				color: var(--accent);
+			}
+			.nav__theme-icon {
+				display: inline-flex;
+			}
+			:root[data-theme="dark"] .nav__theme-icon--sun,
+			:root:not([data-theme]) .nav__theme-icon--sun {
+				display: none;
+			}
+			:root[data-theme="light"] .nav__theme-icon--moon {
+				display: none;
+			}
 
 			/* Shared */
 			main {
@@ -878,6 +988,40 @@ const steps = [
 				color: var(--text);
 				border-color: var(--accent);
 				background: var(--accent-soft);
+			}
+			.copy--inline {
+				flex: 0 0 auto;
+				padding: 0;
+				color: var(--muted);
+				border-color: transparent;
+				font-family: inherit;
+			}
+			.copy--inline:hover {
+				color: var(--text);
+				border-color: var(--accent-line);
+			}
+			.copy--inline.is-copied {
+				color: var(--accent);
+				border-color: var(--accent-line);
+			}
+			.copy--inline.is-failed {
+				color: var(--accent);
+				border-color: var(--accent);
+				background: var(--accent-soft);
+			}
+			.copy__icon {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+			}
+			.copy__icon--done {
+				display: none;
+			}
+			.copy--inline.is-copied .copy__icon--idle {
+				display: none;
+			}
+			.copy--inline.is-copied .copy__icon--done {
+				display: inline-flex;
 			}
 			.shell__body {
 				margin: 0;
@@ -1207,15 +1351,35 @@ const steps = [
 				min-height: 3.2em;
 			}
 			.flow__cmd {
-				display: block;
+				display: flex;
+				align-items: center;
+				gap: 0.4rem;
 				margin-top: 0.85rem;
-				font-size: 0.82rem;
-				padding: 0.6rem 0.75rem;
+				padding: 0.2rem 0.3rem 0.2rem 0.75rem;
 				border-radius: var(--radius-sm);
 				background: var(--surface);
 				border: 1px solid var(--border);
+			}
+			.flow__cmd-text {
+				flex: 1 1 auto;
+				min-width: 0;
 				overflow-x: auto;
 				white-space: nowrap;
+				font-size: 0.82rem;
+				scrollbar-width: none;
+				-webkit-mask-image: linear-gradient(
+					to right,
+					#000 calc(100% - 1.1rem),
+					transparent
+				);
+				mask-image: linear-gradient(
+					to right,
+					#000 calc(100% - 1.1rem),
+					transparent
+				);
+			}
+			.flow__cmd-text::-webkit-scrollbar {
+				display: none;
 			}
 			.flow__cmd .pr {
 				color: var(--accent);
