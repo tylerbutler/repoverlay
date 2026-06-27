@@ -319,18 +319,19 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			<!-- PROBLEM: editorial statement -->
 			<section class="problem reveal">
 				<div class="problem__lead">
-					<h2>Some files don't belong in the repo.</h2>
+					<h2>Your config, not the repo's.</h2>
 					<p>
-						AI assistant configs, editor settings, local environment files, the
-						tooling you carry around. You want them in every checkout,
-						but committing them clutters history, and git clean wipes them.
+						The AI instructions, editor preferences, local env, and tooling
+						overrides you carry from repo to repo. You want them in every
+						checkout, including forks and other people's projects, but they
+						don't belong in the commit history, and git clean wipes them.
 					</p>
 				</div>
-				<ul class="configs" aria-label="Examples of files repoverlay manages">
-					<li><span>AI assistants</span><code>.claude/ · CLAUDE.md</code></li>
+				<ul class="configs" aria-label="Examples of personal files repoverlay manages">
+					<li><span>AI assistants</span><code>CLAUDE.local.md · .claude/settings.local.json</code></li>
 					<li><span>Editor settings</span><code>.vscode/settings.json</code></li>
-					<li><span>Environment</span><code>.envrc · .env.local</code></li>
-					<li><span>Dev tooling</span><code>.prettierrc · biome.json</code></li>
+					<li><span>Environment</span><code>.env.local · .envrc</code></li>
+					<li><span>Dev tooling</span><code>.mise.local.toml · lefthook-local.yml</code></li>
 				</ul>
 			</section>
 
