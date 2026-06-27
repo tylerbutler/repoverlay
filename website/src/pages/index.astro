@@ -205,18 +205,18 @@ const placed = [
 			<section class="hero">
 				<div class="hero__copy reveal">
 					<h1>
-						Load your agent's setup per repo.<br /><span class="accentword"
-							>Commit nothing.</span
+						Your agent's setup, in every repo.<br /><span class="accentword"
+							>Committed to none of them.</span
 						>
 					</h1>
 					<p class="lede">
-						Apply a profile and repoverlay places skills, agents, MCP servers, and
-						instructions into the repo for your AI assistant, alongside any shared
-						configs and dotfiles. Everything is git-excluded; nothing is committed.
+						Apply a profile and repoverlay drops the right skills, tools,
+						instructions, and dotfiles into a repo for your AI assistant. All
+						git-excluded, so none of it lands in history.
 					</p>
 					<div class="cta-row">
 						<a class="btn btn--primary" href="/quick-start/">
-							Start with Quick Start
+							Quick start
 							<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 								><path
 									fill="none"
@@ -230,8 +230,8 @@ const placed = [
 						<a class="btn btn--ghost" href="/introduction/">Read the docs</a>
 					</div>
 					<p class="hero__note">
-						New repo? Apply a profile and your agent is ready: skills, tools, and
-						house rules, scoped to the checkout.
+						Clone a repo, apply a profile, and your agent has its tools and
+						conventions — scoped to that checkout.
 					</p>
 				</div>
 
@@ -248,7 +248,7 @@ const placed = [
 								<span class="copy__label">Copy command</span>
 							</button>
 						</div>
-						<pre class="shell__body"><code><span class="ln dim">  One profile composes overlays and agent capabilities.</span>
+						<pre class="shell__body"><code><span class="ln dim">  One profile bundles overlays and agent capabilities.</span>
 <span class="ln"><span class="pr">$</span> repoverlay profile apply rust-dev <span class="dim">--harness claude</span></span>
 <span class="ln dim">  Placing skills, an agent, an MCP server, and instructions.</span>
 <span class="ln dim">  Repo-local files excluded via .git/info/exclude.</span>
@@ -309,7 +309,7 @@ const placed = [
 					<h2>Some files don't belong in the repo.</h2>
 					<p>
 						AI assistant configs, editor settings, local environment files, the
-						tooling you carry between projects. You want them in every checkout,
+						tooling you carry around. You want them in every checkout,
 						but committing them clutters history, and git clean wipes them.
 					</p>
 				</div>
@@ -324,10 +324,10 @@ const placed = [
 			<!-- MECHANISM: the overlay lifecycle -->
 			<section class="mechanism reveal" aria-label="How an overlay is applied">
 				<div class="mechanism__head">
-					<h2 class="section-head">An overlay's whole life, in four moves.</h2>
+					<h2 class="section-head">How an overlay works, in four steps.</h2>
 					<p class="mechanism__sub">
 						repoverlay places files, hides them from git, and can put them back.
-						Browse a source to see what's on offer:
+						Browse a source to see what's available:
 					</p>
 					<div class="cmdline cmdline--browse">
 						<code class="cmdline__text"><span class="pr">$</span> {browseExample}</code>
@@ -348,8 +348,8 @@ const placed = [
 				</ol>
 				<div class="mechanism__apply">
 					<div class="mechanism__apply-copy">
-						<span class="mechanism__apply-eyebrow">Know the reference?</span>
-						<p>Skip the picker and apply an overlay straight away.</p>
+						<span class="mechanism__apply-eyebrow">Already know the overlay?</span>
+						<p>Skip the browser and apply it directly.</p>
 					</div>
 					<div class="cmdline cmdline--apply">
 						<code class="cmdline__text"><span class="pr">$</span> {applyExample}</code>
@@ -360,7 +360,7 @@ const placed = [
 
 			<!-- CAPABILITIES: editorial spec list -->
 			<section class="capabilities reveal" aria-label="What else repoverlay does">
-				<h2 class="section-head">And the details that make it livable.</h2>
+				<h2 class="section-head">The details that make it practical.</h2>
 				<ul class="capabilities__list">
 					{
 						capabilities.map((c) => (
@@ -378,7 +378,7 @@ const placed = [
 
 			<!-- FINAL CTA -->
 			<section class="final reveal">
-				<h2>Stop copying configs by hand.</h2>
+				<h2>Set up your configs once.</h2>
 				<p>Define your overlays once, apply them anywhere, recover them anytime.</p>
 				<div class="cta-row cta-row--center">
 					<a class="btn btn--primary" href="/quick-start/">
