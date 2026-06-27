@@ -2,4 +2,7 @@
   command = "pnpm build:site"
   publish = "dist"
   # Netlify runs this from the site's base directory.
-  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- ."
+  # Skip the build unless this PR/branch changes website/ relative to its
+  # merge base with main (three-dot diff). Fetch main first since Netlify's
+  # shallow clone may not have it; a non-zero exit safely forces a build.
+  ignore = "git fetch --depth=100 origin main >/dev/null 2>&1; git diff --quiet origin/main...HEAD -- ."
