@@ -55,6 +55,8 @@ pub(crate) struct ResolvedOverlay {
     pub(crate) commit: String,
     /// Whether the overlay came from a flat local source layout.
     pub(crate) flat: bool,
+    /// Whether the overlay came from the reserved `@global/` namespace.
+    pub(crate) global: bool,
 }
 
 /// Manager for multiple overlay sources.
@@ -204,12 +206,11 @@ impl SourceManager {
                     if manager.needs_clone() {
                         continue;
                     }
-                    // Git sources require org/repo addressing; flat lookup is local-only.
-                    if org.is_empty() || repo.is_empty() {
-                        continue;
-                    }
-                    if let Some((path, resolved_via)) =
-                        manager.find_overlay_path_with_fallback(org, repo, name, upstream)?
+                    // Structured org/repo/name takes priority over global.
+                    if !org.is_empty()
+                        && !repo.is_empty()
+                        && let Some((path, resolved_via)) =
+                            manager.find_overlay_path_with_fallback(org, repo, name, upstream)?
                     {
                         let commit = manager.get_current_commit()?;
                         return Ok(Some(ResolvedOverlay {
@@ -218,6 +219,19 @@ impl SourceManager {
                             resolved_via,
                             commit,
                             flat: false,
+                            global: false,
+                        }));
+                    }
+                    // Global overlays are addressed independently of org/repo.
+                    if let Some(path) = manager.get_global_overlay_path(name)? {
+                        let commit = manager.get_current_commit()?;
+                        return Ok(Some(ResolvedOverlay {
+                            path,
+                            source: ms.source.clone(),
+                            resolved_via: ResolvedVia::Direct,
+                            commit,
+                            flat: false,
+                            global: true,
                         }));
                     }
                 }
@@ -234,6 +248,18 @@ impl SourceManager {
                             resolved_via: ResolvedVia::Direct,
                             commit: String::from("local"),
                             flat: false,
+                            global: false,
+                        }));
+                    }
+                    // Global overlays are addressed independently of org/repo.
+                    if let Some(overlay_path) = get_global_overlay_path_in_dir(base_path, name) {
+                        return Ok(Some(ResolvedOverlay {
+                            path: overlay_path,
+                            source: ms.source.clone(),
+                            resolved_via: ResolvedVia::Direct,
+                            commit: String::from("local"),
+                            flat: false,
+                            global: true,
                         }));
                     }
                     if (source_filter.is_some() || org.is_empty() || repo.is_empty())
@@ -245,6 +271,7 @@ impl SourceManager {
                             resolved_via: ResolvedVia::Direct,
                             commit: String::from("local"),
                             flat: true,
+                            global: false,
                         }));
                     }
                     if let Some(upstream_info) = upstream
@@ -263,6 +290,7 @@ impl SourceManager {
                             resolved_via: ResolvedVia::Upstream,
                             commit: String::from("local"),
                             flat: false,
+                            global: false,
                         }));
                     }
                 }
@@ -342,8 +370,9 @@ impl SourceManager {
                 }
                 ManagedSourceBackend::Local { path: base_path } => {
                     for overlay in list_overlays_in_dir(base_path)? {
-                        if overlay.org.eq_ignore_ascii_case(org)
-                            && overlay.repo.eq_ignore_ascii_case(repo)
+                        if overlay.is_global()
+                            || (overlay.org.eq_ignore_ascii_case(org)
+                                && overlay.repo.eq_ignore_ascii_case(repo))
                         {
                             names.insert(OverlayName::try_new(overlay.name)?);
                         }
@@ -442,6 +471,24 @@ fn get_flat_overlay_path_in_dir(base: &Path, name: &str) -> Option<PathBuf> {
     }
 }
 
+/// Check if a global overlay exists at `base/@global/name`.
+///
+/// The overlay name is validated for path safety; the resolved path is confined
+/// to the `@global` namespace within `base`.
+fn get_global_overlay_path_in_dir(base: &Path, name: &str) -> Option<PathBuf> {
+    if !is_valid_path_component(name) {
+        return None;
+    }
+    let overlay_path = base.join(crate::library::GLOBAL_NAMESPACE).join(name);
+    let canonical_overlay = overlay_path.canonicalize().ok()?;
+    let canonical_base = base.canonicalize().ok()?;
+    if canonical_overlay.starts_with(canonical_base) && canonical_overlay.is_dir() {
+        Some(overlay_path)
+    } else {
+        None
+    }
+}
+
 /// Validate path component safety for org/repo/overlay segments.
 ///
 /// Reserved namespaces (e.g. `@global`, `@library`) are rejected so they cannot
@@ -530,7 +577,7 @@ fn is_valid_structured_overlay_leaf(path: &Path) -> Result<bool> {
     contains_any_file(path)
 }
 
-fn contains_any_file(path: &Path) -> Result<bool> {
+pub(crate) fn contains_any_file(path: &Path) -> Result<bool> {
     for entry in fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
         let entry = entry.with_context(|| format!("reading entry in {}", path.display()))?;
         let entry_path = entry.path();
@@ -621,8 +668,16 @@ pub(crate) fn list_overlays_in_dir(base: &Path) -> Result<Vec<AvailableOverlay>>
     }
 
     match detect_source_layout(base)? {
-        SourceLayout::Structured => list_overlays_in_structured_dir(base),
-        SourceLayout::Flat => list_overlays_in_flat_dir(base),
+        SourceLayout::Structured => {
+            let mut overlays = list_overlays_in_structured_dir(base)?;
+            overlays.extend(crate::overlay_repo::scan_global_overlays(base)?);
+            Ok(overlays)
+        }
+        SourceLayout::Flat => {
+            let mut overlays = list_overlays_in_flat_dir(base)?;
+            overlays.extend(crate::overlay_repo::scan_global_overlays(base)?);
+            Ok(overlays)
+        }
     }
 }
 
@@ -1255,6 +1310,35 @@ mod tests {
             .unwrap();
 
         assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolves_global_overlay_from_local_source_for_any_repo() {
+        let temp = TempDir::new().unwrap();
+        let base = temp.path().join("local-overlays");
+        let global_overlay = base.join("@global").join("dotfiles");
+        fs::create_dir_all(&global_overlay).unwrap();
+        fs::write(global_overlay.join(".gitconfig"), "x").unwrap();
+
+        let manager = SourceManager {
+            sources: vec![ManagedSource {
+                source: Source {
+                    name: "local-source".to_string(),
+                    url: None,
+                    path: Some(PathBuf::from("local-overlays")),
+                },
+                backend: ManagedSourceBackend::Local { path: base },
+            }],
+        };
+
+        // A global overlay resolves for a repo that matches no org/repo.
+        let resolved = manager
+            .resolve("unrelated", "project", "dotfiles", None, None)
+            .unwrap()
+            .expect("global overlay should resolve");
+        assert!(resolved.global);
+        assert!(!resolved.flat);
+        assert_eq!(resolved.path, global_overlay);
     }
 
     #[test]
@@ -1927,7 +2011,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_overlays_in_dir_skips_global_namespace() {
+    fn test_list_overlays_in_dir_surfaces_global_namespace() {
         let temp = TempDir::new().unwrap();
         let base = temp.path();
 
@@ -1937,12 +2021,15 @@ mod tests {
         fs::create_dir_all(&global_overlay).unwrap();
         fs::write(global_overlay.join(".envrc"), "export FOO=bar").unwrap();
 
-        // Phase 0 tolerance: the @global namespace is skipped entirely, so only
-        // the repo-scoped overlay is listed (never mis-parsed as org/repo/name).
+        // @global is surfaced as a global overlay (not mis-parsed as org/repo/name).
         let overlays = list_overlays_in_dir(base).unwrap();
-        assert_eq!(overlays.len(), 1);
-        assert_eq!(overlays[0].name, "visible");
-        assert!(overlays.iter().all(|o| o.org != "@global"));
+        assert_eq!(overlays.len(), 2);
+        assert!(overlays.iter().all(|o| o.is_global() || o.org != "@global"));
+        let visible = overlays.iter().find(|o| !o.is_global()).unwrap();
+        assert_eq!(visible.name, "visible");
+        let global = overlays.iter().find(|o| o.is_global()).unwrap();
+        assert_eq!(global.name, "my-global");
+        assert!(global.is_global());
     }
 
     #[test]
@@ -1957,7 +2044,12 @@ mod tests {
         fs::write(global_overlay.join(".envrc"), "export FOO=bar").unwrap();
 
         assert_eq!(detect_source_layout(base).unwrap(), SourceLayout::Flat);
-        assert!(list_overlays_in_dir(base).unwrap().is_empty());
+        // The overlay is surfaced as a global, never as a literal org/repo/name.
+        let overlays = list_overlays_in_dir(base).unwrap();
+        assert_eq!(overlays.len(), 1);
+        assert!(overlays[0].is_global());
+        assert_eq!(overlays[0].name, "my-global");
+        assert!(overlays.iter().all(|o| o.is_global() || o.org != "@global"));
     }
 
     #[test]

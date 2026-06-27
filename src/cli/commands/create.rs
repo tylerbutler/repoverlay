@@ -61,6 +61,15 @@ pub(crate) fn extract_overlay_name(name_arg: &str) -> Result<String> {
     }
 }
 
+/// Human-readable overlay label: `org/name` for globals (empty repo), else `org/repo/name`.
+fn overlay_label(org: &str, repo: &str, name: &str) -> String {
+    if repo.is_empty() {
+        format!("{org}/{name}")
+    } else {
+        format!("{org}/{repo}/{name}")
+    }
+}
+
 /// Parse an overlay name argument.
 ///
 /// Returns (org, repo, name) tuple.
@@ -205,11 +214,13 @@ pub(crate) fn create_into_library(
 ///
 /// After creating the overlay, it is automatically applied to the source
 /// repository (symlinks replace originals, state saved, git exclude updated).
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 pub(crate) fn create_overlay_command(
     source: &Path,
     name_arg: Option<String>,
     local: Option<PathBuf>,
     include: &[PathBuf],
+    global: bool,
     dry_run: bool,
     yes: bool,
     force: bool,
@@ -268,8 +279,27 @@ pub(crate) fn create_overlay_command(
         )
     })?;
 
-    // Parse the name argument
-    let (org, repo, overlay_name) = parse_overlay_name_arg(&name_arg, source)?;
+    // Parse the name argument. Global overlays live in the @global namespace and
+    // do not need git-remote org/repo detection.
+    let (org, repo, overlay_name) = if global {
+        if name_arg.contains('/') {
+            bail!(
+                "A global overlay takes a bare name, not an org/repo path: \
+                 repoverlay create <name> --global"
+            );
+        }
+        let overlay_name = extract_overlay_name(&name_arg)?;
+        (
+            crate::library::GLOBAL_NAMESPACE.to_string(),
+            String::new(),
+            overlay_name,
+        )
+    } else {
+        parse_overlay_name_arg(&name_arg, source)?
+    };
+
+    // Human-readable target label (`@global/name` for globals, else `org/repo/name`).
+    let target_label = overlay_label(&org, &repo, &overlay_name);
 
     // Load overlay repo config
     let config = load_config(None)?;
@@ -280,24 +310,22 @@ pub(crate) fn create_overlay_command(
     manager.ensure_cloned()?;
     manager.pull()?;
 
-    // Determine output path in overlay repo
+    // Determine output path in overlay repo (empty repo segment is a no-op for globals)
     let output_path = manager.path().join(&org).join(&repo).join(&overlay_name);
 
     // Check if overlay already exists
     if output_path.exists() && !force {
         bail!(
-            "Overlay '{org}/{repo}/{overlay_name}' already exists.\n\n\
+            "Overlay '{target_label}' already exists.\n\n\
              To update an applied overlay, use: repoverlay sync {overlay_name}\n\
              To overwrite, use: repoverlay create {name_arg} --force"
         );
     }
 
     println!(
-        "{} Creating overlay: {}/{}/{}",
+        "{} Creating overlay: {}",
         "Create".blue().bold(),
-        org,
-        repo,
-        overlay_name
+        target_label
     );
 
     if dry_run {
@@ -445,7 +473,8 @@ pub(crate) fn auto_commit_overlay(
     }
 
     let action = if is_new { "Add" } else { "Update" };
-    let commit_msg = format!("{action} overlay: {org}/{repo}/{name}");
+    let label = overlay_label(org, repo, name);
+    let commit_msg = format!("{action} overlay: {label}");
 
     println!("{} changes...", "Committing".blue().bold());
     manager.commit(&commit_msg)?;
@@ -462,7 +491,7 @@ pub(crate) fn auto_commit_overlay(
         Ok((status, _)) if status.success() => {
             let check = "✓".green().bold();
             let action_word = if is_new { "created" } else { "updated" };
-            println!("\n{check} Overlay {action_word}: {org}/{repo}/{name}");
+            println!("\n{check} Overlay {action_word}: {label}");
         }
         Ok(_) | Err(_) => {
             let warn = "Warning:".yellow();
