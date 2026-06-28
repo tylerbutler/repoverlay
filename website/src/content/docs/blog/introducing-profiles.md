@@ -1,6 +1,6 @@
 ---
 title: Introducing profiles
-date: 2026-06-11
+date: 2026-06-27
 excerpt: Profiles compose overlays with AI harness capabilities (instructions and plugins) into one loadable unit you can apply to any repo.
 authors:
   - tylerbutler
