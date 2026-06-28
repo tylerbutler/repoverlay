@@ -26,19 +26,19 @@ colors:
   accent-light-deep: "#8f371f"
 typography:
   display:
-    fontFamily: "Metropolis, system-ui, sans-serif"
+    fontFamily: "Schibsted Grotesk Variable, Metropolis, system-ui, sans-serif"
     fontSize: "clamp(3rem, 7.8vw, 5.4rem)"
     fontWeight: 800
     lineHeight: 1.05
     letterSpacing: "-0.04em"
   headline:
-    fontFamily: "Metropolis, system-ui, sans-serif"
+    fontFamily: "Schibsted Grotesk Variable, Metropolis, system-ui, sans-serif"
     fontSize: "clamp(1.9rem, 3.6vw, 2.8rem)"
     fontWeight: 800
     lineHeight: 1.05
     letterSpacing: "-0.02em"
   title:
-    fontFamily: "Metropolis, system-ui, sans-serif"
+    fontFamily: "Schibsted Grotesk Variable, Metropolis, system-ui, sans-serif"
     fontSize: "1.25rem"
     fontWeight: 700
     lineHeight: 1.05
@@ -54,7 +54,7 @@ typography:
     fontWeight: 700
     letterSpacing: "0.13em"
   mono:
-    fontFamily: "ui-monospace, SFMono-Regular, JetBrains Mono, Menlo, Consolas, monospace"
+    fontFamily: "Commit Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
     fontSize: "0.86rem"
     fontWeight: 400
     lineHeight: 1.85
@@ -182,13 +182,17 @@ from sand, bone, parchment, or ivory backgrounds.
 
 ## 3. Typography
 
-**Display Font:** Metropolis with system sans-serif fallback.  
+**Display Font:** Schibsted Grotesk (variable) with Metropolis and system sans-serif fallback.  
 **Body Font:** Metropolis with system sans-serif fallback.  
-**Label/Mono Font:** UI monospace stack for commands and code only.
+**Label Font:** Metropolis (UI weights).  
+**Mono Font:** Commit Mono for commands and code only, with a UI monospace fallback stack.
 
-**Character:** Metropolis gives the site a squared, sturdy voice without pretending to be a
-terminal. Monospace is used functionally for commands and file paths, not as a costume for
-"developer brand."
+**Character:** Schibsted Grotesk gives headings a tight, engineered grotesque voice that reads as
+precise rather than decorative; Metropolis keeps body copy squared, sturdy, and readable without
+pretending to be a terminal. Commit Mono is a neutral, exact monospace used functionally for
+commands and file paths, not as a costume for "developer brand." The pairing works on a
+geometric-body / grotesque-display contrast axis; the three families (display, body, mono) are
+shared identically by the homepage and the docs.
 
 ### Hierarchy
 
@@ -285,6 +289,19 @@ Motion is restrained and functional: hover lifts on actionable elements, enhance
 reveals for landing sections, and a blinking caret inside the shell. Reveal motion must never
 gate readability; content is visible by default and JavaScript adds animation only when motion is
 allowed and supported. Reduced motion removes the caret blink, reveal animation, and hover lifts.
+
+### Iconography
+
+- **Set:** [Tabler](https://tabler.io/icons) (outline, 2px stroke) is the single icon system across
+  homepage and docs. It replaces Starlight's stock icons so the chrome reads as one cohesive,
+  non-default set.
+- **Mechanism:** Starlight has no supported way to swap its built-in icon registry, so the docs CSS
+  (`website/src/styles/custom.css`) masks every icon-bearing `<svg>` — Starlight UI icons, callout
+  icons, heading anchors, the announcement banner, and Expressive Code's frame glyphs — with a Tabler
+  shape held in a `--tbl-*` token. Icons inherit `currentColor`, so they adapt to theme automatically.
+- **Mapping highlights:** chevrons for carets (right-base inside `<details>` so they read ▶/▼),
+  sun/moon for the appearance toggle, info-circle / bulb / alert-triangle / flame for note / tip /
+  caution / danger callouts, a hash for heading anchors, and a rocket for the release banner.
 
 ### Production Hardening
 

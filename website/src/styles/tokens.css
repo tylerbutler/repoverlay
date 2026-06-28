@@ -23,7 +23,9 @@
 	--rv-radius-pill: 999px;
 	--rv-layout-max: 1180px;
 	--rv-font: "Metropolis", system-ui, sans-serif;
-	--rv-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas,
+	--rv-display: "Schibsted Grotesk Variable", "Metropolis", system-ui,
+		sans-serif;
+	--rv-mono: "Commit Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
 		monospace;
 	--rv-ease: cubic-bezier(0.16, 1, 0.3, 1);
 

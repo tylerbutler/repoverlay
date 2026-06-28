@@ -5,6 +5,9 @@ import "@fontsource/metropolis/400.css";
 import "@fontsource/metropolis/600.css";
 import "@fontsource/metropolis/700.css";
 import "@fontsource/metropolis/800.css";
+import "@fontsource-variable/schibsted-grotesk/index.css";
+import "@fontsource/commit-mono/400.css";
+import "@fontsource/commit-mono/700.css";
 import "../styles/tokens.css";
 import logo from "../assets/repoverlay.svg";
 import CopyButton from "../components/CopyButton.astro";
@@ -658,6 +661,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				--radius-sm: var(--rv-radius-md);
 				--maxw: var(--rv-layout-max);
 				--font: var(--rv-font);
+				--display: var(--rv-display);
 				--mono: var(--rv-mono);
 				--ease: var(--rv-ease);
 			}
@@ -695,6 +699,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				line-height: 1.05;
 				letter-spacing: -0.02em;
 				font-weight: 800;
+				font-family: var(--display);
 			}
 			p {
 				margin: 0;

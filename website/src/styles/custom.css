@@ -1,6 +1,251 @@
 @import "./tokens.css";
 
+/* ============================================================
+   repoverlay docs — brand alignment with the homepage system.
+   Starlight ships these surfaces stock; these rules carry the
+   "Local Workbench" voice (clay accent, shell-panel objects)
+   into the content pages. All values come from brand tokens so
+   light mode adapts automatically.
+   ============================================================ */
+
+/* --- Type system ---
+   Docs share the homepage's type voice: Metropolis body, Schibsted
+   Grotesk display headings, and Commit Mono for code. Starlight only
+   loaded Metropolis 400/600, so headings were faux-bolded; the real
+   700/800 weights and the display/mono families are wired here. */
+:root {
+	--sl-font-mono: var(--rv-mono);
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+.sl-markdown-content h5,
+.sl-markdown-content h6,
+.content-panel h1,
+h1#_top {
+	font-family: var(--rv-display);
+}
+
+/* --- Release announcement: clay, not the stock green "tip" ---
+   The one-tool accent rule: clay is the only brand accent, so the
+   release banner must not introduce a green semantic state. */
+.sl-announcement[data-announcement-id][data-variant="tip"] {
+	--sl-announcement-accent: var(--rv-accent);
+	--sl-announcement-bg: var(--rv-accent-soft);
+	--sl-announcement-border: var(--rv-accent-line);
+	--sl-announcement-icon: var(--rv-accent);
+}
+
+/* --- Sidebar active item ---
+   Replace the washed-out peach fill with a quiet clay-wash chip
+   and clay label, matching the accent-soft + accent treatment used
+   across the rest of the system. */
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover,
+.sidebar-content a[aria-current="page"]:focus {
+	color: var(--rv-accent);
+	background-color: var(--rv-accent-soft);
+	border-radius: var(--rv-radius-sm);
+}
+
+/* --- Code blocks as the signature shell-panel object ---
+   Round to the brand container radius, define structure with a
+   border, and stay flat (Flat-Until-Physical: the strong shell
+   shadow is reserved for the hero, not every code sample). */
+.sl-markdown-content .expressive-code {
+	--ec-brdRad: var(--rv-radius-lg);
+	--ec-brdCol: var(--rv-border-strong);
+	--ec-brdWd: 1px;
+}
+
 .sl-markdown-content .expressive-code .copy button {
 	width: 2.75rem;
 	height: 2.75rem;
+	border-radius: var(--rv-radius-sm);
+}
+
+/* --- Less-stock code-block chrome ---
+   Expressive Code draws its frame icons from CSS vars; point the
+   terminal-titlebar and copy-button glyphs at the Tabler set so the
+   code panel matches the rest of the icon system. */
+.sl-markdown-content .expressive-code {
+	--ec-frm-trmIcon: var(--tbl-terminal);
+	--ec-frm-copyIcon: var(--tbl-copy);
+}
+
+/* EC sizes the terminal-titlebar glyph for its wide 3-dots SVG
+   (2.1rem x 0.56rem); resize that pseudo to a square box and centre
+   it so the square Tabler terminal icon isn't clipped. */
+.sl-markdown-content .expressive-code .frame.is-terminal .header::before {
+	width: 1rem;
+	height: 1rem;
+	top: 50%;
+	transform: translateY(-50%);
+	-webkit-mask-position: center;
+	mask-position: center;
+	-webkit-mask-size: contain;
+	mask-size: contain;
+}
+
+.sl-markdown-content .expressive-code .frame.is-terminal {
+	--ec-frm-trmTtbDotsFg: var(--rv-accent);
+	--ec-frm-trmTtbDotsOpa: 1;
+}
+
+/* --- Inline code as a brand code-chip ---
+   Stock Starlight renders square, borderless inline code; give it
+   the raised ground, soft border, and small radius of the chip. */
+.sl-markdown-content :not(pre) > code {
+	background-color: var(--rv-bg-raised);
+	border: 1px solid var(--rv-border);
+	border-radius: var(--rv-radius-sm);
+	padding: 0.12em 0.4em;
+}
+
+/* --- Headings: committed Metropolis tracking ---
+   The display/headline steps in the design system tighten letter
+   spacing and balance line breaks; Starlight defaults do neither. */
+.sl-markdown-content h1,
+.content-panel h1,
+h1#_top {
+	letter-spacing: -0.03em;
+	text-wrap: balance;
+}
+
+.sl-markdown-content h2,
+.sl-markdown-content h3 {
+	letter-spacing: -0.02em;
+	text-wrap: balance;
+}
+
+/* Long prose reads better without orphans. */
+.sl-markdown-content p {
+	text-wrap: pretty;
+}
+
+/* --- Body links: clay with a calmer underline ---
+   Keep links unmistakably actionable but quiet at rest. */
+.sl-markdown-content a:not(.sl-anchor-link) {
+	text-underline-offset: 0.18em;
+	text-decoration-thickness: 1px;
+	text-decoration-color: var(--rv-accent-line);
+}
+
+.sl-markdown-content a:not(.sl-anchor-link):hover {
+	text-decoration-color: currentColor;
+}
+
+/* ============================================================
+   Tabler icon set
+   ------------------------------------------------------------
+   Starlight has no supported way to swap its built-in icon
+   registry (verified against the official Icons + component-
+   override docs): icons render as inline <svg> with no per-icon
+   class. So we mask every icon-bearing <svg> with a Tabler glyph
+   — the one method that covers Starlight Icons, asides, heading
+   anchors, the announcement plugin, AND survives upgrades.
+
+   The engine hides the original art (fill + stroke transparent,
+   covering both Starlight's fill-based icons and the stroke-based
+   announcement icons), paints the box in currentColor, then masks
+   it to the Tabler shape held in --i. Each context sets --i below.
+   Expressive Code icons are handled via its own CSS vars above.
+   ============================================================ */
+svg.caret,
+svg.label-icon,
+starlight-menu-button svg.open-menu,
+starlight-menu-button svg.close-menu,
+site-search button[data-open-modal] svg,
+.social-icons a[href*="github"] svg,
+.social-icons a[href*="/rss"] svg,
+.pagination-links a[rel="prev"] svg,
+.pagination-links a[rel="next"] svg,
+a[href*="/edit/"] svg,
+.starlight-aside__icon,
+.sl-markdown-content .sl-anchor-icon svg,
+.sl-announcement-icon,
+.sl-announcement-link svg,
+.sl-announcement-dismiss svg {
+	--i: none;
+	fill: transparent !important;
+	stroke: transparent !important;
+	background-color: currentColor;
+	-webkit-mask-image: var(--i);
+	mask-image: var(--i);
+	-webkit-mask-repeat: no-repeat;
+	mask-repeat: no-repeat;
+	-webkit-mask-position: center;
+	mask-position: center;
+	-webkit-mask-size: contain;
+	mask-size: contain;
+}
+
+/* Carets: theme/language select use a down-caret (no rotation);
+   sidebar groups and the mobile ToC use a right-caret that Starlight
+   rotates 90deg when open, so those get a chevron-right base that
+   reads ▶ collapsed and ▼ expanded. */
+svg.caret { --i: var(--tbl-chevron-down); }
+summary svg.caret { --i: var(--tbl-chevron-right); }
+
+/* Theme selector: the leading glyph carries class `label-icon` in
+   Starlight 0.41; map it to the resolved appearance (moon in dark,
+   sun in light) rather than a static laptop. */
+svg.label-icon { --i: var(--tbl-moon); }
+:root[data-theme="light"] svg.label-icon { --i: var(--tbl-sun); }
+
+/* Mobile menu toggle */
+starlight-menu-button svg.open-menu { --i: var(--tbl-menu); }
+starlight-menu-button svg.close-menu { --i: var(--tbl-x); }
+
+/* Search */
+site-search button[data-open-modal] svg { --i: var(--tbl-search); }
+
+/* Social links */
+.social-icons a[href*="github"] svg { --i: var(--tbl-github); }
+.social-icons a[href*="/rss"] svg { --i: var(--tbl-rss); }
+
+/* Pagination */
+.pagination-links a[rel="prev"] svg { --i: var(--tbl-arrow-left); }
+.pagination-links a[rel="next"] svg { --i: var(--tbl-arrow-right); }
+
+/* Edit-page link */
+a[href*="/edit/"] svg { --i: var(--tbl-pencil); }
+
+/* Asides / callouts */
+.starlight-aside--note .starlight-aside__icon { --i: var(--tbl-note); }
+.starlight-aside--tip .starlight-aside__icon { --i: var(--tbl-tip); }
+.starlight-aside--caution .starlight-aside__icon { --i: var(--tbl-caution); }
+.starlight-aside--danger .starlight-aside__icon { --i: var(--tbl-danger); }
+
+/* Heading anchors */
+.sl-markdown-content .sl-anchor-icon svg { --i: var(--tbl-hash); }
+
+/* Release announcement banner */
+.sl-announcement-icon { --i: var(--tbl-rocket); }
+.sl-announcement-link svg { --i: var(--tbl-arrow-narrow-right); }
+.sl-announcement-dismiss svg { --i: var(--tbl-x); }
+:root {
+  --tbl-chevron-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M6 9l6 6l6 -6' /%3E %3C/svg%3E");
+  --tbl-chevron-right: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M9 6l6 6l-6 6' /%3E %3C/svg%3E");
+  --tbl-arrow-left: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M5 12l14 0' /%3E %3Cpath d='M5 12l6 6' /%3E %3Cpath d='M5 12l6 -6' /%3E %3C/svg%3E");
+  --tbl-arrow-right: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M5 12l14 0' /%3E %3Cpath d='M13 18l6 -6' /%3E %3Cpath d='M13 6l6 6' /%3E %3C/svg%3E");
+  --tbl-arrow-narrow-right: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M5 12l14 0' /%3E %3Cpath d='M15 16l4 -4' /%3E %3Cpath d='M15 8l4 4' /%3E %3C/svg%3E");
+  --tbl-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0' /%3E %3Cpath d='M21 21l-6 -6' /%3E %3C/svg%3E");
+  --tbl-sun: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0' /%3E %3Cpath d='M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7' /%3E %3C/svg%3E");
+  --tbl-moon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454l0 .008' /%3E %3C/svg%3E");
+  --tbl-menu: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M4 6l16 0' /%3E %3Cpath d='M4 12l16 0' /%3E %3Cpath d='M4 18l16 0' /%3E %3C/svg%3E");
+  --tbl-x: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M18 6l-12 12' /%3E %3Cpath d='M6 6l12 12' /%3E %3C/svg%3E");
+  --tbl-github: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5' /%3E %3C/svg%3E");
+  --tbl-rss: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M4 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0' /%3E %3Cpath d='M4 4a16 16 0 0 1 16 16' /%3E %3Cpath d='M4 11a9 9 0 0 1 9 9' /%3E %3C/svg%3E");
+  --tbl-note: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0' /%3E %3Cpath d='M12 9h.01' /%3E %3Cpath d='M11 12h1v4h1' /%3E %3C/svg%3E");
+  --tbl-tip: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M3 12h1m8 -9v1m8 8h1m-15.4 -6.4l.7 .7m12.1 -.7l-.7 .7' /%3E %3Cpath d='M9 16a5 5 0 1 1 6 0a3.5 3.5 0 0 0 -1 3a2 2 0 0 1 -4 0a3.5 3.5 0 0 0 -1 -3' /%3E %3Cpath d='M9.7 17l4.6 0' /%3E %3C/svg%3E");
+  --tbl-caution: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M12 9v4' /%3E %3Cpath d='M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0' /%3E %3Cpath d='M12 16h.01' /%3E %3C/svg%3E");
+  --tbl-danger: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M12 10.941c2.333 -3.308 .167 -7.823 -1 -8.941c0 3.395 -2.235 5.299 -3.667 6.706c-1.43 1.408 -2.333 3.294 -2.333 5.588c0 3.704 3.134 6.706 7 6.706c3.866 0 7 -3.002 7 -6.706c0 -1.712 -1.232 -4.403 -2.333 -5.588c-2.084 3.353 -3.257 3.353 -4.667 2.235' /%3E %3C/svg%3E");
+  --tbl-pencil: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4' /%3E %3Cpath d='M13.5 6.5l4 4' /%3E %3C/svg%3E");
+  --tbl-hash: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M5 9l14 0' /%3E %3Cpath d='M5 15l14 0' /%3E %3Cpath d='M11 4l-4 16' /%3E %3Cpath d='M17 4l-4 16' /%3E %3C/svg%3E");
+  --tbl-copy: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666' /%3E %3Cpath d='M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1' /%3E %3C/svg%3E");
+  --tbl-terminal: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M8 9l3 3l-3 3' /%3E %3Cpath d='M13 15l3 0' /%3E %3Cpath d='M3 6a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2l0 -12' /%3E %3C/svg%3E");
+  --tbl-rocket: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' %3E %3Cpath stroke='none' d='M0 0h24v24H0z' fill='none' /%3E %3Cpath d='M4 13a8 8 0 0 1 7 7a6 6 0 0 0 3 -5a9 9 0 0 0 6 -8a3 3 0 0 0 -3 -3a9 9 0 0 0 -8 6a6 6 0 0 0 -5 3' /%3E %3Cpath d='M7 14a6 6 0 0 0 -3 6a6 6 0 0 0 6 -3' /%3E %3Cpath d='M14 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0' /%3E %3C/svg%3E");
 }
