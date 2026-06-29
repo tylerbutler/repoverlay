@@ -20,7 +20,7 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: tylerbutler/actions/changie-release@c3a7aaef75dddeb7e07ffd49392238f996feb906 # ratchet:tylerbutler/actions/changie-release@main
+      - uses: tylerbutler/actions/changie-release@c3de10f5c576265f4910698528d949179081f25b # ratchet:tylerbutler/actions/changie-release@main
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
