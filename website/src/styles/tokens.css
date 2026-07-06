@@ -13,6 +13,9 @@
 	--rv-accent-deep: #aa462c;
 	--rv-accent-soft: rgba(207, 98, 66, 0.14);
 	--rv-accent-line: rgba(207, 98, 66, 0.4);
+	/* Prompt glyphs sit on raised surfaces where the base accent dips below
+	   AA (4.26:1); this lighter clay clears 4.5:1 on --rv-surface. */
+	--rv-prompt: #d67253;
 	--rv-success: #5fb98b;
 	--rv-on-accent: #1a0f0b;
 	--rv-hover-tint: #ffffff;
@@ -64,6 +67,7 @@
 	--rv-accent-deep: #8f371f;
 	--rv-accent-soft: rgba(172, 72, 46, 0.1);
 	--rv-accent-line: rgba(172, 72, 46, 0.35);
+	--rv-prompt: var(--rv-accent);
 	--rv-success: #24794d;
 	--rv-on-accent: #ffffff;
 
@@ -100,6 +104,7 @@
 		--rv-accent-deep: #8f371f;
 		--rv-accent-soft: rgba(172, 72, 46, 0.1);
 		--rv-accent-line: rgba(172, 72, 46, 0.35);
+		--rv-prompt: var(--rv-accent);
 		--rv-success: #24794d;
 		--rv-on-accent: #ffffff;
 

@@ -83,7 +83,7 @@ const capabilities = [
 	},
 	{
 		title: "Fork inheritance",
-		body: "On a fork, repoverlay falls back to the upstream repo's overlays until yours exist.",
+		body: "On a fork, repoverlay falls back to the upstream repo’s overlays until yours exist.",
 		code: "origin → upstream",
 	},
 ];
@@ -102,7 +102,7 @@ const reversible = [
 	},
 	{
 		cmd: "repoverlay remove rust-dev",
-		body: "Pulls a profile's files back out and clears its .git/info/exclude entries. Your committed history never changes.",
+		body: "Pulls a profile’s files back out and clears its .git/info/exclude entries. Your committed history never changes.",
 	},
 ];
 
@@ -222,7 +222,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			<section class="hero">
 				<div class="hero__copy reveal">
 					<h1>
-						Your agent's setup, in every repo.<br /><span class="accentword"
+						Your agent’s setup, in every repo.<br /><span class="accentword"
 							>Committed to none of them.</span
 						>
 					</h1>
@@ -299,6 +299,25 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				</div>
 			</section>
 
+			<!-- PROBLEM: editorial statement -->
+			<section class="problem reveal">
+				<div class="problem__lead">
+					<h2>Your config, not the repo’s.</h2>
+					<p>
+						The AI instructions, editor preferences, local env, and tooling
+						overrides you carry from repo to repo. You want them in every
+						checkout, including forks and other people’s projects, but they
+						don’t belong in the commit history, and git clean wipes them.
+					</p>
+				</div>
+				<ul class="configs" aria-label="Examples of personal files repoverlay manages">
+					<li><span>AI assistants</span><code>CLAUDE.local.md · .claude/settings.local.json</code></li>
+					<li><span>Editor settings</span><code>.vscode/settings.json</code></li>
+					<li><span>Environment</span><code>.env.local · .envrc</code></li>
+					<li><span>Dev tooling</span><code>.mise.local.toml · lefthook-local.yml</code></li>
+				</ul>
+			</section>
+
 			<!-- INSTALL: one line to the binary -->
 			<section class="install-strip reveal" aria-label="Install repoverlay">
 				<div class="install-strip__intro">
@@ -320,32 +339,13 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				</ul>
 			</section>
 
-			<!-- PROBLEM: editorial statement -->
-			<section class="problem reveal">
-				<div class="problem__lead">
-					<h2>Your config, not the repo's.</h2>
-					<p>
-						The AI instructions, editor preferences, local env, and tooling
-						overrides you carry from repo to repo. You want them in every
-						checkout, including forks and other people's projects, but they
-						don't belong in the commit history, and git clean wipes them.
-					</p>
-				</div>
-				<ul class="configs" aria-label="Examples of personal files repoverlay manages">
-					<li><span>AI assistants</span><code>CLAUDE.local.md · .claude/settings.local.json</code></li>
-					<li><span>Editor settings</span><code>.vscode/settings.json</code></li>
-					<li><span>Environment</span><code>.env.local · .envrc</code></li>
-					<li><span>Dev tooling</span><code>.mise.local.toml · lefthook-local.yml</code></li>
-				</ul>
-			</section>
-
 			<!-- MECHANISM: the overlay lifecycle -->
 			<section class="mechanism reveal" aria-label="How an overlay is applied">
 				<div class="mechanism__head">
 					<h2 class="section-head">How an overlay works, in four steps.</h2>
 					<p class="mechanism__sub">
 						repoverlay places files, hides them from git, and can put them back.
-						Browse a source to see what's available:
+						Browse a source to see what’s available:
 					</p>
 					<div class="cmdline cmdline--browse">
 						<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {browseExample}</code>
@@ -397,7 +397,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			<!-- REVERSIBLE: nothing you can't undo -->
 			<section class="reversible reveal" aria-label="How to undo overlays">
 				<div class="reversible__head">
-					<h2 class="section-head">Nothing you can't undo.</h2>
+					<h2 class="section-head">Nothing you can’t undo.</h2>
 					<p class="reversible__sub">
 						Overlays live outside committed history, so you can pull them back
 						out or rebuild them at any time. Two commands cover the whole
@@ -656,6 +656,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				--accent-2: var(--rv-accent-deep);
 				--accent-soft: var(--rv-accent-soft);
 				--accent-line: var(--rv-accent-line);
+				--prompt: var(--rv-prompt);
 				--success: var(--rv-success);
 				--on-accent: var(--rv-on-accent);
 				--radius: var(--rv-radius-lg);
@@ -1199,7 +1200,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				display: block;
 			}
 			.shell__body .pr {
-				color: var(--accent);
+				color: var(--prompt);
 				font-weight: 700;
 				margin-right: 0.4rem;
 			}
@@ -1348,7 +1349,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				mask-image: none;
 			}
 			.cmdline .pr {
-				color: var(--accent);
+				color: var(--prompt);
 				font-weight: 700;
 			}
 
@@ -1393,7 +1394,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				width: 11px;
 				height: 11px;
 				border-radius: 50%;
-				background: var(--accent);
+				background: var(--muted);
 				box-shadow: 0 0 0 4px var(--bg);
 			}
 			.mechanism__label {
@@ -1407,7 +1408,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			.mechanism__label::before {
 				content: counter(step, decimal-leading-zero);
 				margin-right: 0.5rem;
-				color: var(--accent);
+				color: var(--text-2);
 				font-variant-numeric: tabular-nums;
 			}
 			.mechanism__stage h3 {
