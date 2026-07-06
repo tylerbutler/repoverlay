@@ -22,9 +22,13 @@
 	--rv-radius-lg: 16px;
 	--rv-radius-pill: 999px;
 	--rv-layout-max: 1180px;
-	--rv-font: "Metropolis", system-ui, sans-serif;
-	--rv-display: "Schibsted Grotesk Variable", "Metropolis", system-ui,
-		sans-serif;
+	--rv-font: "Schibsted Grotesk Variable", system-ui, sans-serif;
+	--rv-display: "Schibsted Grotesk Variable", system-ui, sans-serif;
+	/* Light-on-dark compensation: one grotesk carries body + display, so
+	   body copy reads a touch light on the dark canvas. Nudge weight and
+	   tracking up in dark mode; the light theme resets to 400 / normal. */
+	--rv-body-weight: 430;
+	--rv-body-tracking: 0.006em;
 	--rv-mono: "Commit Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
 		monospace;
 	--rv-ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -46,6 +50,8 @@
 :root[data-theme='light'] {
 	color-scheme: light;
 	--rv-color-scheme: light;
+	--rv-body-weight: 400;
+	--rv-body-tracking: normal;
 	--rv-bg: #f6f7fc;
 	--rv-bg-raised: #eef0f8;
 	--rv-surface: #ffffff;
@@ -80,6 +86,8 @@
 	:root:not([data-theme]) {
 		color-scheme: light;
 		--rv-color-scheme: light;
+		--rv-body-weight: 400;
+		--rv-body-tracking: normal;
 		--rv-bg: #f6f7fc;
 		--rv-bg-raised: #eef0f8;
 		--rv-surface: #ffffff;

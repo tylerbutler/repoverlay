@@ -41,10 +41,6 @@ export default defineConfig({
 				"Overlay config files into git repositories without committing them.",
 			lastUpdated: true,
 			customCss: [
-				"@fontsource/metropolis/400.css",
-				"@fontsource/metropolis/600.css",
-				"@fontsource/metropolis/700.css",
-				"@fontsource/metropolis/800.css",
 				"@fontsource-variable/schibsted-grotesk",
 				"@fontsource/commit-mono/400.css",
 				"@fontsource/commit-mono/700.css",

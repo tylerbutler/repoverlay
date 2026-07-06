@@ -9,10 +9,10 @@
    ============================================================ */
 
 /* --- Type system ---
-   Docs share the homepage's type voice: Metropolis body, Schibsted
-   Grotesk display headings, and Commit Mono for code. Starlight only
-   loaded Metropolis 400/600, so headings were faux-bolded; the real
-   700/800 weights and the display/mono families are wired here. */
+   Docs share the homepage's type voice: one grotesk carries the whole
+   UI. Schibsted Grotesk (variable) sets both body and display via weight
+   contrast, and Commit Mono handles code. The variable family exposes the
+   700/800 heading weights Starlight's stock body weight can't reach. */
 :root {
 	--sl-font-mono: var(--rv-mono);
 }
@@ -104,7 +104,7 @@ h1#_top {
 	padding: 0.12em 0.4em;
 }
 
-/* --- Headings: committed Metropolis tracking ---
+/* --- Headings: committed grotesk tracking ---
    The display/headline steps in the design system tighten letter
    spacing and balance line breaks; Starlight defaults do neither. */
 .sl-markdown-content h1,

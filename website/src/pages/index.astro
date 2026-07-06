@@ -1,16 +1,17 @@
 ---
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import "@fontsource/metropolis/400.css";
-import "@fontsource/metropolis/600.css";
-import "@fontsource/metropolis/700.css";
-import "@fontsource/metropolis/800.css";
 import "@fontsource-variable/schibsted-grotesk/index.css";
 import "@fontsource/commit-mono/400.css";
 import "@fontsource/commit-mono/700.css";
 import "../styles/tokens.css";
 import logo from "../assets/repoverlay.svg";
 import CopyButton from "../components/CopyButton.astro";
+
+// impeccable-disable em-dash-overuse: the detector counts BEM `--` class
+// modifiers (btn--primary, mechanism__apply) and CSS custom properties in
+// this single-file component as em-dashes. There are no em-dashes in the
+// prose; src/pages/index.test.mjs enforces that on the rendered copy.
 
 const description =
 	"Overlay AI configs, editor settings, and dev tooling into any git repo. Files are symlinked or copied into place and excluded through .git/info/exclude.";
@@ -683,7 +684,9 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				color: var(--text);
 				font-family: var(--font);
 				font-size: 17px;
+				font-weight: var(--rv-body-weight, 400);
 				line-height: 1.6;
+				letter-spacing: var(--rv-body-tracking, normal);
 				-webkit-font-smoothing: antialiased;
 				text-rendering: optimizeLegibility;
 			}
@@ -706,6 +709,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			}
 			code {
 				font-family: var(--mono);
+				letter-spacing: normal;
 			}
 
 			.skip {
@@ -881,6 +885,13 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			.section-head {
 				font-size: clamp(1.6rem, 3.2vw, 2.3rem);
 				margin-bottom: 1.8rem;
+			}
+			/* Statement headings (the opening thesis and the closing CTA) form
+			   one larger tier; the functional sections use .section-head. Two
+			   deliberate tiers, so heading size always maps to a role. */
+			.problem h2,
+			.final h2 {
+				font-size: clamp(1.9rem, 3.6vw, 2.8rem);
 			}
 			.accentword {
 				color: var(--accent);
@@ -1221,9 +1232,6 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				align-items: start;
 				border-top: 1px solid var(--border);
 			}
-			.problem h2 {
-				font-size: clamp(1.9rem, 3.6vw, 2.8rem);
-			}
 			.problem p {
 				margin-top: 1.2rem;
 				color: var(--text-2);
@@ -1363,6 +1371,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			}
 			.mechanism__track {
 				list-style: none;
+				counter-reset: step;
 				margin: clamp(2rem, 4vw, 3rem) 0 0;
 				padding: 0;
 				display: grid;
@@ -1372,17 +1381,20 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			.mechanism__stage {
 				position: relative;
 				min-width: 0;
-				padding-top: 1.15rem;
+				padding-top: 1.35rem;
 				border-top: 2px solid var(--border-strong);
+				counter-increment: step;
 			}
 			.mechanism__stage::before {
 				content: "";
 				position: absolute;
-				top: -2px;
+				top: -6px;
 				left: 0;
-				width: 34%;
-				height: 2px;
+				width: 11px;
+				height: 11px;
+				border-radius: 50%;
 				background: var(--accent);
+				box-shadow: 0 0 0 4px var(--bg);
 			}
 			.mechanism__label {
 				display: block;
@@ -1391,6 +1403,12 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				letter-spacing: 0.12em;
 				font-weight: 700;
 				color: var(--muted);
+			}
+			.mechanism__label::before {
+				content: counter(step, decimal-leading-zero);
+				margin-right: 0.5rem;
+				color: var(--accent);
+				font-variant-numeric: tabular-nums;
 			}
 			.mechanism__stage h3 {
 				margin-top: 0.45rem;
@@ -1453,38 +1471,40 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				margin: clamp(1.5rem, 3vw, 2.5rem) 0 0;
 				padding: 0;
 				display: grid;
-				grid-template-columns: repeat(3, 1fr);
 				gap: 0;
 			}
 			.capability {
 				min-width: 0;
-				padding: 1.2rem clamp(1rem, 2vw, 1.6rem);
-				border-top: 2px solid var(--border-strong);
+				display: grid;
+				grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+				gap: clamp(1rem, 4vw, 3rem);
+				align-items: start;
+				padding: 1.5rem 0;
 			}
 			.capability + .capability {
-				border-left: 1px solid var(--border);
+				border-top: 1px solid var(--border);
 			}
 			.capability__head {
 				display: flex;
-				flex-wrap: wrap;
-				align-items: baseline;
-				justify-content: space-between;
-				gap: 0.6rem;
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.55rem;
 			}
 			.capability__head h3 {
-				font-size: 1.02rem;
+				font-size: 1.15rem;
 				font-weight: 700;
 			}
 			.capability__code {
 				font-family: var(--mono);
-				font-size: 0.74rem;
+				font-size: 0.78rem;
 				color: var(--muted);
 				overflow-wrap: anywhere;
 			}
 			.capability p {
-				margin-top: 0.6rem;
+				margin: 0;
 				color: var(--text-2);
-				font-size: 0.9rem;
+				font-size: 0.95rem;
+				max-width: 52ch;
 			}
 
 						/* Reversible: nothing you can't undo */
@@ -1567,9 +1587,6 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			.final {
 				text-align: center;
 				border-top: 1px solid var(--border);
-			}
-			.final h2 {
-				font-size: clamp(1.9rem, 4vw, 3rem);
 			}
 			.final p {
 				margin: 1.1rem auto 0;
@@ -1730,10 +1747,8 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 					grid-template-columns: 1fr;
 				}
 				.capability {
-					padding-inline: 0;
-				}
-				.capability + .capability {
-					border-left: none;
+					grid-template-columns: 1fr;
+					gap: 0.7rem;
 				}
 			}
 			@media (max-width: 600px) {

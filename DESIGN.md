@@ -26,30 +26,30 @@ colors:
   accent-light-deep: "#8f371f"
 typography:
   display:
-    fontFamily: "Schibsted Grotesk Variable, Metropolis, system-ui, sans-serif"
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
     fontSize: "clamp(3rem, 7.8vw, 5.4rem)"
     fontWeight: 800
     lineHeight: 1.05
     letterSpacing: "-0.04em"
   headline:
-    fontFamily: "Schibsted Grotesk Variable, Metropolis, system-ui, sans-serif"
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
     fontSize: "clamp(1.9rem, 3.6vw, 2.8rem)"
     fontWeight: 800
     lineHeight: 1.05
     letterSpacing: "-0.02em"
   title:
-    fontFamily: "Schibsted Grotesk Variable, Metropolis, system-ui, sans-serif"
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
     fontSize: "1.25rem"
     fontWeight: 700
     lineHeight: 1.05
     letterSpacing: "-0.02em"
   body:
-    fontFamily: "Metropolis, system-ui, sans-serif"
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
     fontSize: "17px"
     fontWeight: 400
     lineHeight: 1.6
   label:
-    fontFamily: "Metropolis, system-ui, sans-serif"
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
     fontSize: "0.72rem"
     fontWeight: 700
     letterSpacing: "0.13em"
@@ -133,7 +133,8 @@ showing concrete files, commands, exclusions, and restore flows.
 **Key Characteristics:**
 
 - Dark-by-default developer environment with a complete light-mode counterpart.
-- Metropolis-driven type system: wide, sturdy, and readable rather than trendy.
+- Schibsted Grotesk-driven type system: one grotesk carries body and display through weight
+  contrast, sturdy and readable rather than trendy.
 - Clay-orange accent used as a working signal for action, success-path emphasis, and command
   prompts.
 - Tonal layering, borders, and a single structural shell shadow instead of decorative depth.
@@ -182,17 +183,18 @@ from sand, bone, parchment, or ivory backgrounds.
 
 ## 3. Typography
 
-**Display Font:** Schibsted Grotesk (variable) with Metropolis and system sans-serif fallback.  
-**Body Font:** Metropolis with system sans-serif fallback.  
-**Label Font:** Metropolis (UI weights).  
+**Display Font:** Schibsted Grotesk (variable) with system sans-serif fallback.  
+**Body Font:** Schibsted Grotesk (variable, regular weight) with system sans-serif fallback.  
+**Label Font:** Schibsted Grotesk (UI weights).  
 **Mono Font:** Commit Mono for commands and code only, with a UI monospace fallback stack.
 
-**Character:** Schibsted Grotesk gives headings a tight, engineered grotesque voice that reads as
-precise rather than decorative; Metropolis keeps body copy squared, sturdy, and readable without
-pretending to be a terminal. Commit Mono is a neutral, exact monospace used functionally for
-commands and file paths, not as a costume for "developer brand." The pairing works on a
-geometric-body / grotesque-display contrast axis; the three families (display, body, mono) are
-shared identically by the homepage and the docs.
+**Character:** Schibsted Grotesk carries the whole UI as a single variable grotesk: a tight,
+engineered voice that reads as precise rather than decorative. Hierarchy comes from committed
+weight contrast (regular body against 700/800 headings) plus the fluid size scale, not from a
+second, near-identical sans. Commit Mono is a neutral, exact monospace used functionally for
+commands and file paths, not as a costume for "developer brand." The system pairs a single
+grotesk against monospace-for-code only; the two families (grotesk, mono) are shared identically
+by the homepage and the docs.
 
 ### Hierarchy
 
@@ -262,7 +264,7 @@ physical object. Ordinary feature cells stay flat and use borders plus tonal con
 ### Navigation
 
 - **Style:** Sticky top nav on a blurred, saturated canvas with a 1px bottom border.
-- **Typography:** Compact Metropolis links with secondary text color at rest.
+- **Typography:** Compact grotesk links with secondary text color at rest.
 - **States:** Hover shifts links to primary text or Clay for icon links. The nav should stay calm;
   do not add badge clutter or dropdown theatrics.
 - **Mobile:** Keep the brand and all primary docs links (Docs, Quick Start, CLI) reachable; below
