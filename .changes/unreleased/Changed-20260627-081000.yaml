@@ -1,6 +1,0 @@
-kind: Changed
-body: |-
-    Reserve the `@global` overlay namespace
-
-    Overlay sources now skip the reserved `@global` and `@library` directories instead of treating them as `org/repo/name` overlays, and neither can be addressed as a literal org, repo, or overlay name. This lets clients tolerate sources that use the upcoming global-overlay feature.
-time: 2026-06-27T08:10:00-07:00
