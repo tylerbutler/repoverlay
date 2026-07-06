@@ -8,4 +8,4 @@ body: |-
     are torn down automatically when the agent exits. If a profile fails to
     apply, any profiles already applied in that run are rolled back so the
     repository is left clean.
-time: 2026-06-04T10:58:23-07:00
+time: 2026-06-05T12:35:13-07:00
