@@ -79,7 +79,7 @@ const capabilities = [
 	{
 		title: "GitHub-aware sources",
 		body: "Pull overlays from repos, branches, tags, or subdirectories, cached with shallow clones.",
-		code: "owner/repo@tag",
+		code: "--ref v1.0.0",
 	},
 	{
 		title: "Fork inheritance",
@@ -101,7 +101,7 @@ const reversible = [
 		body: "Re-applies every overlay after git clean wipes the working tree. State is backed up outside the repo, so nothing is lost.",
 	},
 	{
-		cmd: "repoverlay remove rust-dev",
+		cmd: "repoverlay profile remove rust-dev --harness claude",
 		body: "Pulls a profile’s files back out and clears its .git/info/exclude entries. Your committed history never changes.",
 	},
 ];
