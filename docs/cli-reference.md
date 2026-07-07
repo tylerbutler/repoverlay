@@ -30,11 +30,19 @@ This document contains the help content for the `repoverlay` command-line progra
 * [`repoverlay marketplace add`↴](#repoverlay-marketplace-add)
 * [`repoverlay marketplace list`↴](#repoverlay-marketplace-list)
 * [`repoverlay marketplace remove`↴](#repoverlay-marketplace-remove)
+* [`repoverlay profile`↴](#repoverlay-profile)
+* [`repoverlay profile list`↴](#repoverlay-profile-list)
+* [`repoverlay profile show`↴](#repoverlay-profile-show)
+* [`repoverlay profile apply`↴](#repoverlay-profile-apply)
+* [`repoverlay profile status`↴](#repoverlay-profile-status)
+* [`repoverlay profile remove`↴](#repoverlay-profile-remove)
 * [`repoverlay library`↴](#repoverlay-library)
 * [`repoverlay library list`↴](#repoverlay-library-list)
 * [`repoverlay library import`↴](#repoverlay-library-import)
 * [`repoverlay library export`↴](#repoverlay-library-export)
 * [`repoverlay library remove`↴](#repoverlay-library-remove)
+* [`repoverlay copilot`↴](#repoverlay-copilot)
+* [`repoverlay claude`↴](#repoverlay-claude)
 * [`repoverlay completions`↴](#repoverlay-completions)
 
 ## `repoverlay`
@@ -59,7 +67,10 @@ Overlay config files into git repositories without committing them
 * `edit` — Edit an existing applied overlay
 * `source` — Manage overlay sources (for multi-source configurations)
 * `marketplace` — Manage plugin marketplaces
+* `profile` — Manage repository profiles
 * `library` — Manage the in-repo overlay library
+* `copilot` — Run GitHub Copilot with one or more profiles applied for the process lifetime
+* `claude` — Run Claude with one or more profiles applied for the process lifetime
 * `completions` — Generate shell completions
 
 
@@ -516,6 +527,106 @@ Remove a registered marketplace
 
 
 
+## `repoverlay profile`
+
+Manage repository profiles
+
+**Usage:** `repoverlay profile <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List configured profiles
+* `show` — Show a configured profile
+* `apply` — Apply a profile persistently
+* `status` — Show applied profile state
+* `remove` — Remove an applied profile
+
+
+
+
+## `repoverlay profile list`
+List configured profiles
+
+**Usage:** `repoverlay profile list [OPTIONS]`
+
+###### **Options:**
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay profile show`
+
+Show a configured profile
+
+**Usage:** `repoverlay profile show [OPTIONS] <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Profile name
+
+###### **Options:**
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay profile apply`
+
+Apply a profile persistently
+
+**Usage:** `repoverlay profile apply [OPTIONS] --harness <HARNESS> <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Profile name
+
+###### **Options:**
+
+* `--harness <HARNESS>`
+
+  Possible values: `copilot`, `claude`
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay profile status`
+
+Show applied profile state
+
+**Usage:** `repoverlay profile status [OPTIONS]`
+
+###### **Options:**
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `--harness <HARNESS>`
+
+  Possible values: `copilot`, `claude`
+
+
+
+
+## `repoverlay profile remove`
+
+Remove an applied profile
+
+**Usage:** `repoverlay profile remove [OPTIONS] --harness <HARNESS> <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>` — Profile name
+
+###### **Options:**
+
+* `--harness <HARNESS>`
+
+  Possible values: `copilot`, `claude`
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
 ## `repoverlay library`
 
 Manage the in-repo overlay library
@@ -591,6 +702,40 @@ Remove an overlay from the library
 ### Options
 
 * `-f`, `--force` — Force removal even if overlay is currently applied
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay copilot`
+
+Run GitHub Copilot with one or more profiles applied for the process lifetime
+
+**Usage:** `repoverlay copilot [OPTIONS] --profile <PROFILES> [-- <EXTRA_ARGS>...]`
+
+###### **Arguments:**
+
+* `<EXTRA_ARGS>` — Extra arguments forwarded to the Copilot harness
+
+###### **Options:**
+
+* `--profile <PROFILES>` — Profile name to apply while Copilot runs (repeat to apply several)
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+
+
+
+## `repoverlay claude`
+
+Run Claude with one or more profiles applied for the process lifetime
+
+**Usage:** `repoverlay claude [OPTIONS] --profile <PROFILES> [-- <EXTRA_ARGS>...]`
+
+###### **Arguments:**
+
+* `<EXTRA_ARGS>` — Extra arguments forwarded to the Claude harness
+
+###### **Options:**
+
+* `--profile <PROFILES>` — Profile name to apply while Claude runs (repeat to apply several)
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 
 

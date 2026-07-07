@@ -22,18 +22,22 @@
 	},
 	"dependencies": {
 		"@astrojs/check": "^0.9.9",
-		"@astrojs/starlight": "^0.39.2",
-		"@fontsource/metropolis": "^5.2.5",
-		"astro": "^6.4.6",
-		"sharp": "^0.34.5",
+		"@astrojs/starlight": "^0.41.1",
+		"@fontsource-variable/schibsted-grotesk": "^5.2.8",
+		"@fontsource/commit-mono": "^5.2.5",
+		"astro": "^7.0.3",
+		"sharp": "^0.35.2",
 		"starlight-announcement": "^1.1.0",
-		"starlight-links-validator": "^0.24.0",
+		"starlight-blog": "^0.26.1",
+		"starlight-heading-badges": "^0.7.0",
+		"starlight-links-validator": "^0.24.1",
 		"starlight-llms-txt": "^0.10.0",
 		"typescript": "~6.0.3"
 	},
 	"devDependencies": {
 		"@fec/remark-a11y-emoji": "^4.0.2",
 		"@hashicorp/platform-remark-plugins": "^0.2.1",
+		"@tabler/icons": "^3.44.0",
 		"remark-shift-headings": "^0.1.1",
 		"rimraf": "^6.1.3"
 	}

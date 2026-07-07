@@ -31,3 +31,4 @@ repoverlay lets you **define overlay sources** — local directories or GitHub r
 - **Update & restore** — pull remote changes with `repoverlay update`; recover after `git clean` with `repoverlay restore`
 - **Create & share** — package your configs into overlays and share them via GitHub
 - **Overlay configuration** — rename files, symlink directories atomically, and more via `repoverlay.ccl`
+- **Profiles** — compose overlays with AI agent capabilities (instructions, skills, MCP servers) and apply them per-harness, persistently or just for one agent session; see the [profiles guide](/guides/profiles/)

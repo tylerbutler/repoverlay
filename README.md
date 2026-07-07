@@ -27,6 +27,9 @@ Overlay config files into git repositories without committing them. Files are sy
 | Manage sources | `repoverlay source add/list/remove` |
 | Manage cache | `repoverlay cache list/remove/path` |
 | Manage in-repo library | `repoverlay library list/import/export/remove` |
+| Manage profiles | `repoverlay profile list/show/apply/status/remove` |
+| Run agent with profiles | `repoverlay claude --profile <name>` / `repoverlay copilot --profile <name>` |
+| Manage plugin marketplaces | `repoverlay marketplace add/list/remove` |
 | Shell completions | `repoverlay completions <shell>` |
 
 ## Concepts
@@ -170,7 +173,7 @@ repoverlay remove my-overlay
 ### Profiles (experimental)
 
 > [!WARNING]
-> Profiles, plugins, and the harness commands are **experimental**. The `profile`, `claude`, and `copilot` commands work but are hidden from `--help` and the CLI reference, and their interface may change before they are announced.
+> Profiles, plugins, and the harness commands are **experimental**. The `profile`, `claude`, and `copilot` commands work, but their interface may change before they are announced as stable.
 
 Profiles can declare overlays and AI harness configuration. Define them under the `profiles` key of the global config (`~/.config/repoverlay/config.ccl`) or the repo-local config (`.repoverlay/config.ccl`):
 
@@ -214,7 +217,7 @@ repoverlay copilot --profile rust-dev -- --help
 repoverlay claude --profile rust-dev
 ```
 
-Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copilot) or `.claude/skills/` (Claude), plugin MCP servers merge into the repo's `.mcp.json`, and instruction files are written into a managed region of `AGENTS.md` (Copilot) or `CLAUDE.md` (Claude). Claude can also *delegate* plugin enablement to its own settings instead of placing files. A full `repoverlay update` re-resolves applied profiles' managed plugins and re-applies any whose source changed.
+Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copilot) or `.claude/skills/` (Claude), plugin MCP servers merge into the repo's `.mcp.json`, and instruction files are written into a managed region of `CLAUDE.md` (Claude) or `AGENTS.md` (Copilot). Claude can also *delegate* plugin enablement to its own settings instead of placing files. A full `repoverlay update` re-resolves applied profiles' managed plugins and re-applies any whose source changed.
 
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 

@@ -1,17 +1,22 @@
 ---
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import "@fontsource/metropolis/400.css";
-import "@fontsource/metropolis/600.css";
-import "@fontsource/metropolis/700.css";
-import "@fontsource/metropolis/800.css";
+import "@fontsource-variable/schibsted-grotesk/index.css";
+import "@fontsource/commit-mono/400.css";
+import "@fontsource/commit-mono/700.css";
 import "../styles/tokens.css";
 import logo from "../assets/repoverlay.svg";
+import CopyButton from "../components/CopyButton.astro";
+
+// impeccable-disable em-dash-overuse: the detector counts BEM `--` class
+// modifiers (btn--primary, mechanism__apply) and CSS custom properties in
+// this single-file component as em-dashes. There are no em-dashes in the
+// prose; src/pages/index.test.mjs enforces that on the rendered copy.
 
 const description =
-	"Overlay AI configs, editor settings, and dev tooling into any git repo. Files are linked into place and excluded through .git/info/exclude.";
+	"Overlay AI configs, editor settings, and dev tooling into any git repo. Files are symlinked or copied into place and excluded through .git/info/exclude.";
 const ghUrl = "https://github.com/tylerbutler/repoverlay";
-const firstRunCommand = "brew install tylerbutler/tap/repoverlay\nrepoverlay browse owner/repo";
+const firstRunCommand = "repoverlay profile apply rust-dev --harness claude";
 const cargoTomlPath = [resolve(process.cwd(), "Cargo.toml"), resolve(process.cwd(), "../Cargo.toml")].find(
 	existsSync,
 );
@@ -30,60 +35,79 @@ const ogImageUrl = new URL("/og.png", Astro.site).href;
 const ogImageAlt =
 	"repoverlay: share configs across repos, commit nothing. Terminal showing files excluded via .git/info/exclude.";
 
-const features = [
+const installs = [
+	{ label: "Homebrew", cmd: "brew install tylerbutler/tap/repoverlay" },
+	{ label: "Cargo", cmd: "cargo binstall repoverlay" },
+];
+
+const browseExample = "repoverlay browse tylerbutler/overlays";
+const applyExample = "repoverlay apply tylerbutler/overlays/claude";
+
+const mechanism = [
 	{
-		title: "Overlay without committing",
-		body: "Apply shared files to any git repo. They're excluded through .git/info/exclude, so .gitignore stays untouched.",
-		code: ".git/info/exclude",
-		variant: "accent",
+		stage: "Source",
+		title: "Point at a source",
+		body: "Name an overlay by owner, repo, and path, or browse a source to see what is available.",
+		artifact: "tylerbutler/overlays/claude",
 	},
+	{
+		stage: "Place",
+		title: "Files land in the working tree",
+		body: "repoverlay symlinks each file into place, or copies it on Windows and whenever you ask.",
+		artifact: ".claude/settings.json",
+	},
+	{
+		stage: "Exclude",
+		title: "Git never sees them",
+		body: "Every placed path is added to .git/info/exclude, so .gitignore and history stay untouched.",
+		artifact: ".git/info/exclude",
+	},
+	{
+		stage: "Restore",
+		title: "Survives git clean",
+		body: "State is backed up outside the repo, so repoverlay restore re-applies everything after a wipe.",
+		artifact: "~/.local/share/repoverlay/applied/",
+	},
+];
+
+const capabilities = [
 	{
 		title: "Symlink or copy",
-		body: "Symlinked by default for instant updates. Reach for --copy when symlinks aren't an option.",
-		variant: "plain",
+		body: "Symlinked by default on macOS and Linux for instant edits; copied on Windows or on request.",
+		code: "--copy",
 	},
 	{
-		title: "GitHub-aware",
-		body: "Pull overlays from repos, branches, tags, or subdirectories. Cached locally with shallow clones.",
-		variant: "plain",
+		title: "GitHub-aware sources",
+		body: "Pull overlays from repos, branches, tags, or subdirectories, cached with shallow clones.",
+		code: "owner/repo@tag",
 	},
 	{
 		title: "Fork inheritance",
-		body: "Working on a fork? repoverlay falls back to the upstream repo's overlays until yours exist.",
-		variant: "plain",
-	},
-	{
-		title: "Survives git clean",
-		body: "State is backed up outside the repo, so repoverlay restore brings every overlaid file back.",
-		code: "repoverlay restore",
-		variant: "recovery",
+		body: "On a fork, repoverlay falls back to the upstream repo’s overlays until yours exist.",
+		code: "origin → upstream",
 	},
 ];
 
-const stateMap = [
-	{ label: "Source", value: "owner/repo/claude" },
-	{ label: "Placed file", value: ".claude/settings.json" },
-	{ label: "Local git guard", value: ".git/info/exclude" },
-	{ label: "Restore state", value: "~/.local/share/repoverlay" },
+const placed = [
+	{ kind: "skills", name: "rustfmt + clippy skills", path: ".claude/skills/rust/" },
+	{ kind: "agent", name: "cargo-review agent", path: ".claude/agents/cargo-review/" },
+	{ kind: "mcp", name: "crates.io MCP server", path: ".mcp.json" },
+	{ kind: "rules", name: "Rust house style", path: "CLAUDE.md" },
 ];
 
-const steps = [
+const reversible = [
 	{
-		key: "Install",
-		body: "Install the binary once with Homebrew, Cargo, or the shell installer.",
-		cmd: "brew install tylerbutler/tap/repoverlay",
+		cmd: "repoverlay restore",
+		body: "Re-applies every overlay after git clean wipes the working tree. State is backed up outside the repo, so nothing is lost.",
 	},
 	{
-		key: "Browse",
-		body: "Point at a source, see available overlays, and apply one from the picker.",
-		cmd: "repoverlay browse owner/repo",
-	},
-	{
-		key: "Apply directly",
-		body: "Already know the overlay name? Skip the picker and apply it by name.",
-		cmd: "repoverlay apply claude-config",
+		cmd: "repoverlay remove rust-dev",
+		body: "Pulls a profile’s files back out and clears its .git/info/exclude entries. Your committed history never changes.",
 	},
 ];
+
+const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.json"];
+
 ---
 
 <!doctype html>
@@ -129,6 +153,13 @@ const steps = [
 	</head>
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
+		<div
+			class="sr-only"
+			role="status"
+			aria-live="polite"
+			aria-atomic="true"
+			data-copy-status
+		></div>
 
 		<div class="release" role="note">
 			<span class="release__dot" aria-hidden="true"></span>
@@ -144,8 +175,36 @@ const steps = [
 				</a>
 				<nav class="nav__links" aria-label="Primary">
 					<a href="/introduction/">Docs</a>
-					<a href="/quick-start/">Quick Start</a>
+					<a class="nav__primary" href="/quick-start/">Quick Start</a>
 					<a href="/cli-reference/">CLI</a>
+					<button
+						class="nav__theme"
+						type="button"
+						data-theme-toggle
+						aria-label="Switch color theme"
+					>
+						<span class="nav__theme-icon nav__theme-icon--moon" aria-hidden="true">
+							<svg viewBox="0 0 24 24" width="18" height="18"
+								><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg
+							>
+						</span>
+						<span class="nav__theme-icon nav__theme-icon--sun" aria-hidden="true">
+							<svg viewBox="0 0 24 24" width="18" height="18"
+								><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"></circle><path
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg
+							>
+						</span>
+					</button>
 					<a class="nav__gh" href={ghUrl} aria-label="repoverlay on GitHub">
 						<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"
 							><path
@@ -163,14 +222,18 @@ const steps = [
 			<section class="hero">
 				<div class="hero__copy reveal">
 					<h1>
-						Share configs across repos.<br /><span class="accentword"
-							>Commit nothing.</span
+						Your agent’s setup, in every repo.<br /><span class="accentword"
+							>Committed to none of them.</span
 						>
 					</h1>
-					<p class="lede">{description}</p>
+					<p class="lede">
+						Apply a profile and repoverlay drops the right skills, tools,
+						instructions, and dotfiles into a repo for your AI assistant. All
+						git-excluded, so none of it lands in history.
+					</p>
 					<div class="cta-row">
 						<a class="btn btn--primary" href="/quick-start/">
-							Start with Quick Start
+							Quick Start
 							<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 								><path
 									fill="none"
@@ -184,66 +247,54 @@ const steps = [
 						<a class="btn btn--ghost" href="/introduction/">Read the docs</a>
 					</div>
 					<p class="hero__note">
-						New checkout? Install once, browse an overlay source, and apply from the
-						picker before reaching for direct commands.
+						Clone a repo, apply a profile, and your agent has its tools and
+						conventions, scoped to that checkout.
 					</p>
-					<dl class="mechanics" aria-label="repoverlay overlay mechanics">
-						<div>
-							<dt>Source</dt>
-							<dd><code>owner/repo</code></dd>
-						</div>
-						<div>
-							<dt>Working tree</dt>
-							<dd><code>.claude/</code></dd>
-						</div>
-						<div>
-							<dt>Git ignore stays clean</dt>
-							<dd><code>.git/info/exclude</code></dd>
-						</div>
-					</dl>
 				</div>
 
 				<div class="hero__panel reveal" style="--delay:90ms">
-					<div class="overlay-stack" aria-hidden="true">
-						<span class="stack-card stack-card--source">
-							<span>Overlay source</span>
-							<code>owner/repo</code>
-						</span>
-						<span class="stack-card stack-card--exclude">
-							<span>Git exclude</span>
-							<code>.git/info/exclude</code>
-						</span>
-						<span class="stack-card stack-card--state">
-							<span>Restore state</span>
-							<code>~/.local/share</code>
-						</span>
-					</div>
-					<div class="shell" aria-label="First-run shell session">
+					<div class="shell" aria-label="Profile apply shell session">
 						<div class="shell__bar">
-							<span class="shell__name">zsh</span>
+							<span class="shell__name">apply a profile</span>
 							<button
 								class="copy"
 								type="button"
 								data-copy={firstRunCommand}
-								aria-label="Copy first-run commands"
-								aria-describedby="first-run-copy-status"
+								aria-label="Copy profile apply command"
 							>
-								<span class="copy__label">Copy commands</span>
+								<span class="copy__label">Copy command</span>
 							</button>
-							<span
-								id="first-run-copy-status"
-								class="copy__status sr-only"
-								role="status"
-								aria-live="polite"
-								aria-atomic="true"
-							></span>
 						</div>
-						<pre class="shell__body"><code><span class="ln"><span class="pr">$</span> brew install tylerbutler/tap/repoverlay</span>
-<span class="ln"><span class="pr">$</span> repoverlay browse owner/repo</span>
-<span class="ln dim">  Choose an overlay, apply it, and keep Git clean.</span>
-<span class="ln dim">  Files are linked into the repo working tree.</span>
-<span class="ln"><span class="ok">✓</span> Excluded from git via .git/info/exclude</span>
-<span class="ln"><span class="pr">$</span> <span class="caret">▍</span></span></code></pre>
+						<pre class="shell__body" tabindex="0"><code><span class="ln dim">  One profile bundles overlays and agent capabilities.</span>
+<span class="ln"><span class="pr">$</span> repoverlay profile apply rust-dev <span class="dim">--harness claude</span></span>
+<span class="ln dim">  Placing skills, an agent, an MCP server, and instructions.</span>
+<span class="ln dim">  Repo-local files excluded via .git/info/exclude.</span>
+<span class="ln"><span class="ok">✓</span> Applied rust-dev · 4 capabilities, 0 files committed</span>
+<span class="ln"><span class="pr">$</span> <span class="caret" aria-hidden="true">▍</span></span></code></pre>
+						</div>
+					<div class="manifest">
+						<div class="manifest__head">
+							<span class="manifest__title">rust-dev applied</span>
+							<span class="manifest__guard">git-excluded, removable</span>
+						</div>
+						<ul
+							class="manifest__list"
+							aria-label="Capabilities placed by the rust-dev profile, excluded from git"
+						>
+							{
+								placed.map((c) => (
+									<li class="manifest__row">
+										<span class={`manifest__kind manifest__kind--${c.kind}`}>
+											{c.kind}
+										</span>
+										<span class="manifest__info">
+											<span class="manifest__file">{c.name}</span>
+											<code class="manifest__src">{c.path}</code>
+										</span>
+									</li>
+								))
+							}
+						</ul>
 					</div>
 				</div>
 			</section>
@@ -251,71 +302,145 @@ const steps = [
 			<!-- PROBLEM: editorial statement -->
 			<section class="problem reveal">
 				<div class="problem__lead">
-					<h2>Some files don't belong in the repo.</h2>
+					<h2>Your config, not the repo’s.</h2>
 					<p>
-						AI assistant configs, editor settings, local environment files, the
-						tooling you carry between projects. You want them in every checkout,
-						but committing them clutters history, and git clean wipes them.
+						The AI instructions, editor preferences, local env, and tooling
+						overrides you carry from repo to repo. You want them in every
+						checkout, including forks and other people’s projects, but they
+						don’t belong in the commit history, and git clean wipes them.
 					</p>
 				</div>
-				<ul class="configs" aria-label="Examples of files repoverlay manages">
-					<li><span>AI assistants</span><code>.claude/ · CLAUDE.md</code></li>
+				<ul class="configs" aria-label="Examples of personal files repoverlay manages">
+					<li><span>AI assistants</span><code>CLAUDE.local.md · .claude/settings.local.json</code></li>
 					<li><span>Editor settings</span><code>.vscode/settings.json</code></li>
-					<li><span>Environment</span><code>.envrc · .env.local</code></li>
-					<li><span>Dev tooling</span><code>.prettierrc · biome.json</code></li>
+					<li><span>Environment</span><code>.env.local · .envrc</code></li>
+					<li><span>Dev tooling</span><code>.mise.local.toml · lefthook-local.yml</code></li>
 				</ul>
 			</section>
 
-			<!-- FEATURES: bento -->
-			<section class="features">
-				<h2 class="section-head reveal">Local state, visible on purpose</h2>
-				<div class="bento">
+			<!-- INSTALL: one line to the binary -->
+			<section class="install-strip reveal" aria-label="Install repoverlay">
+				<div class="install-strip__intro">
+					<span class="install-strip__eyebrow">One binary, no runtime</span>
+					<p class="install-strip__line">
+						Install once, then overlay any repo. Pick your package manager:
+					</p>
+				</div>
+				<ul class="install-strip__options">
 					{
-						features.map((f, i) => (
-							<article
-								class:list={["cell", `cell--${f.variant}`, `cell--${i}`, "reveal"]}
-								style={`--delay:${i * 60}ms`}
-							>
-								<h3>{f.title}</h3>
-								<p>{f.body}</p>
-								{f.variant === "accent" && (
-									<div class="state-map" role="list" aria-label="Overlay state path">
-										{stateMap.map((item) => (
-											<div class="state-map__item" role="listitem">
-												<span>{item.label}</span>
-												<code>{item.value}</code>
-											</div>
-										))}
-									</div>
-								)}
-								{f.code && <code class="chip">{f.code}</code>}
-							</article>
+						installs.map((opt) => (
+							<li class="cmdline">
+								<span class="cmdline__manager">{opt.label}</span>
+								<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {opt.cmd}</code>
+								<CopyButton command={opt.cmd} label={`Copy ${opt.label} install command`} />
+							</li>
 						))
 					}
-				</div>
+				</ul>
 			</section>
 
-			<!-- HOW IT WORKS: command flow -->
-			<section class="flow reveal">
-				<h2 class="section-head">First run, then fast repeat.</h2>
-				<ol class="flow__track">
+			<!-- MECHANISM: the overlay lifecycle -->
+			<section class="mechanism reveal" aria-label="How an overlay is applied">
+				<div class="mechanism__head">
+					<h2 class="section-head">How an overlay works, in four steps.</h2>
+					<p class="mechanism__sub">
+						repoverlay places files, hides them from git, and can put them back.
+						Browse a source to see what’s available:
+					</p>
+					<div class="cmdline cmdline--browse">
+						<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {browseExample}</code>
+						<CopyButton command={browseExample} label="Copy browse command" />
+					</div>
+				</div>
+				<ol class="mechanism__track">
 					{
-						steps.map((s) => (
-							<li class="flow__step">
-								<h3>{s.key}</h3>
-								<p>{s.body}</p>
-								<code class="flow__cmd">
-									<span class="pr">$</span> {s.cmd}
-								</code>
+						mechanism.map((m) => (
+							<li class="mechanism__stage">
+								<span class="mechanism__label">{m.stage}</span>
+								<h3>{m.title}</h3>
+								<p>{m.body}</p>
+								<code class="mechanism__artifact">{m.artifact}</code>
 							</li>
 						))
 					}
 				</ol>
+				<div class="mechanism__apply">
+					<div class="mechanism__apply-copy">
+						<span class="mechanism__apply-eyebrow">Already know the overlay?</span>
+						<p>Skip the browser and apply it directly.</p>
+					</div>
+					<div class="cmdline cmdline--apply">
+						<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {applyExample}</code>
+						<CopyButton command={applyExample} label="Copy example apply command" />
+					</div>
+				</div>
+			</section>
+
+			<!-- CAPABILITIES: editorial spec list -->
+			<section class="capabilities reveal" aria-label="What else repoverlay does">
+				<h2 class="section-head">The details that make it practical.</h2>
+				<ul class="capabilities__list">
+					{
+						capabilities.map((c) => (
+							<li class="capability">
+								<div class="capability__head">
+									<h3>{c.title}</h3>
+									<code class="capability__code">{c.code}</code>
+								</div>
+								<p>{c.body}</p>
+							</li>
+						))
+					}
+				</ul>
+			</section>
+
+			<!-- REVERSIBLE: nothing you can't undo -->
+			<section class="reversible reveal" aria-label="How to undo overlays">
+				<div class="reversible__head">
+					<h2 class="section-head">Nothing you can’t undo.</h2>
+					<p class="reversible__sub">
+						Overlays live outside committed history, so you can pull them back
+						out or rebuild them at any time. Two commands cover the whole
+						lifecycle:
+					</p>
+				</div>
+				<div class="reversible__grid">
+					<ul class="reversible__actions">
+						{
+							reversible.map((action) => (
+								<li class="reversible__action">
+									<div class="cmdline cmdline--undo">
+										<code class="cmdline__text" tabindex="0"><span class="pr">$</span> {action.cmd}</code>
+										<CopyButton command={action.cmd} label={`Copy ${action.cmd} command`} />
+									</div>
+									<p>{action.body}</p>
+								</li>
+							))
+						}
+					</ul>
+					<figure class="exclude">
+						<figcaption class="exclude__cap">.git/info/exclude</figcaption>
+						<div class="exclude__diff">
+							{
+								excludeEntries.map((entry) => (
+									<span class="exclude__line">
+										<span class="exclude__sign" aria-hidden="true">+</span>
+										{entry}
+									</span>
+								))
+							}
+						</div>
+						<p class="exclude__note">
+							Added on apply, stripped on remove. Your committed .gitignore is
+							never touched.
+						</p>
+					</figure>
+				</div>
 			</section>
 
 			<!-- FINAL CTA -->
 			<section class="final reveal">
-				<h2>Stop copying configs by hand.</h2>
+				<h2>Set up your configs once.</h2>
 				<p>Define your overlays once, apply them anywhere, recover them anytime.</p>
 				<div class="cta-row cta-row--center">
 					<a class="btn btn--primary" href="/quick-start/">
@@ -369,6 +494,17 @@ const steps = [
 		<script>
 			const themeStorageKey = "starlight-theme";
 			const colorSchemeQuery = window.matchMedia?.("(prefers-color-scheme: light)");
+			const themeToggle =
+				document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
+			const syncThemeToggle = () => {
+				if (!themeToggle) return;
+				const isDark = document.documentElement.dataset.theme !== "light";
+				themeToggle.setAttribute(
+					"aria-label",
+					isDark ? "Switch to light theme" : "Switch to dark theme",
+				);
+				themeToggle.setAttribute("aria-pressed", String(!isDark));
+			};
 			const readSavedTheme = () => {
 				try {
 					const stored = window.localStorage.getItem(themeStorageKey);
@@ -380,10 +516,23 @@ const steps = [
 			const applyPreferredTheme = () => {
 				document.documentElement.dataset.theme =
 					readSavedTheme() ?? (colorSchemeQuery?.matches ? "light" : "dark");
+				syncThemeToggle();
 			};
 			const applyAutoTheme = () => {
 				if (readSavedTheme() === null) applyPreferredTheme();
 			};
+			syncThemeToggle();
+			themeToggle?.addEventListener("click", () => {
+				const next =
+					document.documentElement.dataset.theme === "light" ? "dark" : "light";
+				document.documentElement.dataset.theme = next;
+				try {
+					window.localStorage.setItem(themeStorageKey, next);
+				} catch {
+					/* localStorage can be blocked; the in-page toggle still works. */
+				}
+				syncThemeToggle();
+			});
 			if (colorSchemeQuery) {
 				if (typeof colorSchemeQuery.addEventListener === "function") {
 					colorSchemeQuery.addEventListener("change", applyAutoTheme);
@@ -395,7 +544,12 @@ const steps = [
 				if (event.key === themeStorageKey) applyPreferredTheme();
 			});
 
-			// Copy-to-clipboard for the shell example.
+			// Copy-to-clipboard for shell and command examples.
+			const copyStatus =
+				document.querySelector<HTMLElement>("[data-copy-status]");
+			const announceCopy = (message: string) => {
+				if (copyStatus) copyStatus.textContent = message;
+			};
 			const copyToClipboard = async (text: string) => {
 				if (text.length === 0) {
 					throw new Error("No text available to copy");
@@ -411,27 +565,21 @@ const steps = [
 				btn.addEventListener("click", async () => {
 					const text = btn.dataset.copy ?? "";
 					const label = btn.querySelector(".copy__label");
-					const status = btn
-						.closest(".shell__bar")
-						?.querySelector<HTMLElement>(".copy__status");
-					const prev = label?.textContent ?? "Copy";
+					const prev = label?.textContent ?? "Copy command";
 					const reset = () => {
 						if (label) label.textContent = prev;
-						if (status) status.textContent = "";
+						announceCopy("");
 						btn.classList.remove("is-copied", "is-failed");
 					};
 					if (resetTimer) window.clearTimeout(resetTimer);
 					try {
 						await copyToClipboard(text);
 						if (label) label.textContent = "Copied";
-						if (status) status.textContent = "First-run commands copied.";
+						announceCopy(`Copied to clipboard: ${text}`);
 						btn.classList.add("is-copied");
 					} catch {
 						if (label) label.textContent = "Copy failed";
-						if (status) {
-							status.textContent =
-								"Copy failed. Select and copy the commands manually.";
-						}
+						announceCopy("Copy failed. Select and copy the command manually.");
 						btn.classList.add("is-failed");
 					}
 					resetTimer = window.setTimeout(reset, 1800);
@@ -508,12 +656,14 @@ const steps = [
 				--accent-2: var(--rv-accent-deep);
 				--accent-soft: var(--rv-accent-soft);
 				--accent-line: var(--rv-accent-line);
+				--prompt: var(--rv-prompt);
 				--success: var(--rv-success);
 				--on-accent: var(--rv-on-accent);
 				--radius: var(--rv-radius-lg);
 				--radius-sm: var(--rv-radius-md);
 				--maxw: var(--rv-layout-max);
 				--font: var(--rv-font);
+				--display: var(--rv-display);
 				--mono: var(--rv-mono);
 				--ease: var(--rv-ease);
 			}
@@ -535,7 +685,9 @@ const steps = [
 				color: var(--text);
 				font-family: var(--font);
 				font-size: 17px;
+				font-weight: var(--rv-body-weight, 400);
 				line-height: 1.6;
+				letter-spacing: var(--rv-body-tracking, normal);
 				-webkit-font-smoothing: antialiased;
 				text-rendering: optimizeLegibility;
 			}
@@ -551,12 +703,14 @@ const steps = [
 				line-height: 1.05;
 				letter-spacing: -0.02em;
 				font-weight: 800;
+				font-family: var(--display);
 			}
 			p {
 				margin: 0;
 			}
 			code {
 				font-family: var(--mono);
+				letter-spacing: normal;
 			}
 
 			.skip {
@@ -588,7 +742,7 @@ const steps = [
 			:focus-visible {
 				outline: 2px solid var(--accent);
 				outline-offset: 3px;
-				border-radius: 6px;
+				border-radius: var(--radius-sm);
 			}
 
 			/* Release banner */
@@ -616,11 +770,15 @@ const steps = [
 				align-items: center;
 				min-height: 44px;
 				padding-inline: 0.15rem;
-				color: var(--accent);
-				font-weight: 600;
+				color: var(--text-2);
+				font-weight: 500;
+				text-decoration: underline;
+				text-decoration-color: var(--border-strong);
+				text-underline-offset: 3px;
 			}
 			.release a:hover {
-				text-decoration: underline;
+				color: var(--text);
+				text-decoration-color: currentColor;
 			}
 
 			/* Nav */
@@ -672,6 +830,13 @@ const steps = [
 			.nav__links a:hover {
 				color: var(--text);
 			}
+			.nav__primary {
+				color: var(--accent);
+				font-weight: 600;
+			}
+			.nav__primary:hover {
+				color: var(--accent-deep);
+			}
 			.nav__gh {
 				display: inline-flex;
 				justify-content: center;
@@ -680,6 +845,32 @@ const steps = [
 			}
 			.nav__gh:hover {
 				color: var(--accent);
+			}
+			.nav__theme {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				width: 44px;
+				min-height: 44px;
+				padding: 0;
+				color: var(--text-2);
+				background: transparent;
+				border: 0;
+				border-radius: var(--radius-sm);
+				cursor: pointer;
+			}
+			.nav__theme:hover {
+				color: var(--accent);
+			}
+			.nav__theme-icon {
+				display: inline-flex;
+			}
+			:root[data-theme="dark"] .nav__theme-icon--sun,
+			:root:not([data-theme]) .nav__theme-icon--sun {
+				display: none;
+			}
+			:root[data-theme="light"] .nav__theme-icon--moon {
+				display: none;
 			}
 
 			/* Shared */
@@ -690,11 +881,18 @@ const steps = [
 				padding-right: max(1.5rem, env(safe-area-inset-right));
 			}
 			section {
-				padding-block: clamp(4.5rem, 9vw, 8rem);
+				padding-block: clamp(3rem, 6.5vw, 5.5rem);
 			}
 			.section-head {
 				font-size: clamp(1.6rem, 3.2vw, 2.3rem);
-				margin-bottom: 2.5rem;
+				margin-bottom: 1.8rem;
+			}
+			/* Statement headings (the opening thesis and the closing CTA) form
+			   one larger tier; the functional sections use .section-head. Two
+			   deliberate tiers, so heading size always maps to a role. */
+			.problem h2,
+			.final h2 {
+				font-size: clamp(1.9rem, 3.6vw, 2.8rem);
 			}
 			.accentword {
 				color: var(--accent);
@@ -788,49 +986,17 @@ const steps = [
 				margin-top: 2rem;
 			}
 			.hero__note {
-				max-width: min(42ch, 100%);
+				max-width: min(36ch, 100%);
 				margin-top: 0.95rem;
 				color: var(--text-2);
 				font-size: 0.95rem;
 				text-wrap: pretty;
 			}
-			.mechanics {
-				display: grid;
-				grid-template-columns: repeat(3, minmax(0, 1fr));
-				max-width: min(45rem, 100%);
-				margin: 2.6rem 0 0;
-				padding: 0;
-				border: 1px solid var(--border-strong);
-				border-radius: var(--radius);
-				background: color-mix(in srgb, var(--surface) 84%, var(--bg));
-				overflow: hidden;
-			}
-			.mechanics div {
-				min-width: 0;
-				padding: 0.9rem 1rem 1rem;
-			}
-			.mechanics div + div {
-				border-left: 1px solid var(--border);
-			}
-			.mechanics dt {
-				color: var(--muted);
-				font-size: 0.76rem;
-				font-weight: 700;
-			}
-			.mechanics dd {
-				margin: 0.35rem 0 0;
-			}
-			.mechanics code {
-				color: var(--text);
-				font-size: 0.78rem;
-				overflow-wrap: anywhere;
-				white-space: normal;
-			}
 			/* Shell panel */
 			.hero__panel {
 				position: relative;
 				isolation: isolate;
-				padding-block: clamp(1.5rem, 3.6vw, 2.7rem);
+				padding-block: clamp(1.2rem, 3vw, 2.2rem);
 			}
 			.hero__panel::before {
 				content: "";
@@ -847,55 +1013,10 @@ const steps = [
 			.hero__panel::after {
 				content: "";
 				position: absolute;
-				inset: 18% -3% 8% 16%;
-				border-radius: calc(var(--radius) + 6px);
+				inset: 1.6rem -0.7rem 0.4rem 0.95rem;
+				border-radius: var(--radius);
 				background: color-mix(in srgb, var(--accent) 86%, var(--accent-2));
-				transform: rotate(2.4deg);
 				z-index: -2;
-			}
-			.overlay-stack {
-				position: absolute;
-				inset: 0;
-				z-index: -1;
-				pointer-events: none;
-			}
-			.stack-card {
-				position: absolute;
-				display: flex;
-				flex-direction: column;
-				gap: 0.18rem;
-				min-width: min(11rem, 100%);
-				padding: 0.7rem 0.82rem;
-				border: 1px solid var(--border-strong);
-				border-radius: 12px;
-				background: color-mix(in srgb, var(--surface) 88%, var(--bg));
-				color: var(--text);
-			}
-			.stack-card span {
-				color: var(--muted);
-				font-size: 0.74rem;
-				font-weight: 700;
-			}
-			.stack-card code {
-				color: var(--text);
-				font-size: 0.78rem;
-				overflow-wrap: anywhere;
-				white-space: normal;
-			}
-			.stack-card--source {
-				top: 0.2rem;
-				left: -0.75rem;
-				transform: rotate(-4deg);
-			}
-			.stack-card--exclude {
-				right: -0.35rem;
-				bottom: 0.5rem;
-				transform: rotate(3deg);
-			}
-			.stack-card--state {
-				top: -0.3rem;
-				right: 4.5rem;
-				transform: rotate(1.5deg);
 			}
 			.shell {
 				position: relative;
@@ -949,19 +1070,137 @@ const steps = [
 				border-color: var(--accent);
 				background: var(--accent-soft);
 			}
+			.copy--inline {
+				flex: 0 0 auto;
+				padding: 0;
+				color: var(--muted);
+				border-color: transparent;
+				font-family: inherit;
+			}
+			.copy--inline:hover {
+				color: var(--text);
+				border-color: var(--accent-line);
+			}
+			.copy--inline.is-copied {
+				color: var(--accent);
+				border-color: var(--accent-line);
+			}
+			.copy--inline.is-failed {
+				color: var(--accent);
+				border-color: var(--accent);
+				background: var(--accent-soft);
+			}
+			.copy__icon {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+			}
+			.copy__icon--done {
+				display: none;
+			}
+			.copy--inline.is-copied .copy__icon--idle {
+				display: none;
+			}
+			.copy--inline.is-copied .copy__icon--done {
+				display: inline-flex;
+			}
 			.shell__body {
 				margin: 0;
-				padding: 1.1rem 1.2rem 1.3rem;
+				padding: 0.9rem 1.2rem 1rem;
 				font-family: var(--mono);
 				font-size: 0.86rem;
-				line-height: 1.85;
+				line-height: 1.35;
 				overflow-x: auto;
+			}
+			/* Manifest: the working tree after overlays are placed, every file git-excluded. */
+			.manifest {
+				margin-top: 1.1rem;
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				background: var(--surface);
+				overflow: hidden;
+			}
+			.manifest__head {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 0.6rem;
+				flex-wrap: wrap;
+				padding: 0.6rem 0.9rem;
+				border-bottom: 1px solid var(--border);
+				background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+			}
+			.manifest__title {
+				font-family: var(--mono);
+				font-size: 0.78rem;
+				font-weight: 600;
+				color: var(--text-2);
+			}
+			.manifest__guard {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.36rem;
+				font-size: 0.74rem;
+				font-weight: 700;
+				color: var(--success);
+			}
+			.manifest__guard::before {
+				content: "";
+				width: 7px;
+				height: 7px;
+				border-radius: 50%;
+				background: var(--success);
+			}
+			.manifest__list {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+			}
+			.manifest__row {
+				display: grid;
+				grid-template-columns: 4.6rem minmax(0, 1fr);
+				gap: 0.85rem;
+				align-items: center;
+				padding: 0.6rem 0.9rem;
+			}
+			.manifest__row + .manifest__row {
+				border-top: 1px solid var(--border);
+			}
+			.manifest__kind {
+				justify-self: start;
+				font-family: var(--mono);
+				font-size: 0.64rem;
+				font-weight: 700;
+				letter-spacing: 0.04em;
+				text-transform: uppercase;
+				color: var(--text-2);
+				padding: 0.16rem 0.42rem;
+				border-radius: var(--radius-sm);
+				border: 1px solid var(--border-strong);
+				background: color-mix(in srgb, var(--surface) 60%, var(--bg));
+			}
+			.manifest__info {
+				min-width: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 0.1rem;
+			}
+			.manifest__file {
+				font-size: 0.85rem;
+				color: var(--text);
+				overflow-wrap: anywhere;
+			}
+			.manifest__src {
+				font-size: 0.72rem;
+				color: var(--muted);
+				font-family: var(--mono);
+				overflow-wrap: anywhere;
 			}
 			.shell__body .ln {
 				display: block;
 			}
 			.shell__body .pr {
-				color: var(--accent);
+				color: var(--prompt);
 				font-weight: 700;
 				margin-right: 0.4rem;
 			}
@@ -993,9 +1232,6 @@ const steps = [
 				gap: clamp(2rem, 5vw, 4rem);
 				align-items: start;
 				border-top: 1px solid var(--border);
-			}
-			.problem h2 {
-				font-size: clamp(1.9rem, 3.6vw, 2.8rem);
 			}
 			.problem p {
 				margin-top: 1.2rem;
@@ -1034,193 +1270,324 @@ const steps = [
 				overflow-wrap: anywhere;
 			}
 
-			/* Bento */
-			.bento {
+			/* Install strip */
+			.install-strip {
 				display: grid;
-				grid-template-columns: repeat(3, 1fr);
-				grid-auto-rows: 1fr;
-				gap: 1rem;
-			}
-			.cell {
-				min-width: 0;
-				border: 1px solid var(--border);
-				border-radius: var(--radius);
-				padding: 1.6rem 1.6rem 1.7rem;
-				background: var(--surface);
-				display: flex;
-				flex-direction: column;
-				gap: 0.7rem;
-				transition:
-					transform 0.2s var(--ease),
-					border-color 0.2s var(--ease);
-			}
-			.cell:hover {
-				transform: translateY(-4px);
-				border-color: var(--accent-line);
-			}
-			.cell h3 {
-				font-size: 1.18rem;
-				font-weight: 700;
-			}
-			.cell p {
-				color: var(--text-2);
-				font-size: 0.97rem;
-				overflow-wrap: anywhere;
-			}
-			.chip {
-				align-self: flex-start;
-				max-width: 100%;
-				margin-top: auto;
-				font-size: 0.8rem;
-				padding: 0.3rem 0.6rem;
-				border-radius: 7px;
-				background: var(--bg-2);
-				border: 1px solid var(--border);
-				color: var(--text-2);
-				overflow-wrap: anywhere;
-				white-space: normal;
-			}
-			/* cell 0: big accent feature */
-			.cell--0 {
-				grid-column: span 2;
-				grid-row: span 2;
-				background:
-					radial-gradient(
-						80% 90% at 100% 0%,
-						var(--accent-soft),
-						transparent 60%
-					),
-					var(--surface);
-				border-color: var(--accent-line);
-			}
-			.cell--0 h3 {
-				font-size: 1.7rem;
-			}
-			.cell--0 p {
-				font-size: 1.05rem;
-				max-width: 40ch;
-			}
-			.state-map {
-				position: relative;
-				display: grid;
-				gap: 0.65rem;
-				margin-top: 0.3rem;
-			}
-			.state-map__item {
-				position: relative;
-				display: grid;
-				grid-template-columns: minmax(6rem, 0.32fr) minmax(0, 1fr);
-				gap: 0.8rem;
+				grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+				gap: clamp(1.5rem, 4vw, 3rem);
 				align-items: center;
-				padding: 0.62rem 0.72rem;
-				border: 1px solid color-mix(in srgb, var(--accent-line) 70%, var(--border));
-				border-radius: var(--radius-sm);
-				background: color-mix(in srgb, var(--bg-2) 76%, transparent);
-			}
-			.state-map__item + .state-map__item::before {
-				content: "";
-				position: absolute;
-				top: -0.66rem;
-				left: 1.1rem;
-				width: 1px;
-				height: 0.65rem;
-				background: var(--accent-line);
-			}
-			.state-map__item span {
-				color: var(--muted);
-				font-size: 0.72rem;
-				font-weight: 700;
-			}
-			.state-map__item code {
-				min-width: 0;
-				color: var(--text);
-				font-size: 0.8rem;
-				overflow-wrap: anywhere;
-			}
-			.cell--0 .chip {
-				background: var(--accent-soft);
-				border-color: var(--accent-line);
-				color: var(--accent);
-			}
-			/* cell 4: clay recovery feature */
-			.cell--4 {
-				grid-column: span 2;
-				background: var(--accent);
-				border-color: transparent;
-				color: var(--on-accent);
-			}
-			.cell--4:hover {
-				border-color: transparent;
-			}
-			.cell--4 p {
-				color: var(--on-accent);
-			}
-			.cell--4 .chip {
-				background: color-mix(in srgb, var(--on-accent) 10%, transparent);
-				border-color: color-mix(in srgb, var(--on-accent) 24%, transparent);
-				color: var(--on-accent);
-			}
-
-			/* Flow */
-			.flow {
 				border-top: 1px solid var(--border);
 			}
-			.flow__track {
+			.install-strip__eyebrow {
+				display: block;
+				font-size: 0.95rem;
+				color: var(--text);
+				font-weight: 700;
+			}
+			.install-strip__line {
+				margin-top: 0.7rem;
+				color: var(--text-2);
+				font-size: 1rem;
+				max-width: 34ch;
+			}
+			.install-strip__options {
 				list-style: none;
 				margin: 0;
 				padding: 0;
 				display: grid;
-				grid-template-columns: repeat(3, 1fr);
-				gap: 1.2rem;
-				}
-			.flow__step {
-				position: relative;
+				gap: 0.7rem;
+			}
+
+			/* Command line: a copyable terminal row */
+			.cmdline {
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
 				min-width: 0;
-				padding-top: 1.6rem;
-				border-top: 2px solid var(--border-strong);
-			}
-			.flow__step::before {
-				content: "";
-				position: absolute;
-				top: -2px;
-				left: 0;
-				width: 38%;
-				height: 2px;
-				background: var(--accent);
-			}
-			.flow__step h3 {
-				font-size: 1.25rem;
-				font-weight: 700;
-			}
-			.flow__step p {
-				margin-top: 0.5rem;
-				color: var(--text-2);
-				font-size: 0.97rem;
-				min-height: 3.4em;
-			}
-			.flow__cmd {
-				display: block;
-				margin-top: 1rem;
-				font-size: 0.85rem;
-				padding: 0.7rem 0.85rem;
+				padding: 0.35rem 0.4rem 0.35rem 0.85rem;
 				border-radius: var(--radius-sm);
 				background: var(--surface);
 				border: 1px solid var(--border);
+			}
+			.cmdline__manager {
+				flex: 0 0 auto;
+				font-size: 0.78rem;
+				font-weight: 600;
+				color: var(--text-2);
+				padding-right: 0.75rem;
+				margin-right: 0.1rem;
+				border-right: 1px solid var(--border);
+			}
+			.cmdline__text {
+				flex: 1 1 auto;
+				min-width: 0;
 				overflow-x: auto;
 				white-space: nowrap;
+				font-family: var(--mono);
+				font-size: 0.85rem;
+				color: var(--text);
+				scrollbar-width: none;
+				-webkit-mask-image: linear-gradient(
+					to right,
+					#000 calc(100% - 1.1rem),
+					transparent
+				);
+				mask-image: linear-gradient(
+					to right,
+					#000 calc(100% - 1.1rem),
+					transparent
+				);
 			}
-			.flow__cmd .pr {
-				color: var(--accent);
+			.cmdline__text::-webkit-scrollbar {
+				display: none;
+			}
+			.cmdline__text:focus-visible {
+				outline: 2px solid var(--accent);
+				outline-offset: 2px;
+				border-radius: var(--radius-sm);
+				-webkit-mask-image: none;
+				mask-image: none;
+			}
+			.cmdline .pr {
+				color: var(--prompt);
 				font-weight: 700;
 			}
 
-			/* Final CTA */
+			/* Mechanism: the overlay lifecycle */
+			.mechanism {
+				border-top: 1px solid var(--border);
+			}
+			.mechanism__head {
+				display: grid;
+				gap: 1rem;
+				max-width: 60ch;
+			}
+			.mechanism__sub {
+				color: var(--text-2);
+				font-size: 1rem;
+			}
+			.cmdline--browse,
+			.cmdline--apply {
+				max-width: 30rem;
+			}
+			.mechanism__track {
+				list-style: none;
+				counter-reset: step;
+				margin: clamp(2rem, 4vw, 3rem) 0 0;
+				padding: 0;
+				display: grid;
+				grid-template-columns: repeat(4, 1fr);
+				gap: 1.1rem;
+			}
+			.mechanism__stage {
+				position: relative;
+				min-width: 0;
+				padding-top: 1.35rem;
+				border-top: 2px solid var(--border-strong);
+				counter-increment: step;
+			}
+			.mechanism__stage::before {
+				content: "";
+				position: absolute;
+				top: -6px;
+				left: 0;
+				width: 11px;
+				height: 11px;
+				border-radius: 50%;
+				background: var(--muted);
+				box-shadow: 0 0 0 4px var(--bg);
+			}
+			.mechanism__label {
+				display: block;
+				font-size: 0.72rem;
+				text-transform: uppercase;
+				letter-spacing: 0.12em;
+				font-weight: 700;
+				color: var(--muted);
+			}
+			.mechanism__label::before {
+				content: counter(step, decimal-leading-zero);
+				margin-right: 0.5rem;
+				color: var(--text-2);
+				font-variant-numeric: tabular-nums;
+			}
+			.mechanism__stage h3 {
+				margin-top: 0.45rem;
+				font-size: 1.05rem;
+				font-weight: 700;
+			}
+			.mechanism__stage p {
+				margin-top: 0.4rem;
+				color: var(--text-2);
+				font-size: 0.9rem;
+			}
+			.mechanism__artifact {
+				display: inline-block;
+				margin-top: 0.7rem;
+				font-family: var(--mono);
+				font-size: 0.76rem;
+				color: var(--text);
+				overflow-wrap: anywhere;
+			}
+			.mechanism__apply {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: center;
+				justify-content: space-between;
+				gap: 1.2rem;
+				margin-top: clamp(2rem, 4vw, 3rem);
+				padding: clamp(1.1rem, 2.5vw, 1.6rem);
+				border-radius: var(--radius);
+				background:
+					radial-gradient(
+						90% 120% at 0% 0%,
+						var(--accent-soft),
+						transparent 60%
+					),
+					var(--surface);
+				border: 1px solid var(--accent-line);
+			}
+			.mechanism__apply-eyebrow {
+				display: block;
+				font-size: 0.95rem;
+				font-weight: 700;
+				color: var(--text);
+			}
+			.mechanism__apply-copy p {
+				margin-top: 0.4rem;
+				color: var(--text-2);
+				font-size: 0.92rem;
+			}
+			.mechanism__apply .cmdline {
+				flex: 1 1 22rem;
+				background: var(--bg-2);
+			}
+
+			/* Capabilities: editorial spec list */
+			.capabilities {
+				border-top: 1px solid var(--border);
+			}
+			.capabilities__list {
+				list-style: none;
+				margin: clamp(1.5rem, 3vw, 2.5rem) 0 0;
+				padding: 0;
+				display: grid;
+				gap: 0;
+			}
+			.capability {
+				min-width: 0;
+				display: grid;
+				grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+				gap: clamp(1rem, 4vw, 3rem);
+				align-items: start;
+				padding: 1.5rem 0;
+			}
+			.capability + .capability {
+				border-top: 1px solid var(--border);
+			}
+			.capability__head {
+				display: flex;
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.55rem;
+			}
+			.capability__head h3 {
+				font-size: 1.15rem;
+				font-weight: 700;
+			}
+			.capability__code {
+				font-family: var(--mono);
+				font-size: 0.78rem;
+				color: var(--muted);
+				overflow-wrap: anywhere;
+			}
+			.capability p {
+				margin: 0;
+				color: var(--text-2);
+				font-size: 0.95rem;
+				max-width: 52ch;
+			}
+
+						/* Reversible: nothing you can't undo */
+			.reversible {
+				border-top: 1px solid var(--border);
+			}
+			.reversible__head {
+				display: grid;
+				gap: 1rem;
+				max-width: 60ch;
+			}
+			.reversible__sub {
+				color: var(--text-2);
+				font-size: 1rem;
+			}
+			.reversible__grid {
+				margin-top: clamp(2rem, 4vw, 3rem);
+				display: grid;
+				grid-template-columns: 1.1fr 0.9fr;
+				gap: clamp(1.5rem, 3vw, 2.5rem);
+				align-items: start;
+			}
+			.reversible__actions {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: grid;
+				gap: 1.4rem;
+			}
+			.cmdline--undo {
+				max-width: 30rem;
+			}
+			.reversible__action p {
+				margin-top: 0.55rem;
+				color: var(--text-2);
+				font-size: 0.92rem;
+				max-width: 48ch;
+			}
+			.exclude {
+				margin: 0;
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				background: var(--surface);
+				overflow: hidden;
+			}
+			.exclude__cap {
+				font-family: var(--mono);
+				font-size: 0.78rem;
+				color: var(--text-2);
+				padding: 0.6rem 0.9rem;
+				border-bottom: 1px solid var(--border);
+				background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+			}
+			.exclude__diff {
+				display: grid;
+				padding: 0.7rem 0.9rem;
+				font-family: var(--mono);
+				font-size: 0.82rem;
+				line-height: 1.9;
+				color: var(--text);
+			}
+			.exclude__line {
+				display: flex;
+				gap: 0.5rem;
+				overflow-wrap: anywhere;
+			}
+			.exclude__sign {
+				flex: 0 0 auto;
+				color: var(--success);
+				font-weight: 700;
+			}
+			.exclude__note {
+				margin: 0;
+				padding: 0 0.9rem 0.8rem;
+				color: var(--muted);
+				font-size: 0.78rem;
+			}
+
+						/* Final CTA */
 			.final {
 				text-align: center;
 				border-top: 1px solid var(--border);
-			}
-			.final h2 {
-				font-size: clamp(1.9rem, 4vw, 3rem);
 			}
 			.final p {
 				margin: 1.1rem auto 0;
@@ -1307,13 +1674,11 @@ const steps = [
 				}
 				.btn,
 				.btn svg,
-				.copy,
-				.cell {
+				.copy {
 					transition: none;
 				}
 				.btn--primary:hover,
 				.btn--ghost:hover,
-				.cell:hover,
 				.btn--primary:hover svg {
 					transform: none;
 				}
@@ -1323,22 +1688,35 @@ const steps = [
 					background: CanvasText;
 				}
 				.hero__panel::before,
-				.hero__panel::after,
-				.overlay-stack {
+				.hero__panel::after {
 					display: none;
 				}
 				.btn,
 				.copy,
 				.shell,
-				.mechanics,
+				.manifest,
 				.configs,
-				.cell,
-				.flow__cmd {
+				.cmdline,
+				.mechanism__stage,
+				.mechanism__apply,
+				.capability,
+				.exclude {
 					border-color: CanvasText;
 				}
 				.btn--primary {
 					background: ButtonText;
 					color: ButtonFace;
+				}
+			}
+
+			@media (pointer: coarse) {
+				.copy,
+				.copy--inline {
+					min-width: 44px;
+					min-height: 44px;
+				}
+				.nav__links a {
+					padding-block: 0.35rem;
 				}
 			}
 
@@ -1357,28 +1735,21 @@ const steps = [
 					max-width: min(13ch, 100%);
 					font-size: clamp(2.55rem, 10vw, 4.6rem);
 				}
-				.bento {
-					grid-template-columns: 1fr 1fr;
-				}
-				.cell--0,
-				.cell--4 {
-					grid-column: span 2;
-					grid-row: auto;
-				}
-				.flow__track {
+				.install-strip {
 					grid-template-columns: 1fr;
 				}
-				.flow__step p {
-					min-height: 0;
+				.mechanism__track {
+					grid-template-columns: 1fr 1fr;
 				}
-				.stack-card--source {
-					left: 0.4rem;
+				.capabilities__list {
+					grid-template-columns: 1fr;
 				}
-				.stack-card--exclude {
-					right: 0.4rem;
+				.reversible__grid {
+					grid-template-columns: 1fr;
 				}
-				.stack-card--state {
-					right: 2rem;
+				.capability {
+					grid-template-columns: 1fr;
+					gap: 0.7rem;
 				}
 			}
 			@media (max-width: 600px) {
@@ -1397,27 +1768,18 @@ const steps = [
 					gap: 0.5rem;
 					font-size: 0.9rem;
 				}
-				.nav__links a[href="/cli-reference/"] {
-					display: none;
+				.cmdline__text {
+					white-space: normal;
+					overflow-x: visible;
+					-webkit-mask-image: none;
+					mask-image: none;
 				}
-				.bento,
 				.configs,
 				.foot__cols {
 					grid-template-columns: 1fr;
 				}
-				.cell--0,
-				.cell--4 {
-					grid-column: span 1;
-				}
-				.mechanics {
+				.mechanism__track {
 					grid-template-columns: 1fr;
-				}
-				.mechanics div + div {
-					border-top: 1px solid var(--border);
-					border-left: 0;
-				}
-				.overlay-stack {
-					display: none;
 				}
 				.hero__panel {
 					padding-block: 1rem;
@@ -1428,14 +1790,14 @@ const steps = [
 				.shell__body {
 					font-size: 0.78rem;
 				}
+				.manifest__row {
+					grid-template-columns: 4rem 1fr;
+					gap: 0.7rem;
+				}
 				.copy {
 					min-width: 44px;
 					min-height: 44px;
 					padding-inline: 0.8rem;
-				}
-				.state-map__item {
-					grid-template-columns: 1fr;
-					gap: 0.2rem;
 				}
 				.cta-row .btn {
 					flex: 1 1 13rem;

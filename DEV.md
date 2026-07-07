@@ -181,17 +181,17 @@ The GitHub App configured by `RELEASE_APP_ID`/`RELEASE_APP_PRIVATE_KEY` must be 
 
 *Snapshot: 2026-06-10.*
 
-The full profiles + plugins implementation landed on `main` in #347 (squash of the `profiles` branch) and shipped in **v0.15.0**. All profile-related tests pass on `main` (46 tests via `cargo test profile`). The feature is **hidden**: the `profile`, `claude`, and `copilot` commands are declared with `hide = true` in `src/cli/mod.rs`, so they work but do not appear in `--help`. Only `marketplace` is visible.
+The full profiles + plugins implementation landed on `main` in #347 (squash of the `profiles` branch) and shipped hidden in **v0.15.0**. All profile-related tests pass on `main` (46 tests via `cargo test profile`). The feature is **public as of v0.17.0**: the `profile`, `claude`, and `copilot` commands appear in `--help` and the CLI reference alongside `marketplace`.
 
 ### CLI surface
 
-| Command | Visibility | Purpose |
-| --- | --- | --- |
-| `repoverlay profile list/show/apply/status/remove` | hidden | Persistent profile lifecycle (`apply`/`status`/`remove` take `--harness claude\|copilot`) |
-| `repoverlay claude --profile X [--profile Y] [-- args]` | hidden | Run Claude with profiles applied for the process lifetime (ephemeral) |
-| `repoverlay copilot --profile X [--profile Y] [-- args]` | hidden | Same for GitHub Copilot CLI |
-| `repoverlay marketplace …` | visible | Manage the plugin marketplace registry |
-| `repoverlay update` | visible | Also re-resolves managed profile plugins (full update only, not single-overlay) |
+| Command | Purpose |
+| --- | --- |
+| `repoverlay profile list/show/apply/status/remove` | Persistent profile lifecycle (`apply`/`status`/`remove` take `--harness claude\|copilot`) |
+| `repoverlay claude --profile X [--profile Y] [-- args]` | Run Claude with profiles applied for the process lifetime (ephemeral) |
+| `repoverlay copilot --profile X [--profile Y] [-- args]` | Same for GitHub Copilot CLI |
+| `repoverlay marketplace …` | Manage the plugin marketplace registry |
+| `repoverlay update` | Also re-resolves managed profile plugins (full update only, not single-overlay) |
 
 ### What a profile contains and how each part maps to a harness
 
@@ -222,8 +222,8 @@ Harness identity (`AgentHarness` in `src/profile_applicators/mod.rs`): stable id
 ### Remaining work
 
 - **Hooks and commands**: plugin bundle `hooks/` and `commands/` are never decomposed for either harness.
-- **Un-hide the CLI**: `profile`, `claude`, and `copilot` are still hidden pending public announcement.
-- **Unmerged docs on the `profiles` branch**: the website profiles guide (`website/src/content/docs/guides/profiles.md`), homepage profile announcements, and the design specs/plans (`docs/superpowers/specs/2026-06-02-profiles-design.md`, `2026-06-03-plugins-design.md`, plans, and the harness-process refactor docs) exist only on the branch. The branch's source code is otherwise fully merged — `main` is *ahead* of it (the branch lacks the cf4114f cross-platform symlink fix), so only the docs need to be brought over. The unmerged guide also predates Claude instruction placement (it documents instructions as Copilot-only), so it needs updating when brought over.
+
+The website profiles guide, homepage announcements, design specs (`docs/superpowers/specs/`), and unreleased changelog fragments were brought over from the `profiles` branch in the v0.17.0 announcement PR, with revision notes where the shipped behavior diverged from the specs. The branch's implementation plans (`docs/superpowers/plans/`) and the `Fixed` fragment for never-released behavior were intentionally not brought over; they remain in git history on the `profiles` branch.
 
 ## Vendored Agent Skills
 

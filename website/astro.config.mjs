@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import starlight from "@astrojs/starlight";
 import starlightAnnouncement from "starlight-announcement";
+import starlightBlog from "starlight-blog";
+import starlightHeadingBadges from "starlight-heading-badges";
 import a11yEmoji from "@fec/remark-a11y-emoji";
 import { includeMarkdown } from "@hashicorp/platform-remark-plugins";
 import { defineConfig } from "astro/config";
@@ -39,12 +41,23 @@ export default defineConfig({
 				"Overlay config files into git repositories without committing them.",
 			lastUpdated: true,
 			customCss: [
-				"@fontsource/metropolis/400.css",
-				"@fontsource/metropolis/600.css",
+				"@fontsource-variable/schibsted-grotesk",
+				"@fontsource/commit-mono/400.css",
+				"@fontsource/commit-mono/700.css",
 				"./src/styles/fonts.css",
 				"./src/styles/custom.css",
 			],
 			plugins: [
+				starlightBlog({
+					title: "Blog",
+					authors: {
+						tylerbutler: {
+							name: "Tyler Butler",
+							title: "Author of repoverlay",
+							url: "https://github.com/tylerbutler",
+						},
+					},
+				}),
 				starlightAnnouncement({
 					announcements: [
 						{
@@ -59,6 +72,7 @@ export default defineConfig({
 						},
 					],
 				}),
+				starlightHeadingBadges(),
 				starlightLlmsTxt(),
 				starlightLinksValidator(),
 			],
@@ -109,6 +123,10 @@ export default defineConfig({
 						{
 							label: "Restoring After Git Clean",
 							slug: "guides/restoring",
+						},
+						{
+							label: "Profiles",
+							slug: "guides/profiles",
 						},
 						{
 							label: "How It Works",

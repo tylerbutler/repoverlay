@@ -1,7 +1,7 @@
 ---
 title: How It Works
 sidebar:
-  order: 5
+  order: 6
 ---
 
 Symlinks, git exclusions, and external backups do the work. This page covers each mechanism.
