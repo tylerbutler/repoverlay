@@ -19,8 +19,8 @@ use crate::selection::is_interactive;
 use crate::sources;
 use crate::state;
 use crate::state::{
-    OverlaySource, OverlayState, ResolvedVia, SourceResolver, list_applied_overlays,
-    normalize_overlay_name, save_overlay_state,
+    OverlaySource, OverlayState, ResolvedVia, list_applied_overlays, normalize_overlay_name,
+    save_overlay_state,
 };
 use crate::upstream;
 use crate::upstream::detect_upstream;
@@ -604,10 +604,7 @@ fn prompt_save_source(owner: &str, repo: &str, target_path: Option<&Path>) -> Re
     let source_name = repo.to_string();
 
     let prompt = format!("Save {owner}/{repo} as a source for future use?");
-    let confirmed = dialoguer::Confirm::new()
-        .with_prompt(&prompt)
-        .default(true)
-        .interact()?;
+    let confirmed = crate::prompt::confirm(&prompt, true)?;
 
     if !confirmed {
         return Ok(());

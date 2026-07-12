@@ -209,17 +209,13 @@ pub(crate) fn create_overlay(
 
             // Get output directory from user if not specified
             let final_output = if output.is_none() {
-                use dialoguer::Input;
-
                 println!(
                     "Where should the overlay be created?\n\
                      (This directory will contain the overlay files and config)"
                 );
 
-                let path_str: String = Input::new()
-                    .with_prompt("Overlay directory")
-                    .default(output_dir.display().to_string())
-                    .interact_text()?;
+                let path_str =
+                    crate::prompt::input("Overlay directory", &output_dir.display().to_string())?;
 
                 PathBuf::from(path_str)
             } else {

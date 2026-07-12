@@ -22,6 +22,7 @@ mod plugin;
 mod profile;
 mod profile_applicators;
 mod profile_plan;
+mod prompt;
 mod reference;
 mod remove;
 mod resolve;

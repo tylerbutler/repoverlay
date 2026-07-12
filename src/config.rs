@@ -121,12 +121,6 @@ impl Source {
         self.path.is_some()
     }
 
-    /// Returns `true` if this is a git-based source.
-    #[allow(dead_code)] // Utility method for callers
-    pub(crate) const fn is_git(&self) -> bool {
-        self.url.is_some()
-    }
-
     /// Get the URL. Returns an error if this is a local source.
     pub(crate) fn url(&self) -> Result<&str> {
         self.url.as_deref().ok_or_else(|| {
@@ -145,22 +139,6 @@ impl Source {
                 self.name
             )
         })
-    }
-
-    /// Validate that exactly one of url or path is set.
-    #[allow(dead_code)] // Utility method; used in tests
-    pub(crate) fn validate(&self) -> Result<()> {
-        match (&self.url, &self.path) {
-            (Some(_), None) | (None, Some(_)) => Ok(()),
-            (Some(_), Some(_)) => anyhow::bail!(
-                "Source '{}' has both url and path; only one is allowed",
-                self.name
-            ),
-            (None, None) => anyhow::bail!(
-                "Source '{}' has neither url nor path; one is required",
-                self.name
-            ),
-        }
     }
 }
 
@@ -431,7 +409,7 @@ fn config_dir_with_env(xdg: Option<&str>) -> Result<PathBuf> {
     let base = if let Some(xdg) = xdg {
         PathBuf::from(xdg)
     } else {
-        dirs::home_dir()
+        std::env::home_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?
             .join(".config")
     };
@@ -982,7 +960,6 @@ sources =
         let source = &config.sources[0];
         assert!(source.url.is_none());
         assert!(source.path.is_none());
-        assert!(source.validate().is_err());
     }
 
     #[test]
@@ -1542,54 +1519,6 @@ sources =
         assert!(repo_config_path(temp.path()).exists());
     }
 
-    // ==================== Source validation tests ====================
-
-    #[test]
-    fn test_source_validate_url_only_ok() {
-        let source = Source {
-            name: "test".to_string(),
-            url: Some("https://github.com/org/repo".to_string()),
-            path: None,
-        };
-        assert!(source.validate().is_ok());
-        assert!(source.is_git());
-        assert!(!source.is_local());
-    }
-
-    #[test]
-    fn test_source_validate_path_only_ok() {
-        let source = Source {
-            name: "test".to_string(),
-            url: None,
-            path: Some(PathBuf::from("./my-overlays")),
-        };
-        assert!(source.validate().is_ok());
-        assert!(source.is_local());
-        assert!(!source.is_git());
-    }
-
-    #[test]
-    fn test_source_validate_both_set_err() {
-        let source = Source {
-            name: "test".to_string(),
-            url: Some("https://github.com/org/repo".to_string()),
-            path: Some(PathBuf::from("./my-overlays")),
-        };
-        let err = source.validate().unwrap_err();
-        assert!(err.to_string().contains("both url and path"));
-    }
-
-    #[test]
-    fn test_source_validate_neither_set_err() {
-        let source = Source {
-            name: "test".to_string(),
-            url: None,
-            path: None,
-        };
-        let err = source.validate().unwrap_err();
-        assert!(err.to_string().contains("neither url nor path"));
-    }
-
     // ==================== CCL serialization roundtrip for path sources ====================
 
     #[test]
@@ -1651,7 +1580,6 @@ sources =
             Some(Path::new("overlays"))
         );
         assert_eq!(parsed.sources[1].name, "remote");
-        assert!(parsed.sources[1].is_git());
         assert_eq!(
             parsed.sources[1].url().unwrap(),
             "https://github.com/org/overlays"

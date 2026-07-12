@@ -1100,7 +1100,6 @@ const fn conflict_strategy(
 mod tests {
     use super::*;
     use crate::cli::commands::create::{detect_target_repo, parse_overlay_name_arg};
-    use crate::cli::commands::edit::resolve_overlay_source_path;
     use crate::cli::commands::sync::sync_single_overlay;
     use crate::{create_overlay, remove_overlay};
     use std::fs;
@@ -5698,7 +5697,7 @@ directories =
     /// Regression tests for source-type dispatch bugs.
     ///
     /// These tests reproduce the bugs described in issues #142, #143, #145–#148.
-    /// They should fail on the `main` branch (before the `SourceResolver` fix)
+    /// They should fail on the `main` branch (before the source-resolution fix)
     /// and pass once the fix from #149 is applied.
     mod source_resolver_bugs {
         use super::*;
@@ -5745,7 +5744,7 @@ directories =
 
             // BUG: On main, this returns Err("Interactive edit is not supported for GitHub overlays")
             // EXPECTED: Should return Ok with a path (the cached path), not bail
-            let result = resolve_overlay_source_path(&state);
+            let result = state.source.resolve_local_path();
             assert!(
                 !result
                     .as_ref()
@@ -5759,7 +5758,7 @@ directories =
         // ==================== #143: add_files_to_overlay assumes overlay repo ====================
 
         /// Issue #143: `add_files_to_overlay` should use `resolve_local_path()` from
-        /// the `SourceResolver` trait for Local sources instead of going through the
+        /// source resolution for Local sources instead of going through the
         /// overlay repo code path. With the fix, `dry_run` succeeds for local sources
         /// by resolving directly to the local path.
         #[test]
@@ -5781,7 +5780,7 @@ directories =
             fs::write(repo.path().join(".envrc"), "export FOO=bar").unwrap();
             fs::write(repo.path().join("new-file.txt"), "new content").unwrap();
 
-            // With the SourceResolver fix (#149), add_files_to_overlay uses
+            // With the source-resolution fix (#149), add_files_to_overlay uses
             // resolve_local_path() which returns the local path directly for
             // Local sources — no overlay repo lookup needed.
             let result = add_files_to_overlay(
@@ -5846,12 +5845,10 @@ directories =
         // ==================== #145: update shows wrong message for OverlayRepo ====================
 
         /// Issue #145: `update_overlays` should distinguish `OverlayRepo` from Local
-        /// sources. With the `SourceResolver` fix (#149), `source_type_label()` returns
+        /// sources. With the source-resolution fix (#149), `source_type_label()` returns
         /// different labels and `is_updatable()` returns different values for each.
         #[test]
         fn issue_145_update_code_should_handle_overlay_repo_separately() {
-            use crate::state::SourceResolver;
-
             let local_source = OverlaySource::local(PathBuf::from("/path"));
             let repo_source = OverlaySource::overlay_repo(
                 "org".to_string(),
@@ -5860,7 +5857,7 @@ directories =
                 "abc".to_string(),
             );
 
-            // SourceResolver provides distinct labels for each source type
+            // Source resolution provides distinct labels for each source type
             assert_ne!(
                 local_source.source_type_label(),
                 repo_source.source_type_label(),
@@ -6078,7 +6075,7 @@ directories =
             // get_default_overlay_repo_config() (ignoring source_name) and fail
             // with "Overlay repository not configured" rather than a source-name-aware
             // error like "Source 'secondary-source' not found in configuration".
-            let result = resolve_overlay_source_path(&state);
+            let result = state.source.resolve_local_path();
             assert!(
                 result.is_err(),
                 "Expected error (no config available in test env)"

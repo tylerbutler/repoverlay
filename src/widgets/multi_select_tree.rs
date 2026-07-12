@@ -65,48 +65,9 @@ impl<Id: Clone + Eq + Hash> MultiSelectTreeState<Id> {
         self.selected.contains(id)
     }
 
-    /// Toggle selection of a single item.
-    #[allow(dead_code)]
-    pub(crate) fn toggle(&mut self, id: &Id) {
-        if self.selected.contains(id) {
-            self.selected.remove(id);
-        } else {
-            self.selected.insert(id.clone());
-        }
-    }
-
     /// Select a single item.
     pub(crate) fn select(&mut self, id: Id) {
         self.selected.insert(id);
-    }
-
-    /// Select multiple items.
-    #[allow(dead_code)]
-    pub(crate) fn select_many(&mut self, ids: impl IntoIterator<Item = Id>) {
-        self.selected.extend(ids);
-    }
-
-    /// Deselect multiple items.
-    #[allow(dead_code)]
-    pub(crate) fn deselect_many<'a>(&mut self, ids: impl IntoIterator<Item = &'a Id>)
-    where
-        Id: 'a,
-    {
-        for id in ids {
-            self.selected.remove(id);
-        }
-    }
-
-    /// Get the number of selected items.
-    #[allow(dead_code)]
-    pub(crate) fn selected_count(&self) -> usize {
-        self.selected.len()
-    }
-
-    /// Get an iterator over selected identifiers.
-    #[allow(dead_code)]
-    pub(crate) fn selected_ids(&self) -> impl Iterator<Item = &Id> {
-        self.selected.iter()
     }
 
     /// Clear all selections.
@@ -213,13 +174,6 @@ impl<'a, Id: Clone + Eq + Hash + 'a> MultiSelectTree<'a, Id> {
     /// Set the function used to compute descendant IDs for tri-state checkboxes.
     pub(crate) fn descendants_fn(mut self, f: DescendantsFn<'a, Id>) -> Self {
         self.descendants_fn = Some(f);
-        self
-    }
-
-    /// Set the highlight style for the focused node.
-    #[allow(dead_code)]
-    pub(crate) const fn highlight_style(mut self, style: Style) -> Self {
-        self.highlight_style = style;
         self
     }
 
@@ -335,16 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn toggle_leaf_selection() {
-        let mut state = MultiSelectTreeState::<String>::default();
-        assert!(!state.is_selected(&"child-a".to_string()));
-        state.toggle(&"child-a".to_string());
-        assert!(state.is_selected(&"child-a".to_string()));
-        state.toggle(&"child-a".to_string());
-        assert!(!state.is_selected(&"child-a".to_string()));
-    }
-
-    #[test]
     fn check_state_all_selected() {
         let mut state = MultiSelectTreeState::<String>::default();
         state.select("child-a".to_string());
@@ -375,21 +319,13 @@ mod tests {
     }
 
     #[test]
-    fn select_many_and_deselect_many() {
-        let mut state = MultiSelectTreeState::<String>::default();
-        state.select_many(["a".to_string(), "b".to_string(), "c".to_string()]);
-        assert_eq!(state.selected_count(), 3);
-        state.deselect_many(&["a".to_string(), "b".to_string()]);
-        assert_eq!(state.selected_count(), 1);
-        assert!(state.is_selected(&"c".to_string()));
-    }
-
-    #[test]
     fn clear_selection() {
         let mut state = MultiSelectTreeState::<String>::default();
-        state.select_many(["a".to_string(), "b".to_string()]);
+        state.select("a".to_string());
+        state.select("b".to_string());
         state.clear_selection();
-        assert_eq!(state.selected_count(), 0);
+        assert!(!state.is_selected(&"a".to_string()));
+        assert!(!state.is_selected(&"b".to_string()));
     }
 
     #[test]

@@ -73,14 +73,14 @@ impl SourceReference {
 
         // Handle tilde expansion for home directory
         if input == "~" {
-            if let Some(home) = dirs::home_dir() {
+            if let Some(home) = std::env::home_dir() {
                 return Self::LocalPath {
                     path: home,
                     needs_prefix_warning: false,
                 };
             }
         } else if let Some(rest) = input.strip_prefix("~/")
-            && let Some(home) = dirs::home_dir()
+            && let Some(home) = std::env::home_dir()
         {
             return Self::LocalPath {
                 path: home.join(rest),
@@ -142,19 +142,6 @@ impl SourceReference {
             path: PathBuf::from(input),
             needs_prefix_warning: false,
         }
-    }
-
-    /// Check if this reference requires the user to add a `./` prefix.
-    #[must_use]
-    #[allow(dead_code)] // Available for future use
-    pub(crate) const fn needs_local_path_warning(&self) -> bool {
-        matches!(
-            self,
-            Self::LocalPath {
-                needs_prefix_warning: true,
-                ..
-            }
-        )
     }
 }
 
@@ -265,7 +252,7 @@ mod tests {
         } = result
         {
             // Should expand to home dir (if available)
-            if let Some(home) = dirs::home_dir() {
+            if let Some(home) = std::env::home_dir() {
                 assert_eq!(path, home);
             }
             assert!(!needs_prefix_warning);
@@ -301,7 +288,7 @@ mod tests {
             needs_prefix_warning,
         } = result
         {
-            if let Some(home) = dirs::home_dir() {
+            if let Some(home) = std::env::home_dir() {
                 assert_eq!(path, home.join("overlays/test"));
             }
             assert!(!needs_prefix_warning);
@@ -344,37 +331,6 @@ mod tests {
         } else {
             panic!("Expected TwoPart with whitespace preserved");
         }
-    }
-
-    #[test]
-    fn needs_local_path_warning_returns_false_for_explicit_paths() {
-        let reference = SourceReference::LocalPath {
-            path: PathBuf::from("./test"),
-            needs_prefix_warning: false,
-        };
-        assert!(!reference.needs_local_path_warning());
-    }
-
-    #[test]
-    fn needs_local_path_warning_returns_true_for_ambiguous_paths() {
-        let reference = SourceReference::LocalPath {
-            path: PathBuf::from("test"),
-            needs_prefix_warning: true,
-        };
-        assert!(reference.needs_local_path_warning());
-    }
-
-    #[test]
-    fn needs_local_path_warning_returns_false_for_non_local_path() {
-        let reference = SourceReference::GitHubUrl("https://github.com/a/b".to_string());
-        assert!(!reference.needs_local_path_warning());
-
-        let reference = SourceReference::ThreePart {
-            owner: "a".to_string(),
-            repo: "b".to_string(),
-            overlay: "c".to_string(),
-        };
-        assert!(!reference.needs_local_path_warning());
     }
 
     #[test]

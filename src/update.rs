@@ -14,8 +14,8 @@ use crate::canonicalize_path;
 use crate::github::GitHubSource;
 use crate::remove_single_overlay;
 use crate::state::{
-    OVERLAYS_DIR, OverlaySource, STATE_DIR, SourceResolver, list_applied_overlays,
-    load_overlay_state, normalize_overlay_name,
+    OVERLAYS_DIR, OverlaySource, STATE_DIR, list_applied_overlays, load_overlay_state,
+    normalize_overlay_name,
 };
 
 /// Update applied overlays from remote sources.

@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
-use crate::state::{OverlaySource, SourceResolver};
+use crate::state::OverlaySource;
 use crate::{
     OVERLAYS_DIR, STATE_DIR, canonicalize_path, list_applied_overlays, remove_overlay,
     remove_single_overlay, selection::is_interactive, state, validate_git_repo,

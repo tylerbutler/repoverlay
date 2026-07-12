@@ -56,9 +56,6 @@ pub(crate) struct CachedOverlay {
     pub(crate) path: PathBuf,
     /// The resolved commit SHA
     pub(crate) commit: String,
-    /// When the cache was created/updated
-    #[allow(dead_code)]
-    pub(crate) cached_at: DateTime<Utc>,
 }
 
 /// Information about a cached repository.
@@ -134,7 +131,6 @@ impl CacheManager {
         };
 
         let commit = self.get_current_commit(&repo_path)?;
-        let cached_at = Utc::now();
 
         // Save cache metadata
         self.save_meta(&repo_path, source, &commit)?;
@@ -142,7 +138,6 @@ impl CacheManager {
         Ok(CachedOverlay {
             path: overlay_path,
             commit,
-            cached_at,
         })
     }
 
@@ -171,7 +166,7 @@ impl CacheManager {
 
         // If specific branch/tag, clone that
         match &source.git_ref {
-            GitRef::Branch(branch) | GitRef::Tag(branch) => {
+            GitRef::Branch(branch) => {
                 cmd.args(["--branch", branch]);
             }
             GitRef::Default | GitRef::Commit(_) => {
@@ -232,7 +227,6 @@ impl CacheManager {
                 debug!("remote ref not found, falling back to local: {b}");
                 b.as_str()
             }
-            GitRef::Tag(t) => t.as_str(),
             GitRef::Commit(c) => c.as_str(),
         };
 
@@ -419,8 +413,8 @@ impl CacheManager {
         let ref_spec = match &source.git_ref {
             GitRef::Default => "origin/HEAD".to_string(),
             GitRef::Branch(b) => format!("origin/{b}"),
-            GitRef::Tag(_) | GitRef::Commit(_) => {
-                // Tags and commits don't have "updates"
+            GitRef::Commit(_) => {
+                // Commits don't have "updates"
                 return Ok(None);
             }
         };
@@ -750,62 +744,6 @@ mod tests {
         let result = manager.check_for_updates(&source).unwrap();
 
         // Should return None for non-existent repo
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_check_for_updates_tag_returns_none() {
-        let temp = TempDir::new().unwrap();
-        let manager = CacheManager {
-            cache_dir: temp.path().to_path_buf(),
-        };
-
-        // Create a fake cached repo
-        let repo_path = temp.path().join("github/owner/repo");
-        fs::create_dir_all(&repo_path).unwrap();
-
-        // Initialize as git repo
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-
-        // Configure git user for commit
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-
-        // Create an initial commit
-        fs::write(repo_path.join("file.txt"), "content").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "initial"])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-
-        // Parse as tag source - tags don't have "updates"
-        let source = GitHubSource {
-            owner: "owner".to_string(),
-            repo: "repo".to_string(),
-            git_ref: GitRef::Tag("v1.0.0".to_string()),
-            subpath: None,
-        };
-
-        let result = manager.check_for_updates(&source).unwrap();
-        // Tags don't have updates, should return None
         assert!(result.is_none());
     }
 

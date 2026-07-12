@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use crate::profile_applicators::AgentHarness;
 
-#[allow(dead_code)]
 const PROFILES_DIR: &str = "profiles";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -126,7 +125,6 @@ fn merge_list<T: Clone>(base: &[T], override_list: &[T]) -> Vec<T> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn profile_state_path(
     target: &Path,
     name: &str,
@@ -249,19 +247,17 @@ pub(crate) fn validate_profile_marker_component(component: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
 pub(crate) fn save_profile_state(target: &Path, state: &ProfileState) -> Result<()> {
     let path = profile_state_path(target, &state.name, state.harness)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let content = sickle::to_string(state).context("Failed to serialize profile state")?;
-    crate::state::atomic_write(&path, &content)
+    crate::fs_util::atomic_write(&path, &content)
         .with_context(|| format!("Failed to write profile state: {}", path.display()))?;
     Ok(())
 }
 
-#[allow(dead_code)]
 pub(crate) fn load_profile_state(
     target: &Path,
     name: &str,
@@ -280,7 +276,6 @@ pub(crate) fn load_profile_state(
 /// filenames, because profile names may legally contain `.`. A file that fails
 /// to parse is skipped (with the error returned alongside its path) so a single
 /// corrupt state file does not abort bulk operations such as `update`.
-#[allow(dead_code)]
 pub(crate) fn list_applied_profile_states(target: &Path) -> Result<Vec<ProfileState>> {
     let dir = target.join(crate::state::STATE_DIR).join(PROFILES_DIR);
     if !dir.try_exists().unwrap_or(false) {
@@ -310,7 +305,6 @@ pub(crate) fn list_applied_profile_states(target: &Path) -> Result<Vec<ProfileSt
     Ok(states)
 }
 
-#[allow(dead_code)]
 pub(crate) fn remove_profile_state(target: &Path, name: &str, harness: AgentHarness) -> Result<()> {
     let path = profile_state_path(target, name, harness)?;
     if path.exists() {
@@ -322,14 +316,13 @@ pub(crate) fn remove_profile_state(target: &Path, name: &str, harness: AgentHarn
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[allow(dead_code)]
 pub(crate) enum ProfileMode {
     Persistent,
     Ephemeral,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) struct ProfileState {
     pub(crate) name: String,
     pub(crate) harness: AgentHarness,
@@ -351,7 +344,7 @@ pub(crate) struct ProfileState {
 /// Provenance for a managed plugin that was resolved, cached, and decomposed
 /// into native harness placements during apply.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) struct ProfilePluginEntry {
     pub(crate) reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -359,7 +352,7 @@ pub(crate) struct ProfilePluginEntry {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) struct ProfileFileEntry {
     pub(crate) source: PathBuf,
     pub(crate) target: PathBuf,
@@ -377,7 +370,6 @@ pub(crate) struct ProfileFileEntry {
 /// are repo-local; this only distinguishes the project/local settings split.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-#[allow(dead_code)]
 pub(crate) enum DelegateScope {
     /// `.claude/settings.json` (team-shareable, committed)
     Project,
@@ -386,7 +378,7 @@ pub(crate) enum DelegateScope {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) struct SkippedCapability {
     pub(crate) capability: String,
     pub(crate) reason: String,

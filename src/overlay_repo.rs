@@ -790,71 +790,10 @@ fn lexically_contained(link_path: &Path, target: &Path, root: &Path) -> bool {
     resolved.starts_with(root)
 }
 
-/// Parse an overlay reference in the format "org/repo/name".
-#[allow(dead_code)] // Kept for backward compatibility; new code uses reference::SourceReference
-pub(crate) fn parse_overlay_reference(s: &str) -> Option<(String, String, String)> {
-    // Must have exactly 3 parts separated by /
-    let parts: Vec<_> = s.split('/').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    // Must not look like a path or URL
-    if s.starts_with('.') || s.starts_with('/') || s.contains("://") {
-        return None;
-    }
-
-    // Each part must be non-empty
-    if parts.iter().any(|p| p.is_empty()) {
-        return None;
-    }
-
-    Some((
-        parts[0].to_string(),
-        parts[1].to_string(),
-        parts[2].to_string(),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_parse_overlay_reference_valid() {
-        let result = parse_overlay_reference("microsoft/FluidFramework/claude-config");
-        assert!(result.is_some());
-        let (org, repo, name) = result.unwrap();
-        assert_eq!(org, "microsoft");
-        assert_eq!(repo, "FluidFramework");
-        assert_eq!(name, "claude-config");
-    }
-
-    #[test]
-    fn test_parse_overlay_reference_invalid_path() {
-        assert!(parse_overlay_reference("./local/path").is_none());
-        assert!(parse_overlay_reference("/absolute/path/here").is_none());
-    }
-
-    #[test]
-    fn test_parse_overlay_reference_invalid_url() {
-        assert!(parse_overlay_reference("https://github.com/owner/repo").is_none());
-    }
-
-    #[test]
-    fn test_parse_overlay_reference_wrong_parts() {
-        assert!(parse_overlay_reference("org/repo").is_none());
-        assert!(parse_overlay_reference("org/repo/name/extra").is_none());
-        assert!(parse_overlay_reference("single").is_none());
-    }
-
-    #[test]
-    fn test_parse_overlay_reference_empty_parts() {
-        assert!(parse_overlay_reference("org//name").is_none());
-        assert!(parse_overlay_reference("/repo/name").is_none());
-        assert!(parse_overlay_reference("org/repo/").is_none());
-    }
 
     #[test]
     fn test_default_overlay_repo_path() {

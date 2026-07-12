@@ -139,15 +139,6 @@ impl SourceManager {
             .collect()
     }
 
-    /// Get a source by name.
-    #[allow(dead_code)] // Utility method for future use
-    pub(crate) fn get_source(&self, name: &str) -> Option<&Source> {
-        self.sources
-            .iter()
-            .find(|s| s.source.name == name)
-            .map(|s| &s.source)
-    }
-
     /// Ensure all git sources are cloned.
     pub(crate) fn ensure_all_cloned(&self) -> Result<()> {
         for ms in &self.sources {
@@ -299,53 +290,6 @@ impl SourceManager {
         }
 
         Ok(None)
-    }
-
-    /// Find all sources that have a specific overlay.
-    ///
-    /// Returns a list of (source, `resolved_via`) pairs for each source
-    /// that has the overlay.
-    #[allow(dead_code)] // Utility method for future `resolve` command
-    pub(crate) fn find_all_matches(
-        &self,
-        org: &str,
-        repo: &str,
-        name: &str,
-        upstream: Option<&UpstreamInfo>,
-    ) -> Result<Vec<(Source, ResolvedVia)>> {
-        let mut matches = Vec::new();
-
-        for ms in &self.sources {
-            match &ms.backend {
-                ManagedSourceBackend::Git(manager) => {
-                    if manager.needs_clone() {
-                        continue;
-                    }
-                    if let Some((_, resolved_via)) =
-                        manager.find_overlay_path_with_fallback(org, repo, name, upstream)?
-                    {
-                        matches.push((ms.source.clone(), resolved_via));
-                    }
-                }
-                ManagedSourceBackend::Local { path: base_path } => {
-                    if get_overlay_path_in_dir(base_path, org, repo, name).is_some() {
-                        matches.push((ms.source.clone(), ResolvedVia::Direct));
-                    } else if let Some(upstream_info) = upstream
-                        && get_overlay_path_in_dir(
-                            base_path,
-                            &upstream_info.org,
-                            &upstream_info.repo,
-                            name,
-                        )
-                        .is_some()
-                    {
-                        matches.push((ms.source.clone(), ResolvedVia::Upstream));
-                    }
-                }
-            }
-        }
-
-        Ok(matches)
     }
 
     /// List overlay names for a specific org/repo across all sources.
@@ -1191,68 +1135,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_all_matches() {
-        let temp = TempDir::new().unwrap();
-        let cache_dir = temp.path();
-
-        // Both sources have the overlay
-        let source1_path = cache_dir.join("personal");
-        let source2_path = cache_dir.join("team");
-        fs::create_dir_all(&source1_path).unwrap();
-        fs::create_dir_all(&source2_path).unwrap();
-
-        create_mock_source(
-            &source1_path,
-            &[("microsoft", "FluidFramework", "claude-config")],
-        );
-        create_mock_source(
-            &source2_path,
-            &[("microsoft", "FluidFramework", "claude-config")],
-        );
-
-        let sources = vec![
-            Source {
-                name: "personal".to_string(),
-                url: Some("file://dummy".to_string()),
-                path: None,
-            },
-            Source {
-                name: "team".to_string(),
-                url: Some("file://dummy".to_string()),
-                path: None,
-            },
-        ];
-
-        let manager = SourceManager {
-            sources: sources
-                .into_iter()
-                .map(|source| {
-                    let local_path = cache_dir.join(&source.name);
-                    let config = OverlayRepoConfig {
-                        url: source.url().unwrap().to_string(),
-                        local_path: Some(local_path),
-                    };
-                    ManagedSource {
-                        source,
-                        backend: ManagedSourceBackend::Git(
-                            OverlayRepoManager::new(config).unwrap(),
-                        ),
-                    }
-                })
-                .collect(),
-        };
-
-        // Should find in both sources
-        let matches = manager
-            .find_all_matches("microsoft", "FluidFramework", "claude-config", None)
-            .unwrap();
-
-        assert_eq!(matches.len(), 2);
-        assert_eq!(matches[0].0.name, "personal");
-        assert_eq!(matches[1].0.name, "team");
-    }
-
-    #[test]
     fn git_source_resolution_propagates_invalid_overlay_name() {
         let temp = TempDir::new().unwrap();
         let repo_path = temp.path().join("source");
@@ -1450,84 +1332,6 @@ mod tests {
 
         let names = manager.source_names();
         assert_eq!(names, vec!["personal", "team"]);
-    }
-
-    #[test]
-    fn test_get_source_found() {
-        let temp = TempDir::new().unwrap();
-        let cache_dir = temp.path();
-
-        let sources = vec![
-            Source {
-                name: "personal".to_string(),
-                url: Some("https://github.com/user/overlays".to_string()),
-                path: None,
-            },
-            Source {
-                name: "team".to_string(),
-                url: Some("https://github.com/team/overlays".to_string()),
-                path: None,
-            },
-        ];
-
-        let manager = SourceManager {
-            sources: sources
-                .into_iter()
-                .map(|source| {
-                    let local_path = cache_dir.join(&source.name);
-                    let config = OverlayRepoConfig {
-                        url: source.url().unwrap().to_string(),
-                        local_path: Some(local_path),
-                    };
-                    ManagedSource {
-                        source,
-                        backend: ManagedSourceBackend::Git(
-                            OverlayRepoManager::new(config).unwrap(),
-                        ),
-                    }
-                })
-                .collect(),
-        };
-
-        let source = manager.get_source("personal");
-        assert!(source.is_some());
-        let source = source.unwrap();
-        assert_eq!(source.name, "personal");
-        assert_eq!(source.url().unwrap(), "https://github.com/user/overlays");
-    }
-
-    #[test]
-    fn test_get_source_not_found() {
-        let temp = TempDir::new().unwrap();
-        let cache_dir = temp.path();
-
-        let sources = vec![Source {
-            name: "personal".to_string(),
-            url: Some("file://dummy".to_string()),
-            path: None,
-        }];
-
-        let manager = SourceManager {
-            sources: sources
-                .into_iter()
-                .map(|source| {
-                    let local_path = cache_dir.join(&source.name);
-                    let config = OverlayRepoConfig {
-                        url: source.url().unwrap().to_string(),
-                        local_path: Some(local_path),
-                    };
-                    ManagedSource {
-                        source,
-                        backend: ManagedSourceBackend::Git(
-                            OverlayRepoManager::new(config).unwrap(),
-                        ),
-                    }
-                })
-                .collect(),
-        };
-
-        let source = manager.get_source("nonexistent");
-        assert!(source.is_none());
     }
 
     #[test]
@@ -2588,30 +2392,5 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().unwrap().to_string();
         assert!(err.contains("repository context"));
-    }
-
-    #[test]
-    fn test_local_source_find_all_matches() {
-        let temp = TempDir::new().unwrap();
-        let repo_root = temp.path();
-
-        let overlays_dir = repo_root.join("my-overlays");
-        fs::create_dir_all(&overlays_dir).unwrap();
-        create_local_source_dir(&overlays_dir, &[("org", "repo", "overlay")]);
-
-        let sources = vec![Source {
-            name: "local".to_string(),
-            url: None,
-            path: Some(PathBuf::from("my-overlays")),
-        }];
-
-        let manager = SourceManager::new(sources, Some(repo_root)).unwrap();
-
-        let matches = manager
-            .find_all_matches("org", "repo", "overlay", None)
-            .unwrap();
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].0.name, "local");
-        assert_eq!(matches[0].1, ResolvedVia::Direct);
     }
 }

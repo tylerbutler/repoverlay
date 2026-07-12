@@ -25,7 +25,6 @@ use std::path::{Component, Path};
 ///
 /// For example, `src/config.rs` is accepted, while `/etc/passwd`,
 /// `../../../etc/passwd`, and empty paths are rejected.
-#[allow(dead_code)] // Infrastructure for future call-site migrations (#323)
 pub(crate) fn validate_repo_relative_path(path: &Path) -> Result<()> {
     // Reject empty paths
     if path.as_os_str().is_empty() {
@@ -82,54 +81,6 @@ pub(crate) fn validate_repo_relative_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Validate a path component (e.g., overlay name, org name, repo name).
-///
-/// This is stricter than `validate_repo_relative_path` and ensures the
-/// component is safe to use as a single directory or file name.
-///
-/// Rejects:
-/// - Empty strings
-/// - Path separators (`/` or `\`)
-/// - Current or parent directory references (`.`, `..`)
-/// - Control characters
-/// - Leading/trailing whitespace
-///
-/// # Errors
-///
-/// Returns an error if the component fails validation.
-///
-/// For example, `my-overlay` and `user_config` are accepted, while
-/// `../etc`, `name/with/slash`, and empty strings are rejected.
-#[allow(dead_code)] // Infrastructure for future call-site migrations (#323)
-pub(crate) fn validate_path_component(component: &str) -> Result<()> {
-    // Reject empty components
-    if component.is_empty() {
-        bail!("Path component cannot be empty");
-    }
-
-    // Reject leading/trailing whitespace
-    if component != component.trim() {
-        bail!("Path component cannot have leading/trailing whitespace: '{component}'");
-    }
-
-    // Reject path separators
-    if component.contains('/') || component.contains('\\') {
-        bail!("Path component cannot contain path separators: '{component}'");
-    }
-
-    // Reject current/parent directory references
-    if component == "." || component == ".." {
-        bail!("Path component cannot be '.' or '..': '{component}'");
-    }
-
-    // Reject control characters
-    if component.chars().any(char::is_control) {
-        bail!("Path component contains control characters: '{component}'");
-    }
-
-    Ok(())
-}
-
 /// Check if a path or any of its ancestors is a symlink.
 ///
 /// This walks from the repo root up to the target path (or its nearest
@@ -154,7 +105,6 @@ pub(crate) fn validate_path_component(component: &str) -> Result<()> {
 /// - `repo_root` is not a directory
 /// - Any existing ancestor of `target` is a symlink
 /// - I/O errors occur during traversal
-#[allow(dead_code)] // Infrastructure for future call-site migrations (#323)
 pub(crate) fn check_no_symlink_ancestors(repo_root: &Path, target: &Path) -> Result<()> {
     validate_repo_relative_path(target)?;
 
@@ -290,62 +240,6 @@ mod tests {
         // Path with null byte
         let path_with_null = PathBuf::from("file\0name.txt");
         let result = validate_repo_relative_path(&path_with_null);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("control"));
-    }
-
-    #[test]
-    fn test_validate_path_component_valid() {
-        assert!(validate_path_component("my-overlay").is_ok());
-        assert!(validate_path_component("user_config").is_ok());
-        assert!(validate_path_component("name123").is_ok());
-        assert!(validate_path_component("simple").is_ok());
-    }
-
-    #[test]
-    fn test_validate_path_component_empty() {
-        let result = validate_path_component("");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("empty"));
-    }
-
-    #[test]
-    fn test_validate_path_component_path_separator() {
-        let result = validate_path_component("name/with/slash");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("separator"));
-
-        let result = validate_path_component("name\\with\\backslash");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_path_component_dot_references() {
-        let result = validate_path_component(".");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("'.'"));
-
-        let result = validate_path_component("..");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("'..'"));
-    }
-
-    #[test]
-    fn test_validate_path_component_whitespace() {
-        let result = validate_path_component(" leading");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("whitespace"));
-
-        let result = validate_path_component("trailing ");
-        assert!(result.is_err());
-
-        let result = validate_path_component(" both ");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_path_component_control_chars() {
-        let result = validate_path_component("file\nname");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("control"));
     }

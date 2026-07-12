@@ -366,7 +366,7 @@ fn execute_profile_action(
                     )
                 })?;
             }
-            crate::state::atomic_write(&region_target, &updated)?;
+            crate::fs_util::atomic_write(&region_target, &updated)?;
             state.files.push(ProfileFileEntry {
                 source: region_target.clone(),
                 target: region_target,
@@ -1160,7 +1160,7 @@ fn restore_merge_json_backup(
         fs::remove_file(&file.target)
             .with_context(|| format!("Failed to remove {}", file.target.display()))?;
     } else {
-        crate::state::atomic_write(&file.target, &serde_json::to_string_pretty(&current)?)?;
+        crate::fs_util::atomic_write(&file.target, &serde_json::to_string_pretty(&current)?)?;
     }
     if let Err(err) = fs::remove_file(&file.source) {
         eprintln!(
@@ -1221,7 +1221,7 @@ fn restore_managed_region(
         fs::remove_file(&file.target)
             .with_context(|| format!("Failed to remove {}", file.target.display()))?;
     } else {
-        crate::state::atomic_write(&file.target, &stripped)?;
+        crate::fs_util::atomic_write(&file.target, &stripped)?;
     }
     Ok(())
 }
@@ -1876,7 +1876,7 @@ fn merge_json_value(target: &Path, value: &Value, owned_paths: &[String]) -> Res
         let new_value = value.pointer(pointer).cloned().unwrap_or(Value::Null);
         set_json_pointer(&mut merged, pointer, new_value);
     }
-    crate::state::atomic_write(target, &serde_json::to_string_pretty(&merged)?)?;
+    crate::fs_util::atomic_write(target, &serde_json::to_string_pretty(&merged)?)?;
     Ok(())
 }
 
@@ -2066,7 +2066,7 @@ fn save_external_profile_snapshot(
     let manifest = dir.join(PROFILE_SNAPSHOT_MANIFEST);
     let content =
         serde_json::to_string_pretty(&snapshot).context("Failed to serialize profile snapshot")?;
-    crate::state::atomic_write(&manifest, &content)
+    crate::fs_util::atomic_write(&manifest, &content)
 }
 
 /// Mark a profile's external snapshot as removed so `restore` skips it.
@@ -2085,7 +2085,7 @@ pub(crate) fn remove_external_profile_snapshot(
             snapshot.removed_at = Some(chrono::Utc::now());
             let updated = serde_json::to_string_pretty(&snapshot)
                 .context("Failed to serialize profile snapshot")?;
-            crate::state::atomic_write(&manifest, &updated)
+            crate::fs_util::atomic_write(&manifest, &updated)
         }
         Err(err) => {
             warn!(
