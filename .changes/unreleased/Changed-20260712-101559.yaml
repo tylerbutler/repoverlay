@@ -1,0 +1,12 @@
+kind: Changed
+body: |-
+    Remove dead code and drop the dialoguer and dirs dependencies
+
+    An over-engineering audit removed ~850 lines: stale `#[allow(dead_code)]`
+    annotations and the code they hid (unused `GitRef::Tag` variant, test-only
+    helpers, speculative accessors, delegate-only wrappers), converted the
+    single-impl `SourceResolver` trait to inherent methods, and replaced
+    dialoguer with a small stdin prompt helper and dirs with
+    `std::env::home_dir()`. No user-visible behavior changes beyond plainer
+    confirm/input prompt rendering.
+time: 2026-07-12T10:15:59-07:00

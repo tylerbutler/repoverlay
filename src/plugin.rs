@@ -26,7 +26,7 @@ pub(crate) enum InstallMode {
 
 /// A reference to a plugin from a profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) enum PluginRef {
     /// A plugin provided by a named marketplace.
     Marketplace {
@@ -223,7 +223,7 @@ impl Serialize for PluginRef {
 
 /// Origin of a resolved plugin bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) enum PluginOrigin {
     /// Bundle came from a cached git clone (commit-pinned).
     CachedGit,
@@ -233,7 +233,7 @@ pub(crate) enum PluginOrigin {
 
 /// Why a plugin must be delegated to the harness rather than managed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) enum DelegateReason {
     /// The plugin source is not a cloneable/introspectable git repo (e.g. `npm:`).
     NonGitSource,
@@ -241,7 +241,7 @@ pub(crate) enum DelegateReason {
 
 /// A fully resolved plugin reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) enum ResolvedPlugin {
     /// repoverlay located (and, for git sources, cached) an introspectable bundle.
     Bundle {
@@ -267,7 +267,7 @@ pub(crate) enum ResolvedPlugin {
 
 /// Introspected contents of a plugin bundle directory.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub(crate) struct PluginBundle {
     /// Parsed `.claude-plugin/plugin.json`, if present.
     pub(crate) manifest: Option<serde_json::Value>,
@@ -289,7 +289,6 @@ impl PluginBundle {
     ///
     /// Missing `.claude-plugin/plugin.json`, `.mcp.json`, `skills/`, or `agents/`
     /// are not errors — they yield empty/absent fields. Malformed JSON is an error.
-    #[allow(dead_code)]
     pub(crate) fn read(dir: &std::path::Path) -> anyhow::Result<Self> {
         use anyhow::Context;
 
@@ -571,7 +570,6 @@ fn local_git_commit(dir: &std::path::Path) -> Option<String> {
 ///
 /// `base_dir` is the directory that local relative plugin paths are resolved
 /// against (the target repository root).
-#[allow(dead_code)]
 pub(crate) fn resolve_plugin(
     reference: &PluginRef,
     marketplaces: &[crate::config::Marketplace],

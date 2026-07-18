@@ -23,9 +23,6 @@ pub(crate) enum GitRef {
     Default,
     /// A branch name
     Branch(String),
-    /// A tag name (currently parsed as Branch, kept for future use)
-    #[allow(dead_code)]
-    Tag(String),
     /// A commit SHA (40 hex characters)
     Commit(String),
 }
@@ -102,33 +99,9 @@ impl GitHubSource {
         lower.starts_with("https://github.com/") || lower.starts_with("http://github.com/")
     }
 
-    /// Generate a unique cache directory name.
-    #[allow(dead_code)]
-    pub(crate) fn cache_key(&self) -> String {
-        let ref_part = match &self.git_ref {
-            GitRef::Default => "default".to_string(),
-            GitRef::Branch(b) => format!("branch-{}", sanitize_for_path(b)),
-            GitRef::Tag(t) => format!("tag-{}", sanitize_for_path(t)),
-            GitRef::Commit(c) => format!("commit-{}", &c[..12.min(c.len())]),
-        };
-        format!("{}__{}__{}", self.owner, self.repo, ref_part)
-    }
-
     /// Full clone URL for the repository.
     pub(crate) fn clone_url(&self) -> String {
         format!("https://github.com/{}/{}.git", self.owner, self.repo)
-    }
-
-    /// Human-readable display of the source.
-    #[allow(dead_code)]
-    pub(crate) fn display_url(&self) -> String {
-        let base = format!("https://github.com/{}/{}", self.owner, self.repo);
-        match (&self.git_ref, &self.subpath) {
-            (GitRef::Default, None) => base,
-            (GitRef::Default, Some(path)) => format!("{}/tree/HEAD/{}", base, path.display()),
-            (ref_, None) => format!("{}/tree/{}", base, ref_.as_str()),
-            (ref_, Some(path)) => format!("{}/tree/{}/{}", base, ref_.as_str(), path.display()),
-        }
     }
 
     /// Apply a ref override from CLI.
@@ -171,14 +144,8 @@ impl GitRef {
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Default => "HEAD",
-            Self::Branch(s) | Self::Tag(s) | Self::Commit(s) => s,
+            Self::Branch(s) | Self::Commit(s) => s,
         }
-    }
-
-    /// Check if this is the default ref.
-    #[allow(dead_code)]
-    pub(crate) const fn is_default(&self) -> bool {
-        matches!(self, Self::Default)
     }
 }
 
@@ -187,7 +154,6 @@ impl std::fmt::Display for GitRef {
         match self {
             Self::Default => write!(f, "(default branch)"),
             Self::Branch(s) => write!(f, "branch:{s}"),
-            Self::Tag(s) => write!(f, "tag:{s}"),
             Self::Commit(s) => write!(f, "commit:{}", &s[..12.min(s.len())]),
         }
     }
@@ -224,20 +190,6 @@ pub(crate) fn parse_remote_url(url: &str) -> Option<(String, String)> {
     }
 
     None
-}
-
-/// Sanitize a string for use in a filesystem path.
-#[allow(dead_code)]
-fn sanitize_for_path(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -343,21 +295,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_key() {
-        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
-        assert_eq!(source.cache_key(), "owner__repo__default");
-
-        let source = GitHubSource::parse("https://github.com/owner/repo/tree/main").unwrap();
-        assert_eq!(source.cache_key(), "owner__repo__branch-main");
-
-        let source = GitHubSource::parse(
-            "https://github.com/owner/repo/tree/abc123def456789012345678901234567890abcd",
-        )
-        .unwrap();
-        assert_eq!(source.cache_key(), "owner__repo__commit-abc123def456");
-    }
-
-    #[test]
     fn test_with_ref_override() {
         let source = GitHubSource::parse("https://github.com/owner/repo")
             .unwrap()
@@ -367,53 +304,11 @@ mod tests {
     }
 
     #[test]
-    fn test_display_url() {
-        let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
-        assert_eq!(source.display_url(), "https://github.com/owner/repo");
-
-        let source = GitHubSource::parse("https://github.com/owner/repo/tree/main").unwrap();
-        assert_eq!(
-            source.display_url(),
-            "https://github.com/owner/repo/tree/main"
-        );
-
-        let source = GitHubSource::parse("https://github.com/owner/repo/tree/main/subdir").unwrap();
-        assert_eq!(
-            source.display_url(),
-            "https://github.com/owner/repo/tree/main/subdir"
-        );
-    }
-
-    #[test]
-    fn test_display_url_default_with_subpath() {
-        // Create source with default ref but with subpath
-        let mut source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
-        source.subpath = Some(PathBuf::from("some/path"));
-
-        assert_eq!(
-            source.display_url(),
-            "https://github.com/owner/repo/tree/HEAD/some/path"
-        );
-    }
-
-    #[test]
-    fn test_git_ref_is_default() {
-        assert!(GitRef::Default.is_default());
-        assert!(!GitRef::Branch("main".to_string()).is_default());
-        assert!(!GitRef::Tag("v1.0".to_string()).is_default());
-        assert!(!GitRef::Commit("abc123".to_string()).is_default());
-    }
-
-    #[test]
     fn test_git_ref_display() {
         assert_eq!(format!("{}", GitRef::Default), "(default branch)");
         assert_eq!(
             format!("{}", GitRef::Branch("main".to_string())),
             "branch:main"
-        );
-        assert_eq!(
-            format!("{}", GitRef::Tag("v1.0.0".to_string())),
-            "tag:v1.0.0"
         );
         assert_eq!(
             format!(
@@ -431,24 +326,6 @@ mod tests {
             format!("{}", GitRef::Commit("abc123".to_string())),
             "commit:abc123"
         );
-    }
-
-    #[test]
-    fn test_cache_key_tag() {
-        // Create a source and manually set it to a tag
-        let mut source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
-        source.git_ref = GitRef::Tag("v1.0.0".to_string());
-
-        assert_eq!(source.cache_key(), "owner__repo__tag-v1.0.0");
-    }
-
-    #[test]
-    fn test_sanitize_for_path() {
-        assert_eq!(sanitize_for_path("main"), "main");
-        assert_eq!(sanitize_for_path("feature/branch"), "feature_branch");
-        assert_eq!(sanitize_for_path("v1.0.0"), "v1.0.0");
-        assert_eq!(sanitize_for_path("branch-name_123"), "branch-name_123");
-        assert_eq!(sanitize_for_path("special!@#chars"), "special___chars");
     }
 
     #[test]
@@ -556,7 +433,6 @@ mod tests {
     fn test_git_ref_as_str() {
         assert_eq!(GitRef::Default.as_str(), "HEAD");
         assert_eq!(GitRef::Branch("main".to_string()).as_str(), "main");
-        assert_eq!(GitRef::Tag("v1.0".to_string()).as_str(), "v1.0");
         assert_eq!(GitRef::Commit("abc123".to_string()).as_str(), "abc123");
     }
 
@@ -710,7 +586,6 @@ mod tests {
             GitRef::Default,
             GitRef::Branch("main".to_string()),
             GitRef::Branch("feature/long-branch-name".to_string()),
-            GitRef::Tag("v1.2.3".to_string()),
             GitRef::Commit("abc123def456789012345678901234567890abcd".to_string()),
             GitRef::Commit("abc123".to_string()),
         ];

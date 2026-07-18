@@ -10,7 +10,7 @@ use crate::config::load_config;
 use crate::detection::{DetectedFile, FileCategory};
 use crate::overlay_repo::OverlayRepoManager;
 use crate::selection::{SelectionConfig, select_files};
-use crate::state::{EntryType, FileEntry, LinkType, OverlaySource, SourceResolver};
+use crate::state::{EntryType, FileEntry, LinkType, OverlaySource};
 use crate::{
     OverlayName, canonicalize_path, list_applied_overlays, load_all_overlay_targets,
     load_overlay_state, normalize_overlay_name, save_external_state, save_overlay_state,
@@ -30,27 +30,12 @@ enum RollbackEntry {
     },
 }
 
-/// Edit an existing applied overlay by re-selecting files interactively.
-pub(crate) fn edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
-    interactive_edit_overlay(name_arg, target, dry_run)
-}
-
-/// Resolve an overlay's source to a local filesystem path.
-///
-/// Uses the `SourceResolver` trait to handle all source types uniformly:
-/// - Local: returns the stored path directly
-/// - `OverlayRepo`: reconstructs path from the overlay repo (respects `source_name`)
-/// - GitHub: returns the cached download path
-pub(crate) fn resolve_overlay_source_path(state: &crate::state::OverlayState) -> Result<PathBuf> {
-    state.source.resolve_local_path()
-}
-
 /// Interactively re-select which files from an overlay source should be applied.
 ///
 /// Shows the selection UI with all files from the overlay source directory,
 /// pre-selecting the currently applied files. Computes the diff between the
 /// old and new selections and applies adds/removes accordingly.
-fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
+pub(crate) fn edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: bool) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
     crate::validate_git_repo(&target)?;
 
@@ -87,7 +72,7 @@ fn interactive_edit_overlay(name_arg: &str, target: &std::path::Path, dry_run: b
     }
 
     // Resolve overlay source to a local directory
-    let source_path = resolve_overlay_source_path(&state)?;
+    let source_path = state.source.resolve_local_path()?;
 
     if !source_path.exists() {
         bail!(
@@ -550,7 +535,7 @@ pub(crate) fn add_files_to_overlay(
         return Ok(());
     }
 
-    // Resolve the overlay source to a local path using the SourceResolver trait (#149).
+    // Resolve the overlay source to a local path via OverlaySource::resolve_local_path (#149).
     // This correctly handles Local, OverlayRepo (with source_name), and GitHub sources.
     let overlay_repo_path = state
         .source

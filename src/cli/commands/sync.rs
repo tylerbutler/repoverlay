@@ -6,7 +6,7 @@ use super::create::{auto_commit_overlay, parse_overlay_name_arg};
 use crate::config::load_config;
 use crate::overlay_repo::OverlayRepoManager;
 use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
-use crate::state::{OverlaySource, SourceResolver};
+use crate::state::OverlaySource;
 use crate::{
     canonicalize_path, list_applied_overlays, load_overlay_state, normalize_overlay_name,
     selection::is_interactive,
@@ -42,7 +42,7 @@ pub(crate) fn handle_sync(
             let mut state = load_overlay_state(&target, overlay_name.as_str())?;
             crate::try_upgrade_github_source(&target, &mut state)?;
 
-            // Use SourceResolver to check syncability (#146, #149)
+            // Check syncability via the source (#146, #149)
             if !state.source.is_syncable() {
                 let label = state.source.source_type_label();
                 println!(

@@ -128,7 +128,7 @@ impl AgentHarness {
         if let Some(home) = override_home {
             return Ok(home.into());
         }
-        let home = dirs::home_dir().context("Could not determine home directory")?;
+        let home = std::env::home_dir().context("Could not determine home directory")?;
         Ok(home.join(self.home_suffix()))
     }
 
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn claude_home_defaults_to_dot_claude() {
-        let expected = dirs::home_dir().unwrap().join(".claude");
+        let expected = std::env::home_dir().unwrap().join(".claude");
         assert_eq!(
             AgentHarness::Claude.home_from_override(None).unwrap(),
             expected
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn copilot_home_defaults_to_config_github_copilot() {
-        let expected = dirs::home_dir()
+        let expected = std::env::home_dir()
             .unwrap()
             .join(".config")
             .join("github-copilot");

@@ -3,7 +3,7 @@
 //! Handles overlay state persistence, both in-repo (`.repoverlay/`) and external
 //! (`~/.local/share/repoverlay/`) for recovery after `git clean`.
 
-use crate::fs_util::atomic_write as atomic_write_impl;
+use crate::fs_util::atomic_write;
 use crate::overlay_name::OverlayName;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -123,24 +123,6 @@ impl OverlaySource {
         }
     }
 
-    /// Create a new overlay repository source.
-    #[allow(dead_code)] // Useful constructor for sources without resolution metadata
-    pub(crate) const fn overlay_repo(
-        org: String,
-        repo: String,
-        name: String,
-        commit: String,
-    ) -> Self {
-        Self::OverlayRepo {
-            org,
-            repo,
-            name,
-            commit,
-            resolved_via: None,
-            source_name: None,
-        }
-    }
-
     /// Create a new overlay repository source with full info (resolution + source name).
     pub(crate) const fn overlay_repo_full(
         org: String,
@@ -170,8 +152,56 @@ impl OverlaySource {
         matches!(self, Self::Library { .. })
     }
 
-    /// Get the library overlay name (for library sources only).
-    #[allow(dead_code)]
+    /// The source string (and optional ref override) that re-applies this
+    /// overlay through normal source resolution, e.g. for `restore`.
+    ///
+    /// For GitHub sources with a subpath, the subpath is rebuilt into a
+    /// `tree/HEAD/<subpath>` URL so resolution finds the specific overlay
+    /// instead of falling into browse/selection mode.
+    pub(crate) fn reapply_reference(&self) -> (String, Option<&str>) {
+        match self {
+            Self::Local { path, .. } => (path.to_string_lossy().to_string(), None),
+            Self::GitHub {
+                url,
+                owner,
+                repo,
+                git_ref,
+                subpath,
+                ..
+            } => {
+                let reference = subpath.as_ref().map_or_else(
+                    || url.clone(),
+                    |subpath| format!("https://github.com/{owner}/{repo}/tree/HEAD/{subpath}"),
+                );
+                (reference, Some(git_ref))
+            }
+            Self::OverlayRepo {
+                org, repo, name, ..
+            } => (format!("{org}/{repo}/{name}"), None),
+            Self::Library { name } => (name.clone(), None),
+        }
+    }
+}
+
+/// Test-only convenience helpers for constructing and inspecting sources.
+#[cfg(test)]
+impl OverlaySource {
+    pub(crate) const fn overlay_repo(
+        org: String,
+        repo: String,
+        name: String,
+        commit: String,
+    ) -> Self {
+        Self::OverlayRepo {
+            org,
+            repo,
+            name,
+            commit,
+            resolved_via: None,
+            source_name: None,
+        }
+    }
+
     pub(crate) fn library_name(&self) -> Option<&str> {
         match self {
             Self::Library { name } => Some(name),
@@ -179,8 +209,6 @@ impl OverlaySource {
         }
     }
 
-    /// Get a display string for the source.
-    #[allow(dead_code)]
     pub(crate) fn display(&self) -> String {
         match self {
             Self::Local { path, source_name } => source_name.as_ref().map_or_else(
@@ -224,56 +252,14 @@ impl OverlaySource {
         }
     }
 
-    /// Check if this is a GitHub source.
-    #[allow(dead_code)]
     pub(crate) const fn is_github(&self) -> bool {
         matches!(self, Self::GitHub { .. })
     }
 
-    /// Check if this is a local source.
-    #[allow(dead_code)]
-    pub(crate) const fn is_local(&self) -> bool {
-        matches!(self, Self::Local { .. })
-    }
-
-    /// Check if this is an overlay repository source.
-    #[allow(dead_code)]
     pub(crate) const fn is_overlay_repo(&self) -> bool {
         matches!(self, Self::OverlayRepo { .. })
     }
 
-    /// The source string (and optional ref override) that re-applies this
-    /// overlay through normal source resolution, e.g. for `restore`.
-    ///
-    /// For GitHub sources with a subpath, the subpath is rebuilt into a
-    /// `tree/HEAD/<subpath>` URL so resolution finds the specific overlay
-    /// instead of falling into browse/selection mode.
-    pub(crate) fn reapply_reference(&self) -> (String, Option<&str>) {
-        match self {
-            Self::Local { path, .. } => (path.to_string_lossy().to_string(), None),
-            Self::GitHub {
-                url,
-                owner,
-                repo,
-                git_ref,
-                subpath,
-                ..
-            } => {
-                let reference = subpath.as_ref().map_or_else(
-                    || url.clone(),
-                    |subpath| format!("https://github.com/{owner}/{repo}/tree/HEAD/{subpath}"),
-                );
-                (reference, Some(git_ref))
-            }
-            Self::OverlayRepo {
-                org, repo, name, ..
-            } => (format!("{org}/{repo}/{name}"), None),
-            Self::Library { name } => (name.clone(), None),
-        }
-    }
-
-    /// Get the local path for this source (for local sources only).
-    #[allow(dead_code)]
     pub(crate) fn local_path(&self) -> Option<&Path> {
         match self {
             Self::Local { path, .. } => Some(path),
@@ -282,7 +268,7 @@ impl OverlaySource {
     }
 }
 
-/// Abstraction for resolving overlay sources to local paths and querying capabilities.
+/// Source resolution and capability queries.
 ///
 /// Centralizes the `match` on `OverlaySource` variants so that each command
 /// doesn't need to independently handle source-type dispatch. Adding a new
@@ -290,41 +276,13 @@ impl OverlaySource {
 /// exhaustiveness via `match` ensures completeness).
 ///
 /// See: <https://github.com/tylerbutler/repoverlay/issues/149>
-pub(crate) trait SourceResolver {
+impl OverlaySource {
     /// Return the local filesystem path where this overlay's files live.
     ///
     /// - **Local**: the stored path directly.
     /// - **`OverlayRepo`**: the path within the cloned overlay repo (uses `source_name` when available).
     /// - **GitHub**: the cached download path.
-    fn resolve_local_path(&self) -> Result<PathBuf>;
-
-    /// Can files be written back to this source? (add/edit operations)
-    ///
-    /// - **Local**: `true` — files live on the local filesystem.
-    /// - **`OverlayRepo`**: `true` — files live in a cloned git repo.
-    /// - **GitHub**: `false` — cached read-only downloads.
-    fn is_mutable(&self) -> bool;
-
-    /// Can this source be synced with its upstream? (sync command)
-    ///
-    /// - **Local**: `false` — no upstream concept.
-    /// - **`OverlayRepo`**: `true` — can push changes to the overlay repo.
-    /// - **GitHub**: `false` — read-only cache.
-    fn is_syncable(&self) -> bool;
-
-    /// Can we check for newer versions? (update command)
-    ///
-    /// - **Local**: `false` — always uses the current local files.
-    /// - **`OverlayRepo`**: `true` — can pull newer commits.
-    /// - **GitHub**: `true` — can re-fetch from GitHub.
-    fn is_updatable(&self) -> bool;
-
-    /// Human-readable description of the source type for messages.
-    fn source_type_label(&self) -> &'static str;
-}
-
-impl SourceResolver for OverlaySource {
-    fn resolve_local_path(&self) -> Result<PathBuf> {
+    pub(crate) fn resolve_local_path(&self) -> Result<PathBuf> {
         match self {
             Self::Local { path, .. } => Ok(path.clone()),
             Self::Library { name } => {
@@ -375,28 +333,44 @@ impl SourceResolver for OverlaySource {
         }
     }
 
-    fn is_mutable(&self) -> bool {
+    /// Can files be written back to this source? (add/edit operations)
+    ///
+    /// - **Local**: `true` — files live on the local filesystem.
+    /// - **`OverlayRepo`**: `true` — files live in a cloned git repo.
+    /// - **GitHub**: `false` — cached read-only downloads.
+    pub(crate) const fn is_mutable(&self) -> bool {
         match self {
             Self::Local { .. } | Self::Library { .. } | Self::OverlayRepo { .. } => true,
             Self::GitHub { .. } => false,
         }
     }
 
-    fn is_syncable(&self) -> bool {
+    /// Can this source be synced with its upstream? (sync command)
+    ///
+    /// - **Local**: `false` — no upstream concept.
+    /// - **`OverlayRepo`**: `true` — can push changes to the overlay repo.
+    /// - **GitHub**: `false` — read-only cache.
+    pub(crate) const fn is_syncable(&self) -> bool {
         match self {
             Self::OverlayRepo { .. } => true,
             Self::Local { .. } | Self::Library { .. } | Self::GitHub { .. } => false,
         }
     }
 
-    fn is_updatable(&self) -> bool {
+    /// Can we check for newer versions? (update command)
+    ///
+    /// - **Local**: `false` — always uses the current local files.
+    /// - **`OverlayRepo`**: `true` — can pull newer commits.
+    /// - **GitHub**: `true` — can re-fetch from GitHub.
+    pub(crate) const fn is_updatable(&self) -> bool {
         match self {
             Self::OverlayRepo { .. } | Self::GitHub { .. } => true,
             Self::Local { .. } | Self::Library { .. } => false,
         }
     }
 
-    fn source_type_label(&self) -> &'static str {
+    /// Human-readable description of the source type for messages.
+    pub(crate) const fn source_type_label(&self) -> &'static str {
         match self {
             Self::Local { .. } => "local",
             Self::Library { .. } => "library",
@@ -602,10 +576,6 @@ pub(crate) fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
     let base = external_state_dir()?;
     let target_hash = hash_path(target);
     Ok(base.join(target_hash))
-}
-
-pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<()> {
-    atomic_write_impl(path, content)
 }
 
 /// Save overlay state to the external backup location.
@@ -1967,7 +1937,7 @@ directories =
         assert!(removed.is_none());
     }
 
-    // ==================== SourceResolver trait tests ====================
+    // ==================== Source resolution tests ====================
 
     #[test]
     fn source_resolver_local_is_mutable() {

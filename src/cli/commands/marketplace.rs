@@ -53,10 +53,10 @@ fn add_marketplace(name: &str, url: &str, yes: bool) -> Result<()> {
 
     // Marketplaces introduce executable behavior; confirm before registering.
     if !yes && is_interactive() {
-        let confirmed = dialoguer::Confirm::new()
-            .with_prompt(format!("Register marketplace '{name}' from {expanded}?"))
-            .default(true)
-            .interact()?;
+        let confirmed = crate::prompt::confirm(
+            &format!("Register marketplace '{name}' from {expanded}?"),
+            true,
+        )?;
         if !confirmed {
             println!("Aborted.");
             return Ok(());
