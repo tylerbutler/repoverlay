@@ -54,7 +54,7 @@ jobs:
         run: gh release upload "$TAG" repoverlay.cdx.json --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Attest SBOM
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # ratchet:actions/attest@v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # ratchet:actions/attest@v4.2.0
         with:
           subject-path: 'dist-artifacts/*'
           predicate-type: 'https://cyclonedx.org/bom'
