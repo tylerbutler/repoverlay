@@ -485,7 +485,7 @@ enum Commands {
         #[arg(long = "profile", required = true)]
         profiles: Vec<String>,
 
-        /// Target repository directory (defaults to current directory)
+        /// Target repository directory (defaults to enclosing repository root)
         #[arg(short, long)]
         target: Option<PathBuf>,
 
@@ -500,7 +500,7 @@ enum Commands {
         #[arg(long = "profile", required = true)]
         profiles: Vec<String>,
 
-        /// Target repository directory (defaults to current directory)
+        /// Target repository directory (defaults to enclosing repository root)
         #[arg(short, long)]
         target: Option<PathBuf>,
 
