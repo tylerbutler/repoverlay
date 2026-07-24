@@ -1260,6 +1260,55 @@ profiles =
 }
 
 #[test]
+fn copilot_profile_resolves_repo_root_from_subdirectory() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let copilot_home = tempfile::TempDir::new().unwrap();
+    let leaf = ctx.repo_path().join("deep/leaf");
+    let marker = ctx.repo_path().join("copilot-working-dir.txt");
+    fs::create_dir_all(&leaf).unwrap();
+    ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
+    ctx.write_repo_config(
+        r"
+profiles =
+  rust-dev =
+    instructions =
+      =
+        source = copilot-instructions.md
+",
+    );
+
+    cargo_bin_cmd!("repoverlay")
+        .args([
+            "copilot",
+            "--profile",
+            "rust-dev",
+            "--",
+            "-c",
+            &format!("pwd > {}", marker.display()),
+        ])
+        .current_dir(&leaf)
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+        .env("REPOVERLAY_COPILOT_COMMAND", "sh")
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+
+    let working_dir = fs::read_to_string(marker).unwrap();
+    assert_eq!(
+        fs::canonicalize(working_dir.trim()).unwrap(),
+        fs::canonicalize(ctx.repo_path()).unwrap()
+    );
+    assert!(!ctx.repo_path().join("AGENTS.md").exists());
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/rust-dev.copilot.ccl")
+            .exists()
+    );
+}
+
+#[test]
 fn copilot_runs_multiple_profiles_and_cleans_up_all() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();

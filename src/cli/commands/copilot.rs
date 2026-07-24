@@ -11,6 +11,8 @@ use std::os::unix::process::ExitStatusExt;
 use crate::profile::ProfileMode;
 use crate::profile_applicators::AgentHarness;
 
+use super::find_repo_root;
+
 struct ProfileRunLock {
     path: PathBuf,
 }
@@ -116,8 +118,10 @@ pub(crate) fn run_ephemeral_profiles(
     extra_args: Vec<String>,
 ) -> Result<()> {
     let label = harness.label();
-    let target = target.unwrap_or_else(|| PathBuf::from("."));
-    let target = crate::canonicalize_path(&target, "Target")?;
+    let target = match target {
+        Some(target) => crate::canonicalize_path(&target, "Target")?,
+        None => find_repo_root()?,
+    };
     crate::validate_git_repo(&target)?;
 
     // Reject duplicate names up front; otherwise the second apply of the same
