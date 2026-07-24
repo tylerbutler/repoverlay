@@ -8,6 +8,7 @@ use predicates::prelude::*;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -39,6 +40,52 @@ impl SourceTestContext {
         let mut cmd = cargo_bin_cmd!("repoverlay");
         cmd.env("XDG_CONFIG_HOME", self.config_dir.path());
         cmd
+    }
+}
+
+/// Context for testing cache commands with isolated cache storage.
+///
+/// Uses an explicit cache-dir override so Windows path resolution stays isolated.
+struct CacheTestContext {
+    root_dir: tempfile::TempDir,
+    cache_dir: PathBuf,
+}
+
+impl CacheTestContext {
+    fn new() -> Self {
+        let root_dir = tempfile::TempDir::new().expect("Failed to create temp cache root");
+        let cache_dir = root_dir.path().join("repoverlay-cache");
+        Self {
+            root_dir,
+            cache_dir,
+        }
+    }
+
+    fn cmd(&self) -> assert_cmd::Command {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.env("HOME", self.root_dir.path())
+            .env("XDG_CACHE_HOME", self.root_dir.path())
+            .env("APPDATA", self.root_dir.path())
+            .env("LOCALAPPDATA", self.root_dir.path())
+            .env("USERPROFILE", self.root_dir.path())
+            .env("REPOVERLAY_CACHE_DIR", &self.cache_dir);
+        cmd
+    }
+
+    fn cache_root(&self) -> PathBuf {
+        let output = self
+            .cmd()
+            .args(["cache", "path"])
+            .output()
+            .expect("Failed to read cache path");
+        assert!(output.status.success());
+        let cache_root = PathBuf::from(
+            String::from_utf8(output.stdout)
+                .expect("Cache path must be UTF-8")
+                .trim(),
+        );
+        assert_eq!(cache_root, self.cache_dir);
+        cache_root
     }
 }
 
@@ -274,11 +321,128 @@ fn root_help_browse_listed_as_recommended() {
 
 #[test]
 fn cache_help_displays() {
-    cargo_bin_cmd!("repoverlay")
+    let ctx = CacheTestContext::new();
+
+    ctx.cmd()
         .args(["cache", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("cache"));
+        .stdout(predicate::str::contains("GitHub repositories"))
+        .stdout(predicate::str::contains("configured-source clones"));
+}
+
+#[test]
+fn cache_remove_help_mentions_source_selector() {
+    let ctx = CacheTestContext::new();
+
+    ctx.cmd()
+        .args(["cache", "remove", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--source"))
+        .stdout(predicate::str::contains("--all"))
+        .stdout(predicate::str::contains("source clone"))
+        .stdout(predicate::str::contains("GitHub repositories"));
+}
+
+#[test]
+fn cache_list_shows_both_namespaces() {
+    let ctx = CacheTestContext::new();
+    let cache_root = ctx.cache_root();
+    fs::create_dir_all(cache_root.join("github/owner/repo")).unwrap();
+    fs::create_dir_all(cache_root.join("sources/overlay")).unwrap();
+
+    ctx.cmd()
+        .args(["cache", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("GitHub repositories"))
+        .stdout(predicate::str::contains("owner/repo"))
+        .stdout(predicate::str::contains("Configured source clones"))
+        .stdout(predicate::str::contains("overlay"));
+}
+
+#[test]
+fn cache_remove_source_removes_unconfigured_clone() {
+    let ctx = CacheTestContext::new();
+    let source_path = ctx.cache_root().join("sources/overlay");
+    fs::create_dir_all(&source_path).unwrap();
+
+    ctx.cmd()
+        .args(["cache", "remove", "--source", "overlay"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Removed configured source clone overlay from cache.",
+        ));
+
+    assert!(!source_path.exists());
+}
+
+#[test]
+fn cache_remove_missing_source_reports_not_cached() {
+    let ctx = CacheTestContext::new();
+
+    ctx.cmd()
+        .args(["cache", "remove", "--source", "missing"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Configured source clone missing is not cached.",
+        ));
+}
+
+#[test]
+fn cache_remove_invalid_source_name_propagates_validation_error() {
+    let ctx = CacheTestContext::new();
+
+    ctx.cmd()
+        .args(["cache", "remove", "--source", "bad/name"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path separators"));
+}
+
+#[test]
+fn cache_remove_all_reports_both_counts() {
+    let ctx = CacheTestContext::new();
+    let cache_root = ctx.cache_root();
+    let sentinel = ctx.root_dir.path().join("outside-cache-sentinel.txt");
+    fs::write(&sentinel, "keep").unwrap();
+    fs::create_dir_all(cache_root.join("github/owner/repo")).unwrap();
+    fs::create_dir_all(cache_root.join("sources/overlay")).unwrap();
+
+    ctx.cmd()
+        .args(["cache", "remove", "--all", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Removed 1 GitHub repository(s) and 1 configured source clone(s).",
+        ));
+
+    assert!(!cache_root.join("github").exists());
+    assert!(!cache_root.join("sources").exists());
+    assert_eq!(fs::read_to_string(&sentinel).unwrap(), "keep");
+}
+
+#[test]
+fn cache_remove_all_cancellation_works() {
+    let ctx = CacheTestContext::new();
+    let cache_root = ctx.cache_root();
+    fs::create_dir_all(cache_root.join("github/owner/repo")).unwrap();
+    fs::create_dir_all(cache_root.join("sources/overlay")).unwrap();
+
+    ctx.cmd()
+        .args(["cache", "remove", "--all"])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Cancelled. No GitHub repositories or configured source clones were removed.",
+        ));
+
+    assert!(cache_root.join("github/owner/repo").exists());
+    assert!(cache_root.join("sources/overlay").exists());
 }
 
 #[test]
@@ -2784,6 +2948,7 @@ profiles =
 
 #[test]
 fn deprecated_cli_surfaces_are_rejected() {
+    let ctx = CacheTestContext::new();
     cargo_bin_cmd!("repoverlay")
         .args(["create-local", "--help"])
         .assert()
@@ -2792,7 +2957,7 @@ fn deprecated_cli_surfaces_are_rejected() {
         .args(["list", "--help"])
         .assert()
         .failure();
-    cargo_bin_cmd!("repoverlay")
+    ctx.cmd()
         .args(["cache", "clear", "--help"])
         .assert()
         .failure();
@@ -2829,11 +2994,6 @@ fn replacement_cli_surfaces_are_available() {
         .args(["edit", "remove", "--help"])
         .assert()
         .success();
-    cargo_bin_cmd!("repoverlay")
-        .args(["cache", "remove", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("--all"));
 }
 
 #[test]
@@ -2972,19 +3132,38 @@ fn remove_when_no_overlay() {
 
 #[test]
 fn cache_list_empty() {
-    cargo_bin_cmd!("repoverlay")
+    let ctx = CacheTestContext::new();
+
+    ctx.cmd()
         .args(["cache", "list"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains(
+            "No cached GitHub repositories or configured source clones.",
+        ));
 }
 
 #[test]
 fn cache_path_shows_location() {
-    cargo_bin_cmd!("repoverlay")
+    let ctx = CacheTestContext::new();
+    let output = ctx.cmd().args(["cache", "path"]).output().unwrap();
+    assert!(output.status.success());
+
+    let cache_root = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+    assert_eq!(cache_root, ctx.cache_dir);
+    assert_eq!(cache_root.parent(), Some(ctx.root_dir.path()));
+}
+
+#[test]
+fn cache_path_rejects_relative_override() {
+    let ctx = CacheTestContext::new();
+
+    ctx.cmd()
+        .env("REPOVERLAY_CACHE_DIR", "custom-cache")
         .args(["cache", "path"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("repoverlay"));
+        .failure()
+        .stderr(predicate::str::contains("absolute path"));
 }
 
 // ============================================================================
@@ -3899,14 +4078,6 @@ fn apply_conflicting_file_warns_or_fails() {
 // Cache Command Tests
 // ============================================================================
 
-#[test]
-fn cache_remove_help() {
-    cargo_bin_cmd!("repoverlay")
-        .args(["cache", "remove", "--help"])
-        .assert()
-        .success();
-}
-
 // ============================================================================
 // Security Tests
 // ============================================================================
@@ -4166,24 +4337,6 @@ fn apply_with_special_characters_in_filename() {
         .success();
 
     assert!(ctx.file_exists("file with spaces.txt"));
-}
-
-#[test]
-fn cache_list_runs_without_error() {
-    // Just test that cache list command runs without crashing
-    cargo_bin_cmd!("repoverlay")
-        .args(["cache", "list"])
-        .assert()
-        .success();
-}
-
-#[test]
-fn cache_path_shows_directory() {
-    cargo_bin_cmd!("repoverlay")
-        .args(["cache", "path"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("repoverlay"));
 }
 
 // ============================================================================
@@ -4581,6 +4734,45 @@ fn source_add_local_extracts_name_from_dir() {
         .assert()
         .success()
         .stdout(predicate::str::contains("team-overlays"));
+}
+
+#[test]
+fn source_add_rejects_invalid_local_source_name() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+
+    let overlays_dir = ctx.repo_path().join("my-overlays");
+    fs::create_dir_all(&overlays_dir).unwrap();
+
+    cargo_bin_cmd!("repoverlay")
+        .args(["source", "add", "./my-overlays", "--name", "bad/name"])
+        .current_dir(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path separators"));
+}
+
+#[test]
+fn source_add_rejects_invalid_git_source_name() {
+    let ctx = SourceTestContext::new();
+
+    ctx.cmd()
+        .args(["source", "add", "owner/repo", "--name", "bad/name"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("path separators"));
+}
+
+#[test]
+fn source_add_preserves_reserved_source_names() {
+    let ctx = SourceTestContext::new();
+
+    ctx.cmd()
+        .args(["source", "add", "owner/repo", "--name", "@library"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("reserved"));
 }
 
 // ============================================================================

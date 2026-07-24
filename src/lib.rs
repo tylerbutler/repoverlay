@@ -1922,7 +1922,7 @@ mod tests {
 
             // Get the path where CacheManager would store this repo
             // This includes the "github" subdirectory: {cache_dir}/github/{owner}/{repo}
-            let expected_repo_path = cache.repo_path(&source);
+            let expected_repo_path = cache.repo_path(&source).unwrap();
 
             // Create overlay structure at the correct cache location
             let overlay_path = expected_repo_path.join("target-org/target-repo/test-overlay");
@@ -1967,7 +1967,7 @@ mod tests {
             let source =
                 GitHubSource::parse("https://github.com/test-owner-xyz/test-repo-xyz").unwrap();
 
-            let cache_manager_path = cache.repo_path(&source);
+            let cache_manager_path = cache.repo_path(&source).unwrap();
 
             // Verify the cache manager path includes "github" subdirectory
             assert!(

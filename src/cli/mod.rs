@@ -621,20 +621,24 @@ pub(crate) enum ProfileCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum CacheCommand {
-    /// List cached repositories
+    /// List cached GitHub repositories and configured-source clones
     List,
 
-    /// Remove cached repositories
+    /// Remove cached GitHub repositories and configured-source clones
     Remove {
-        /// Repository to remove (format: owner/repo)
-        #[arg(conflicts_with = "all")]
+        /// Cached GitHub repository to remove (format: owner/repo)
+        #[arg(conflicts_with_all = ["source", "all"])]
         repo: Option<String>,
 
-        /// Remove all cached repositories
-        #[arg(short, long)]
+        /// Cached source clone to remove by source name
+        #[arg(long, conflicts_with_all = ["repo", "all"])]
+        source: Option<String>,
+
+        /// Remove all cached GitHub repositories and configured-source clones
+        #[arg(short, long, conflicts_with_all = ["repo", "source"])]
         all: bool,
 
-        /// Skip confirmation prompt (used with --all)
+        /// Skip confirmation prompt when removing all cache entries
         #[arg(short = 'y', long)]
         yes: bool,
     },
@@ -3271,6 +3275,7 @@ directories =
             // Invalid format (no slash)
             let result = handle_cache_command(CacheCommand::Remove {
                 repo: Some("invalid".to_string()),
+                source: None,
                 all: false,
                 yes: false,
             });
@@ -3279,7 +3284,7 @@ directories =
                 result
                     .unwrap_err()
                     .to_string()
-                    .contains("Invalid repository format")
+                    .contains("Invalid GitHub repository format")
             );
         }
 
@@ -3287,6 +3292,7 @@ directories =
         fn cache_remove_fails_on_too_many_slashes() {
             let result = handle_cache_command(CacheCommand::Remove {
                 repo: Some("a/b/c".to_string()),
+                source: None,
                 all: false,
                 yes: false,
             });
@@ -3295,7 +3301,7 @@ directories =
                 result
                     .unwrap_err()
                     .to_string()
-                    .contains("Invalid repository format")
+                    .contains("Invalid GitHub repository format")
             );
         }
 
@@ -3303,6 +3309,7 @@ directories =
         fn cache_remove_fails_when_no_repo_or_all() {
             let result = handle_cache_command(CacheCommand::Remove {
                 repo: None,
+                source: None,
                 all: false,
                 yes: false,
             });
@@ -3311,7 +3318,7 @@ directories =
                 result
                     .unwrap_err()
                     .to_string()
-                    .contains("Specify a repository")
+                    .contains("Specify a GitHub repository")
             );
         }
     }
@@ -5278,8 +5285,31 @@ directories =
 
             match cli.command {
                 Some(Commands::Cache { command }) => match command {
-                    CacheCommand::Remove { repo, all, .. } => {
+                    CacheCommand::Remove {
+                        repo, source, all, ..
+                    } => {
                         assert_eq!(repo, Some("owner/repo".to_string()));
+                        assert!(source.is_none());
+                        assert!(!all);
+                    }
+                    _ => panic!("Expected Cache Remove subcommand"),
+                },
+                _ => panic!("Expected Cache command"),
+            }
+        }
+
+        #[test]
+        fn cache_remove_parses_source() {
+            let cli = Cli::try_parse_from(["repoverlay", "cache", "remove", "--source", "overlay"])
+                .unwrap();
+
+            match cli.command {
+                Some(Commands::Cache { command }) => match command {
+                    CacheCommand::Remove {
+                        repo, source, all, ..
+                    } => {
+                        assert!(repo.is_none());
+                        assert_eq!(source, Some("overlay".to_string()));
                         assert!(!all);
                     }
                     _ => panic!("Expected Cache Remove subcommand"),
@@ -5295,8 +5325,14 @@ directories =
 
             match cli.command {
                 Some(Commands::Cache { command }) => match command {
-                    CacheCommand::Remove { repo, all, yes } => {
+                    CacheCommand::Remove {
+                        repo,
+                        source,
+                        all,
+                        yes,
+                    } => {
                         assert!(repo.is_none());
+                        assert!(source.is_none());
                         assert!(all);
                         assert!(yes);
                     }
@@ -5304,6 +5340,39 @@ directories =
                 },
                 _ => panic!("Expected Cache command"),
             }
+        }
+
+        #[test]
+        fn cache_remove_repo_and_source_conflict() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "cache",
+                "remove",
+                "owner/repo",
+                "--source",
+                "overlay",
+            ]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn cache_remove_repo_and_all_conflict() {
+            let result =
+                Cli::try_parse_from(["repoverlay", "cache", "remove", "owner/repo", "--all"]);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn cache_remove_source_and_all_conflict() {
+            let result = Cli::try_parse_from([
+                "repoverlay",
+                "cache",
+                "remove",
+                "--source",
+                "overlay",
+                "--all",
+            ]);
+            assert!(result.is_err());
         }
 
         #[test]

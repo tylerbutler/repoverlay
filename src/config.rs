@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::cache::{cache_dir, configured_source_cache_path};
 use crate::fs_util::atomic_write;
 
 /// Global repoverlay configuration.
@@ -43,9 +44,7 @@ impl RepoverlayConfig {
             )
         })?;
 
-        let cache_dir = directories::ProjectDirs::from("", "", "repoverlay")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
-        let local_path = cache_dir.cache_dir().join("sources").join(&source.name);
+        let local_path = configured_source_cache_path(&cache_dir()?, &source.name)?;
         Ok(OverlayRepoConfig {
             url: source.url()?.to_string(),
             local_path: Some(local_path),
@@ -80,9 +79,7 @@ impl RepoverlayConfig {
                 )
             })?;
 
-        let cache_dir = directories::ProjectDirs::from("", "", "repoverlay")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
-        let local_path = cache_dir.cache_dir().join("sources").join(&source.name);
+        let local_path = configured_source_cache_path(&cache_dir()?, &source.name)?;
 
         Ok(OverlayRepoConfig {
             url: source.url()?.to_string(),
@@ -1195,6 +1192,24 @@ sources =
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_get_default_overlay_repo_config_rejects_invalid_source_name() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "bad/source".to_string(),
+                url: Some("https://github.com/test/overlays".to_string()),
+                path: None,
+            }],
+            library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
+        };
+
+        let result = config.get_default_overlay_repo_config();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("path separators"));
+    }
+
     // ==================== get_overlay_repo_config_by_name tests ====================
 
     #[test]
@@ -1258,6 +1273,24 @@ sources =
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("nonexistent"));
         assert!(err_msg.contains("primary"));
+    }
+
+    #[test]
+    fn test_get_overlay_repo_config_by_name_rejects_invalid_source_name() {
+        let config = RepoverlayConfig {
+            sources: vec![Source {
+                name: "bad/source".to_string(),
+                url: Some("https://github.com/org/repo".to_string()),
+                path: None,
+            }],
+            library_path: None,
+            profiles: std::collections::BTreeMap::new(),
+            marketplaces: Vec::new(),
+        };
+
+        let result = config.get_overlay_repo_config_by_name(Some("bad/source"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("path separators"));
     }
 
     // ==================== SourceUrlInput tests ====================

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use super::super::SourceCommand;
 use super::find_repo_root;
 use crate::config;
+use crate::path_safety::validate_path_component;
 
 /// Handle source subcommands.
 pub(crate) fn handle_source_command(command: SourceCommand) -> Result<()> {
@@ -49,6 +50,7 @@ pub(crate) fn handle_source_command(command: SourceCommand) -> Result<()> {
                     );
                 }
 
+                validate_path_component(&source_name)?;
                 if source_name.starts_with('@') {
                     bail!(
                         "Source names starting with '@' are reserved. '@library' is a built-in source."
@@ -108,6 +110,7 @@ pub(crate) fn handle_source_command(command: SourceCommand) -> Result<()> {
                     );
                 }
 
+                validate_path_component(&source_name)?;
                 if source_name.starts_with('@') {
                     bail!(
                         "Source names starting with '@' are reserved. '@library' is a built-in source."

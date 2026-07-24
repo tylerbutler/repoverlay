@@ -201,6 +201,9 @@ Examples: repoverlay create my-overlay              # Detects org/repo from git 
 * `-o`, `--output <OUTPUT>` — Output directory for local overlay creation (no overlay repo required)
 * `--into <DEST>` — Create the overlay directly into a destination ("library")
 * `--no-apply` — Skip applying the overlay after creating into the library
+* `--global` — Create a global overlay (applies to any repository)
+
+   Scaffolds into the `@global/<name>/` namespace of the overlay repo instead of `org/repo/<name>/`, skipping git-remote target detection.
 * `--dry-run` — Show what would be created without creating files
 * `-y`, `--yes` — Skip interactive prompts, use defaults
 * `-f`, `--force` — Force overwrite if overlay already exists
@@ -267,15 +270,15 @@ Manage the overlay cache
 
 ### Subcommands
 
-* `list` — List cached repositories
-* `remove` — Remove cached repositories
+* `list` — List cached GitHub repositories and configured-source clones
+* `remove` — Remove cached GitHub repositories and configured-source clones
 * `path` — Show cache location
 
 
 
 ## `repoverlay cache list`
 
-List cached repositories
+List cached GitHub repositories and configured-source clones
 
 **Usage:** `repoverlay cache list`
 
@@ -283,18 +286,19 @@ List cached repositories
 
 ## `repoverlay cache remove`
 
-Remove cached repositories
+Remove cached GitHub repositories and configured-source clones
 
 **Usage:** `repoverlay cache remove [OPTIONS] [REPO]`
 
 ### Arguments
 
-* `<REPO>` — Repository to remove (format: owner/repo)
+* `<REPO>` — Cached GitHub repository to remove (format: owner/repo)
 
 ### Options
 
-* `-a`, `--all` — Remove all cached repositories
-* `-y`, `--yes` — Skip confirmation prompt (used with --all)
+* `--source <SOURCE>` — Cached source clone to remove by source name
+* `-a`, `--all` — Remove all cached GitHub repositories and configured-source clones
+* `-y`, `--yes` — Skip confirmation prompt when removing all cache entries
 
 
 
@@ -533,7 +537,7 @@ Manage repository profiles
 
 **Usage:** `repoverlay profile <COMMAND>`
 
-###### **Subcommands:**
+### Subcommands
 
 * `list` — List configured profiles
 * `show` — Show a configured profile
@@ -543,13 +547,13 @@ Manage repository profiles
 
 
 
-
 ## `repoverlay profile list`
+
 List configured profiles
 
 **Usage:** `repoverlay profile list [OPTIONS]`
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 
@@ -561,11 +565,11 @@ Show a configured profile
 
 **Usage:** `repoverlay profile show [OPTIONS] <NAME>`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Profile name
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 
@@ -577,11 +581,11 @@ Apply a profile persistently
 
 **Usage:** `repoverlay profile apply [OPTIONS] --harness <HARNESS> <NAME>`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Profile name
 
-###### **Options:**
+### Options
 
 * `--harness <HARNESS>`
 
@@ -597,7 +601,7 @@ Show applied profile state
 
 **Usage:** `repoverlay profile status [OPTIONS]`
 
-###### **Options:**
+### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
 * `--harness <HARNESS>`
@@ -613,11 +617,11 @@ Remove an applied profile
 
 **Usage:** `repoverlay profile remove [OPTIONS] --harness <HARNESS> <NAME>`
 
-###### **Arguments:**
+### Arguments
 
 * `<NAME>` — Profile name
 
-###### **Options:**
+### Options
 
 * `--harness <HARNESS>`
 
@@ -712,11 +716,11 @@ Run GitHub Copilot with one or more profiles applied for the process lifetime
 
 **Usage:** `repoverlay copilot [OPTIONS] --profile <PROFILES> [-- <EXTRA_ARGS>...]`
 
-###### **Arguments:**
+### Arguments
 
 * `<EXTRA_ARGS>` — Extra arguments forwarded to the Copilot harness
 
-###### **Options:**
+### Options
 
 * `--profile <PROFILES>` — Profile name to apply while Copilot runs (repeat to apply several)
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
@@ -729,11 +733,11 @@ Run Claude with one or more profiles applied for the process lifetime
 
 **Usage:** `repoverlay claude [OPTIONS] --profile <PROFILES> [-- <EXTRA_ARGS>...]`
 
-###### **Arguments:**
+### Arguments
 
 * `<EXTRA_ARGS>` — Extra arguments forwarded to the Claude harness
 
-###### **Options:**
+### Options
 
 * `--profile <PROFILES>` — Profile name to apply while Claude runs (repeat to apply several)
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
