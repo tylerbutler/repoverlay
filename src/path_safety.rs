@@ -100,7 +100,6 @@ pub(crate) fn validate_repo_relative_path(path: &Path) -> Result<()> {
 ///
 /// For example, `my-overlay` and `user_config` are accepted, while
 /// `../etc`, `name/with/slash`, and empty strings are rejected.
-#[allow(dead_code)] // Infrastructure for future call-site migrations (#323)
 pub(crate) fn validate_path_component(component: &str) -> Result<()> {
     // Reject empty components
     if component.is_empty() {

@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::OverlayName;
+use crate::cache::{cache_dir, configured_source_cache_path};
 use crate::config::{OverlayRepoConfig, Source};
 use crate::overlay_repo::{AvailableOverlay, OverlayRepoManager};
 use crate::state::ResolvedVia;
@@ -67,20 +68,21 @@ pub(crate) struct SourceManager {
     sources: Vec<ManagedSource>,
 }
 
-/// Cache directory for sources.
-fn sources_cache_dir() -> Result<PathBuf> {
-    let base = directories::ProjectDirs::from("", "", "repoverlay")
-        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
-    Ok(base.cache_dir().join("sources"))
-}
-
 impl SourceManager {
     /// Create a new source manager from a list of sources.
     ///
     /// Each git source is configured to clone to a subdirectory within the cache.
     /// Local sources resolve their path relative to `repo_root`.
     pub(crate) fn new(sources: Vec<Source>, repo_root: Option<&Path>) -> Result<Self> {
-        let cache_dir = sources_cache_dir()?;
+        let cache_root = cache_dir()?;
+        Self::new_with_cache_root(sources, repo_root, &cache_root)
+    }
+
+    fn new_with_cache_root(
+        sources: Vec<Source>,
+        repo_root: Option<&Path>,
+        cache_root: &Path,
+    ) -> Result<Self> {
         let managed_sources = sources
             .into_iter()
             .map(|source| {
@@ -113,7 +115,7 @@ impl SourceManager {
                         path: canonical_path,
                     }
                 } else {
-                    let local_path = cache_dir.join(&source.name);
+                    let local_path = configured_source_cache_path(cache_root, &source.name)?;
                     let config = OverlayRepoConfig {
                         url: source.url()?.to_string(),
                         local_path: Some(local_path),
@@ -146,6 +148,15 @@ impl SourceManager {
             .iter()
             .find(|s| s.source.name == name)
             .map(|s| &s.source)
+    }
+
+    /// Get the base filesystem path used by a source backend.
+    #[must_use]
+    pub(crate) fn get_source_base_path(&self, name: &str) -> Option<&Path> {
+        self.sources
+            .iter()
+            .find(|s| s.source.name == name)
+            .map(|s| s.backend.repo_path())
     }
 
     /// Ensure all git sources are cloned.
@@ -384,14 +395,6 @@ impl SourceManager {
         let mut result: Vec<_> = names.into_iter().collect();
         result.sort();
         Ok(result)
-    }
-
-    /// Get the base path for a named source.
-    pub(crate) fn get_source_base_path(&self, source_name: &str) -> Option<&Path> {
-        self.sources
-            .iter()
-            .find(|ms| ms.source.name == source_name)
-            .map(|ms| ms.backend.repo_path())
     }
 
     /// Get the current commit for a named source.
@@ -1414,42 +1417,29 @@ mod tests {
     #[test]
     fn test_source_names() {
         let temp = TempDir::new().unwrap();
-        let cache_dir = temp.path();
 
         let sources = vec![
             Source {
                 name: "personal".to_string(),
-                url: Some("file://dummy".to_string()),
+                url: Some("https://github.com/user/overlays".to_string()),
                 path: None,
             },
             Source {
                 name: "team".to_string(),
-                url: Some("file://dummy".to_string()),
+                url: Some("https://github.com/team/overlays".to_string()),
                 path: None,
             },
         ];
 
-        let manager = SourceManager {
-            sources: sources
-                .into_iter()
-                .map(|source| {
-                    let local_path = cache_dir.join(&source.name);
-                    let config = OverlayRepoConfig {
-                        url: source.url().unwrap().to_string(),
-                        local_path: Some(local_path),
-                    };
-                    ManagedSource {
-                        source,
-                        backend: ManagedSourceBackend::Git(
-                            OverlayRepoManager::new(config).unwrap(),
-                        ),
-                    }
-                })
-                .collect(),
-        };
+        let manager =
+            SourceManager::new_with_cache_root(sources, Some(temp.path()), temp.path()).unwrap();
 
         let names = manager.source_names();
         assert_eq!(names, vec!["personal", "team"]);
+        assert_eq!(
+            manager.get_source_base_path("team").unwrap(),
+            temp.path().join("sources/team")
+        );
     }
 
     #[test]
@@ -1693,21 +1683,24 @@ mod tests {
         assert!(overlays.is_empty());
     }
 
-    /// Test that `sources_cache_dir` returns error when `ProjectDirs` is unavailable.
-    /// This catches mutants that would replace the error with `Ok(Default::default())`.
+    /// Test that `SourceManager::new_with_cache_root` uses a single `sources` segment.
     #[test]
-    fn sources_cache_dir_fails_without_project_dirs() {
-        // The function should return an error, not Ok(PathBuf::new())
-        let result = sources_cache_dir();
-        assert!(
-            result.is_ok(),
-            "sources_cache_dir should work in test environment with valid home dir"
-        );
-        // Verify it returns a valid path, not an empty default
-        let path = result.unwrap();
-        assert!(
-            !path.as_os_str().is_empty(),
-            "sources_cache_dir should not return empty path"
+    fn configured_source_cache_path_uses_single_sources_segment() {
+        let base = TempDir::new().unwrap();
+        let manager = SourceManager::new_with_cache_root(
+            vec![Source {
+                name: "team".to_string(),
+                url: Some("https://github.com/test/team".to_string()),
+                path: None,
+            }],
+            Some(base.path()),
+            base.path(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            manager.get_source_base_path("team").unwrap(),
+            base.path().join("sources/team")
         );
     }
 
@@ -2412,6 +2405,20 @@ mod tests {
 
         // pull_all should not error on local sources
         assert!(manager.pull_all().is_ok());
+    }
+
+    #[test]
+    fn test_git_source_name_rejects_path_separators() {
+        let sources = vec![Source {
+            name: "bad/source".to_string(),
+            url: Some("https://github.com/owner/repo".to_string()),
+            path: None,
+        }];
+
+        let Err(err) = SourceManager::new(sources, None) else {
+            panic!("expected invalid source name to be rejected");
+        };
+        assert!(err.to_string().contains("path separators"));
     }
 
     #[test]

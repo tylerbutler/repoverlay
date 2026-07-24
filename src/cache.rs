@@ -1,4 +1,4 @@
-//! Cache management for GitHub repository overlays.
+//! Cache management for GitHub repository overlays and configured sources.
 //!
 //! Handles downloading, caching, and updating GitHub repositories for use as overlays.
 
@@ -7,11 +7,13 @@ use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 use log::{debug, trace, warn};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::github::{GitHubSource, GitRef};
+use crate::path_safety::validate_path_component;
 
 /// Execute a git command in a directory and return the output.
 fn git_in_dir(repo_path: &Path, args: &[&str]) -> Result<Output> {
@@ -74,10 +76,74 @@ pub(crate) struct CachedRepoInfo {
     pub(crate) meta: Option<CacheMeta>,
 }
 
+/// Information about a cached configured source.
+#[derive(Debug)]
+pub(crate) struct CachedSourceInfo {
+    /// Source name.
+    #[allow(dead_code)] // Consumed by the next cache CLI task.
+    pub(crate) name: String,
+    /// Path to the cached source.
+    #[allow(dead_code)] // Consumed by the next cache CLI task.
+    pub(crate) path: PathBuf,
+}
+
+/// Counts returned when clearing cache namespaces.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CacheClearCounts {
+    /// Number of cached GitHub repositories removed.
+    pub(crate) github: usize,
+    /// Number of cached configured sources removed.
+    #[allow(dead_code)] // Reported once the cache CLI displays both namespace counts.
+    pub(crate) sources: usize,
+}
+
 /// Manager for the overlay cache.
 #[derive(Debug, Clone)]
 pub(crate) struct CacheManager {
     cache_dir: PathBuf,
+}
+
+/// Parse and validate a cache directory override.
+pub(crate) fn parse_cache_dir_override(value: Option<&OsStr>) -> Result<Option<PathBuf>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    if value.is_empty() {
+        bail!("REPOVERLAY_CACHE_DIR cannot be empty");
+    }
+
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        bail!("REPOVERLAY_CACHE_DIR must be an absolute path");
+    }
+
+    Ok(Some(path.to_path_buf()))
+}
+
+/// Get the default cache directory from platform conventions.
+pub(crate) fn default_cache_dir() -> Result<PathBuf> {
+    let proj_dirs = ProjectDirs::from("", "", "repoverlay")
+        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
+
+    Ok(proj_dirs.cache_dir().to_path_buf())
+}
+
+/// Get the cache directory.
+pub(crate) fn cache_dir() -> Result<PathBuf> {
+    if let Some(dir) =
+        parse_cache_dir_override(std::env::var_os("REPOVERLAY_CACHE_DIR").as_deref())?
+    {
+        return Ok(dir);
+    }
+
+    default_cache_dir()
+}
+
+/// Build a configured-source cache path beneath a cache root.
+pub(crate) fn configured_source_cache_path(cache_root: &Path, name: &str) -> Result<PathBuf> {
+    validate_path_component(name)?;
+    Ok(cache_root.join("sources").join(name))
 }
 
 #[allow(clippy::unused_self)]
@@ -101,7 +167,7 @@ impl CacheManager {
         source: &GitHubSource,
         update: bool,
     ) -> Result<CachedOverlay> {
-        let repo_path = self.repo_path(source);
+        let repo_path = self.repo_path(source)?;
         let owner = &source.owner;
         let repo = &source.repo;
         let git_ref = source.git_ref.as_str();
@@ -147,11 +213,19 @@ impl CacheManager {
     }
 
     /// Get the path where a repository would be cached.
-    pub(crate) fn repo_path(&self, source: &GitHubSource) -> PathBuf {
-        self.cache_dir
-            .join("github")
-            .join(&source.owner)
-            .join(&source.repo)
+    pub(crate) fn repo_path(&self, source: &GitHubSource) -> Result<PathBuf> {
+        self.github_cache_path(&source.owner, &source.repo)
+    }
+
+    /// Get the path where a configured source would be cached.
+    fn source_path(&self, name: &str) -> Result<PathBuf> {
+        configured_source_cache_path(&self.cache_dir, name)
+    }
+
+    fn github_cache_path(&self, owner: &str, repo: &str) -> Result<PathBuf> {
+        validate_path_component(owner)?;
+        validate_path_component(repo)?;
+        Ok(self.cache_dir.join("github").join(owner).join(repo))
     }
 
     /// Clone a repository.
@@ -314,11 +388,49 @@ impl CacheManager {
         None
     }
 
+    fn remove_path(path: &Path) -> Result<bool> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_dir() => {
+                fs::remove_dir_all(path)?;
+                Ok(true)
+            }
+            Ok(_) => {
+                fs::remove_file(path)?;
+                Ok(true)
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn require_real_directory(path: &Path, label: &str) -> Result<bool> {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_dir() => Ok(true),
+            Ok(_) => bail!("{label} is not a directory"),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn prune_empty_dir(path: &Path) -> Result<()> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err.into()),
+        };
+
+        if metadata.is_dir() && path.read_dir()?.next().is_none() {
+            fs::remove_dir(path)?;
+        }
+
+        Ok(())
+    }
+
     /// List all cached repositories.
     pub(crate) fn list_cached(&self) -> Result<Vec<CachedRepoInfo>> {
         let github_dir = self.cache_dir.join("github");
 
-        if !github_dir.exists() {
+        if !github_dir.is_dir() {
             return Ok(Vec::new());
         }
 
@@ -356,46 +468,115 @@ impl CacheManager {
         Ok(repos)
     }
 
-    /// Remove a specific cached repository.
-    pub(crate) fn remove_cached(&self, owner: &str, repo: &str) -> Result<bool> {
-        let path = self.cache_dir.join("github").join(owner).join(repo);
+    /// List all cached configured sources.
+    pub(crate) fn list_cached_sources(&self) -> Result<Vec<CachedSourceInfo>> {
+        let sources_dir = self.cache_dir.join("sources");
 
-        if path.exists() {
-            fs::remove_dir_all(&path)?;
+        if !sources_dir.is_dir() {
+            return Ok(Vec::new());
+        }
 
-            // Clean up empty parent directories
-            let owner_dir = self.cache_dir.join("github").join(owner);
-            if owner_dir.exists() && owner_dir.read_dir()?.next().is_none() {
-                fs::remove_dir(&owner_dir)?;
+        let mut sources = Vec::new();
+
+        for source_entry in fs::read_dir(&sources_dir)? {
+            let source_entry = source_entry?;
+            if !source_entry.file_type()?.is_dir() {
+                continue;
             }
 
-            Ok(true)
-        } else {
-            Ok(false)
+            sources.push(CachedSourceInfo {
+                name: source_entry.file_name().to_string_lossy().to_string(),
+                path: source_entry.path(),
+            });
         }
+
+        sources.sort_by(|a, b| a.name.cmp(&b.name));
+
+        Ok(sources)
+    }
+
+    /// Remove a specific cached repository.
+    pub(crate) fn remove_cached(&self, owner: &str, repo: &str) -> Result<bool> {
+        validate_path_component(owner)?;
+        validate_path_component(repo)?;
+
+        if !Self::require_real_directory(&self.cache_dir, "cache root")? {
+            return Ok(false);
+        }
+
+        let github_dir = self.cache_dir.join("github");
+        if !Self::require_real_directory(&github_dir, "cache github namespace")? {
+            return Ok(false);
+        }
+
+        let owner_dir = github_dir.join(owner);
+        if !Self::require_real_directory(&owner_dir, "cache github owner")? {
+            return Ok(false);
+        }
+
+        let path = owner_dir.join(repo);
+
+        if !Self::remove_path(&path)? {
+            return Ok(false);
+        }
+
+        // Clean up empty parent directories.
+        Self::prune_empty_dir(&owner_dir)?;
+
+        Ok(true)
+    }
+
+    /// Remove a specific cached configured source.
+    pub(crate) fn remove_cached_source(&self, name: &str) -> Result<bool> {
+        validate_path_component(name)?;
+
+        if !Self::require_real_directory(&self.cache_dir, "cache root")? {
+            return Ok(false);
+        }
+
+        let sources_dir = self.cache_dir.join("sources");
+        if !Self::require_real_directory(&sources_dir, "cache sources namespace")? {
+            return Ok(false);
+        }
+
+        let path = self.source_path(name)?;
+
+        if !Self::remove_path(&path)? {
+            return Ok(false);
+        }
+
+        // Clean up empty parent directories.
+        let sources_dir = self.cache_dir.join("sources");
+        Self::prune_empty_dir(&sources_dir)?;
+
+        Ok(true)
     }
 
     /// Clear the entire cache.
-    pub(crate) fn clear_cache(&self) -> Result<usize> {
-        let github_dir = self.cache_dir.join("github");
-
-        if !github_dir.exists() {
-            return Ok(0);
+    pub(crate) fn clear_cache(&self) -> Result<CacheClearCounts> {
+        if !Self::require_real_directory(&self.cache_dir, "cache root")? {
+            return Ok(CacheClearCounts::default());
         }
 
-        let repos = self.list_cached()?;
-        let count = repos.len();
+        let counts = CacheClearCounts {
+            github: self.list_cached()?.len(),
+            sources: self.list_cached_sources()?.len(),
+        };
 
-        fs::remove_dir_all(&github_dir)?;
+        let github_dir = self.cache_dir.join("github");
+        let sources_dir = self.cache_dir.join("sources");
 
-        Ok(count)
+        Self::remove_path(&github_dir)?;
+        Self::remove_path(&sources_dir)?;
+
+        Ok(counts)
     }
 
     /// Check for updates to a cached repository.
     ///
     /// Returns the latest commit on the default branch if different from current.
     pub(crate) fn check_for_updates(&self, source: &GitHubSource) -> Result<Option<String>> {
-        let repo_path = self.repo_path(source);
+        let repo_path = self.repo_path(source)?;
 
         if !repo_path.exists() {
             return Ok(None);
@@ -441,17 +622,13 @@ impl CacheManager {
 }
 
 /// Get the cache directory.
-pub(crate) fn cache_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("", "", "repoverlay")
-        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?;
-
-    Ok(proj_dirs.cache_dir().to_path_buf())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    use std::os::unix::fs as unix_fs;
 
     /// Run a git command in `repo`, asserting success.
     fn git_ok(repo: &Path, args: &[&str]) {
@@ -515,7 +692,7 @@ mod tests {
     fn test_repo_path() {
         let manager = CacheManager::new().unwrap();
         let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
-        let path = manager.repo_path(&source);
+        let path = manager.repo_path(&source).unwrap();
 
         assert!(path.ends_with("github/owner/repo"));
     }
@@ -524,25 +701,70 @@ mod tests {
     fn test_repo_path_with_subpath() {
         let manager = CacheManager::new().unwrap();
         let source = GitHubSource::parse("https://github.com/owner/repo/tree/main/subdir").unwrap();
-        let path = manager.repo_path(&source);
+        let path = manager.repo_path(&source).unwrap();
 
         // Subpath should not affect cache path (repo is cached, subpath is used at read time)
         assert!(path.ends_with("github/owner/repo"));
     }
 
     #[test]
-    fn test_cache_dir_function() {
-        let dir = cache_dir();
-        assert!(dir.is_ok());
-        let dir = dir.unwrap();
+    fn test_parse_cache_dir_override_none() {
+        assert_eq!(parse_cache_dir_override(None).unwrap(), None);
+    }
+
+    #[test]
+    fn test_parse_cache_dir_override_empty_rejected() {
+        let err = parse_cache_dir_override(Some(OsStr::new(""))).unwrap_err();
+        assert!(err.to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_parse_cache_dir_override_relative_rejected() {
+        let err = parse_cache_dir_override(Some(OsStr::new("custom-cache"))).unwrap_err();
+        assert!(err.to_string().contains("absolute path"));
+    }
+
+    #[test]
+    fn test_parse_cache_dir_override_absolute_accepted() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path();
+        let parsed = parse_cache_dir_override(Some(path.as_os_str())).unwrap();
+        assert_eq!(parsed, Some(path.to_path_buf()));
+    }
+
+    #[test]
+    fn test_default_cache_dir_function() {
+        let dir = default_cache_dir().unwrap();
         assert!(dir.to_string_lossy().contains("repoverlay"));
     }
 
     #[test]
-    fn test_cache_manager_cache_dir_accessor() {
+    fn test_cache_manager_cache_dir_accessor_uses_current_resolution() {
+        let expected = std::env::var_os("REPOVERLAY_CACHE_DIR").map_or_else(
+            || default_cache_dir().unwrap(),
+            |value| {
+                parse_cache_dir_override(Some(value.as_os_str()))
+                    .unwrap()
+                    .unwrap()
+            },
+        );
+
         let manager = CacheManager::new().unwrap();
-        let dir = manager.cache_dir();
-        assert!(dir.to_string_lossy().contains("repoverlay"));
+        assert_eq!(manager.cache_dir(), expected.as_path());
+    }
+
+    #[test]
+    fn test_configured_source_cache_path_rejects_invalid_name() {
+        let temp = TempDir::new().unwrap();
+        let err = configured_source_cache_path(temp.path(), "bad/name").unwrap_err();
+        assert!(err.to_string().contains("path separators"));
+    }
+
+    #[test]
+    fn test_configured_source_cache_path_joins_sources_namespace() {
+        let temp = TempDir::new().unwrap();
+        let path = configured_source_cache_path(temp.path(), "overlay").unwrap();
+        assert_eq!(path, temp.path().join("sources/overlay"));
     }
 
     #[test]
@@ -623,14 +845,36 @@ mod tests {
     }
 
     #[test]
+    fn test_list_cached_sources_sorted_and_skips_non_directories() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let sources_dir = temp.path().join("sources");
+        fs::create_dir_all(&sources_dir).unwrap();
+        fs::write(sources_dir.join("ignored.txt"), "content").unwrap();
+        fs::create_dir_all(sources_dir.join("zeta")).unwrap();
+        fs::create_dir_all(sources_dir.join("alpha")).unwrap();
+
+        let sources = manager.list_cached_sources().unwrap();
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].name, "alpha");
+        assert_eq!(sources[0].path, sources_dir.join("alpha"));
+        assert_eq!(sources[1].name, "zeta");
+        assert_eq!(sources[1].path, sources_dir.join("zeta"));
+    }
+
+    #[test]
     fn test_clear_cache_empty() {
         let temp = TempDir::new().unwrap();
         let manager = CacheManager {
             cache_dir: temp.path().to_path_buf(),
         };
 
-        let count = manager.clear_cache().unwrap();
-        assert_eq!(count, 0);
+        let counts = manager.clear_cache().unwrap();
+        assert_eq!(counts.github, 0);
+        assert_eq!(counts.sources, 0);
     }
 
     #[test]
@@ -646,11 +890,246 @@ mod tests {
         fs::create_dir_all(&repo1).unwrap();
         fs::create_dir_all(&repo2).unwrap();
 
-        let count = manager.clear_cache().unwrap();
-        assert_eq!(count, 2);
+        let counts = manager.clear_cache().unwrap();
+        assert_eq!(counts.github, 2);
+        assert_eq!(counts.sources, 0);
 
         // Verify directory is removed
         assert!(!temp.path().join("github").exists());
+    }
+
+    #[test]
+    fn test_clear_cache_sources_only() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let keep = temp.path().join("keep.txt");
+        fs::write(&keep, "keep").unwrap();
+        let source_path = temp.path().join("sources/alpha");
+        fs::create_dir_all(&source_path).unwrap();
+
+        let counts = manager.clear_cache().unwrap();
+        assert_eq!(counts.github, 0);
+        assert_eq!(counts.sources, 1);
+        assert!(!temp.path().join("sources").exists());
+        assert!(keep.exists());
+    }
+
+    #[test]
+    fn test_clear_cache_with_both_namespaces() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        fs::create_dir_all(temp.path().join("github/owner1/repo1")).unwrap();
+        fs::create_dir_all(temp.path().join("github/owner2/repo2")).unwrap();
+        fs::create_dir_all(temp.path().join("sources/alpha")).unwrap();
+        fs::create_dir_all(temp.path().join("sources/beta")).unwrap();
+        let keep = temp.path().join("preserve.txt");
+        fs::write(&keep, "keep").unwrap();
+
+        let counts = manager.clear_cache().unwrap();
+        assert_eq!(counts.github, 2);
+        assert_eq!(counts.sources, 2);
+        assert!(!temp.path().join("github").exists());
+        assert!(!temp.path().join("sources").exists());
+        assert!(keep.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_clear_cache_removes_symlinked_namespaces_without_following_targets() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let github_target = temp.path().join("github-target");
+        let sources_target = temp.path().join("sources-target");
+        let github_repo = github_target.join("owner/repo");
+        let sources_clone = sources_target.join("alpha");
+        fs::create_dir_all(&github_repo).unwrap();
+        fs::create_dir_all(&sources_clone).unwrap();
+        fs::write(github_repo.join("sentinel.txt"), "github-sentinel").unwrap();
+        fs::write(sources_clone.join("sentinel.txt"), "sources-sentinel").unwrap();
+
+        let github_link = temp.path().join("github");
+        let sources_link = temp.path().join("sources");
+        unix_fs::symlink(&github_target, &github_link).unwrap();
+        unix_fs::symlink(&sources_target, &sources_link).unwrap();
+
+        let counts = manager.clear_cache().unwrap();
+        assert_eq!(counts.github, 1);
+        assert_eq!(counts.sources, 1);
+        assert!(github_target.exists());
+        assert!(sources_target.exists());
+        assert_eq!(
+            fs::read_to_string(github_repo.join("sentinel.txt")).unwrap(),
+            "github-sentinel"
+        );
+        assert_eq!(
+            fs::read_to_string(sources_clone.join("sentinel.txt")).unwrap(),
+            "sources-sentinel"
+        );
+        assert!(!github_link.exists());
+        assert!(!sources_link.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_clear_cache_rejects_symlinked_cache_root() {
+        let temp = TempDir::new().unwrap();
+        let external_root = temp.path().join("external-root");
+        let github_target = external_root.join("github");
+        let sources_target = external_root.join("sources");
+        let github_repo = github_target.join("owner/repo");
+        let sources_clone = sources_target.join("alpha");
+        fs::create_dir_all(&github_repo).unwrap();
+        fs::create_dir_all(&sources_clone).unwrap();
+        fs::write(github_repo.join("sentinel.txt"), "github-sentinel").unwrap();
+        fs::write(sources_clone.join("sentinel.txt"), "sources-sentinel").unwrap();
+
+        let cache_root = temp.path().join("cache-root");
+        unix_fs::symlink(&external_root, &cache_root).unwrap();
+
+        let manager = CacheManager {
+            cache_dir: cache_root.clone(),
+        };
+
+        let err = manager.clear_cache().unwrap_err();
+        assert!(err.to_string().contains("cache root is not a directory"));
+        assert_eq!(
+            fs::read_to_string(github_repo.join("sentinel.txt")).unwrap(),
+            "github-sentinel"
+        );
+        assert_eq!(
+            fs::read_to_string(sources_clone.join("sentinel.txt")).unwrap(),
+            "sources-sentinel"
+        );
+        assert!(
+            fs::symlink_metadata(&cache_root)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_cached_rejects_symlinked_cache_root() {
+        let temp = TempDir::new().unwrap();
+        let external_root = temp.path().join("external-root");
+        fs::create_dir_all(external_root.join("github/owner/repo")).unwrap();
+        fs::write(
+            external_root.join("github/owner/repo/sentinel.txt"),
+            "repo-sentinel",
+        )
+        .unwrap();
+        fs::create_dir_all(external_root.join("sources/alpha")).unwrap();
+        fs::write(
+            external_root.join("sources/alpha/sentinel.txt"),
+            "source-sentinel",
+        )
+        .unwrap();
+
+        let cache_root = temp.path().join("cache-root");
+        unix_fs::symlink(&external_root, &cache_root).unwrap();
+
+        let manager = CacheManager {
+            cache_dir: cache_root.clone(),
+        };
+
+        let err = manager.remove_cached("owner", "repo").unwrap_err();
+        assert!(err.to_string().contains("cache root is not a directory"));
+        let err = manager.remove_cached_source("alpha").unwrap_err();
+        assert!(err.to_string().contains("cache root is not a directory"));
+        assert_eq!(
+            fs::read_to_string(external_root.join("github/owner/repo/sentinel.txt")).unwrap(),
+            "repo-sentinel"
+        );
+        assert_eq!(
+            fs::read_to_string(external_root.join("sources/alpha/sentinel.txt")).unwrap(),
+            "source-sentinel"
+        );
+        assert!(
+            fs::symlink_metadata(&cache_root)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_cached_rejects_symlinked_github_namespace() {
+        let temp = TempDir::new().unwrap();
+        let external_github = temp.path().join("external-github");
+        fs::create_dir_all(external_github.join("owner/repo")).unwrap();
+        fs::write(
+            external_github.join("owner/repo/sentinel.txt"),
+            "github-sentinel",
+        )
+        .unwrap();
+
+        fs::create_dir_all(temp.path().join("sources")).unwrap();
+        let github_link = temp.path().join("github");
+        unix_fs::symlink(&external_github, &github_link).unwrap();
+
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let err = manager.remove_cached("owner", "repo").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cache github namespace is not a directory")
+        );
+        assert_eq!(
+            fs::read_to_string(external_github.join("owner/repo/sentinel.txt")).unwrap(),
+            "github-sentinel"
+        );
+        assert!(
+            fs::symlink_metadata(&github_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_cached_rejects_symlinked_owner_parent() {
+        let temp = TempDir::new().unwrap();
+        let external_owner = temp.path().join("external-owner");
+        fs::create_dir_all(external_owner.join("repo")).unwrap();
+        fs::write(external_owner.join("repo/sentinel.txt"), "owner-sentinel").unwrap();
+
+        fs::create_dir_all(temp.path().join("github")).unwrap();
+        let owner_link = temp.path().join("github/owner");
+        unix_fs::symlink(&external_owner, &owner_link).unwrap();
+
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let err = manager.remove_cached("owner", "repo").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cache github owner is not a directory")
+        );
+        assert_eq!(
+            fs::read_to_string(external_owner.join("repo/sentinel.txt")).unwrap(),
+            "owner-sentinel"
+        );
+        assert!(
+            fs::symlink_metadata(&owner_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
@@ -678,6 +1157,146 @@ mod tests {
         let removed = manager.remove_cached("owner", "repo").unwrap();
         assert!(removed);
         assert!(!repo_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_cached_symlink_entry_removes_link_only() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let target = temp.path().join("external-owner");
+        let repo_target = target.join("repo");
+        fs::create_dir_all(&repo_target).unwrap();
+        fs::write(repo_target.join("sentinel.txt"), "repo-sentinel").unwrap();
+
+        let repo_link = temp.path().join("github/owner/repo");
+        fs::create_dir_all(temp.path().join("github/owner")).unwrap();
+        unix_fs::symlink(&repo_target, &repo_link).unwrap();
+
+        let removed = manager.remove_cached("owner", "repo").unwrap();
+        assert!(removed);
+        assert!(repo_target.exists());
+        assert_eq!(
+            fs::read_to_string(repo_target.join("sentinel.txt")).unwrap(),
+            "repo-sentinel"
+        );
+        assert!(fs::symlink_metadata(&repo_link).is_err());
+    }
+
+    #[test]
+    fn test_remove_cached_rejects_invalid_components() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let err = manager.remove_cached("bad/owner", "repo").unwrap_err();
+        assert!(err.to_string().contains("path separators"));
+
+        let err = manager.remove_cached("owner", "bad/repo").unwrap_err();
+        assert!(err.to_string().contains("path separators"));
+    }
+
+    #[test]
+    fn test_remove_cached_source_nonexistent() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let removed = manager.remove_cached_source("source").unwrap();
+        assert!(!removed);
+    }
+
+    #[test]
+    fn test_remove_cached_source_existing() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let source_path = temp.path().join("sources/source");
+        fs::create_dir_all(&source_path).unwrap();
+
+        let removed = manager.remove_cached_source("source").unwrap();
+        assert!(removed);
+        assert!(!source_path.exists());
+        assert!(!temp.path().join("sources").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_cached_source_rejects_invalid_name_before_fs_access() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let external_sources = temp.path().join("external-sources");
+        fs::create_dir(&external_sources).unwrap();
+        let sources_link = temp.path().join("sources");
+        unix_fs::symlink(&external_sources, &sources_link).unwrap();
+
+        let err = manager.remove_cached_source("bad/name").unwrap_err();
+        assert!(err.to_string().contains("path separators"));
+        assert!(external_sources.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_cached_source_rejects_symlinked_sources_parent() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let external_sources = temp.path().join("external-sources");
+        let external_child = external_sources.join("child");
+        fs::create_dir_all(&external_child).unwrap();
+        fs::write(external_child.join("payload.txt"), "content").unwrap();
+
+        let sources_link = temp.path().join("sources");
+        unix_fs::symlink(&external_sources, &sources_link).unwrap();
+
+        let err = manager.remove_cached_source("child").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cache sources namespace is not a directory")
+        );
+        assert!(external_child.exists());
+        assert!(external_child.join("payload.txt").exists());
+        assert!(
+            fs::symlink_metadata(&sources_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_remove_cached_source_symlink_entry_removes_link_only() {
+        let temp = TempDir::new().unwrap();
+        let manager = CacheManager {
+            cache_dir: temp.path().to_path_buf(),
+        };
+
+        let target = temp.path().join("external-source");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("payload.txt"), "content").unwrap();
+
+        let source_link = temp.path().join("sources/source");
+        fs::create_dir_all(temp.path().join("sources")).unwrap();
+        unix_fs::symlink(&target, &source_link).unwrap();
+
+        let removed = manager.remove_cached_source("source").unwrap();
+        assert!(removed);
+        assert!(target.exists());
+        assert!(target.join("payload.txt").exists());
+        assert!(fs::symlink_metadata(&source_link).is_err());
     }
 
     #[test]
@@ -1121,7 +1740,7 @@ mod tests {
             cache_dir: temp.path().to_path_buf(),
         };
         let source = GitHubSource::parse("https://github.com/owner/repo").unwrap();
-        let repo_path = manager.repo_path(&source);
+        let repo_path = manager.repo_path(&source).unwrap();
 
         // Create directory to trigger the "cache hit" branch (update=false path)
         // but it's not a real git repo, so checkout_ref will fail

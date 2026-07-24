@@ -10,7 +10,7 @@ use crate::cache::CacheManager;
 use crate::config;
 use crate::fuzzy::OverlayMatcher;
 use crate::github;
-use crate::github::GitHubSource;
+use crate::github::{GitHubSource, GitRef};
 use crate::library;
 use crate::overlay_name::OverlayName;
 use crate::overlay_repo::AvailableOverlay;
@@ -664,8 +664,12 @@ pub(crate) fn list_overlays_from_cached_repo(
     debug!("listing overlays from cached GitHub repo: {owner}/{repo}");
 
     let cache = CacheManager::new()?;
-    let cache_dir = cache.cache_dir();
-    let repo_path = cache_dir.join("github").join(owner).join(repo);
+    let repo_path = cache.repo_path(&GitHubSource {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        git_ref: GitRef::Default,
+        subpath: None,
+    })?;
 
     if !repo_path.exists() {
         bail!("Repository not cached: {owner}/{repo}");
@@ -1356,6 +1360,13 @@ mod tests {
         }
 
         #[test]
+        fn list_overlays_from_cached_repo_rejects_invalid_owner() {
+            let result = list_overlays_from_cached_repo("bad/owner", "repo");
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("path separators"));
+        }
+
+        #[test]
         fn list_overlays_from_cached_repo_finds_overlays_at_correct_path() {
             use crate::cache::CacheManager;
             use crate::github::GitHubSource;
@@ -1371,7 +1382,7 @@ mod tests {
 
             // Get the path where CacheManager would store this repo
             // This includes the "github" subdirectory: {cache_dir}/github/{owner}/{repo}
-            let expected_repo_path = cache.repo_path(&source);
+            let expected_repo_path = cache.repo_path(&source).unwrap();
 
             // Create overlay structure at the correct cache location
             let overlay_path = expected_repo_path.join("target-org/target-repo/test-overlay");
@@ -1416,7 +1427,7 @@ mod tests {
             let source =
                 GitHubSource::parse("https://github.com/test-owner-xyz/test-repo-xyz").unwrap();
 
-            let cache_manager_path = cache.repo_path(&source);
+            let cache_manager_path = cache.repo_path(&source).unwrap();
 
             // Verify the cache manager path includes "github" subdirectory
             assert!(
