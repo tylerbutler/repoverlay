@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.17.1 - 2026-07-28
+
+
+### Command: `cache`
+
+
+#### Fixed
+
+##### Clarify cache commands for configured-source clones.
+
+`cache list` now shows configured-source clones separately. Targeted `--source` removal and combined `--all` clearing manage those clones alongside GitHub caches.
+
+
+
+
+
+#### Fixed
+
+##### Resolve ephemeral harness targets from repository subdirectories
+
+`repoverlay copilot` and `repoverlay claude` now find the enclosing repository root when `--target` is omitted.
+
+
 ## v0.17.0 - 2026-07-06
 
 
