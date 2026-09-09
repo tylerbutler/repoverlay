@@ -13,3 +13,7 @@ mutants.out/
 
 # impeccable design-skill artifacts (local only)
 .impeccable/
+
+
+# APM dependencies
+apm_modules/
