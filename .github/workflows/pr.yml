@@ -32,19 +32,25 @@ jobs:
         env:
           MERGE_BASE_SHA: ${{ steps.merge-base.outputs.sha }}
         run: |
-          set +e
-          OUTPUT=$(cargo semver-checks --baseline-rev "$MERGE_BASE_SHA" --color never 2>&1)
-          EXIT_CODE=$?
+          EXIT_CODE=0
+          OUTPUT=$(cargo +stable semver-checks --baseline-rev "$MERGE_BASE_SHA" --color never 2>&1) || EXIT_CODE=$?
           echo "$OUTPUT"
           {
             echo "output<<EOF"
             echo "$OUTPUT"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          echo "has_breaking=$([[ $EXIT_CODE -ne 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          exit 0
+          case "$EXIT_CODE" in
+            0) echo "result=compatible" >> "$GITHUB_OUTPUT" ;;
+            100) echo "result=breaking" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "result=error" >> "$GITHUB_OUTPUT"
+              echo "::error::Semver check could not complete (exit code $EXIT_CODE). See the output above."
+              exit "$EXIT_CODE"
+              ;;
+          esac
       - name: Comment on PR with breaking changes
-        if: steps.semver.outputs.has_breaking == 'true'
+        if: steps.semver.outputs.result == 'breaking'
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # ratchet:marocchino/sticky-pull-request-comment@v3.0.5
         with:
           header: semver-check
@@ -58,8 +64,23 @@ jobs:
             ```
 
             If these changes are intentional, please ensure the version bump reflects the breaking change.
+      - name: Comment on PR with semver check error
+        if: failure() && steps.semver.outputs.result == 'error'
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # ratchet:marocchino/sticky-pull-request-comment@v3.0.5
+        with:
+          header: semver-check
+          message: |
+            ## Semver Check Failed
+
+            The compatibility check could not complete. This is a tool error, not a finding of breaking changes.
+
+            ```
+            ${{ steps.semver.outputs.output }}
+            ```
+
+            Fix the check error and rerun the workflow to determine compatibility.
       - name: Remove semver comment if no breaking changes
-        if: steps.semver.outputs.has_breaking == 'false'
+        if: steps.semver.outputs.result == 'compatible'
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # ratchet:marocchino/sticky-pull-request-comment@v3.0.5
         with:
           header: semver-check
