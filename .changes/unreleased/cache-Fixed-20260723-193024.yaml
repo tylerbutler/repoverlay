@@ -1,8 +1,0 @@
-component: cache
-kind: Fixed
-body: |-
-  Clarify cache commands for configured-source clones.
-  `cache list` now shows configured-source clones separately. Targeted
-  `--source` removal and combined `--all` clearing manage those clones
-  alongside GitHub caches.
-time: 2026-07-23T19:30:24.623018-07:00
