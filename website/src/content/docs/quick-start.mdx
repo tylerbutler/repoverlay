@@ -1,115 +1,159 @@
 ---
-title: Quick Start
+title: Quick start
 ---
 
 import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Get up and running with repoverlay in a couple of minutes. First install the
-binary, then pick a path: **profiles** compose a whole agent setup at once, while
-**overlays** place a single bundle of files.
+Start with one instruction file for your agent. Apply it, examine the result,
+then remove it. This example works offline after installation. It needs no
+overlay sources or plugins.
 
 ## Install
 
-See [Installation](/installation/) for all options. The quickest way:
+Choose the package manager you already use:
+
+<Tabs>
+<TabItem label="Homebrew">
+
+For macOS or Linux with Homebrew installed:
 
 ```bash
-# macOS/Linux
 brew install tylerbutler/tap/repoverlay
-
-# Or with cargo
-cargo binstall repoverlay
 ```
+
+</TabItem>
+<TabItem label="Cargo">
+
+Build from source with Rust 1.91 or later:
+
+```bash
+cargo install repoverlay
+```
+
+</TabItem>
+</Tabs>
+
+On Windows without Rust, use the [PowerShell installer](/installation/).
+See [Installation](/installation/) for prebuilt binaries and other methods.
+
+Confirm the binary is on your PATH:
+
+```bash
+repoverlay --version
+```
+
+## Try it
+
+Use the `rust-dev` profile from the homepage for this example.
+A **profile** is a reusable setup for an agent. An **overlay** is a set of
+files. Use the second tab if you only need files, not agent instructions.
 
 <Tabs>
 <TabItem label="Profiles (recommended)">
 
-A **profile** composes overlays and AI-harness capabilities — instructions,
-skills, agents, and MCP servers — into one named unit you apply to a repo for a
-specific agent (Claude Code or GitHub Copilot).
+This example uses Claude Code. For GitHub Copilot, replace `claude` with
+`copilot` in both the apply and remove commands. Copilot uses
+`AGENTS.md` instead of `CLAUDE.md` for instructions.
 
 <Steps>
 
-1. **Define a profile**
+1. **Define the profile once**
 
-   Profiles live in your repoverlay config under a `profiles` key. Add one to your
-   global config at `~/.config/repoverlay/config.ccl`:
+   Create `~/.config/repoverlay/config.ccl`, including its parent directory if
+   needed. If you already have a `profiles` section, add `rust-dev` under it
+   instead of replacing your configuration.
 
    ```ccl
    profiles =
      rust-dev =
-       description = Rust development profile
-       overlays =
-         = rust-base
+       description = My first agent profile
        instructions =
          =
            content =
              Be concise in all responses.
    ```
 
-   See the [Profiles guide](/guides/profiles/) for overlays, plugins, and
-   marketplaces.
+   This profile has one instruction and no external dependencies. Keep it in
+   your global configuration to reuse it in other repositories.
 
-2. **Apply it to a repo**
+2. **Apply it in a git repository**
 
-   Pick the harness for your agent — `claude` or `copilot`:
+   In your terminal, go to the repository where you want these instructions. Then run:
 
    ```bash
-   cd ~/projects/my-repo
    repoverlay profile apply rust-dev --harness claude
    ```
 
-   repoverlay places each capability where the harness expects it and git-excludes
-   any new repo-local files.
+   repoverlay adds the instruction to a managed section in `CLAUDE.md`. It excludes
+   a new file through `.git/info/exclude`. If the file is already tracked,
+   git still shows its changes. Review them before you commit.
 
-3. **Check what was applied**
+3. **Inspect the result**
 
    ```bash
    repoverlay profile status
    ```
 
-4. **Remove when done**
+   Look for `rust-dev` and the `claude` harness. Open `CLAUDE.md` to see
+   `Be concise in all responses.` in the managed section.
+
+   ```bash
+   git diff
+   ```
+
+   A newly excluded file will not appear in this diff. An existing tracked
+   instruction file will show the added section.
+
+4. **Remove the example**
 
    ```bash
    repoverlay profile remove rust-dev --harness claude
    ```
 
+   repoverlay removes the managed instruction. Your profile definition stays in the
+   global configuration so you can apply it again. Run `repoverlay profile status` to
+   confirm it is no longer applied.
+
 </Steps>
 
 </TabItem>
-<TabItem label="Overlays">
+<TabItem label="File overlays">
 
-An **overlay** is a named bundle of files placed directly into a repo's working
-tree and excluded from git.
+An overlay adds a set of files directly to a repository. It does not need a
+profile or a harness.
 
 <Steps>
 
-1. **Check that nothing is applied yet**
+1. **Open a git repository**
+
+   In your terminal, go to the repository where you want the files. Check its state:
 
    ```bash
-   cd ~/projects/my-repo
    repoverlay status
    ```
 
-   You should see: `Status: No overlays are currently applied.`
-
 2. **Browse and apply an overlay**
+
+   This step needs a network connection:
 
    ```bash
    repoverlay browse tylerbutler
    ```
 
-   Select an overlay from the interactive list. repoverlay will ask if you want to
-   save the source for future use.
+   Select an overlay from the list. Review the files before you apply it.
+   repoverlay can save the source for future use.
 
-3. **Check status again**
+3. **Inspect the result**
 
    ```bash
    repoverlay status
    ```
 
-   You'll see the applied overlay, its source, and the files it manages.
+   The output lists the applied overlay's name, source, and managed files.
 
-4. **Remove when done**
+4. **Remove the overlay**
+
+   Use the name from the status output in place of `my-overlay`:
 
    ```bash
    repoverlay remove my-overlay
@@ -120,9 +164,17 @@ tree and excluded from git.
 </TabItem>
 </Tabs>
 
+## If something goes wrong
+
+| What you see | What to do |
+| --- | --- |
+| `repoverlay` is not found | Restart your terminal and check that the install directory is on your PATH. See [Installation](/installation/). |
+| The profile cannot be found | Check that `rust-dev` is under `profiles` in `~/.config/repoverlay/config.ccl`. Run `repoverlay profile list` to see configured names. |
+| The directory is not a git repository | Go to an existing git checkout before you apply the profile. |
+| Changes appear in `git diff` | An instruction file was already tracked. Review the managed section, or remove the profile with the same name and harness. |
+
 ## Next steps
 
-- Compose a full agent setup with [Profiles](/guides/profiles/)
-- Learn about [applying overlays](/guides/applying/) from different sources
-- [Create and share](/guides/creating/) your own overlays
-- Understand [how it works](/guides/how-it-works/)
+Add [skills, agents, and MCP servers with plugins](/guides/profiles/#capabilities-come-from-plugins)
+when you need a larger setup. To manage plain configuration files, learn about
+[creating and sharing overlays](/guides/creating/).

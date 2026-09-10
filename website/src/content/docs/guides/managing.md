@@ -1,10 +1,10 @@
 ---
-title: Managing Applied Overlays
+title: Managing applied overlays
 sidebar:
   order: 3
 ---
 
-Once overlays are applied, you can check their status, edit them, update them from their source, and remove them.
+After you apply overlays, you can check their status, edit them, update them from their source, and remove them.
 
 ## Checking status
 
@@ -31,7 +31,7 @@ repoverlay status --json
 repoverlay status --json --name my-overlay
 ```
 
-The `status --json` output is a versioned public contract. The top-level
+The `status --json` output has a versioned public format. The top-level
 `schema_version` field is currently `1`.
 
 ```json
@@ -71,9 +71,12 @@ Source objects include the stable fields relevant to that source type:
 File entries use string values for `link_type` (`symlink`, `copy`, `merged`),
 `entry_type` (`file`, `directory`), and `status` (`ok`, `missing`).
 
-Patch releases may add fields without changing `schema_version`. Removing or
-renaming fields, changing field meanings, or changing enum string values requires
-a new `schema_version` and a semver-major release.
+Patch releases can add fields without a change to `schema_version`.
+A release must use a new `schema_version` and a new major version if it:
+
+- Removes or renames fields.
+- Changes the meaning of a field.
+- Changes an enum string value.
 
 ## Editing an overlay
 
@@ -86,7 +89,7 @@ repoverlay edit add my-overlay newfile.txt
 repoverlay edit add my-overlay file1.txt file2.txt
 ```
 
-This copies the files to the overlay source, replaces the originals with symlinks, and updates the overlay state.
+This command copies the files to the overlay source. It replaces the original files with symlinks and updates the overlay state.
 
 ### Remove files
 
@@ -96,7 +99,7 @@ repoverlay edit remove my-overlay oldfile.txt
 
 ### Interactive re-selection
 
-Re-run the interactive file selector with current files pre-selected:
+Open the file selection menu again. The current files are already selected:
 
 ```bash
 repoverlay edit my-overlay
@@ -110,7 +113,7 @@ repoverlay edit add my-overlay new.txt --dry-run
 
 ## Syncing changes back
 
-If you've modified overlay files in your repo (e.g., edited a symlinked config), the `sync` command copies those changes back to the overlay source:
+If you change overlay files in your repository, use `sync` to copy the changes back to the overlay source:
 
 ```bash
 repoverlay sync my-overlay
@@ -122,11 +125,11 @@ Preview what would be synced:
 repoverlay sync my-overlay --dry-run
 ```
 
-This is useful when you've tweaked a config in one repo and want to propagate the change to all repos using that overlay.
+Use this command to share a configuration change with other repositories that use the overlay.
 
 ## Updating remote overlays
 
-When overlays come from GitHub, repoverlay can pull the latest changes and re-apply them:
+For overlays from GitHub, repoverlay can get the latest changes and apply them again:
 
 ```bash
 # Update all GitHub-sourced overlays
@@ -140,14 +143,14 @@ repoverlay update --dry-run
 ```
 
 :::note
-Local overlays don't need updating — symlinks already point to the source files, so changes are reflected immediately.
+Local overlays that use symlinks do not need updates. The symlinks point to the source files, so changes appear immediately.
 :::
 
 ### When to update
 
-- After the overlay source has been updated on GitHub
-- When you want to pick up config changes shared by your team
-- Periodically, to stay in sync with upstream overlay changes
+- After an update to the overlay source on GitHub.
+- When you want configuration changes from your team.
+- At regular intervals, to get upstream overlay changes.
 
 ## Removing overlays
 
@@ -165,7 +168,7 @@ repoverlay remove --interactive
 repoverlay remove my-overlay --dry-run
 ```
 
-Removing an overlay deletes its symlinks (or copies), cleans up the git exclude entries, and removes the state files. If exclude cleanup fails, managed files and state are still removed where practical, but the command exits non-zero so you can repair `.git/info/exclude`.
+When you remove an overlay, repoverlay deletes its symlinks or copies, git exclude entries, and state files. If exclude cleanup fails, repoverlay still removes managed files and state where possible. The command returns a non-zero exit code so you can repair `.git/info/exclude`.
 
 ## Switching overlays
 
@@ -177,13 +180,13 @@ repoverlay switch https://github.com/user/ai-configs/tree/main/rust
 ```
 
 :::caution
-Switch removes **all** existing overlays before applying the new one. If you want to keep some overlays and add another, use `repoverlay apply` instead.
+The `switch` command removes **all** existing overlays before it applies the new one. To keep existing overlays and add another, use `repoverlay apply` instead.
 :::
 
-This is equivalent to running `repoverlay remove --all` followed by `repoverlay apply`, but as a single atomic operation.
+This is the same as `repoverlay remove --all` followed by `repoverlay apply`, but in one atomic operation.
 
 ### When to use switch
 
-- Changing between language-specific overlay sets (e.g., Rust vs TypeScript configs)
-- Swapping between personal and team overlay configurations
-- Resetting to a known overlay state
+- To change between language-specific overlay sets, such as Rust and TypeScript configuration.
+- To change between personal and team overlay configuration.
+- To return to a known overlay state.

@@ -1,5 +1,5 @@
 ---
-title: CLI Reference
+title: CLI reference
 headingStartLevel: 2
 ---
 

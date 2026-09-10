@@ -1,27 +1,27 @@
 ---
-title: How It Works
+title: How it works
 sidebar:
   order: 6
 ---
 
-Symlinks, git exclusions, and external backups do the work. This page covers each mechanism.
+repoverlay uses symlinks, git exclusions, and external state backups. This page explains how they work.
 
 ## Symlinks vs copies
 
-By default, repoverlay creates **symlinks** from the target repo to the overlay source, so changes to the source appear immediately in the target.
+By default, repoverlay creates symlinks from the target repository to the overlay source. Changes to the source appear immediately in the target.
 
-Use the `--copy` flag to copy files instead, which is useful when:
-- Symlinks aren't supported (e.g., some Docker setups or Windows without developer mode)
-- You want independent copies that won't change when the source is modified
-- Your CI environment doesn't handle symlinks well
+Use `--copy` to copy files instead when:
+- Your environment does not support symlinks, such as some Docker setups or Windows without developer mode.
+- You want independent copies that do not change with the source.
+- Your CI environment does not handle symlinks correctly.
 
 ## Git exclusion
 
-When files are applied, repoverlay adds them to `.git/info/exclude` — a per-repo gitignore file that isn't tracked by git itself. This means:
+When you apply files, repoverlay adds their paths to `.git/info/exclude`. This file contains exclusion rules for one repository. Git does not track the exclusion file. As a result:
 
-- Overlay files don't show up in `git status`
-- No changes to the tracked `.gitignore` file
-- Each overlay gets its own named section for clean removal
+- New overlay files do not appear in `git status`.
+- repoverlay does not change the tracked `.gitignore` file.
+- Each overlay has a named section that repoverlay deletes when you remove the overlay.
 
 The exclude entries look like this:
 
@@ -32,59 +32,59 @@ The exclude entries look like this:
 # repoverlay:my-overlay end
 ```
 
-This approach keeps overlay files completely invisible to git without modifying any tracked files.
+These rules exclude new overlay files without changes to the tracked `.gitignore` file. They do not hide changes to files that git already tracks.
 
-Because this exclusion is core to preventing accidental commits, `repoverlay apply`
-fails if `.git/info/exclude` cannot be updated. If files were already created,
-repoverlay rolls them back where practical and does not save overlay state.
+To prevent accidental commits, `repoverlay apply` fails if it cannot update
+`.git/info/exclude`. If it has already created files, repoverlay removes them
+where possible. It does not save overlay state.
 
-During `repoverlay remove`, managed files and state are still removed where
-practical. If exclude cleanup fails, the command exits non-zero and reports that
-the files were removed but `.git/info/exclude` still needs attention.
+During `repoverlay remove`, repoverlay removes managed files and state where
+possible. If exclude cleanup fails, the command returns a non-zero exit code.
+It reports that the files were removed but `.git/info/exclude` still needs repair.
 
 ## State tracking
 
 repoverlay tracks applied overlays in two locations:
 
-- **In-repo state** (`.repoverlay/overlays/<name>.ccl`) — the primary record of what's applied, stored inside the target repository
-- **External backup** (`~/.local/share/repoverlay/applied/`) — a recovery copy stored outside the repository
+- In-repo state (`.repoverlay/overlays/<name>.ccl`): the primary record of applied overlays, inside the target repository.
+- External backup (`~/.local/share/repoverlay/applied/`): a recovery copy of the state, outside the repository.
 
-The external backup exists so that overlays can be restored after `git clean` or other operations that remove untracked files. See [Restoring After Git Clean](/guides/restoring/) for details.
+The external backup lets repoverlay restore overlays after `git clean` or other operations that remove untracked files. See [Restoring after git clean](/guides/restoring/) for details.
 
-State files are written in [CCL format](https://ccl.tylerbutler.com/) and track the overlay name, source, applied timestamp, and list of files with their link types.
+repoverlay writes state files in [CCL format](https://ccl.tylerbutler.com/). Each file records the overlay name, source, application timestamp, and file list with link types.
 
 ### CCL compatibility and migrations
 
-repoverlay treats these CCL files as user-facing data contracts:
+repoverlay maintains compatibility for these CCL file formats:
 
 - Overlay source config: `repoverlay.ccl`
 - Global and per-repository source config
 - In-repo state: `.repoverlay/overlays/<name>.ccl`
 - External backup state: `~/.local/share/repoverlay/applied/`
 
-Compatibility follows the CLI's semver policy:
+Compatibility follows the CLI semantic versioning policy:
 
 - Patch and minor releases may add optional CCL fields. Older files continue to
   load with documented defaults.
 - Patch and minor releases do not remove fields, rename fields, or change the
   meaning of existing fields.
-- Any required migration for existing CCL files must be automatic when possible
-  and documented in the release notes.
-- Removing or renaming fields, changing meanings, or requiring a manual migration
-  is reserved for semver-major releases.
+- repoverlay must migrate existing CCL files automatically when possible.
+  Release notes must document required migrations.
+- Only major releases can remove or rename fields, change their meanings, or
+  require a manual migration.
 
-State files are implementation records used for restore/update/remove, but their
-format is still stable enough for backups to survive normal upgrades. Prefer
-`repoverlay status --json` for scripting instead of reading state CCL directly.
+repoverlay uses state files to restore, update, and remove overlays. Their
+format stays compatible during normal upgrades so backups remain usable.
+For scripts, use `repoverlay status --json` instead of direct access to CCL state files.
 
 ## Caching
 
-GitHub repositories are cached locally to avoid re-downloading on every `apply`. Caches are stored at `~/.cache/repoverlay/github/<owner>/<repo>/`.
+repoverlay caches GitHub repositories locally so each `apply` does not need a new download. It stores caches at `~/.cache/repoverlay/github/<owner>/<repo>/`.
 
-- Repos are **shallow cloned** to minimize disk usage
-- Caches are updated automatically during `repoverlay update`
-- Cache metadata tracks the commit hash and last update time
-- Changing `--ref` fetches the new ref into the existing cache
+- repoverlay uses shallow clones to reduce disk use.
+- `repoverlay update` updates the caches automatically.
+- Cache metadata records the commit hash and last update time.
+- A change to `--ref` gets the new ref and adds it to the existing cache.
 
 Manage the cache with:
 
@@ -95,18 +95,20 @@ repoverlay cache remove owner/repo # Remove a specific cached repo
 repoverlay cache remove --all      # Remove all cached repos
 ```
 
-Configured sources (added with `repoverlay source add`) are cloned separately, to `~/.cache/repoverlay/sources/<name>/`. The `cache` subcommands operate only on the `github/` directory; source clones are refreshed automatically by commands that resolve from them (such as `browse` and `update`) and can be deleted manually — they are re-cloned on next use.
+repoverlay clones configured sources separately, to `~/.cache/repoverlay/sources/<name>/`. These are the sources you add with `repoverlay source add`.
+
+The `cache` subcommands operate only on the `github/` directory. Commands such as `browse` and `update` refresh source clones automatically when they resolve overlays from them. You can delete source clones manually. repoverlay clones them again on the next use.
 
 ## Fork inheritance
 
-When you work on a **fork** of a repository, repoverlay can automatically inherit overlays from the **upstream** (parent) repository.
+When you work on a fork, repoverlay can use overlays from the upstream (parent) repository automatically.
 
 ### Resolution order
 
 When you apply an overlay using a configured source reference (`org/repo/name`), repoverlay checks:
 
-1. **Direct match** — an overlay matching your fork's `org/repo`
-2. **Upstream fallback** — if no direct match exists and an `upstream` remote is configured, an overlay matching the upstream's `org/repo`
+1. A direct match for the `org/repo` of your fork.
+2. A match for the upstream `org/repo`, if no direct match exists and you have an `upstream` remote.
 
 ### Example
 
@@ -123,7 +125,7 @@ repoverlay apply microsoft/FluidFramework/claude-config
 
 ### Status display
 
-When an overlay is resolved via upstream fallback, `repoverlay status` shows how it was resolved:
+If repoverlay uses an upstream overlay, `repoverlay status` shows the source:
 
 ```
 Overlay: claude-config
@@ -133,4 +135,4 @@ Overlay: claude-config
 
 ### Upstream detection
 
-repoverlay detects the upstream repository by scanning git remotes for one named `upstream` — the standard convention for forks. Both HTTPS and SSH remote URLs are supported.
+repoverlay looks for a git remote named `upstream`, the standard name for the parent repository of a fork. It supports HTTPS and SSH remote URLs.

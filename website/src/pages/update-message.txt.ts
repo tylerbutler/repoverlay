@@ -17,7 +17,7 @@ function getVersion(): string {
 
 export const GET: APIRoute = () => {
 	const version = getVersion();
-	const body = `repoverlay ${version} is out now!
+	const body = `repoverlay ${version} is available.
 See the release notes: https://github.com/tylerbutler/repoverlay/releases/latest
 `;
 

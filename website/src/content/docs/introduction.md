@@ -2,33 +2,33 @@
 title: What is repoverlay?
 ---
 
-repoverlay is a command-line tool that **overlays config files into git repositories without committing them**. Files are symlinked (or copied) from overlay sources and automatically excluded from git tracking.
+repoverlay is a command-line tool that adds configuration files to git repositories without commits. It creates symlinks or copies from overlay sources. It adds new paths to `.git/info/exclude` so git does not track them.
 
 ## OK, but why?
 
-Many development workflows require configuration files that shouldn't be committed to a repository:
+You may need configuration files that you should not commit to a repository:
 
-- **AI assistant configs** (`.claude/`, `CLAUDE.md`, `.cursor/`) — personal preferences that vary by developer
-- **Editor settings** (`.vscode/settings.json`, `.idea/`) — team members use different editors
-- **Environment files** (`.envrc`, `.env.local`) — machine-specific paths and secrets
-- **Dev tooling** (`.prettierrc`, `biome.json`) — standards you apply across multiple repos
+- AI assistant configuration (`.claude/`, `CLAUDE.md`, `.cursor/`): personal preferences for each developer.
+- Editor settings (`.vscode/settings.json`, `.idea/`): settings for different editors.
+- Environment files (`.envrc`, `.env.local`): paths and secrets for a specific machine.
+- Development tools (`.prettierrc`, `biome.json`): standards you use in multiple repositories.
 
-You could copy these files manually and add them to `.gitignore`, but then you must keep them updated across dozens of repositories — and if someone runs `git clean`, they're gone.
+You can copy these files manually and add them to `.gitignore`. But you must then update each copy in each repository. A `git clean` command can also delete these files.
 
 ## How repoverlay helps
 
-repoverlay lets you **define overlay sources** — local directories or GitHub repos — and apply them to any repository with a single command. Applied files are:
+An overlay source is a local directory or a GitHub repository. Define a source, then apply an overlay to any repository with one command. repoverlay:
 
-- **Symlinked** (or copied) into the target repo
-- **Excluded from git** via `.git/info/exclude` (not `.gitignore`)
-- **Tracked in state files** so they can be removed, restored, or updated
-- **Backed up externally** so `git clean` doesn't destroy them
+- Creates symlinks or copies in the target repository.
+- Excludes new paths from git through `.git/info/exclude`, not `.gitignore`.
+- Records applied files in state files so you can remove, restore, or update them.
+- Saves state backups outside the repository so you can restore files from their sources after `git clean`.
 
 ## Key features
 
-- **Multiple sources** — apply overlays from local directories, GitHub URLs, or shared overlay repositories
-- **Fork inheritance** — overlays for upstream repos automatically apply to your forks
-- **Update & restore** — pull remote changes with `repoverlay update`; recover after `git clean` with `repoverlay restore`
-- **Create & share** — package your configs into overlays and share them via GitHub
-- **Overlay configuration** — rename files, symlink directories atomically, and more via `repoverlay.ccl`
-- **Profiles** — compose overlays with AI agent capabilities (instructions, skills, MCP servers) and apply them per-harness, persistently or just for one agent session; see the [profiles guide](/guides/profiles/)
+- Apply overlays from local directories, GitHub URLs, or shared overlay repositories.
+- Use overlays from an upstream repository when your fork has no matching overlay.
+- Get remote changes with `repoverlay update`. Restore files after `git clean` with `repoverlay restore`.
+- Put your configuration files in overlays and share them through GitHub.
+- Use `repoverlay.ccl` to rename files, create directory symlinks as a unit, and control other overlay settings.
+- Use profiles to combine overlays with AI agent instructions, skills, and MCP servers. Apply a profile to a specific harness until removal or for one agent session. See the [profiles guide](/guides/profiles/).
