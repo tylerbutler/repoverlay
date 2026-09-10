@@ -37,7 +37,7 @@ const ogImageAlt =
 
 const installs = [
 	{ label: "Homebrew", cmd: "brew install tylerbutler/tap/repoverlay" },
-	{ label: "Cargo", cmd: "cargo binstall repoverlay" },
+	{ label: "Cargo", cmd: "cargo install repoverlay" },
 ];
 
 const browseExample = "repoverlay browse tylerbutler/overlays";
@@ -58,14 +58,14 @@ const mechanism = [
 	},
 	{
 		stage: "Exclude",
-		title: "Git never sees them",
-		body: "Every placed path is added to .git/info/exclude, so .gitignore and history stay untouched.",
+		title: "New files stay local",
+		body: "New paths are added to .git/info/exclude. Existing tracked files remain visible to git.",
 		artifact: ".git/info/exclude",
 	},
 	{
 		stage: "Restore",
-		title: "Survives git clean",
-		body: "State is backed up outside the repo, so repoverlay restore re-applies everything after a wipe.",
+		title: "Restore after cleanup",
+		body: "State is backed up outside the repo. Restore file overlays from their sources after git clean.",
 		artifact: "~/.local/share/repoverlay/applied/",
 	},
 ];
@@ -89,20 +89,17 @@ const capabilities = [
 ];
 
 const placed = [
-	{ kind: "skills", name: "rustfmt + clippy skills", path: ".claude/skills/rust/" },
-	{ kind: "agent", name: "cargo-review agent", path: ".claude/agents/cargo-review/" },
-	{ kind: "mcp", name: "crates.io MCP server", path: ".mcp.json" },
-	{ kind: "rules", name: "Rust house style", path: "CLAUDE.md" },
+	{ kind: "rules", name: "Your first profile: repo-local instructions", path: "CLAUDE.md" },
 ];
 
 const reversible = [
 	{
-		cmd: "repoverlay restore",
-		body: "Re-applies every overlay after git clean wipes the working tree. State is backed up outside the repo, so nothing is lost.",
+		cmd: "repoverlay profile remove rust-dev --harness claude",
+		body: "Removes the example profile’s managed instructions. Use the same profile name and harness you applied.",
 	},
 	{
-		cmd: "repoverlay remove rust-dev",
-		body: "Pulls a profile’s files back out and clears its .git/info/exclude entries. Your committed history never changes.",
+		cmd: "repoverlay restore",
+		body: "For file overlays, restore after git clean removes them. Recovery state is stored outside the repo; keep the overlay sources available.",
 	},
 ];
 
@@ -153,13 +150,10 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 	</head>
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
-		<div
-			class="sr-only"
-			role="status"
-			aria-live="polite"
-			aria-atomic="true"
-			data-copy-status
-		></div>
+		<div class="copy-notice" data-copy-notice hidden>
+			<p role="status" aria-live="polite" aria-atomic="true" data-copy-status></p>
+			<button type="button" data-dismiss-copy>Dismiss</button>
+		</div>
 
 		<div class="release" role="note">
 			<span class="release__dot" aria-hidden="true"></span>
@@ -222,18 +216,16 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			<section class="hero">
 				<div class="hero__copy reveal">
 					<h1>
-						Your agent’s setup, in every repo.<br /><span class="accentword"
-							>Committed to none of them.</span
-						>
+						Your agent’s setup,<br /><span class="accentword">in every repo.</span>
 					</h1>
 					<p class="lede">
-						Apply a profile and repoverlay drops the right skills, tools,
-						instructions, and dotfiles into a repo for your AI assistant. All
-						git-excluded, so none of it lands in history.
+						Bring instructions, skills, and tools to your AI assistant with a
+						reusable profile. New files stay local. Changes to existing tracked
+						files remain visible in git.
 					</p>
 					<div class="cta-row">
 						<a class="btn btn--primary" href="/quick-start/">
-							Quick Start
+							Set up a profile
 							<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
 								><path
 									fill="none"
@@ -247,15 +239,15 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 						<a class="btn btn--ghost" href="/introduction/">Read the docs</a>
 					</div>
 					<p class="hero__note">
-						Clone a repo, apply a profile, and your agent has its tools and
-						conventions, scoped to that checkout.
+						Start with one instruction file. Add skills, agents, and MCP
+						servers when you need them.
 					</p>
 				</div>
 
 				<div class="hero__panel reveal" style="--delay:90ms">
 					<div class="shell" aria-label="Profile apply shell session">
 						<div class="shell__bar">
-							<span class="shell__name">apply a profile</span>
+							<a class="shell__name" href="/quick-start/#try-it">Example from Quick Start</a>
 							<button
 								class="copy"
 								type="button"
@@ -265,21 +257,21 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 								<span class="copy__label">Copy command</span>
 							</button>
 						</div>
-						<pre class="shell__body" tabindex="0"><code><span class="ln dim">  One profile bundles overlays and agent capabilities.</span>
+						<pre class="shell__body" tabindex="0"><code><span class="ln dim"># First define rust-dev in Quick Start.</span>
 <span class="ln"><span class="pr">$</span> repoverlay profile apply rust-dev <span class="dim">--harness claude</span></span>
-<span class="ln dim">  Placing skills, an agent, an MCP server, and instructions.</span>
-<span class="ln dim">  Repo-local files excluded via .git/info/exclude.</span>
-<span class="ln"><span class="ok">✓</span> Applied rust-dev · 4 capabilities, 0 files committed</span>
+<span class="ln">Applied profile rust-dev for claude</span>
+<span class="ln"><span class="pr">$</span> repoverlay profile status</span>
+<span class="ln">rust-dev (claude)</span>
 <span class="ln"><span class="pr">$</span> <span class="caret" aria-hidden="true">▍</span></span></code></pre>
 						</div>
 					<div class="manifest">
 						<div class="manifest__head">
 							<span class="manifest__title">rust-dev applied</span>
-							<span class="manifest__guard">git-excluded, removable</span>
+							<span class="manifest__guard">managed, removable</span>
 						</div>
 						<ul
 							class="manifest__list"
-							aria-label="Capabilities placed by the rust-dev profile, excluded from git"
+							aria-label="Instruction file managed by the Quick Start profile"
 						>
 							{
 								placed.map((c) => (
@@ -295,27 +287,12 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 								))
 							}
 						</ul>
+						<p class="manifest__note">
+							A new file is git-excluded. If CLAUDE.md already exists, the
+							profile adds a managed section without hiding your git diff.
+						</p>
 					</div>
 				</div>
-			</section>
-
-			<!-- PROBLEM: editorial statement -->
-			<section class="problem reveal">
-				<div class="problem__lead">
-					<h2>Your config, not the repo’s.</h2>
-					<p>
-						The AI instructions, editor preferences, local env, and tooling
-						overrides you carry from repo to repo. You want them in every
-						checkout, including forks and other people’s projects, but they
-						don’t belong in the commit history, and git clean wipes them.
-					</p>
-				</div>
-				<ul class="configs" aria-label="Examples of personal files repoverlay manages">
-					<li><span>AI assistants</span><code>CLAUDE.local.md · .claude/settings.local.json</code></li>
-					<li><span>Editor settings</span><code>.vscode/settings.json</code></li>
-					<li><span>Environment</span><code>.env.local · .envrc</code></li>
-					<li><span>Dev tooling</span><code>.mise.local.toml · lefthook-local.yml</code></li>
-				</ul>
 			</section>
 
 			<!-- INSTALL: one line to the binary -->
@@ -323,7 +300,8 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				<div class="install-strip__intro">
 					<span class="install-strip__eyebrow">One binary, no runtime</span>
 					<p class="install-strip__line">
-						Install once, then overlay any repo. Pick your package manager:
+						Homebrew for macOS or Linux, or build with Cargo.
+						<a href="/installation/">Windows and all install options</a>.
 					</p>
 				</div>
 				<ul class="install-strip__options">
@@ -339,12 +317,29 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				</ul>
 			</section>
 
+			<section class="problem reveal">
+				<div class="problem__lead">
+					<h2>Just need config files?</h2>
+					<p>
+						Use an overlay for a bundle of files, or a profile to combine
+						overlays with agent instructions and plugins. Keep your personal
+						setup available across checkouts, including forks.
+					</p>
+				</div>
+				<ul class="configs" aria-label="Examples of personal files repoverlay manages">
+					<li><span>AI assistants</span><code>CLAUDE.local.md · .claude/settings.local.json</code></li>
+					<li><span>Editor settings</span><code>.vscode/settings.json</code></li>
+					<li><span>Environment</span><code>.env.local · .envrc</code></li>
+					<li><span>Dev tooling</span><code>.mise.local.toml · lefthook-local.yml</code></li>
+				</ul>
+			</section>
+
 			<!-- MECHANISM: the overlay lifecycle -->
 			<section class="mechanism reveal" aria-label="How an overlay is applied">
 				<div class="mechanism__head">
 					<h2 class="section-head">How an overlay works, in four steps.</h2>
 					<p class="mechanism__sub">
-						repoverlay places files, hides them from git, and can put them back.
+						repoverlay places files, excludes new paths from git, and can put them back.
 						Browse a source to see what’s available:
 					</p>
 					<div class="cmdline cmdline--browse">
@@ -397,11 +392,11 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			<!-- REVERSIBLE: nothing you can't undo -->
 			<section class="reversible reveal" aria-label="How to undo overlays">
 				<div class="reversible__head">
-					<h2 class="section-head">Nothing you can’t undo.</h2>
+					<h2 class="section-head">Keep control of your checkout.</h2>
 					<p class="reversible__sub">
-						Overlays live outside committed history, so you can pull them back
-						out or rebuild them at any time. Two commands cover the whole
-						lifecycle:
+						Remove a profile with its matching harness. Restore file overlays
+						from their sources after cleanup. Inspect changes with git diff
+						before you commit.
 					</p>
 				</div>
 				<div class="reversible__grid">
@@ -441,7 +436,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			<!-- FINAL CTA -->
 			<section class="final reveal">
 				<h2>Set up your configs once.</h2>
-				<p>Define your overlays once, apply them anywhere, recover them anytime.</p>
+				<p>Try one instruction file, inspect the result, and remove it when you’re done.</p>
 				<div class="cta-row cta-row--center">
 					<a class="btn btn--primary" href="/quick-start/">
 						Open Quick Start
@@ -471,14 +466,14 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				</div>
 				<nav class="foot__cols" aria-label="Footer">
 					<div>
-						<h4>Docs</h4>
+						<h3>Docs</h3>
 						<a href="/introduction/">Introduction</a>
 						<a href="/installation/">Installation</a>
 						<a href="/quick-start/">Quick Start</a>
 						<a href="/cli-reference/">CLI Reference</a>
 					</div>
 					<div>
-						<h4>Project</h4>
+						<h3>Project</h3>
 						<a href={ghUrl}>GitHub</a>
 						<a href={`${ghUrl}/releases`}>Releases</a>
 						<a href={`${ghUrl}/issues`}>Issues</a>
@@ -547,9 +542,17 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			// Copy-to-clipboard for shell and command examples.
 			const copyStatus =
 				document.querySelector<HTMLElement>("[data-copy-status]");
+			const copyNotice =
+				document.querySelector<HTMLElement>("[data-copy-notice]");
+			let lastCopyButton: HTMLButtonElement | undefined;
 			const announceCopy = (message: string) => {
+				if (copyNotice) copyNotice.hidden = false;
 				if (copyStatus) copyStatus.textContent = message;
 			};
+			document.querySelector("[data-dismiss-copy]")?.addEventListener("click", () => {
+				if (copyNotice) copyNotice.hidden = true;
+				lastCopyButton?.focus();
+			});
 			const copyToClipboard = async (text: string) => {
 				if (text.length === 0) {
 					throw new Error("No text available to copy");
@@ -562,25 +565,31 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 
 			document.querySelectorAll<HTMLButtonElement>(".copy").forEach((btn) => {
 				let resetTimer: number | undefined;
+				const label = btn.querySelector(".copy__label");
+				const originalLabel = label?.textContent ?? "Copy command";
 				btn.addEventListener("click", async () => {
+					lastCopyButton = btn;
 					const text = btn.dataset.copy ?? "";
-					const label = btn.querySelector(".copy__label");
-					const prev = label?.textContent ?? "Copy command";
 					const reset = () => {
-						if (label) label.textContent = prev;
-						announceCopy("");
+						if (label) label.textContent = originalLabel;
 						btn.classList.remove("is-copied", "is-failed");
 					};
 					if (resetTimer) window.clearTimeout(resetTimer);
+					reset();
+					btn.disabled = true;
+					btn.setAttribute("aria-busy", "true");
 					try {
 						await copyToClipboard(text);
 						if (label) label.textContent = "Copied";
-						announceCopy(`Copied to clipboard: ${text}`);
+						announceCopy("Command copied to clipboard.");
 						btn.classList.add("is-copied");
 					} catch {
 						if (label) label.textContent = "Copy failed";
 						announceCopy("Copy failed. Select and copy the command manually.");
 						btn.classList.add("is-failed");
+					} finally {
+						btn.disabled = false;
+						btn.removeAttribute("aria-busy");
 					}
 					resetTimer = window.setTimeout(reset, 1800);
 				});
@@ -727,16 +736,35 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				left: 1rem;
 				top: 1rem;
 			}
-			.sr-only {
-				position: absolute;
-				width: 1px;
-				height: 1px;
-				padding: 0;
-				margin: -1px;
-				overflow: hidden;
-				clip: rect(0, 0, 0, 0);
-				white-space: nowrap;
-				border: 0;
+			.copy-notice {
+				position: fixed;
+				right: 1rem;
+				bottom: max(1rem, env(safe-area-inset-bottom));
+				z-index: 100;
+				display: flex;
+				align-items: center;
+				gap: 1rem;
+				max-width: min(32rem, calc(100% - 2rem));
+				padding: 0.75rem 1rem;
+				border: 1px solid var(--border-strong);
+				border-radius: var(--radius-sm);
+				background: var(--surface);
+				box-shadow: var(--rv-shadow-shell);
+				font-size: 0.95rem;
+			}
+			.copy-notice[hidden] {
+				display: none;
+			}
+			.copy-notice button {
+				flex: none;
+				min-height: 44px;
+				padding: 0.5rem;
+				border: 1px solid var(--border-strong);
+				border-radius: var(--rv-radius-sm);
+				background: transparent;
+				color: var(--text);
+				font: inherit;
+				cursor: pointer;
 			}
 
 			:focus-visible {
@@ -821,6 +849,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				color: var(--text-2);
 			}
 			.nav__links a {
+				flex-shrink: 0;
 				display: inline-flex;
 				align-items: center;
 				justify-content: center;
@@ -835,7 +864,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				font-weight: 600;
 			}
 			.nav__primary:hover {
-				color: var(--accent-deep);
+				color: var(--text);
 			}
 			.nav__gh {
 				display: inline-flex;
@@ -847,6 +876,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				color: var(--accent);
 			}
 			.nav__theme {
+				flex-shrink: 0;
 				display: inline-flex;
 				align-items: center;
 				justify-content: center;
@@ -971,8 +1001,8 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				max-width: 100%;
 			}
 			.hero h1 {
-				max-width: min(12ch, 100%);
-				font-size: clamp(3rem, 7.8vw, 5.4rem);
+				max-width: 16ch;
+				font-size: clamp(2.5rem, 4.7vw, 4rem);
 				letter-spacing: -0.04em;
 				text-wrap: balance;
 			}
@@ -1040,6 +1070,11 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				font-family: var(--mono);
 				font-size: 0.78rem;
 				color: var(--muted);
+				text-decoration: underline;
+				text-underline-offset: 0.2em;
+			}
+			.shell__name:hover {
+				color: var(--text);
 			}
 			.copy {
 				flex: 0 0 auto;
@@ -1060,6 +1095,9 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			.copy:hover {
 				color: var(--text);
 				border-color: var(--accent-line);
+			}
+			.copy:disabled {
+				cursor: progress;
 			}
 			.copy.is-copied {
 				color: var(--accent);
@@ -1140,7 +1178,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				display: inline-flex;
 				align-items: center;
 				gap: 0.36rem;
-				font-size: 0.74rem;
+				font-size: 0.8rem;
 				font-weight: 700;
 				color: var(--success);
 			}
@@ -1169,7 +1207,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			.manifest__kind {
 				justify-self: start;
 				font-family: var(--mono);
-				font-size: 0.64rem;
+				font-size: 0.8rem;
 				font-weight: 700;
 				letter-spacing: 0.04em;
 				text-transform: uppercase;
@@ -1191,10 +1229,16 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				overflow-wrap: anywhere;
 			}
 			.manifest__src {
-				font-size: 0.72rem;
+				font-size: 0.85rem;
 				color: var(--muted);
 				font-family: var(--mono);
 				overflow-wrap: anywhere;
+			}
+			.manifest__note {
+				padding: 0.9rem;
+				border-top: 1px solid var(--border);
+				color: var(--text-2);
+				font-size: 0.85rem;
 			}
 			.shell__body .ln {
 				display: block;
@@ -1206,9 +1250,6 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			}
 			.shell__body .dim {
 				color: var(--muted);
-			}
-			.shell__body .ok {
-				color: var(--success);
 			}
 			.caret {
 				color: var(--accent);
@@ -1259,7 +1300,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				gap: 0.5rem;
 			}
 			.configs span {
-				font-size: 0.72rem;
+				font-size: 0.8rem;
 				text-transform: uppercase;
 				letter-spacing: 0.13em;
 				color: var(--muted);
@@ -1289,6 +1330,10 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				color: var(--text-2);
 				font-size: 1rem;
 				max-width: 34ch;
+			}
+			.install-strip__line a {
+				text-decoration: underline;
+				text-underline-offset: 0.2em;
 			}
 			.install-strip__options {
 				list-style: none;
@@ -1399,7 +1444,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 			}
 			.mechanism__label {
 				display: block;
-				font-size: 0.72rem;
+				font-size: 0.8rem;
 				text-transform: uppercase;
 				letter-spacing: 0.12em;
 				font-weight: 700;
@@ -1622,7 +1667,7 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				grid-template-columns: 1fr 1fr;
 				gap: 2rem;
 			}
-			.foot__cols h4 {
+			.foot__cols h3 {
 				font-size: 0.78rem;
 				text-transform: uppercase;
 				letter-spacing: 0.13em;
@@ -1722,6 +1767,19 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 
 			/* Responsive */
 			@media (max-width: 900px) {
+				.nav__inner {
+					height: auto;
+					min-height: 64px;
+					flex-wrap: wrap;
+					gap: 0.25rem 1rem;
+					padding-block: 0.4rem;
+				}
+				.nav__links {
+					gap: 0.75rem;
+				}
+				.nav .brand {
+					flex-shrink: 0;
+				}
 				.hero,
 				.problem,
 				.foot__inner {
@@ -1732,8 +1790,8 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 					grid-template-columns: 1fr;
 				}
 				.hero h1 {
-					max-width: min(13ch, 100%);
-					font-size: clamp(2.55rem, 10vw, 4.6rem);
+					max-width: 16ch;
+					font-size: clamp(2.5rem, 7vw, 3.5rem);
 				}
 				.install-strip {
 					grid-template-columns: 1fr;
@@ -1765,11 +1823,14 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 					padding-right: max(1rem, env(safe-area-inset-right));
 				}
 				.nav__links {
+					width: 100%;
+					justify-content: space-between;
 					gap: 0.5rem;
 					font-size: 0.9rem;
 				}
 				.cmdline__text {
 					white-space: normal;
+					overflow-wrap: anywhere;
 					overflow-x: visible;
 					-webkit-mask-image: none;
 					mask-image: none;
@@ -1802,11 +1863,6 @@ const excludeEntries = [".claude/settings.json", ".claude/skills/rust/", ".mcp.j
 				.cta-row .btn {
 					flex: 1 1 13rem;
 					justify-content: center;
-				}
-			}
-			@media (max-width: 360px) {
-				.nav .brand span {
-					display: none;
 				}
 			}
 		</style>

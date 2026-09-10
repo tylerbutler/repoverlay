@@ -4,6 +4,9 @@ title: Installation
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
+Choose a method for your platform. Homebrew works on macOS and Linux;
+PowerShell is for Windows. Cargo requires Rust 1.91 or later.
+
 <Tabs>
 	<TabItem label="Homebrew">
 		**Install:**
@@ -55,6 +58,13 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 		```
 	</TabItem>
 	<TabItem label="Cargo">
+		Build from source with Cargo, or use `cargo-binstall` for a prebuilt binary.
+		If you do not have `cargo-binstall`, install it first:
+
+		```bash
+		cargo install cargo-binstall
+		```
+
 		**Install:**
 		```bash
 		# Install a pre-built binary (faster)
@@ -85,3 +95,16 @@ Download the pre-built binaries for your platform at [repoverlay releases](https
 **Update:** Download and replace the binary on your PATH.
 
 **Uninstall:** Delete the binary from your PATH.
+
+## Confirm installation
+
+```bash
+repoverlay --version
+```
+
+If the command is not found, restart your terminal and ensure the installation
+directory is on your PATH. Cargo installs to `$CARGO_HOME/bin`, or
+`$HOME/.cargo/bin` by default. On Windows the default is
+`$env:USERPROFILE\.cargo\bin`.
+
+Once the version appears, [apply your first profile](/quick-start/#try-it).

@@ -15,6 +15,7 @@
    700/800 heading weights Starlight's stock body weight can't reach. */
 :root {
 	--sl-font-mono: var(--rv-mono);
+	--sl-content-width: 42rem;
 }
 
 .sl-markdown-content h1,
