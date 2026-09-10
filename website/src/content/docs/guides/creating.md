@@ -1,14 +1,14 @@
 ---
-title: Creating & Sharing Overlays
+title: Creating and sharing overlays
 sidebar:
   order: 2
 ---
 
-Package existing files into an overlay, then share it so others can apply it.
+Create an overlay from existing files. Share it so others can apply it.
 
 ## Creating an overlay
 
-The `create` command packages files from your current repository into an overlay and saves them to your overlay repository:
+The `create` command puts files from your current repository into an overlay. It saves them to your overlay repository:
 
 ```bash
 # Auto-detect org/repo from git remote
@@ -26,7 +26,7 @@ Use `--include` to specify which files to include:
 repoverlay create my-overlay --include .claude/ --include CLAUDE.md --include .envrc
 ```
 
-Without `--include`, repoverlay launches an interactive file selector that detects AI configs, gitignored files, and untracked files as candidates.
+Without `--include`, repoverlay opens a file selection menu. It suggests AI configuration files, files that git ignores, and untracked files.
 
 ### Preview and overwrite
 
@@ -40,7 +40,7 @@ repoverlay create my-overlay --force
 
 ## Local output
 
-If you don't have an overlay repository set up, or want to create an overlay in a local directory, use `--output`:
+Use `--output` to create an overlay in a local directory. You do not need an overlay repository:
 
 ```bash
 repoverlay create --output ./my-overlay
@@ -48,27 +48,27 @@ repoverlay create --output ./output --include .envrc --include .claude/
 ```
 
 `create --output` performs two actions:
-1. **Writes overlay files** to the specified directory
-2. **Auto-applies the overlay** to your repository (symlinks replace originals, state saved, `.git/info/exclude` updated)
+1. It writes overlay files to the specified directory.
+2. It applies the overlay to your repository. Symlinks replace the original files. repoverlay saves the state and updates `.git/info/exclude`.
 
 ### Preview without applying
 
-To see what would be created and applied without modifying your repository, use `--dry-run`:
+To preview the overlay without changes to your repository, use `--dry-run`:
 
 ```bash
 # Preview: see what files would be created and applied
 repoverlay create --output ./my-overlay --dry-run
 ```
 
-This shows you the overlay contents and what would be applied, without writing files or mutating your repository.
+This command shows the overlay contents and the planned changes. It does not write files or change your repository.
 
 ## Overlay configuration (advanced)
 
 :::note
-Most overlays don't need a configuration file. Without one, all files in the overlay directory are symlinked with the same relative paths. Configuration is most useful for hand-authored overlays or cases where you need to remap files from their source location.
+Most overlays do not need a configuration file. Without one, repoverlay creates symlinks for all files with the same relative paths. Use configuration for overlays you create manually or to change the target paths.
 :::
 
-Create a `repoverlay.ccl` in the root of your overlay directory to control how files are applied:
+Create `repoverlay.ccl` in the root of your overlay directory to control how repoverlay applies files:
 
 ```
 overlay =
@@ -88,13 +88,13 @@ directories =
 
 ### Overlay name and description
 
-The `overlay.name` field sets the name used in `status`, `remove`, and other commands. If omitted, the directory name is used. The optional `overlay.description` field documents what the overlay is for, for people reading the overlay config.
+The `overlay.name` field sets the name for `status`, `remove`, and other commands. If you omit it, repoverlay uses the directory name. Use the optional `overlay.description` field to explain the purpose of the overlay.
 
 ### Mappings
 
-The `mappings` section renames files during apply. Each entry maps a source filename to a destination path. This is useful when the overlay uses different filenames than the target repo expects.
+The `mappings` section renames files when you apply the overlay. Each entry maps a source filename to a target path. Use this when the overlay filenames differ from those the target repository needs.
 
-One source file can map to multiple destinations — repeat the key with a different destination each time:
+One source file can map to multiple target paths. Repeat the key with a different target path each time:
 
 ```
 mappings =
@@ -104,7 +104,7 @@ mappings =
 
 ### Directories
 
-The `directories` section lists directories to symlink (or copy) as a unit rather than walking individual files. This is important for directories like `.claude/` where the entire tree should be managed atomically.
+The `directories` section lists directories to symlink or copy as a unit instead of as individual files. Use this for directories such as `.claude/` when repoverlay must manage the full directory tree as one unit.
 
 ### Configuration format
 
@@ -112,7 +112,7 @@ repoverlay uses [CCL (Categorical Configuration Language)](https://ccl.tylerbutl
 
 ## Composing overlays
 
-Overlays in the [in-repo library](/guides/library/) can build on each other instead of duplicating files. Two keys in `repoverlay.ccl` control this:
+Overlays in the [in-repo library](/guides/library/) can reuse files from other overlays. Two keys in `repoverlay.ccl` control this:
 
 ### extends
 
@@ -123,11 +123,11 @@ extends =
   overlay = base-config
 ```
 
-The parent's files, mappings, and directories are all inherited. Chains are allowed (a child can extend a parent that itself extends a grandparent), and repoverlay detects cycles.
+The overlay inherits all files, mappings, and directories from its parent. The parent can also extend another overlay. repoverlay detects cycles in this chain.
 
 ### includes
 
-Cherry-pick specific files from other overlays:
+Select specific files from other overlays:
 
 ```
 includes =
@@ -138,18 +138,18 @@ includes =
       = scripts/lint.sh
 ```
 
-You can list several `includes` entries, and included overlays are resolved recursively — they may use `extends` or `includes` themselves.
+You can list several `includes` entries. Included overlays can also use `extends` or `includes`. repoverlay resolves them recursively.
 
 ### Precedence
 
-When the same destination path comes from more than one place, the highest-precedence version wins:
+If multiple files have the same target path, repoverlay uses this priority order:
 
 1. The overlay's own files
 2. Files from `extends`
 3. Files from `includes` (later entries override earlier ones)
 
 :::note
-Composition only works between **library overlays** (`.repoverlay/library/`). An overlay applied from GitHub or a local path cannot extend or include another overlay. See [The In-Repo Library](/guides/library/) for how to move overlays into the library.
+Only library overlays (`.repoverlay/library/`) can extend or include other overlays. An overlay applied from GitHub or a local path cannot do this. See [The in-repo library](/guides/library/) to move overlays into the library.
 :::
 
 ## Overlay repository structure
@@ -175,7 +175,7 @@ The structure is `<target-org>/<target-repo>/<overlay-name>/`. When someone runs
 
 ## Global overlays
 
-A **global overlay** applies to *any* repository, regardless of its git remote. Global overlays live in a reserved `@global/` namespace alongside the per-project `<org>/<repo>/` directories:
+A **global overlay** applies to any repository, regardless of its git remote. Store global overlays in the reserved `@global/` namespace beside the project-specific `<org>/<repo>/` directories:
 
 ```
 my-overlays/
@@ -187,29 +187,29 @@ my-overlays/
         └── .gitconfig
 ```
 
-Create one with the `--global` flag (it takes a bare name and skips git-remote detection):
+To create one, use `--global` with the overlay name alone. This skips git remote detection:
 
 ```bash
 repoverlay create dotfiles --global
 ```
 
-Global overlays are listed for every repository under a **Global** heading in `repoverlay browse`, displayed as `*/<name>`, and applied by their bare name:
+`repoverlay browse` lists global overlays for every repository under the **Global** heading. It shows each overlay as `*/<name>`. Apply it with the name alone:
 
 ```bash
 repoverlay apply dotfiles
 ```
 
-When a global overlay and a repo-scoped overlay share a name, the repo-scoped overlay wins (structured `org/repo/name` resolves before `@global/name` within a source; sources are still tried in priority order).
+If a global overlay and a repository-specific overlay have the same name, repoverlay prefers the repository-specific overlay within that source. It checks `org/repo/name` before `@global/name`. It still checks sources in priority order.
 
-Global overlays don't change how overlays work — *any* overlay is technically applicable to any repository. You can apply an overlay defined for repo A onto repo B; resolution only cares about file paths and conflicts, not which repo an overlay was created for. The `@global` namespace simply makes that intent explicit and lets an overlay resolve for every repository without needing an `org/repo` match.
+You can apply any overlay to any repository. repoverlay checks file paths and conflicts, not the repository for which you created the overlay. The `@global` namespace marks an overlay for use in all repositories. It lets repoverlay find the overlay without an `org/repo` match.
 
 :::caution[Minimum version]
-Global overlays rely on the reserved `@global` namespace. Clients that predate it (repoverlay **0.16.0** and earlier) either do not understand `@global` at all or only skip it safely without resolving global overlays. The first release with full support — both consuming sources that use global overlays and creating/applying them — is repoverlay **0.17.0**. Make sure everyone sharing a source is on 0.17.0 or newer.
+Global overlays require the reserved `@global` namespace. repoverlay **0.16.0** and earlier cannot resolve global overlays. These versions either do not recognize `@global` or skip it safely. repoverlay **0.17.0** is the first release that can read sources with global overlays and create and apply them. Make sure that everyone who shares a source uses 0.17.0 or later.
 :::
 
 ## Sharing overlays
 
-Once you've created overlays in a repository, push it to GitHub:
+After you create overlays in a repository, push the repository to GitHub:
 
 ```bash
 cd ~/my-overlays
@@ -223,7 +223,7 @@ Others can then apply your overlays using your GitHub username:
 repoverlay apply tylerbutler
 ```
 
-Direct three-part references use the *target* repository's org and repo plus the overlay name (`<target-org>/<target-repo>/<overlay-name>`), and resolve against configured sources — so consumers add your overlay repository as a source first:
+A three-part reference uses the target organization, target repository, and overlay name: `<target-org>/<target-repo>/<overlay-name>`. repoverlay resolves this reference against configured sources. Users must first add your overlay repository as a source:
 
 ```bash
 repoverlay source add tylerbutler/my-overlays

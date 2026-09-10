@@ -1,11 +1,11 @@
 ---
-title: Quick Start
+title: Quick start
 ---
 
 import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Start with one instruction file for your agent. Apply it, inspect the result,
-then remove it. This example works offline after installation and needs no
+Start with one instruction file for your agent. Apply it, examine the result,
+then remove it. This example works offline after installation. It needs no
 overlay sources or plugins.
 
 ## Install
@@ -44,16 +44,16 @@ repoverlay --version
 
 ## Try it
 
-The recommended path is the same `rust-dev` profile shown on the homepage.
-A **profile** is a reusable setup for an agent. An **overlay** is a bundle of
-files; use the second tab if you only need files, not agent instructions.
+Use the `rust-dev` profile from the homepage for this example.
+A **profile** is a reusable setup for an agent. An **overlay** is a set of
+files. Use the second tab if you only need files, not agent instructions.
 
 <Tabs>
 <TabItem label="Profiles (recommended)">
 
 This example uses Claude Code. For GitHub Copilot, replace `claude` with
-`copilot` in both the apply and remove commands; the instruction file is then
-`AGENTS.md` instead of `CLAUDE.md`.
+`copilot` in both the apply and remove commands. Copilot uses
+`AGENTS.md` instead of `CLAUDE.md` for instructions.
 
 <Steps>
 
@@ -61,7 +61,7 @@ This example uses Claude Code. For GitHub Copilot, replace `claude` with
 
    Create `~/.config/repoverlay/config.ccl`, including its parent directory if
    needed. If you already have a `profiles` section, add `rust-dev` under it
-   instead of replacing your config.
+   instead of replacing your configuration.
 
    ```ccl
    profiles =
@@ -74,19 +74,19 @@ This example uses Claude Code. For GitHub Copilot, replace `claude` with
    ```
 
    This profile has one instruction and no external dependencies. Keep it in
-   your global config to reuse it across repos.
+   your global configuration to reuse it in other repositories.
 
 2. **Apply it in a git repository**
 
-   In your terminal, open the repo where you want these instructions. Then run:
+   In your terminal, go to the repository where you want these instructions. Then run:
 
    ```bash
    repoverlay profile apply rust-dev --harness claude
    ```
 
-   repoverlay adds the instruction to a managed section in `CLAUDE.md`. A new
-   file is excluded through `.git/info/exclude`. If the file is already tracked,
-   its changes remain visible in git; review them before you commit.
+   repoverlay adds the instruction to a managed section in `CLAUDE.md`. It excludes
+   a new file through `.git/info/exclude`. If the file is already tracked,
+   git still shows its changes. Review them before you commit.
 
 3. **Inspect the result**
 
@@ -110,8 +110,8 @@ This example uses Claude Code. For GitHub Copilot, replace `claude` with
    repoverlay profile remove rust-dev --harness claude
    ```
 
-   The managed instruction is removed. Your profile definition stays in the
-   global config so you can apply it again. Run `repoverlay profile status` to
+   repoverlay removes the managed instruction. Your profile definition stays in the
+   global configuration so you can apply it again. Run `repoverlay profile status` to
    confirm it is no longer applied.
 
 </Steps>
@@ -119,14 +119,14 @@ This example uses Claude Code. For GitHub Copilot, replace `claude` with
 </TabItem>
 <TabItem label="File overlays">
 
-An overlay places a bundle of files directly into a repo. It does not need a
+An overlay adds a set of files directly to a repository. It does not need a
 profile or a harness.
 
 <Steps>
 
 1. **Open a git repository**
 
-   In your terminal, open the repo where you want the files. Check its state:
+   In your terminal, go to the repository where you want the files. Check its state:
 
    ```bash
    repoverlay status
@@ -140,7 +140,7 @@ profile or a harness.
    repoverlay browse tylerbutler
    ```
 
-   Select an overlay from the list. Review the files before applying it.
+   Select an overlay from the list. Review the files before you apply it.
    repoverlay can save the source for future use.
 
 3. **Inspect the result**
@@ -170,7 +170,7 @@ profile or a harness.
 | --- | --- |
 | `repoverlay` is not found | Restart your terminal and check that the install directory is on your PATH. See [Installation](/installation/). |
 | The profile cannot be found | Check that `rust-dev` is under `profiles` in `~/.config/repoverlay/config.ccl`. Run `repoverlay profile list` to see configured names. |
-| The folder is not a git repository | Open an existing git checkout before applying the profile. |
+| The directory is not a git repository | Go to an existing git checkout before you apply the profile. |
 | Changes appear in `git diff` | An instruction file was already tracked. Review the managed section, or remove the profile with the same name and harness. |
 
 ## Next steps

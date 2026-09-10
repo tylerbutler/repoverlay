@@ -38,7 +38,7 @@ export default defineConfig({
 			},
 			favicon: "./src/assets/repoverlay.svg",
 			description:
-				"Overlay config files into git repositories without committing them.",
+				"Add configuration files to git repositories without commits.",
 			lastUpdated: true,
 			customCss: [
 				"@fontsource-variable/schibsted-grotesk",
@@ -62,7 +62,7 @@ export default defineConfig({
 					announcements: [
 						{
 							id: releaseAnnouncementId,
-							content: `repoverlay ${releaseVersion} is out now.`,
+							content: `repoverlay ${releaseVersion} is available.`,
 							variant: "tip",
 							dismissible: true,
 							link: {
@@ -85,7 +85,7 @@ export default defineConfig({
 			],
 			sidebar: [
 				{
-					label: "Start Here",
+					label: "Start here",
 					items: [
 						{
 							label: "What is repoverlay?",
@@ -96,7 +96,7 @@ export default defineConfig({
 							slug: "installation",
 						},
 						{
-							label: "Quick Start",
+							label: "Quick start",
 							slug: "quick-start",
 						},
 					],
@@ -105,19 +105,19 @@ export default defineConfig({
 					label: "Guides",
 					items: [
 						{
-							label: "Applying Overlays",
+							label: "Applying overlays",
 							slug: "guides/applying",
 						},
 						{
-							label: "Creating & Sharing",
+							label: "Creating and sharing",
 							slug: "guides/creating",
 						},
 						{
-							label: "Managing Applied Overlays",
+							label: "Managing applied overlays",
 							slug: "guides/managing",
 						},
 						{
-							label: "The In-Repo Library",
+							label: "The in-repo library",
 							slug: "guides/library",
 						},
 					],
@@ -126,7 +126,7 @@ export default defineConfig({
 					label: "Advanced",
 					items: [
 						{
-							label: "Restoring After Git Clean",
+							label: "Restoring after git clean",
 							slug: "guides/restoring",
 						},
 						{
@@ -134,7 +134,7 @@ export default defineConfig({
 							slug: "guides/profiles",
 						},
 						{
-							label: "How It Works",
+							label: "How it works",
 							slug: "guides/how-it-works",
 						},
 						{
@@ -144,7 +144,7 @@ export default defineConfig({
 					],
 				},
 				{
-					label: "CLI Reference",
+					label: "CLI reference",
 					slug: "cli-reference",
 				},
 			],

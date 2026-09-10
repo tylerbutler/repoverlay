@@ -1,7 +1,7 @@
 ---
 title: Introducing profiles
 date: 2026-06-27
-excerpt: Profiles compose overlays with AI harness capabilities (instructions and plugins) into one loadable unit you can apply to any repo.
+excerpt: Profiles combine overlays, agent instructions, and plugins into one named configuration. Apply a profile to any repository.
 authors:
   - tylerbutler
 tags:
@@ -9,25 +9,24 @@ tags:
   - profiles
 ---
 
-repoverlay 0.17.0 ships **profiles**, the biggest feature I've added since the
-project began. A profile bundles overlays with AI harness capabilities
-(instruction files and plugins) into a single named unit you apply to a repo.
+repoverlay 0.17.0 introduces **profiles**, the biggest feature I have added since the
+project began. A profile combines overlays, agent instruction files, and plugins
+into one named configuration that you apply to a repository.
 
 ## Why I built them
 
-Overlays solve one problem well: they drop config files into a repo without
-committing them. But my own setup outgrew plain files. I wanted to say "give me
+Overlays solve one problem well: they add configuration files to a repository without
+commits. But my own setup needed more than files. I wanted to say "give me
 everything I need to do Rust work with this agent" and have one command place the
 overlays, write the agent instructions, and install the skills and MCP servers I
 rely on.
 
-A profile captures that intent. An overlay describes files to place. A profile
-describes a working environment: a recipe that references overlays as
-ingredients and layers harness capabilities on top.
+An overlay defines files to add. A profile defines a working environment.
+It refers to overlays and adds agent capabilities through instructions and plugins.
 
 ## How they work
 
-You define marketplaces and profiles in your repoverlay CCL config, alongside `sources`:
+Define marketplaces and profiles in your repoverlay CCL configuration, beside `sources`:
 
 ```ccl
 marketplaces =
@@ -49,54 +48,55 @@ profiles =
       = playground/rust-dev
 ```
 
-Then you apply it to a specific agent harness. Apply it persistently:
+Apply the profile to a specific harness, the application that runs the agent.
+To keep the profile in place until you remove it, use persistent mode:
 
 ```bash
 repoverlay profile apply rust-dev --harness copilot
 ```
 
-Or apply it only for the lifetime of an agent session, with automatic cleanup:
+To apply it for one agent session with automatic cleanup, use ephemeral mode:
 
 ```bash
 repoverlay copilot --profile rust-dev
 ```
 
-Profiles carry capabilities through **plugins**, the same Claude-style plugin
-format the Claude Code ecosystem uses. A plugin ships skills, agents, and MCP
-servers. When you apply a profile, repoverlay decomposes managed/cacheable
-plugins and places their parts using each harness's own paths: skills land under
-`.agents/skills/` for Copilot and `.claude/skills/` for Claude, and MCP servers
-merge into `.mcp.json`. Delegate or non-cacheable plugins are Claude-delegated
-and Copilot-skipped with a warning.
+Profiles use **plugins** in the Claude Code plugin format. A plugin supplies
+skills, agents, and MCP servers. When you apply a profile, repoverlay extracts
+managed plugins that it can cache. It puts each part in the path for the selected
+harness.
 
-Profile capabilities are applied to the target repo, not installed globally for
-the user or machine. New repo-local files are git-excluded when possible, but
-profiles can also update existing repo files through managed regions or JSON
-merges, and repoverlay keeps cache and recovery snapshots outside the repo.
+Skills use `.agents/skills/` for Copilot and `.claude/skills/` for Claude.
+repoverlay merges MCP servers into `.mcp.json`. Claude loads delegate plugins
+and plugins that repoverlay cannot cache through its own settings.
+Copilot skips these plugins with a warning.
+
+repoverlay applies profile capabilities to the target repository, not globally
+for the user or machine. It excludes new files from git when possible.
+Profiles can also update existing files through managed regions or JSON merges.
+repoverlay keeps cache and recovery snapshots outside the repository.
 
 ## Current limitations
 
-Profiles are new. These limits stand today:
+Profiles have these limits in 0.17.0:
 
-- **Two harnesses.** Profiles target GitHub Copilot and Claude Code. No other
-  agent is supported yet.
-- **Delegate install is Claude-only.** The `delegate` install mode, which records
-  a plugin in the harness's own enablement config, currently means something only
-  for Claude. Copilot skips delegate plugins with a warning.
-- **Repo scope only.** A profile touches just the repo you apply it to. There is
-  no user- or machine-global profile install, so capabilities you want everywhere
-  need a profile applied per repo.
+- Profiles support GitHub Copilot and Claude Code. They do not support other
+  harnesses yet.
+- Only Claude supports `delegate` install mode. This mode enables a plugin in the
+  harness configuration. Copilot skips delegate plugins with a warning.
+- A profile changes only the repository where you apply it. It does not install
+  capabilities globally for the user or machine. Apply the profile to each
+  repository where you need it.
 - **One mode at a time per profile.** A profile already applied persistently
-  cannot also run as an ephemeral session, and vice versa. A lock file guards
-  against concurrent ephemeral sessions and recovers automatically if a previous
-  session was killed.
+  cannot also run as an ephemeral session. An active ephemeral profile cannot
+  also be applied persistently. A lock file prevents concurrent ephemeral
+  sessions. repoverlay recovers the lock automatically if a previous session was killed.
 - **Interrupted cleanup needs a manual step.** If an ephemeral session is
-  interrupted and cleanup fails, repoverlay reports the error and leaves enough
-  state behind for you to finish with `repoverlay profile remove`.
+  interrupted and cleanup fails, repoverlay reports the error. It keeps enough
+  state for you to finish with `repoverlay profile remove`.
 
 ## Try them
 
-The [profiles guide](/guides/profiles/) covers defining, inspecting, applying, and
-removing profiles in full, including marketplaces, managed versus delegate
-plugins, and how each harness maps capabilities. Give it a read, and tell me what
-you build.
+The [profiles guide](/guides/profiles/) explains how to define, inspect, apply, and
+remove profiles. It covers marketplaces, managed and delegate plugins, and the
+capability paths for each harness. Read the guide, and tell me what you build.

@@ -1,25 +1,25 @@
 ---
-title: The In-Repo Library
+title: The in-repo library
 sidebar:
   order: 6
 ---
 
-The library is a directory of overlays stored *inside* a repository, at `.repoverlay/library/` by default. Unlike applied overlay files, library overlays are tracked by git — commit them and everyone who clones the repo gets them.
+The library is a directory of overlays inside a repository. Its default location is `.repoverlay/library/`. Unlike applied overlay files, library overlays are tracked by git. Commit them so everyone who clones the repository gets them.
 
 Use the library when:
 
-- A team wants to ship optional config (editor settings, AI configs) with the repo itself, instead of hosting a separate overlay repository
-- You want overlays that [extend or include](/guides/creating/#composing-overlays) other overlays — composition only works between library overlays
+- Your team wants optional configuration, such as editor settings or AI configuration, in the repository instead of a separate overlay repository.
+- You want overlays that [extend or include](/guides/creating/#composing-overlays) other overlays. Only library overlays support this.
 
 ## Applying library overlays
 
-Library overlays are resolved by bare name, before any configured source:
+Use the overlay name alone to apply a library overlay. repoverlay checks the library before configured sources:
 
 ```bash
 repoverlay apply my-overlay
 ```
 
-If `.repoverlay/library/my-overlay/` exists, that's what gets applied.
+If `.repoverlay/library/my-overlay/` exists, repoverlay applies it.
 
 ## Adding overlays to the library
 
@@ -33,7 +33,7 @@ repoverlay create my-overlay --into library
 repoverlay create my-overlay --into library --no-apply
 ```
 
-Import an existing overlay — from a path, a GitHub URL, an `org/repo/name` reference, or the name of an already-applied overlay:
+To import an existing overlay, specify a path, GitHub URL, `org/repo/name` reference, or applied overlay name:
 
 ```bash
 repoverlay library import ./path/to/overlay
@@ -46,7 +46,7 @@ Or move an applied overlay's source into the library:
 repoverlay move my-overlay --to library
 ```
 
-If the library path is covered by `.gitignore`, repoverlay appends a negation pattern (for example `!.repoverlay/library/`) so the library stays tracked.
+If `.gitignore` excludes the library path, repoverlay adds a negation pattern such as `!.repoverlay/library/`. This lets git track the library.
 
 ## Listing, exporting, and removing
 
@@ -63,7 +63,7 @@ repoverlay library remove my-overlay
 
 ## Custom library location
 
-Set `library_path` in the per-repo config (`.repoverlay/config.ccl`) to move the library. The path must be relative to the repo root:
+Set `library_path` in the repository configuration (`.repoverlay/config.ccl`) to change the library location. The path must be relative to the repository root:
 
 ```
 library_path = tools/overlays

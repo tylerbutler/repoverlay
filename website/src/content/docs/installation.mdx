@@ -30,10 +30,10 @@ PowerShell is for Windows. Cargo requires Rust 1.91 or later.
 		curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.sh | sh
 		```
 
-		The binary is installed to `$CARGO_HOME/bin` (or `$HOME/.cargo/bin` if `CARGO_HOME` is not set).
+		The installer puts the binary in `$CARGO_HOME/bin`. If `CARGO_HOME` is not set, it uses `$HOME/.cargo/bin`.
 
 		**Update:**
-		Rerun the install command in the Install section to replace the binary.
+		Run the install command again to replace the binary.
 
 		**Uninstall:**
 		```bash
@@ -46,10 +46,10 @@ PowerShell is for Windows. Cargo requires Rust 1.91 or later.
 		irm https://github.com/tylerbutler/repoverlay/releases/latest/download/repoverlay-installer.ps1 | iex
 		```
 
-		The binary is installed to `$env:CARGO_HOME\bin` (or `$env:USERPROFILE\.cargo\bin` if `CARGO_HOME` is not set).
+		The installer puts the binary in `$env:CARGO_HOME\bin`. If `CARGO_HOME` is not set, it uses `$env:USERPROFILE\.cargo\bin`.
 
 		**Update:**
-		Rerun the install command in the Install section to replace the binary.
+		Run the install command again to replace the binary.
 
 		**Uninstall:**
 		```powershell
@@ -90,7 +90,7 @@ PowerShell is for Windows. Cargo requires Rust 1.91 or later.
 
 ## Manual
 
-Download the pre-built binaries for your platform at [repoverlay releases](https://github.com/tylerbutler/repoverlay/releases).
+Download the prebuilt binary for your platform from [repoverlay releases](https://github.com/tylerbutler/repoverlay/releases).
 
 **Update:** Download and replace the binary on your PATH.
 
@@ -102,9 +102,9 @@ Download the pre-built binaries for your platform at [repoverlay releases](https
 repoverlay --version
 ```
 
-If the command is not found, restart your terminal and ensure the installation
+If the terminal cannot find the command, restart it. Make sure that the installation
 directory is on your PATH. Cargo installs to `$CARGO_HOME/bin`, or
 `$HOME/.cargo/bin` by default. On Windows the default is
 `$env:USERPROFILE\.cargo\bin`.
 
-Once the version appears, [apply your first profile](/quick-start/#try-it).
+When the terminal shows the version, [apply your first profile](/quick-start/#try-it).
