@@ -9,7 +9,8 @@ targets:
   - claude
   - copilot
 dependencies:
-  apm: []
+  apm:
+    - pbakaus/impeccable/plugin#skill-v4.1.2
   mcp: []
 includes: auto
 scripts: {}
