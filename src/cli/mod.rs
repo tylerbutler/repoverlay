@@ -18,6 +18,7 @@ use crate::{
 
 pub(crate) mod commands;
 
+pub(crate) use commands::apm::handle_apm_command;
 pub(crate) use commands::browse::browse_overlays;
 pub(crate) use commands::cache::handle_cache_command;
 pub(crate) use commands::claude::handle_claude_command;
@@ -48,6 +49,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Install an APM package into a repository profile
+    Apm {
+        #[command(subcommand)]
+        command: ApmCommand,
+    },
+
     /// Apply an overlay to a git repository (scripting / power-user)
     ///
     /// Applies an overlay directly from a path, GitHub URL, or configured source.
@@ -513,6 +520,23 @@ enum Commands {
     Completions {
         /// Shell to generate completions for
         shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ApmCommand {
+    /// Resolve, pack, and apply an APM package
+    Install {
+        /// APM dependency reference, for example `tylerbutler/apm-base`
+        package: String,
+
+        /// Harness to apply (defaults to Claude)
+        #[arg(long, default_value = "claude")]
+        harness: crate::profile_applicators::AgentHarness,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
     },
 }
 
@@ -1038,6 +1062,9 @@ pub(crate) fn run() -> Result<()> {
         },
         Commands::Source { command } => {
             handle_source_command(command)?;
+        }
+        Commands::Apm { command } => {
+            handle_apm_command(command)?;
         }
         Commands::Marketplace { command } => {
             handle_marketplace_command(command)?;

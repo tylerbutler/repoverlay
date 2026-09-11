@@ -221,23 +221,19 @@ Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copil
 
 ### APM packages
 
-You can use [APM](https://github.com/microsoft/apm) packages through the existing local plugin support. The workflow below is validated with APM 0.29.1. Build the package outside the target repository, then reference the versioned bundle directory from a profile:
+You can install [APM](https://github.com/microsoft/apm) packages directly into a repository profile. repoverlay runs APM in an isolated temporary project, packs the result, stores the bundle under `.repoverlay/apm/`, and applies the profile:
 
 ```bash
-apm install --frozen
-apm pack --format claude-plugin --output ./build
+repoverlay apm install tylerbutler/apm-base --harness claude
 ```
 
-```ccl
-profiles =
-  agent-tools =
-    plugins =
-      = ./build/my-package-1.0.0
+The default harness is Claude. Use `--harness copilot` for Copilot. Remove the generated profile with:
+
+```bash
+repoverlay profile remove apm-apm-base --harness claude
 ```
 
-Apply the profile with `repoverlay profile apply agent-tools --harness claude` or run an ephemeral session with `repoverlay copilot --profile agent-tools`. APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages only the files it places in the target repository.
-
-The supported bundle subset is plugin skills, agent files, and `.mcp.json` `mcpServers`. repoverlay reports APM `hooks/` and `commands/` as unsupported and does not install them. APM manifests and lockfiles stay in the build directory; they are not required in the target repository.
+APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages the durable bundle, repository placement, Git exclusion, and profile lifecycle. The supported bundle subset is plugin skills, agent files, and `.mcp.json` `mcpServers`. APM `hooks/`, `commands/`, and `instructions/` are reported as unsupported and are not installed.
 
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 

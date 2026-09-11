@@ -1,3 +1,4 @@
+pub(crate) mod apm;
 pub(crate) mod browse;
 pub(crate) mod cache;
 pub(crate) mod claude;
