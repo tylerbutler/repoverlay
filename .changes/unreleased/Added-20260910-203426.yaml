@@ -1,0 +1,7 @@
+kind: Added
+body: |-
+    Install APM packages directly with `repoverlay apm install`
+
+    Resolve and pack the package in isolation, then apply supported skills, agents, and MCP servers through the existing profile lifecycle.
+time: 2026-09-10T20:34:26-07:00
+component: apm

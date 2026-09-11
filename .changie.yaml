@@ -39,6 +39,7 @@ components:
     - fixes
     - misc
     - library
+    - apm
     - apply
     - browse
     - cache

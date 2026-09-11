@@ -221,19 +221,19 @@ Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copil
 
 ### APM packages
 
-You can install [APM](https://github.com/microsoft/apm) packages directly into a repository profile. repoverlay runs APM in an isolated temporary project, packs the result, stores the bundle under `.repoverlay/apm/`, and applies the profile:
+You can install [APM](https://github.com/microsoft/apm) packages directly into a repository profile. repoverlay runs APM in an isolated temporary project, packs the result, stores the bundle in repoverlay's external state directory, and applies it:
 
 ```bash
-repoverlay apm install tylerbutler/apm-base --harness claude
+repoverlay apm install tylerbutler/apm-base
 ```
 
-The default harness is Claude. Use `--harness copilot` for Copilot. Remove the generated profile with:
+The default harness is Claude. Use `--harness copilot` for Copilot. The target repository's Git remote and any `policy` block in its `apm.yml` are copied to the temporary project so APM can enforce the same policy. Remove the generated profile with:
 
 ```bash
-repoverlay profile remove apm-apm-base --harness claude
+repoverlay profile remove apm-tylerbutler-apm-base --harness claude
 ```
 
-APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages the durable bundle, repository placement, Git exclusion, and profile lifecycle. The supported bundle subset is plugin skills, agent files, and `.mcp.json` `mcpServers`. APM `hooks/`, `commands/`, and `instructions/` are reported as unsupported and are not installed.
+A package can be active for one harness at a time because both harnesses share `.mcp.json`. Remove the profile before reinstalling it or switching harnesses. APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages the durable bundle, repository placement, Git exclusion, removal, and restore. The supported bundle subset is plugin skills, agent files, and `.mcp.json` `mcpServers`. APM `hooks/`, `commands/`, and `instructions/` are reported as unsupported and are not installed.
 
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 

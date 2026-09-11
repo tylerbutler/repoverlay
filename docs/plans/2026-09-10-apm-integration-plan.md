@@ -1,6 +1,6 @@
 # APM integration plan
 
-Status: Phase 1 validated. Native support is not currently required.
+Status: Phase 1 validated. Native installation implemented because the manual export workflow was too onerous.
 
 Date: 2026-09-10
 
@@ -33,7 +33,7 @@ shared overlay sources.
 
 ## Phase 1 findings
 
-Validated with APM 0.29.1. `apm install --frozen` followed by `apm pack --format claude-plugin --output ./build` produces a standalone plugin bundle with `plugin.json`, `skills/`, `agents/`, `.mcp.json`, `hooks/`, and an embedded `apm.lock.yaml`. The current repoverlay plugin adapter already handles skills, agents, and MCP servers and reports `hooks` and `commands` as unsupported capabilities. APM omitted an unaudited dependency's hooks/MCP content from the packed bundle, so APM policy and attestation controls remain authoritative. No native APM invocation is needed for the supported workflow.
+Validated with APM 0.29.1. `apm install` followed by `apm pack --format claude-plugin --output ./build` produces a standalone plugin bundle with `plugin.json`, `skills/`, `agents/`, `.mcp.json`, `hooks/`, and an embedded `apm.lock.yaml`. The current repoverlay plugin adapter handles skills, agents, and MCP servers and reports `hooks`, `commands`, and `instructions` as unsupported capabilities. APM omitted an unaudited dependency's hooks/MCP content from the packed bundle, so APM policy and attestation controls remain authoritative. The workflow is compatible but too manual for routine use, which justifies the native install command.
 
 ## Starting point
 
@@ -142,6 +142,10 @@ Cover these cases:
 - Lockfile reproducibility and source or exported-path traversal attempts.
 - Trust prompts, policy denial, and attempts to escape the isolated output area.
 - Existing project APM configuration without overwrite or ownership takeover.
+
+## Phase 2 outcome
+
+The manual workflow proved too onerous for routine use. `repoverlay apm install <package>` now runs APM in an isolated temporary project, packs a Claude-style bundle, stores it in repoverlay's external state directory, and applies it through an in-memory managed profile. It mirrors the target Git remote and any target `apm.yml` policy block for APM policy enforcement, and it does not modify the repository's repoverlay configuration. Artifacts are durable outside the target repository so restore remains valid after `git clean`. An applied package must be removed before it can be installed again or switched to another harness, which protects local edits and avoids conflicting ownership of the shared `.mcp.json` file.
 
 ## Optional distribution path: prebuilt overlays
 

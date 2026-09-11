@@ -109,25 +109,68 @@ fn apply_profile_with_harness_home(
     session_id: Option<String>,
     harness_home: PathBuf,
 ) -> Result<ProfileState> {
+    ensure_profile_not_applied(name, harness, target)?;
+    let config = crate::config::load_config(Some(target))?;
+    let profile = config
+        .profiles
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("Profile '{name}' not found"))?;
+    apply_profile_config_with_harness_home(
+        name,
+        harness,
+        target,
+        mode,
+        session_id,
+        harness_home,
+        profile,
+        config.marketplaces.clone(),
+    )
+}
+
+/// Apply an in-memory profile without adding it to the user's configuration.
+pub(crate) fn apply_profile_config(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+    profile: &crate::profile::ProfileConfig,
+) -> Result<ProfileState> {
+    ensure_profile_not_applied(name, harness, target)?;
+    apply_profile_config_with_harness_home(
+        name,
+        harness,
+        target,
+        ProfileMode::Persistent,
+        None,
+        harness.home_from_env()?,
+        profile,
+        Vec::new(),
+    )
+}
+
+fn ensure_profile_not_applied(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
     crate::profile::validate_profile_state_component(name)?;
     let state_path = crate::profile::profile_state_path(target, name, harness)?;
     match state_path.try_exists() {
         Ok(true) => bail!(
             "Profile '{name}' is already applied for {harness}; remove it before applying again"
         ),
-        Ok(false) => {}
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!("Failed to inspect profile state: {}", state_path.display())
-            });
-        }
+        Ok(false) => Ok(()),
+        Err(err) => Err(err)
+            .with_context(|| format!("Failed to inspect profile state: {}", state_path.display())),
     }
+}
 
-    let config = crate::config::load_config(Some(target))?;
-    let profile = config
-        .profiles
-        .get(name)
-        .ok_or_else(|| anyhow::anyhow!("Profile '{name}' not found"))?;
+#[allow(clippy::too_many_arguments)]
+fn apply_profile_config_with_harness_home(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+    mode: ProfileMode,
+    session_id: Option<String>,
+    harness_home: PathBuf,
+    profile: &crate::profile::ProfileConfig,
+    marketplaces: Vec<crate::config::Marketplace>,
+) -> Result<ProfileState> {
     let applicator = harness.applicator();
     let context = ProfileContext {
         profile_name: name.to_string(),
@@ -137,12 +180,12 @@ fn apply_profile_with_harness_home(
         harness_home,
         mode,
         session_id: session_id.clone(),
-        marketplaces: config.marketplaces.clone(),
+        marketplaces,
         cache: crate::cache::CacheManager::new()?,
     };
     let plan = applicator.plan(profile, &context)?;
     preflight_plan(&plan, &context.profile_asset_dir)?;
-    check_mcp_ownership_conflicts(&plan, target, harness)?;
+    check_mcp_ownership_conflicts(&plan, target)?;
     let mut state = ProfileState {
         name: name.to_string(),
         harness,
@@ -845,8 +888,8 @@ fn is_shared_marketplace_pointer(pointer: &str) -> bool {
 }
 
 /// Gather the JSON pointers still owned by other applied profiles for the same
-/// harness and JSON target. Removing the profile named `name` must not delete
-/// these (they remain in use by another profile).
+/// JSON target. Removing one harness's profile must not delete paths still used
+/// by a profile for another harness.
 fn protected_json_pointers(
     name: &str,
     harness: AgentHarness,
@@ -858,7 +901,7 @@ fn protected_json_pointers(
         return protected;
     };
     for state in states {
-        if state.name == name || state.harness != harness {
+        if state.name == name && state.harness == harness {
             continue;
         }
         for file in &state.files {
@@ -874,16 +917,12 @@ fn protected_json_pointers(
 }
 
 /// Reject applying a profile whose planned JSON merge would manage JSON-pointer
-/// paths already owned by another applied profile for the same harness.
+/// paths already owned by another applied profile, including another harness.
 ///
 /// Precise pointer tracking is used when the other profile's backup metadata is
 /// readable; otherwise we conservatively reject any other profile that already
 /// manages the same JSON target.
-fn check_mcp_ownership_conflicts(
-    plan: &ProfilePlan,
-    target: &Path,
-    harness: AgentHarness,
-) -> Result<()> {
+fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path) -> Result<()> {
     let existing = list_profile_states(target)?;
     for action in &plan.actions {
         let ProfileAction::MergeJson {
@@ -897,9 +936,6 @@ fn check_mcp_ownership_conflicts(
         };
         let planned_keys: BTreeSet<String> = owned_paths.iter().cloned().collect();
         for state in &existing {
-            if state.harness != harness {
-                continue;
-            }
             for file in &state.files {
                 if file.action != "merge-json" || file.target != *json_target {
                     continue;
@@ -932,18 +968,20 @@ fn check_mcp_ownership_conflicts(
                                 .join(", ");
                             bail!(
                                 "JSON path(s) {keys} in {} are already managed by applied \
-                                 profile '{}' for {harness}; remove that profile first",
+                                 profile '{}' for {}; remove that profile first",
                                 json_target.display(),
-                                state.name
+                                state.name,
+                                state.harness
                             );
                         }
                     }
                     None => {
                         bail!(
-                            "{} is already managed by applied profile '{}' for {harness} and its \
+                            "{} is already managed by applied profile '{}' for {} and its \
                              ownership metadata could not be read; remove that profile first",
                             json_target.display(),
-                            state.name
+                            state.name,
+                            state.harness
                         );
                     }
                 }
