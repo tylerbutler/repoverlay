@@ -47,19 +47,24 @@ fn install(package: &str, harness: AgentHarness, target: Option<PathBuf>) -> Res
     let bundle = single_bundle(&build_dir)?;
     let destination = target.join(&source);
     crate::path_safety::check_no_symlink_ancestors(&target, Path::new(".repoverlay/apm"))?;
+
+    let mut repo_config = config::load_repo_config(&target)?.unwrap_or_default();
+    if repo_config.profiles.contains_key(&profile_name) {
+        let applied = crate::profile_plan::list_profile_states(&target)?
+            .into_iter()
+            .any(|state| state.name == profile_name && state.harness == harness);
+        if applied {
+            crate::profile_plan::remove_profile(&profile_name, harness, &target)?;
+        }
+        repo_config.profiles.remove(&profile_name);
+    }
+
     if destination.exists() {
         fs::remove_dir_all(&destination)
             .with_context(|| format!("Failed to replace {}", destination.display()))?;
     }
     crate::overlay_repo::copy_dir_recursive(&bundle, &destination)?;
 
-    let mut repo_config = config::load_repo_config(&target)?.unwrap_or_default();
-    if repo_config.profiles.contains_key(&profile_name) {
-        bail!(
-            "APM package '{package}' is already installed as profile '{profile_name}'; \
-             remove it first with 'repoverlay profile remove {profile_name} --harness {harness}'"
-        );
-    }
     repo_config.profiles.insert(
         profile_name.clone(),
         ProfileConfig {
