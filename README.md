@@ -219,6 +219,26 @@ repoverlay claude --profile rust-dev
 
 Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copilot) or `.claude/skills/` (Claude), plugin MCP servers merge into the repo's `.mcp.json`, and instruction files are written into a managed region of `CLAUDE.md` (Claude) or `AGENTS.md` (Copilot). Claude can also *delegate* plugin enablement to its own settings instead of placing files. A full `repoverlay update` re-resolves applied profiles' managed plugins and re-applies any whose source changed.
 
+### APM packages
+
+You can use [APM](https://github.com/microsoft/apm) packages through the existing local plugin support. The workflow below is validated with APM 0.29.1. Build the package outside the target repository, then reference the versioned bundle directory from a profile:
+
+```bash
+apm install --frozen
+apm pack --format claude-plugin --output ./build
+```
+
+```ccl
+profiles =
+  agent-tools =
+    plugins =
+      = ./build/my-package-1.0.0
+```
+
+Apply the profile with `repoverlay profile apply agent-tools --harness claude` or run an ephemeral session with `repoverlay copilot --profile agent-tools`. APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages only the files it places in the target repository.
+
+The supported bundle subset is plugin skills, agent files, and `.mcp.json` `mcpServers`. repoverlay reports APM `hooks/` and `commands/` as unsupported and does not install them. APM manifests and lockfiles stay in the build directory; they are not required in the target repository.
+
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 
 ## Migrating to 1.0
