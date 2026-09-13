@@ -22,6 +22,10 @@ pub(crate) struct ProfileConfig {
     pub(crate) instructions: Vec<InstructionConfig>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) plugins: Vec<crate::plugin::PluginRef>,
+    /// Resolved MCP configuration supplied by an in-memory profile, such as an
+    /// APM install. It is never serialized into repoverlay configuration.
+    #[serde(skip)]
+    pub(crate) resolved_mcp_servers: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -115,6 +119,11 @@ pub(crate) fn merge_profile_config(
         overlays: merge_list(&base.overlays, &override_profile.overlays),
         instructions: merge_list(&base.instructions, &override_profile.instructions),
         plugins: merge_list(&base.plugins, &override_profile.plugins),
+        resolved_mcp_servers: if override_profile.resolved_mcp_servers.is_empty() {
+            base.resolved_mcp_servers.clone()
+        } else {
+            override_profile.resolved_mcp_servers.clone()
+        },
     }
 }
 
@@ -510,6 +519,7 @@ profiles =
                 install: InstallMode::Managed,
                 scope: None,
             }],
+            ..ProfileConfig::default()
         };
         let overlay = ProfileConfig {
             description: None,
@@ -522,6 +532,7 @@ profiles =
                 install: InstallMode::Managed,
                 scope: None,
             }],
+            ..ProfileConfig::default()
         };
 
         let merged = merge_profile_config(&base, &overlay);

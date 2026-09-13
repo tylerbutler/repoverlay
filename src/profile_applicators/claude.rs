@@ -197,6 +197,12 @@ impl ProfileApplicator for ClaudeApplicator {
             }
         }
 
+        super::apply_resolved_mcp_servers(
+            &profile.resolved_mcp_servers,
+            &mut mcp_servers,
+            &mut owned_paths,
+        );
+
         if !mcp_servers.is_empty() {
             actions.push(ProfileAction::MergeJson {
                 target: context.target.join(".mcp.json"),

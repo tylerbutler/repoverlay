@@ -96,6 +96,7 @@ fn install_with_apm(
         &["install", "--target", &harness_name, "--", package],
         "install",
     )?;
+    let resolved_mcp_servers = resolved_mcp_servers(temp.path(), harness)?;
     let build_dir = temp.path().join("build");
     let output = build_dir.to_string_lossy().into_owned();
     run_apm(
@@ -147,6 +148,7 @@ fn install_with_apm(
         plugins: vec![PluginRef::Local {
             source: destination.clone(),
         }],
+        resolved_mcp_servers,
         ..ProfileConfig::default()
     };
     if let Err(err) =
@@ -190,6 +192,53 @@ fn target_policy(target: &Path) -> Result<Option<serde_json::Value>> {
     let manifest: TargetApmManifest = serde_saphyr::from_str(&content)
         .with_context(|| format!("Failed to parse {}", path.display()))?;
     Ok(manifest.policy)
+}
+
+fn resolved_mcp_servers(
+    project: &Path,
+    harness: AgentHarness,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let mcp_path = project.join(".mcp.json");
+    if harness == AgentHarness::Copilot {
+        let copilot_path = project.join(".github").join("mcp.json");
+        if copilot_path.is_file() {
+            fs::copy(&copilot_path, &mcp_path).with_context(|| {
+                format!(
+                    "Failed to normalize Copilot MCP configuration {}",
+                    copilot_path.display()
+                )
+            })?;
+        }
+    }
+
+    let content = match fs::read_to_string(&mcp_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(serde_json::Map::new());
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to read APM MCP configuration {}",
+                    mcp_path.display()
+                )
+            });
+        }
+    };
+    let value: serde_json::Value = serde_json::from_str(&content).with_context(|| {
+        format!(
+            "Failed to parse APM MCP configuration {}",
+            mcp_path.display()
+        )
+    })?;
+    match value.get("mcpServers") {
+        None => Ok(serde_json::Map::new()),
+        Some(serde_json::Value::Object(servers)) => Ok(servers.clone()),
+        Some(_) => bail!(
+            "APM MCP configuration {} has a non-object 'mcpServers' value",
+            mcp_path.display()
+        ),
+    }
 }
 
 fn mirror_git_identity(target: &Path, project: &Path) -> Result<()> {
@@ -424,13 +473,24 @@ mod tests {
 set -eu
 if [ "$1" = install ]; then
     grep -q 'fetch_failure_default: block' apm.yml
+    if [ "$3" = copilot ]; then
+        mkdir -p .github
+        config=.github/mcp.json
+        skills_root=.agents
+    else
+        config=.mcp.json
+        skills_root=.claude
+    fi
+    printf '%s\n' "{\"mcpServers\":{\"demo\":{\"command\":\"$skills_root/skills/demo/bin/server\",\"env\":{\"TOKEN\":\"\${TOKEN}\"},\"headers\":{\"Authorization\":\"Bearer \${TOKEN}\"}}}}" > "$config"
     exit 0
 fi
 while [ "$1" != "--output" ]; do shift; done
 output=$2
+test -f .mcp.json
 bundle="$output/test-package-1.0.0"
-mkdir -p "$bundle/skills/demo" "$bundle/hooks" "$bundle/instructions" "$bundle/bin"
+mkdir -p "$bundle/skills/demo/bin" "$bundle/hooks" "$bundle/instructions" "$bundle/bin"
 printf '%s\n' '# Demo' > "$bundle/skills/demo/SKILL.md"
+printf '%s\n' '#!/bin/sh' > "$bundle/skills/demo/bin/server"
 printf '%s\n' '#!/bin/sh' > "$bundle/bin/server"
 printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/server"}}}' > "$bundle/.mcp.json"
 "#,
@@ -514,7 +574,12 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
         let mcp: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(target.join(".mcp.json")).unwrap()).unwrap();
         let command = mcp["mcpServers"]["demo"]["command"].as_str().unwrap();
-        assert!(Path::new(command).is_file());
+        assert!(target.join(command).is_file());
+        assert_eq!(mcp["mcpServers"]["demo"]["env"]["TOKEN"], "${TOKEN}");
+        assert_eq!(
+            mcp["mcpServers"]["demo"]["headers"]["Authorization"],
+            "Bearer ${TOKEN}"
+        );
         crate::profile_plan::remove_profile(
             "apm-owner-test-package",
             AgentHarness::Claude,
@@ -534,6 +599,13 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
             artifact_root
                 .join("copilot/owner-test-package/skills/demo/SKILL.md")
                 .is_file()
+        );
+        let mcp: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(target.join(".mcp.json")).unwrap()).unwrap();
+        assert_eq!(mcp["mcpServers"]["demo"]["env"]["TOKEN"], "${TOKEN}");
+        assert_eq!(
+            mcp["mcpServers"]["demo"]["headers"]["Authorization"],
+            "Bearer ${TOKEN}"
         );
         crate::profile_plan::remove_profile(
             "apm-owner-test-package",

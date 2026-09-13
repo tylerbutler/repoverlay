@@ -289,6 +289,20 @@ fn decompose_bundle(
     Ok(())
 }
 
+fn apply_resolved_mcp_servers(
+    resolved_servers: &serde_json::Map<String, serde_json::Value>,
+    servers: &mut serde_json::Map<String, serde_json::Value>,
+    owned_paths: &mut Vec<String>,
+) {
+    for (server_name, server) in resolved_servers {
+        servers.insert(server_name.clone(), server.clone());
+        let pointer = json_pointer(&["mcpServers", server_name]);
+        if !owned_paths.contains(&pointer) {
+            owned_paths.push(pointer);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ProfileContext {
     pub(crate) profile_name: String,

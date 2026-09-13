@@ -86,6 +86,12 @@ impl ProfileApplicator for CopilotApplicator {
             }
         }
 
+        super::apply_resolved_mcp_servers(
+            &profile.resolved_mcp_servers,
+            &mut servers,
+            &mut owned_paths,
+        );
+
         if !servers.is_empty() {
             actions.push(ProfileAction::MergeJson {
                 target: context.target.join(".mcp.json"),
