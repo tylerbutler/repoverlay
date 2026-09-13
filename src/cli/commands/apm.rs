@@ -7,10 +7,16 @@ use std::process::Command;
 use crate::cli::ApmCommand;
 use crate::cli::commands::resolve_target;
 use crate::plugin::PluginRef;
-use crate::profile::ProfileConfig;
+use crate::profile::{ProfileConfig, ResolvedJsonMerge, ResolvedPlacement};
 use crate::profile_applicators::AgentHarness;
 
 const SOURCE_MARKER: &str = ".repoverlay-apm-source";
+/// Directory inside the durable artifact that stores target-native APM output.
+const NATIVE_DIR: &str = ".repoverlay-native";
+/// Subdirectory of [`NATIVE_DIR`] that mirrors the captured repository paths.
+const NATIVE_FILES_DIR: &str = "files";
+/// Claude `settings.json` hooks object captured from the temporary project.
+const CLAUDE_HOOKS_FILE: &str = "claude-hooks.json";
 
 #[derive(serde::Deserialize)]
 struct TargetApmManifest {
@@ -32,13 +38,19 @@ pub(crate) fn handle_apm_command(command: ApmCommand) -> Result<()> {
             package,
             harness,
             target,
-        } => install(&package, harness, target),
+            allow_hooks,
+        } => install(&package, harness, target, allow_hooks),
     }
 }
 
-fn install(package: &str, harness: AgentHarness, target: Option<PathBuf>) -> Result<()> {
+fn install(
+    package: &str,
+    harness: AgentHarness,
+    target: Option<PathBuf>,
+    allow_hooks: bool,
+) -> Result<()> {
     let target = resolve_target(target)?;
-    install_with_apm(package, harness, &target, OsStr::new("apm"))
+    install_with_apm(package, harness, &target, OsStr::new("apm"), allow_hooks)
 }
 
 fn install_with_apm(
@@ -46,6 +58,7 @@ fn install_with_apm(
     harness: AgentHarness,
     target: &Path,
     apm: &OsStr,
+    allow_hooks: bool,
 ) -> Result<()> {
     validate_package(package)?;
     let identity = package_identity(package);
@@ -72,13 +85,15 @@ fn install_with_apm(
             snapshot.harness
         )
     }
+    let harness_name = harness.to_string();
     let package_root = crate::state::external_state_dir_for_target(target)?
         .join("apm")
         .join(&key);
     ensure_package_identity(&package_root, identity)?;
+    let destination = package_root.join(&harness_name).join(&key);
+    let native_root = destination.join(NATIVE_DIR);
 
     let temp = tempfile::tempdir().context("Failed to create temporary APM project")?;
-    let harness_name = harness.to_string();
     let manifest = TemporaryApmManifest {
         name: "repoverlay-apm-install",
         version: "1.0.0",
@@ -97,6 +112,14 @@ fn install_with_apm(
         "install",
     )?;
     let resolved_mcp_servers = resolved_mcp_servers(temp.path(), harness)?;
+    let capture = tempfile::tempdir().context("Failed to create temporary APM capture")?;
+    let captured = capture_native_output(temp.path(), harness, capture.path(), &native_root)?;
+    if captured.capabilities.iter().any(|c| c == "hooks") && !allow_hooks {
+        bail!(
+            "APM package '{package}' installs hooks, which run commands in this repository; \
+             inspect the package and rerun with --allow-hooks"
+        )
+    }
     let build_dir = temp.path().join("build");
     let output = build_dir.to_string_lossy().into_owned();
     run_apm(
@@ -114,7 +137,6 @@ fn install_with_apm(
     let harness_root = package_root.join(&harness_name);
     fs::create_dir_all(&harness_root)
         .with_context(|| format!("Failed to create {}", harness_root.display()))?;
-    let destination = harness_root.join(&key);
     ensure_managed_directory(&destination)?;
     let suffix = std::process::id();
     let staging = harness_root.join(format!(".{key}.new-{suffix}"));
@@ -124,6 +146,14 @@ fn install_with_apm(
     if let Err(err) = crate::overlay_repo::copy_dir_recursive(&bundle, &staging) {
         let _ = remove_if_exists(&staging);
         return Err(err).context("Failed to stage the APM plugin bundle");
+    }
+    if captured.is_empty() {
+        // Nothing target-native to keep.
+    } else if let Err(err) =
+        crate::profile_plan::copy_tree_no_symlinks(capture.path(), &staging.join(NATIVE_DIR))
+    {
+        let _ = remove_if_exists(&staging);
+        return Err(err).context("Failed to stage the target-native APM output");
     }
 
     remove_if_exists(&backup)?;
@@ -143,12 +173,19 @@ fn install_with_apm(
         return Err(err).context("Failed to activate the new APM bundle");
     }
 
+    let resolved_placements = native_placements(&native_root, harness)?;
+    let resolved_json_merges = claude_hooks_merge(&native_root, harness)?
+        .into_iter()
+        .collect();
     let profile = ProfileConfig {
         description: Some(format!("APM package {package}")),
         plugins: vec![PluginRef::Local {
             source: destination.clone(),
         }],
         resolved_mcp_servers,
+        resolved_placements,
+        resolved_json_merges,
+        handled_plugin_capabilities: captured.capabilities,
         ..ProfileConfig::default()
     };
     if let Err(err) =
@@ -239,6 +276,268 @@ fn resolved_mcp_servers(
             mcp_path.display()
         ),
     }
+}
+
+/// Target-native APM output captured from the temporary project.
+struct NativeCapture {
+    /// Plugin capabilities the capture handled (`commands`, `instructions`,
+    /// `hooks`), so the applicator does not report them as skipped.
+    capabilities: Vec<String>,
+}
+
+impl NativeCapture {
+    const fn is_empty(&self) -> bool {
+        self.capabilities.is_empty()
+    }
+}
+
+/// A repository-relative directory repoverlay copies out of the temporary APM
+/// project.
+struct NativeRoot {
+    /// Repository-relative directory in the temporary project.
+    relative: &'static str,
+    /// Plugin capability this directory satisfies.
+    capability: &'static str,
+    /// Whether each direct child becomes a managed placement in the repository.
+    /// Claude hook scripts are kept in the durable artifact only, because Claude
+    /// runs them through the absolute command path in `settings.json`.
+    placed: bool,
+}
+
+const fn root(relative: &'static str, capability: &'static str, placed: bool) -> NativeRoot {
+    NativeRoot {
+        relative,
+        capability,
+        placed,
+    }
+}
+
+/// The allowlisted target-native directories for a harness.
+fn native_roots(harness: AgentHarness) -> Vec<NativeRoot> {
+    match harness {
+        AgentHarness::Claude => vec![
+            root(".claude/commands", "commands", true),
+            root(".claude/rules", "instructions", true),
+            root(".claude/hooks", "hooks", false),
+        ],
+        AgentHarness::Copilot => vec![
+            root(".github/prompts", "commands", true),
+            root(".github/instructions", "instructions", true),
+            root(".github/hooks", "hooks", true),
+        ],
+    }
+}
+
+/// Copy the allowlisted target-native APM output into `capture_dir`.
+///
+/// Only the directories in [`native_roots`] and Claude's `hooks` settings object
+/// are captured. Symlinked sources are rejected, and hook commands that point
+/// into the temporary project are rewritten to `native_root`, the durable
+/// artifact location the capture will occupy.
+fn capture_native_output(
+    project: &Path,
+    harness: AgentHarness,
+    capture_dir: &Path,
+    native_root: &Path,
+) -> Result<NativeCapture> {
+    let mut capabilities: Vec<String> = Vec::new();
+    let files_root = capture_dir.join(NATIVE_FILES_DIR);
+    for root in native_roots(harness) {
+        let source = project.join(root.relative);
+        if !source.is_dir() || fs::read_dir(&source)?.next().is_none() {
+            continue;
+        }
+        let destination = files_root.join(root.relative);
+        crate::profile_plan::copy_tree_no_symlinks(&source, &destination).with_context(|| {
+            format!(
+                "Failed to capture target-native APM output {}",
+                root.relative
+            )
+        })?;
+        if root.capability == "hooks" {
+            rewrite_hook_files(&destination, project, native_root)?;
+        }
+        if !capabilities.iter().any(|known| known == root.capability) {
+            capabilities.push(root.capability.to_string());
+        }
+    }
+
+    if harness == AgentHarness::Claude
+        && let Some(hooks) = claude_settings_hooks(project)?
+    {
+        let hooks = rewrite_project_paths(&hooks, project, native_root)?;
+        let content = serde_json::to_string_pretty(&hooks)
+            .context("Failed to serialize captured Claude hooks")?;
+        crate::state::atomic_write(&capture_dir.join(CLAUDE_HOOKS_FILE), &content)?;
+        if !capabilities.iter().any(|known| known == "hooks") {
+            capabilities.push("hooks".to_string());
+        }
+    }
+
+    Ok(NativeCapture { capabilities })
+}
+
+/// Read the top-level `hooks` object from the temporary project's Claude
+/// settings, ignoring every other setting.
+fn claude_settings_hooks(project: &Path) -> Result<Option<serde_json::Value>> {
+    let path = project.join(".claude").join("settings.json");
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", path.display())),
+    };
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    match value.get("hooks") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Object(hooks)) if hooks.is_empty() => Ok(None),
+        Some(serde_json::Value::Object(hooks)) => {
+            Ok(Some(serde_json::Value::Object(hooks.clone())))
+        }
+        Some(_) => bail!(
+            "APM wrote a non-object 'hooks' value into {}",
+            path.display()
+        ),
+    }
+}
+
+/// Rewrite temporary-project paths inside every captured hook definition.
+fn rewrite_hook_files(directory: &Path, project: &Path, native_root: &Path) -> Result<()> {
+    for entry in fs::read_dir(directory)
+        .with_context(|| format!("Failed to read {}", directory.display()))?
+    {
+        let path = entry?.path();
+        if !path.is_file() || path.extension().and_then(OsStr::to_str) != Some("json") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&content)
+            .with_context(|| format!("Failed to parse hook definition {}", path.display()))?;
+        let value = rewrite_project_paths(&value, project, native_root)?;
+        let rewritten =
+            serde_json::to_string_pretty(&value).context("Failed to serialize hook definition")?;
+        crate::state::atomic_write(&path, &rewritten)?;
+    }
+    Ok(())
+}
+
+/// Replace temporary-project prefixes with the durable artifact location.
+///
+/// Relative commands stay relative. An absolute path that points into a
+/// temporary directory outside this install's project is rejected, because it
+/// cannot survive the install.
+fn rewrite_project_paths(
+    value: &serde_json::Value,
+    project: &Path,
+    native_root: &Path,
+) -> Result<serde_json::Value> {
+    let project = project.to_string_lossy().into_owned();
+    let native = native_root
+        .join(NATIVE_FILES_DIR)
+        .to_string_lossy()
+        .into_owned();
+    let temp_dir = std::env::temp_dir().to_string_lossy().into_owned();
+    rewrite_value(value, &project, &native, &temp_dir)
+}
+
+fn rewrite_value(
+    value: &serde_json::Value,
+    project: &str,
+    native: &str,
+    temp_dir: &str,
+) -> Result<serde_json::Value> {
+    Ok(match value {
+        serde_json::Value::String(text) => {
+            reject_foreign_temp_path(text, project, temp_dir)?;
+            serde_json::Value::String(text.replace(project, native))
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| rewrite_value(item, project, native, temp_dir))
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        serde_json::Value::Object(entries) => {
+            let mut rewritten = serde_json::Map::new();
+            for (key, entry) in entries {
+                rewritten.insert(
+                    key.clone(),
+                    rewrite_value(entry, project, native, temp_dir)?,
+                );
+            }
+            serde_json::Value::Object(rewritten)
+        }
+        other => other.clone(),
+    })
+}
+
+fn reject_foreign_temp_path(text: &str, project: &str, temp_dir: &str) -> Result<()> {
+    for token in text.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '=' | ',')) {
+        if token.starts_with(temp_dir) && !token.starts_with(project) {
+            bail!(
+                "APM hook references temporary path '{token}', which will not exist after install"
+            )
+        }
+    }
+    Ok(())
+}
+
+/// Build one managed placement per captured command, prompt, instruction, or
+/// hook file, so each target file is independently owned and restorable.
+fn native_placements(native_root: &Path, harness: AgentHarness) -> Result<Vec<ResolvedPlacement>> {
+    let files_root = native_root.join(NATIVE_FILES_DIR);
+    let mut placements = Vec::new();
+    for root in native_roots(harness).iter().filter(|root| root.placed) {
+        let relative = root.relative;
+        let source_root = files_root.join(relative);
+        if !source_root.is_dir() {
+            continue;
+        }
+        let mut entries = fs::read_dir(&source_root)
+            .with_context(|| format!("Failed to read {}", source_root.display()))?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort();
+        for name in entries {
+            placements.push(ResolvedPlacement {
+                source: source_root.join(&name),
+                target: Path::new(relative).join(&name),
+            });
+        }
+    }
+    Ok(placements)
+}
+
+/// Build the `.claude/settings.json` merge for captured Claude hooks, owning one
+/// JSON pointer per hook event.
+fn claude_hooks_merge(
+    native_root: &Path,
+    harness: AgentHarness,
+) -> Result<Option<ResolvedJsonMerge>> {
+    if harness != AgentHarness::Claude {
+        return Ok(None);
+    }
+    let path = native_root.join(CLAUDE_HOOKS_FILE);
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", path.display())),
+    };
+    let hooks: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse captured Claude hooks {}", path.display()))?;
+    if hooks.is_empty() {
+        return Ok(None);
+    }
+    let owned_paths = hooks
+        .keys()
+        .map(|event| crate::profile_plan::json_pointer(&["hooks", event]))
+        .collect();
+    Ok(Some(ResolvedJsonMerge {
+        target: PathBuf::from(".claude").join("settings.json"),
+        value: serde_json::json!({ "hooks": hooks }),
+        owned_paths,
+    }))
 }
 
 fn mirror_git_identity(target: &Path, project: &Path) -> Result<()> {
@@ -505,6 +804,7 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
             AgentHarness::Claude,
             &target,
             apm.as_os_str(),
+            false,
         )
         .unwrap();
         let repeat = install_with_apm(
@@ -512,6 +812,7 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
             AgentHarness::Claude,
             &target,
             apm.as_os_str(),
+            false,
         )
         .unwrap_err();
         assert!(repeat.to_string().contains("already installed"));
@@ -520,6 +821,7 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
             AgentHarness::Copilot,
             &target,
             apm.as_os_str(),
+            false,
         )
         .unwrap_err();
         assert!(other_harness.to_string().contains("installed for claude"));
@@ -528,6 +830,7 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
             AgentHarness::Copilot,
             &target,
             apm.as_os_str(),
+            false,
         )
         .unwrap_err();
         assert!(format!("{mcp_conflict:#}").contains("already managed"));
@@ -565,6 +868,7 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
             AgentHarness::Copilot,
             &target,
             apm.as_os_str(),
+            false,
         )
         .unwrap_err();
         assert!(restorable.to_string().contains("can be restored"));
@@ -592,6 +896,7 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
             AgentHarness::Copilot,
             &target,
             apm.as_os_str(),
+            false,
         )
         .unwrap();
         assert!(target.join(".agents/skills/demo/SKILL.md").is_file());
@@ -614,5 +919,236 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
         )
         .unwrap();
         remove_if_exists(artifact_root.parent().unwrap()).unwrap();
+    }
+
+    /// An APM stub that writes target-native commands, instructions, and hooks
+    /// for both harnesses, plus a bundle that carries the same capabilities.
+    #[cfg(unix)]
+    fn native_apm_stub(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let apm = dir.join("apm-native");
+        fs::write(
+            &apm,
+            r#"#!/bin/sh
+set -eu
+if [ "$1" = install ]; then
+    if [ "$3" = copilot ]; then
+        mkdir -p .github/prompts .github/instructions .github/hooks
+        printf '%s\n' '# prompt' > .github/prompts/demo.prompt.md
+        printf '%s\n' '---' 'applyTo: "**"' '---' 'rule body' > .github/instructions/demo.instructions.md
+        printf '%s\n' '#!/bin/sh' > .github/hooks/demo.sh
+        chmod +x .github/hooks/demo.sh
+        printf '{"hooks":[{"command":"%s/.github/hooks/demo.sh"}]}' "$PWD" > .github/hooks/demo.json
+    else
+        mkdir -p .claude/commands .claude/rules .claude/hooks
+        printf '%s\n' '# command' > .claude/commands/demo.md
+        printf '%s\n' 'rule body' > .claude/rules/demo.md
+        printf '%s\n' '#!/bin/sh' > .claude/hooks/run.sh
+        chmod +x .claude/hooks/run.sh
+        printf '{"model":"temporary","hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"%s/.claude/hooks/run.sh"}]}]}}' "$PWD" > .claude/settings.json
+    fi
+    exit 0
+fi
+while [ "$1" != "--output" ]; do shift; done
+output=$2
+bundle="$output/native-package-1.0.0"
+mkdir -p "$bundle/hooks" "$bundle/commands" "$bundle/instructions"
+printf '%s\n' 'x' > "$bundle/hooks/a.sh"
+printf '%s\n' 'x' > "$bundle/commands/a.md"
+printf '%s\n' 'x' > "$bundle/instructions/a.md"
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&apm).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&apm, permissions).unwrap();
+        apm
+    }
+
+    #[cfg(unix)]
+    fn native_target(dir: &Path) -> PathBuf {
+        let target = dir.join("repo");
+        fs::create_dir_all(target.join(".git/info")).unwrap();
+        fs::create_dir_all(target.join(".repoverlay")).unwrap();
+        target
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_applies_claude_commands_rules_and_hooks() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = native_target(temp.path());
+        let apm = native_apm_stub(temp.path());
+        fs::create_dir_all(target.join(".claude/commands")).unwrap();
+        fs::write(target.join(".claude/commands/demo.md"), "user command\n").unwrap();
+        fs::write(
+            target.join(".claude/settings.json"),
+            "{\"model\":\"user\"}\n",
+        )
+        .unwrap();
+
+        let refused = install_with_apm(
+            "owner/native-package",
+            AgentHarness::Claude,
+            &target,
+            apm.as_os_str(),
+            false,
+        )
+        .unwrap_err();
+        assert!(refused.to_string().contains("--allow-hooks"));
+        assert_eq!(
+            fs::read_to_string(target.join(".claude/commands/demo.md")).unwrap(),
+            "user command\n"
+        );
+
+        install_with_apm(
+            "owner/native-package",
+            AgentHarness::Claude,
+            &target,
+            apm.as_os_str(),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target.join(".claude/commands/demo.md")).unwrap(),
+            "# command\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join(".claude/rules/demo.md")).unwrap(),
+            "rule body\n"
+        );
+        let settings: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(target.join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings["model"], "user");
+        let command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            Path::new(command).is_file(),
+            "hook script {command} is missing"
+        );
+
+        let state = crate::profile::load_profile_state(
+            &target,
+            "apm-owner-native-package",
+            AgentHarness::Claude,
+        )
+        .unwrap();
+        assert!(
+            state.skipped.is_empty(),
+            "captured capabilities must not be reported as skipped: {:?}",
+            state.skipped
+        );
+
+        crate::profile_plan::remove_profile(
+            "apm-owner-native-package",
+            AgentHarness::Claude,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(target.join(".claude/commands/demo.md")).unwrap(),
+            "user command\n"
+        );
+        assert!(!target.join(".claude/rules/demo.md").exists());
+        let settings: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(target.join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings["model"], "user");
+        assert!(settings.get("hooks").is_none_or(serde_json::Value::is_null));
+        remove_if_exists(
+            &crate::state::external_state_dir_for_target(&target)
+                .unwrap()
+                .join("apm"),
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_applies_copilot_prompts_instructions_and_hooks() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = native_target(temp.path());
+        let apm = native_apm_stub(temp.path());
+
+        install_with_apm(
+            "owner/native-package",
+            AgentHarness::Copilot,
+            &target,
+            apm.as_os_str(),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(target.join(".github/prompts/demo.prompt.md")).unwrap(),
+            "# prompt\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join(".github/instructions/demo.instructions.md")).unwrap(),
+            "---\napplyTo: \"**\"\n---\nrule body\n"
+        );
+        let hook: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(target.join(".github/hooks/demo.json")).unwrap(),
+        )
+        .unwrap();
+        let command = hook["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            Path::new(command).is_file(),
+            "hook script {command} is missing"
+        );
+        assert_eq!(
+            fs::metadata(command).unwrap().permissions().mode() & 0o111,
+            0o111
+        );
+
+        // Restore rebuilds the placements after `git clean` removes them.
+        fs::remove_dir_all(target.join(".repoverlay")).unwrap();
+        fs::remove_dir_all(target.join(".github")).unwrap();
+        assert_eq!(crate::profile_plan::restore_profiles(&target).unwrap(), 1);
+        assert_eq!(
+            fs::read_to_string(target.join(".github/prompts/demo.prompt.md")).unwrap(),
+            "# prompt\n"
+        );
+        assert!(target.join(".github/hooks/demo.json").is_file());
+
+        crate::profile_plan::remove_profile(
+            "apm-owner-native-package",
+            AgentHarness::Copilot,
+            &target,
+        )
+        .unwrap();
+        assert!(!target.join(".github/prompts/demo.prompt.md").exists());
+        assert!(!target.join(".github/hooks/demo.json").exists());
+        remove_if_exists(
+            &crate::state::external_state_dir_for_target(&target)
+                .unwrap()
+                .join("apm"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn hook_paths_outside_the_temporary_project_are_rejected() {
+        let temp_dir = std::env::temp_dir();
+        let project = temp_dir.join("repoverlay-apm-project");
+        let native = temp_dir.join("durable");
+        let value = serde_json::json!({
+            "command": format!("{}/other/run.sh", temp_dir.display()),
+        });
+        assert!(rewrite_project_paths(&value, &project, &native).is_err());
+
+        let value = serde_json::json!({ "command": "./relative.sh" });
+        assert_eq!(
+            rewrite_project_paths(&value, &project, &native).unwrap(),
+            value
+        );
     }
 }

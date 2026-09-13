@@ -537,6 +537,10 @@ pub(crate) enum ApmCommand {
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
         target: Option<PathBuf>,
+
+        /// Allow the package to install hooks, which run commands in this repository
+        #[arg(long)]
+        allow_hooks: bool,
     },
 }
 

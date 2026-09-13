@@ -1,6 +1,6 @@
 # APM integration plan
 
-Status: Phase 1 validated. Native installation implemented because the manual export workflow was too onerous.
+Status: Phase 1 validated. Native installation implemented because the manual export workflow was too onerous. Target-native commands, prompts, instructions, and hooks are now installed too (see [APM native primitives implementation plan](2026-09-13-apm-native-primitives-impl.md)).
 
 Date: 2026-09-10
 
@@ -33,7 +33,7 @@ shared overlay sources.
 
 ## Phase 1 findings
 
-Validated with APM 0.29.1. `apm install` followed by `apm pack --format claude-plugin --output ./build` produces a standalone plugin bundle with `plugin.json`, `skills/`, `agents/`, `.mcp.json`, `hooks/`, and an embedded `apm.lock.yaml`. The current repoverlay plugin adapter handles skills, agents, and MCP servers and reports `hooks`, `commands`, and `instructions` as unsupported capabilities. APM omitted an unaudited dependency's hooks/MCP content from the packed bundle, so APM policy and attestation controls remain authoritative. The workflow is compatible but too manual for routine use, which justifies the native install command.
+Validated with APM 0.29.1. `apm install` followed by `apm pack --format claude-plugin --output ./build` produces a standalone plugin bundle with `plugin.json`, `skills/`, `agents/`, `.mcp.json`, `hooks/`, and an embedded `apm.lock.yaml`. The repoverlay plugin adapter handles skills, agents, and MCP servers. `repoverlay apm install` additionally captures APM's target-native commands or prompts, instructions, and hooks from the temporary project and installs them; hooks require `--allow-hooks`. Ordinary plugin bundles still report `hooks`, `commands`, and `instructions` as unsupported capabilities. APM omitted an unaudited dependency's hooks/MCP content from the packed bundle, so APM policy and attestation controls remain authoritative. The workflow is compatible but too manual for routine use, which justifies the native install command.
 
 ## Starting point
 

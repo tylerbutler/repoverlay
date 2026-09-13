@@ -69,8 +69,11 @@ impl ProfileApplicator for CopilotApplicator {
                         &bundle_dir,
                         &name,
                         &mut actions,
-                        &mut servers,
-                        &mut owned_paths,
+                        &mut super::McpAccumulator {
+                            servers: &mut servers,
+                            owned_paths: &mut owned_paths,
+                        },
+                        &profile.handled_plugin_capabilities,
                         |capability| {
                             format!("Copilot does not support '{capability}' from plugin '{name}'")
                         },
@@ -85,6 +88,8 @@ impl ProfileApplicator for CopilotApplicator {
                 }
             }
         }
+
+        super::plan_resolved_actions(profile, context, &mut actions)?;
 
         super::apply_resolved_mcp_servers(
             &profile.resolved_mcp_servers,

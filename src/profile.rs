@@ -26,6 +26,37 @@ pub(crate) struct ProfileConfig {
     /// APM install. It is never serialized into repoverlay configuration.
     #[serde(skip)]
     pub(crate) resolved_mcp_servers: serde_json::Map<String, serde_json::Value>,
+    /// Managed placements supplied by an in-memory profile, such as the
+    /// target-native output of an APM install. Runtime-only.
+    #[serde(skip)]
+    pub(crate) resolved_placements: Vec<ResolvedPlacement>,
+    /// JSON merges supplied by an in-memory profile, such as Claude hooks
+    /// captured from an APM install. Runtime-only.
+    #[serde(skip)]
+    pub(crate) resolved_json_merges: Vec<ResolvedJsonMerge>,
+    /// Plugin-bundle capabilities another mechanism already handled, so the
+    /// applicator must not report them as skipped. Runtime-only.
+    #[serde(skip)]
+    pub(crate) handled_plugin_capabilities: Vec<String>,
+}
+
+/// A durable source placed at a repository-relative target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedPlacement {
+    /// Absolute path inside the durable artifact.
+    pub(crate) source: PathBuf,
+    /// Repository-relative target path.
+    pub(crate) target: PathBuf,
+}
+
+/// A JSON merge into a repository-relative target with explicit ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedJsonMerge {
+    /// Repository-relative target path.
+    pub(crate) target: PathBuf,
+    pub(crate) value: serde_json::Value,
+    /// RFC 6901 pointers this merge owns.
+    pub(crate) owned_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -124,6 +155,18 @@ pub(crate) fn merge_profile_config(
         } else {
             override_profile.resolved_mcp_servers.clone()
         },
+        resolved_placements: merge_list(
+            &base.resolved_placements,
+            &override_profile.resolved_placements,
+        ),
+        resolved_json_merges: merge_list(
+            &base.resolved_json_merges,
+            &override_profile.resolved_json_merges,
+        ),
+        handled_plugin_capabilities: merge_list(
+            &base.handled_plugin_capabilities,
+            &override_profile.handled_plugin_capabilities,
+        ),
     }
 }
 

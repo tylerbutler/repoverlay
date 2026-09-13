@@ -5,6 +5,8 @@ This document contains the help content for the `repoverlay` command-line progra
 **Command Overview:**
 
 * [`repoverlay`↴](#repoverlay)
+* [`repoverlay apm`↴](#repoverlay-apm)
+* [`repoverlay apm install`↴](#repoverlay-apm-install)
 * [`repoverlay apply`↴](#repoverlay-apply)
 * [`repoverlay remove`↴](#repoverlay-remove)
 * [`repoverlay status`↴](#repoverlay-status)
@@ -53,6 +55,7 @@ Overlay config files into git repositories without committing them
 
 ### Subcommands
 
+* `apm` — Install an APM package into a repository profile
 * `apply` — Apply an overlay to a git repository (scripting / power-user)
 * `remove` — Remove applied overlay(s)
 * `status` — Show the status of applied overlays
@@ -72,6 +75,41 @@ Overlay config files into git repositories without committing them
 * `copilot` — Run GitHub Copilot with one or more profiles applied for the process lifetime
 * `claude` — Run Claude with one or more profiles applied for the process lifetime
 * `completions` — Generate shell completions
+
+
+
+## `repoverlay apm`
+
+Install an APM package into a repository profile
+
+**Usage:** `repoverlay apm <COMMAND>`
+
+### Subcommands
+
+* `install` — Resolve, pack, and apply an APM package
+
+
+
+## `repoverlay apm install`
+
+Resolve, pack, and apply an APM package
+
+**Usage:** `repoverlay apm install [OPTIONS] <PACKAGE>`
+
+### Arguments
+
+* `<PACKAGE>` — APM dependency reference, for example `tylerbutler/apm-base`
+
+### Options
+
+* `--harness <HARNESS>` — Harness to apply (defaults to Claude)
+
+  Default value: `claude`
+
+  Possible values: `copilot`, `claude`
+
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `--allow-hooks` — Allow the package to install hooks, which run commands in this repository
 
 
 
@@ -723,7 +761,7 @@ Run GitHub Copilot with one or more profiles applied for the process lifetime
 ### Options
 
 * `--profile <PROFILES>` — Profile name to apply while Copilot runs (repeat to apply several)
-* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to enclosing repository root)
 
 
 
@@ -740,7 +778,7 @@ Run Claude with one or more profiles applied for the process lifetime
 ### Options
 
 * `--profile <PROFILES>` — Profile name to apply while Claude runs (repeat to apply several)
-* `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
+* `-t`, `--target <TARGET>` — Target repository directory (defaults to enclosing repository root)
 
 
 

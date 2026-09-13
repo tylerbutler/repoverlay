@@ -233,7 +233,28 @@ The default harness is Claude. Use `--harness copilot` for Copilot. The target r
 repoverlay profile remove apm-tylerbutler-apm-base --harness claude
 ```
 
-A package can be active for one harness at a time because both harnesses share `.mcp.json`. Remove the profile before reinstalling it or switching harnesses. APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages the durable bundle, repository placement, Git exclusion, removal, and restore. The supported bundle subset is plugin skills, agent files, and `.mcp.json` `mcpServers`. APM `hooks/`, `commands/`, and `instructions/` are reported as unsupported and are not installed.
+A package can be active for one harness at a time because both harnesses share `.mcp.json`. Remove the profile before reinstalling it or switching harnesses. APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages the durable artifact, repository placement, Git exclusion, removal, and restore.
+
+repoverlay applies the target-native output APM writes for the selected harness:
+
+| APM output | Claude target | Copilot target |
+|------------|---------------|----------------|
+| Skills | `.claude/skills/` | `.agents/skills/` |
+| Agents | `.claude/agents/` | `.github/agents/` |
+| MCP servers | `.mcp.json` | `.mcp.json` |
+| Commands or prompts | `.claude/commands/` | `.github/prompts/` |
+| Instructions | `.claude/rules/` | `.github/instructions/` |
+| Hooks | `hooks` in `.claude/settings.json` | `.github/hooks/` |
+
+Hooks run commands in your repository, so a package that installs hooks needs explicit consent:
+
+```bash
+repoverlay apm install owner/package --allow-hooks
+```
+
+Each command, prompt, instruction, and hook file is managed on its own. A pre-existing file at one of these paths is backed up and restored when you remove the profile, and two profiles cannot claim the same target file or the same Claude hook event. Claude hook scripts stay in the durable artifact, and the recorded command paths point there, so no stored command refers to the temporary project.
+
+Ordinary (non-APM) plugin bundles still report `hooks/`, `commands/`, and `instructions/` as unsupported, because repoverlay has no reliable cross-harness mapping for them.
 
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 

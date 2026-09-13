@@ -1585,14 +1585,16 @@ fn ensure_plugin_dir_under_managed_root(
     target: &Path,
 ) -> Result<()> {
     validate_plugin_dir_target(target)?;
-    let skills_root = harness.skills_root(repo_target);
-    let agents_root = harness.agents_root(repo_target);
     let parent = target
         .parent()
         .context("Plugin directory target has no parent")?;
-    if parent != skills_root && parent != agents_root {
+    if !harness
+        .managed_placement_roots(repo_target)
+        .iter()
+        .any(|root| root == parent)
+    {
         bail!(
-            "Refusing plugin placement outside managed skills/agents roots: {}",
+            "Refusing plugin placement outside managed harness roots: {}",
             target.display()
         );
     }
@@ -1603,7 +1605,7 @@ fn ensure_plugin_dir_under_managed_root(
 ///
 /// Plugin bundles ship plain markdown/script trees; rejecting symlinks prevents
 /// a malicious or compromised bundle from escaping the placement target.
-fn copy_tree_no_symlinks(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_tree_no_symlinks(src: &Path, dst: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(src)
         .with_context(|| format!("Failed to inspect plugin source: {}", src.display()))?;
     if meta.file_type().is_symlink() {

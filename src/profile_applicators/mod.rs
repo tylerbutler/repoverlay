@@ -75,6 +75,45 @@ impl AgentHarness {
         }
     }
 
+    /// Repo-local root for target-native command or prompt files (Claude
+    /// `<repo>/.claude/commands`, Copilot `<repo>/.github/prompts`).
+    pub(crate) fn commands_root(self, repo_target: &Path) -> PathBuf {
+        match self {
+            Self::Claude => repo_target.join(".claude").join("commands"),
+            Self::Copilot => repo_target.join(".github").join("prompts"),
+        }
+    }
+
+    /// Repo-local root for target-native instruction files (Claude
+    /// `<repo>/.claude/rules`, Copilot `<repo>/.github/instructions`).
+    pub(crate) fn instructions_root(self, repo_target: &Path) -> PathBuf {
+        match self {
+            Self::Claude => repo_target.join(".claude").join("rules"),
+            Self::Copilot => repo_target.join(".github").join("instructions"),
+        }
+    }
+
+    /// Repo-local root for target-native hook files. Claude configures hooks in
+    /// `settings.json` instead, so it has no placement root.
+    pub(crate) fn hooks_root(self, repo_target: &Path) -> Option<PathBuf> {
+        match self {
+            Self::Claude => None,
+            Self::Copilot => Some(repo_target.join(".github").join("hooks")),
+        }
+    }
+
+    /// Every repo-local root a managed placement may write a direct child into.
+    pub(crate) fn managed_placement_roots(self, repo_target: &Path) -> Vec<PathBuf> {
+        let mut roots = vec![
+            self.skills_root(repo_target),
+            self.agents_root(repo_target),
+            self.commands_root(repo_target),
+            self.instructions_root(repo_target),
+        ];
+        roots.extend(self.hooks_root(repo_target));
+        roots
+    }
+
     /// The single shared managed-region file this harness writes instructions
     /// into (`<repo>/AGENTS.md` for Copilot, `<repo>/CLAUDE.md` for Claude).
     pub(crate) fn managed_region_path(self, repo_target: &Path) -> PathBuf {
@@ -230,6 +269,102 @@ fn plan_instruction_region(
     ))
 }
 
+/// Convert a profile's runtime-resolved placements and JSON merges into the
+/// existing [`ProfileAction::PlacePluginDir`] and [`ProfileAction::MergeJson`]
+/// actions.
+///
+/// Targets are repository-relative and must resolve to a direct child of one of
+/// the harness's managed placement roots (for placements) or to one of its
+/// removable JSON targets (for merges).
+fn plan_resolved_actions(
+    profile: &ProfileConfig,
+    context: &ProfileContext,
+    actions: &mut Vec<ProfileAction>,
+) -> Result<()> {
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for placement in &profile.resolved_placements {
+        let target = resolve_repo_relative(&placement.target, &context.target)?;
+        let roots = context.harness.managed_placement_roots(&context.target);
+        let parent = target
+            .parent()
+            .context("Resolved placement target has no parent directory")?;
+        if !roots.iter().any(|root| root == parent) {
+            bail!(
+                "Resolved placement target '{}' is outside the managed roots for {}",
+                placement.target.display(),
+                context.harness
+            );
+        }
+        if seen.contains(&target) {
+            bail!(
+                "Resolved placement target '{}' is claimed twice in one profile",
+                placement.target.display()
+            );
+        }
+        seen.push(target.clone());
+        actions.push(ProfileAction::PlacePluginDir {
+            source: placement.source.clone(),
+            target,
+        });
+    }
+
+    let mut merged: Vec<PathBuf> = Vec::new();
+    for merge in &profile.resolved_json_merges {
+        let target = resolve_repo_relative(&merge.target, &context.target)?;
+        if !context
+            .harness
+            .removable_json_targets(&context.target)
+            .contains(&target)
+        {
+            bail!(
+                "Resolved JSON merge target '{}' is not a managed {} JSON file",
+                merge.target.display(),
+                context.harness
+            );
+        }
+        if merged.contains(&target) {
+            bail!(
+                "Resolved JSON merge target '{}' is claimed twice in one profile",
+                merge.target.display()
+            );
+        }
+        merged.push(target.clone());
+        actions.push(ProfileAction::MergeJson {
+            target,
+            value: merge.value.clone(),
+            owned_paths: merge.owned_paths.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Resolve a repository-relative target, rejecting absolute paths and `..`.
+fn resolve_repo_relative(relative: &Path, repo_target: &Path) -> Result<PathBuf> {
+    if relative.is_absolute() {
+        bail!(
+            "Resolved target '{}' must be repository-relative",
+            relative.display()
+        );
+    }
+    for component in relative.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => bail!(
+                "Resolved target '{}' must stay inside the repository",
+                relative.display()
+            ),
+        }
+    }
+    Ok(repo_target.join(relative))
+}
+
+/// The MCP servers a profile accumulates for its single project `.mcp.json`
+/// merge, with the JSON pointers that merge owns.
+pub(crate) struct McpAccumulator<'a> {
+    pub(crate) servers: &'a mut serde_json::Map<String, serde_json::Value>,
+    pub(crate) owned_paths: &'a mut Vec<String>,
+}
+
 /// Decompose a resolved plugin bundle into repo-local placements for the
 /// context's harness, appending skill/agent placement and skip actions and
 /// accumulating MCP servers for the harness's single project `.mcp.json`
@@ -244,8 +379,8 @@ fn decompose_bundle(
     bundle_dir: &Path,
     plugin_name: &str,
     actions: &mut Vec<ProfileAction>,
-    mcp_servers: &mut serde_json::Map<String, serde_json::Value>,
-    owned_paths: &mut Vec<String>,
+    mcp: &mut McpAccumulator<'_>,
+    handled_capabilities: &[String],
     skip_reason: impl Fn(&str) -> String,
 ) -> Result<()> {
     let bundle = PluginBundle::read(bundle_dir)?;
@@ -268,18 +403,21 @@ fn decompose_bundle(
 
     for (server_name, server) in &bundle.mcp_servers {
         let pointer = json_pointer(&["mcpServers", server_name]);
-        if owned_paths.contains(&pointer) {
+        if mcp.owned_paths.contains(&pointer) {
             anyhow::bail!(
                 "MCP server '{server_name}' is provided by more than one plugin; \
                  resolve the conflict before applying"
             );
         }
         let resolved = crate::plugin::substitute_plugin_root(server, bundle_dir)?;
-        mcp_servers.insert(server_name.clone(), resolved);
-        owned_paths.push(pointer);
+        mcp.servers.insert(server_name.clone(), resolved);
+        mcp.owned_paths.push(pointer);
     }
 
     for capability in &bundle.unsupported_capabilities {
+        if handled_capabilities.contains(capability) {
+            continue;
+        }
         actions.push(ProfileAction::SkipCapability {
             capability: format!("plugin:{plugin_name}:{capability}"),
             reason: skip_reason(capability),
@@ -442,6 +580,92 @@ mod tests {
         };
         assert_eq!(skips(&claude), skips(&copilot));
         assert_eq!(skips(&claude), vec!["plugin:rust-dev:hooks".to_string()]);
+    }
+
+    fn resolved_context(target: &Path, harness: AgentHarness) -> ProfileContext {
+        ProfileContext {
+            profile_name: "resolved".to_string(),
+            harness,
+            target: target.to_path_buf(),
+            profile_asset_dir: target.to_path_buf(),
+            harness_home: target.join("harness-home"),
+            mode: ProfileMode::Persistent,
+            session_id: None,
+            marketplaces: Vec::new(),
+            cache: crate::cache::CacheManager::new().unwrap(),
+        }
+    }
+
+    fn placement_profile(targets: &[&str]) -> ProfileConfig {
+        ProfileConfig {
+            resolved_placements: targets
+                .iter()
+                .map(|target| crate::profile::ResolvedPlacement {
+                    source: PathBuf::from("/durable").join(target),
+                    target: PathBuf::from(target),
+                })
+                .collect(),
+            ..ProfileConfig::default()
+        }
+    }
+
+    #[test]
+    fn resolved_placements_become_managed_placements() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = resolved_context(temp.path(), AgentHarness::Copilot);
+        let profile = placement_profile(&[".github/prompts/demo.prompt.md"]);
+        let mut actions = Vec::new();
+        plan_resolved_actions(&profile, &context, &mut actions).unwrap();
+        assert_eq!(
+            actions,
+            vec![ProfileAction::PlacePluginDir {
+                source: PathBuf::from("/durable/.github/prompts/demo.prompt.md"),
+                target: temp.path().join(".github/prompts/demo.prompt.md"),
+            }]
+        );
+    }
+
+    #[test]
+    fn resolved_placements_reject_unmanaged_and_duplicate_targets() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = resolved_context(temp.path(), AgentHarness::Claude);
+        for target in [".github/prompts/demo.md", "../escape.md", "/absolute.md"] {
+            let mut actions = Vec::new();
+            assert!(
+                plan_resolved_actions(&placement_profile(&[target]), &context, &mut actions)
+                    .is_err(),
+                "{target} must be rejected"
+            );
+        }
+
+        let duplicate =
+            placement_profile(&[".claude/commands/demo.md", ".claude/commands/demo.md"]);
+        let mut actions = Vec::new();
+        assert!(plan_resolved_actions(&duplicate, &context, &mut actions).is_err());
+    }
+
+    #[test]
+    fn resolved_json_merges_target_managed_files_only() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let context = resolved_context(temp.path(), AgentHarness::Claude);
+        let merge = |target: &str| ProfileConfig {
+            resolved_json_merges: vec![crate::profile::ResolvedJsonMerge {
+                target: PathBuf::from(target),
+                value: serde_json::json!({ "hooks": { "Stop": [] } }),
+                owned_paths: vec!["/hooks/Stop".to_string()],
+            }],
+            ..ProfileConfig::default()
+        };
+
+        let mut actions = Vec::new();
+        plan_resolved_actions(&merge(".claude/settings.json"), &context, &mut actions).unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ProfileAction::MergeJson { .. }]
+        ));
+
+        let mut actions = Vec::new();
+        assert!(plan_resolved_actions(&merge("package.json"), &context, &mut actions).is_err());
     }
 
     #[test]
