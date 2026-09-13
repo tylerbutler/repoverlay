@@ -785,6 +785,7 @@ profiles =
                         install: crate::plugin::InstallMode::Managed,
                         scope: None,
                     }],
+                    ..crate::profile::ProfileConfig::default()
                 },
             )]),
             ..RepoverlayConfig::default()

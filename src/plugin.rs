@@ -279,7 +279,7 @@ pub(crate) struct PluginBundle {
     /// `agents/`. Each is decomposed into a native harness agent placement.
     pub(crate) agents: Vec<String>,
     /// Bundle capabilities repoverlay cannot decompose into native harness
-    /// locations (e.g. `hooks`, `commands`). Surfaced so applicators
+    /// locations (e.g. `hooks`, `commands`, `instructions`). Surfaced so applicators
     /// can emit `SkipCapability` rather than silently dropping them.
     pub(crate) unsupported_capabilities: Vec<String>,
 }
@@ -362,7 +362,7 @@ impl PluginBundle {
         // Capabilities repoverlay does not decompose: surface them so the
         // applicator can record a `SkipCapability` instead of dropping silently.
         let mut unsupported_capabilities = Vec::new();
-        for capability in ["hooks", "commands"] {
+        for capability in ["hooks", "commands", "instructions"] {
             if dir.join(capability).is_dir() {
                 unsupported_capabilities.push(capability.to_string());
             }
@@ -941,8 +941,9 @@ mod tests {
         fs::write(agents.join("README.txt"), "ignore me").unwrap();
         fs::create_dir_all(agents.join("claude")).unwrap();
         fs::write(agents.join("claude/variant.md"), "---\nname: v\n---\n").unwrap();
-        // `hooks` remains an unsupported capability.
+        // These capabilities remain unsupported.
         fs::create_dir_all(dir.path().join("hooks")).unwrap();
+        fs::create_dir_all(dir.path().join("instructions")).unwrap();
 
         let bundle = PluginBundle::read(dir.path()).unwrap();
         assert_eq!(
@@ -958,6 +959,11 @@ mod tests {
             bundle
                 .unsupported_capabilities
                 .contains(&"hooks".to_string())
+        );
+        assert!(
+            bundle
+                .unsupported_capabilities
+                .contains(&"instructions".to_string())
         );
     }
 

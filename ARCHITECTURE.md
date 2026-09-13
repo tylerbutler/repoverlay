@@ -192,6 +192,16 @@ Remove all existing overlays
 Apply new overlay (atomic replacement)
 ```
 
+### APM installs
+
+`repoverlay apm install` runs APM in a temporary project, captures the allowlisted
+target-native output (commands or prompts, instructions, hooks) into
+`<artifact>/.repoverlay-native/`, packs the rest as a plugin bundle, and applies both
+through the same profile plan. The captured output reaches the plan through the
+runtime-only `resolved_placements` and `resolved_json_merges` profile fields, so no new
+placement mechanism exists and removal and restore behave like any other profile.
+Hooks need `--allow-hooks`.
+
 ### Profile apply
 
 ```
@@ -205,6 +215,8 @@ Build ProfilePlan for the chosen harness (claude | copilot):
     - plugin skills/agents → harness-specific directories
     - plugin MCP servers → merged into .mcp.json
     - delegate plugins (Claude only) → .claude/settings[.local].json
+    - resolved placements/JSON merges (APM installs) → commands, prompts,
+      instructions, and hooks in their target-native locations
     ↓
 Execute plan transactionally (rollback on failure)
     ↓

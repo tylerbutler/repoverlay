@@ -1,0 +1,7 @@
+kind: Added
+body: |-
+    Install APM commands, prompts, instructions, and hooks
+
+    `repoverlay apm install` now applies the target-native output APM writes for the selected harness: commands or prompts, instructions, and hooks. Each file is managed on its own, so conflicts, removal, and restore behave like any other profile placement. Hooks run commands in your repository and require `--allow-hooks`.
+time: 2026-09-13T14:15:00-07:00
+component: apm

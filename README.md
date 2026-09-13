@@ -219,6 +219,43 @@ repoverlay claude --profile rust-dev
 
 Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copilot) or `.claude/skills/` (Claude), plugin MCP servers merge into the repo's `.mcp.json`, and instruction files are written into a managed region of `CLAUDE.md` (Claude) or `AGENTS.md` (Copilot). Claude can also *delegate* plugin enablement to its own settings instead of placing files. A full `repoverlay update` re-resolves applied profiles' managed plugins and re-applies any whose source changed.
 
+### APM packages
+
+You can install [APM](https://github.com/microsoft/apm) packages directly into a repository profile. repoverlay runs APM in an isolated temporary project, packs the result, stores the bundle in repoverlay's external state directory, and applies it:
+
+```bash
+repoverlay apm install tylerbutler/apm-base
+```
+
+The default harness is Claude. Use `--harness copilot` for Copilot. The target repository's Git remote and any `policy` block in its `apm.yml` are copied to the temporary project so APM can enforce the same policy. Remove the generated profile with:
+
+```bash
+repoverlay profile remove apm-tylerbutler-apm-base --harness claude
+```
+
+A package can be active for one harness at a time because both harnesses share `.mcp.json`. Remove the profile before reinstalling it or switching harnesses. APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages the durable artifact, repository placement, Git exclusion, removal, and restore.
+
+repoverlay applies the target-native output APM writes for the selected harness:
+
+| APM output | Claude target | Copilot target |
+|------------|---------------|----------------|
+| Skills | `.claude/skills/` | `.agents/skills/` |
+| Agents | `.claude/agents/` | `.github/agents/` |
+| MCP servers | `.mcp.json` | `.mcp.json` |
+| Commands or prompts | `.claude/commands/` | `.github/prompts/` |
+| Instructions | `.claude/rules/` | `.github/instructions/` |
+| Hooks | `hooks` in `.claude/settings.json` | `.github/hooks/` |
+
+Hooks run commands in your repository, so a package that installs hooks needs explicit consent:
+
+```bash
+repoverlay apm install owner/package --allow-hooks
+```
+
+Each command, prompt, instruction, and hook file is managed on its own. A pre-existing file at one of these paths is backed up and restored when you remove the profile, and two profiles cannot claim the same target file or the same Claude hook event. Claude hook scripts stay in the durable artifact, and the recorded command paths point there, so no stored command refers to the temporary project.
+
+Ordinary (non-APM) plugin bundles still report `hooks/`, `commands/`, and `instructions/` as unsupported, because repoverlay has no reliable cross-harness mapping for them.
+
 For the full command reference with all options and flags, see the [CLI reference](https://repoverlay.tylerbutler.com/cli-reference/).
 
 ## Migrating to 1.0
