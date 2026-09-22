@@ -49,7 +49,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Install an APM package into a repository profile
+    /// Manage APM packages and project manifests as repository profiles
     Apm {
         #[command(subcommand)]
         command: ApmCommand,
@@ -539,6 +539,21 @@ pub(crate) enum ApmCommand {
         target: Option<PathBuf>,
 
         /// Allow the package to install hooks, which run commands in this repository
+        #[arg(long)]
+        allow_hooks: bool,
+    },
+
+    /// Reproduce the repository's pinned APM project as a managed profile
+    Sync {
+        /// Harness to apply (defaults to Claude)
+        #[arg(long, default_value = "claude")]
+        harness: crate::profile_applicators::AgentHarness,
+
+        /// Target repository directory (defaults to current directory)
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+
+        /// Allow the project to install hooks, which run commands in this repository
         #[arg(long)]
         allow_hooks: bool,
     },

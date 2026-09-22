@@ -17,6 +17,8 @@ const NATIVE_DIR: &str = ".repoverlay-native";
 const NATIVE_FILES_DIR: &str = "files";
 /// Claude `settings.json` hooks object captured from the temporary project.
 const CLAUDE_HOOKS_FILE: &str = "claude-hooks.json";
+const PROJECT_PROFILE: &str = "apm-project";
+const PROJECT_KEY: &str = "project";
 
 #[derive(serde::Deserialize)]
 struct TargetApmManifest {
@@ -40,6 +42,11 @@ pub(crate) fn handle_apm_command(command: ApmCommand) -> Result<()> {
             target,
             allow_hooks,
         } => install(&package, harness, target, allow_hooks),
+        ApmCommand::Sync {
+            harness,
+            target,
+            allow_hooks,
+        } => sync(harness, target, allow_hooks),
     }
 }
 
@@ -51,6 +58,11 @@ fn install(
 ) -> Result<()> {
     let target = resolve_target(target)?;
     install_with_apm(package, harness, &target, OsStr::new("apm"), allow_hooks)
+}
+
+fn sync(harness: AgentHarness, target: Option<PathBuf>, allow_hooks: bool) -> Result<()> {
+    let target = resolve_target(target)?;
+    sync_with_apm(harness, &target, OsStr::new("apm"), allow_hooks)
 }
 
 fn install_with_apm(
@@ -111,9 +123,16 @@ fn install_with_apm(
         &["install", "--target", &harness_name, "--", package],
         "install",
     )?;
+    run_apm(
+        apm,
+        temp.path(),
+        &["compile", "--target", &harness_name],
+        "compile",
+    )?;
     let resolved_mcp_servers = resolved_mcp_servers(temp.path(), harness)?;
     let capture = tempfile::tempdir().context("Failed to create temporary APM capture")?;
-    let captured = capture_native_output(temp.path(), harness, capture.path(), &native_root)?;
+    let captured =
+        capture_native_output(temp.path(), harness, capture.path(), &native_root, false)?;
     if captured.capabilities.iter().any(|c| c == "hooks") && !allow_hooks {
         bail!(
             "APM package '{package}' installs hooks, which run commands in this repository; \
@@ -147,9 +166,7 @@ fn install_with_apm(
         let _ = remove_if_exists(&staging);
         return Err(err).context("Failed to stage the APM plugin bundle");
     }
-    if captured.is_empty() {
-        // Nothing target-native to keep.
-    } else if let Err(err) =
+    if let Err(err) =
         crate::profile_plan::copy_tree_no_symlinks(capture.path(), &staging.join(NATIVE_DIR))
     {
         let _ = remove_if_exists(&staging);
@@ -174,9 +191,11 @@ fn install_with_apm(
     }
 
     let resolved_placements = native_placements(&native_root, harness)?;
-    let resolved_json_merges = claude_hooks_merge(&native_root, harness)?
+    let mut resolved_json_merges: Vec<_> = claude_hooks_merge(&native_root, harness)?
         .into_iter()
         .collect();
+    resolved_json_merges.extend(lsp_merge(&native_root, harness)?);
+    let resolved_managed_regions = native_managed_regions(&native_root, harness)?;
     let profile = ProfileConfig {
         description: Some(format!("APM package {package}")),
         plugins: vec![PluginRef::Local {
@@ -185,6 +204,7 @@ fn install_with_apm(
         resolved_mcp_servers,
         resolved_placements,
         resolved_json_merges,
+        resolved_managed_regions,
         handled_plugin_capabilities: captured.capabilities,
         ..ProfileConfig::default()
     };
@@ -203,6 +223,169 @@ fn install_with_apm(
         );
     }
     println!("Installed APM package '{package}' as profile '{profile_name}'");
+    Ok(())
+}
+
+fn sync_with_apm(
+    harness: AgentHarness,
+    target: &Path,
+    apm: &OsStr,
+    allow_hooks: bool,
+) -> Result<()> {
+    let manifest_path = target.join("apm.yml");
+    let lock_path = target.join("apm.lock.yaml");
+    let manifest_before = fs::read(&manifest_path).with_context(|| {
+        format!(
+            "APM project manifest is missing: {}",
+            manifest_path.display()
+        )
+    })?;
+    let lock_before = fs::read(&lock_path).with_context(|| {
+        format!(
+            "APM project lockfile is missing: {}; run 'apm install' before syncing",
+            lock_path.display()
+        )
+    })?;
+
+    if let Some(snapshot) = crate::profile_plan::list_restorable_profiles(target)?
+        .into_iter()
+        .find(|snapshot| snapshot.name != PROJECT_PROFILE)
+    {
+        bail!(
+            "Profile '{}' ({}) can be restored; run `repoverlay restore` before syncing APM",
+            snapshot.name,
+            snapshot.harness
+        )
+    }
+    if let Some(state) = crate::profile_plan::list_profile_states(target)?
+        .into_iter()
+        .find(|state| state.name == PROJECT_PROFILE && state.harness != harness)
+    {
+        bail!(
+            "The APM project is installed for {}; remove profile '{PROJECT_PROFILE}' before \
+             syncing it for {harness}",
+            state.harness
+        )
+    }
+
+    let harness_name = harness.to_string();
+    let package_root = crate::state::external_state_dir_for_target(target)?
+        .join("apm")
+        .join(PROJECT_KEY);
+    ensure_package_identity(&package_root, PROJECT_KEY)?;
+    let destination = package_root.join(&harness_name).join(PROJECT_KEY);
+    let native_root = destination.join(NATIVE_DIR);
+    let output = tempfile::tempdir().context("Failed to create temporary APM output root")?;
+    let output_path = output.path().to_string_lossy().into_owned();
+    fs::write(output.path().join("apm.lock.yaml"), &lock_before)
+        .context("Failed to stage the pinned APM lockfile")?;
+
+    run_apm(
+        apm,
+        target,
+        &[
+            "install",
+            "--frozen",
+            "--target",
+            &harness_name,
+            "--root",
+            &output_path,
+        ],
+        "install",
+    )?;
+    run_apm(
+        apm,
+        target,
+        &["compile", "--target", &harness_name, "--root", &output_path],
+        "compile",
+    )?;
+
+    if fs::read(&manifest_path)? != manifest_before
+        || fs::read(&lock_path)? != lock_before
+        || fs::read(output.path().join("apm.lock.yaml"))? != lock_before
+    {
+        bail!(
+            "APM changed apm.yml or apm.lock.yaml during read-only sync; update the project with \
+             APM, commit the result, and retry"
+        );
+    }
+
+    let resolved_mcp_servers = resolved_mcp_servers(output.path(), harness)?;
+    let capture = tempfile::tempdir().context("Failed to create temporary APM capture")?;
+    let captured =
+        capture_native_output(output.path(), harness, capture.path(), &native_root, true)?;
+    if captured.capabilities.iter().any(|c| c == "hooks") && !allow_hooks {
+        bail!(
+            "The APM project installs hooks, which run commands in this repository; inspect the \
+             project and rerun with --allow-hooks"
+        )
+    }
+
+    fs::create_dir_all(&package_root)
+        .with_context(|| format!("Failed to create {}", package_root.display()))?;
+    fs::write(package_root.join(SOURCE_MARKER), format!("{PROJECT_KEY}\n"))?;
+    let harness_root = package_root.join(&harness_name);
+    fs::create_dir_all(&harness_root)
+        .with_context(|| format!("Failed to create {}", harness_root.display()))?;
+    ensure_managed_directory(&destination)?;
+    let suffix = std::process::id();
+    let staging = harness_root.join(format!(".{PROJECT_KEY}.new-{suffix}"));
+    let backup = harness_root.join(format!(".{PROJECT_KEY}.old-{suffix}"));
+    remove_if_exists(&staging)?;
+    fs::create_dir(&staging)?;
+    if let Err(err) =
+        crate::profile_plan::copy_tree_no_symlinks(capture.path(), &staging.join(NATIVE_DIR))
+    {
+        let _ = remove_if_exists(&staging);
+        return Err(err).context("Failed to stage the APM project output");
+    }
+
+    remove_if_exists(&backup)?;
+    if destination.exists()
+        && let Err(err) = fs::rename(&destination, &backup)
+    {
+        let _ = remove_if_exists(&staging);
+        return Err(err).with_context(|| {
+            format!(
+                "Failed to preserve existing APM project artifact {}",
+                destination.display()
+            )
+        });
+    }
+    if let Err(err) = fs::rename(&staging, &destination) {
+        let _ = restore_bundle(&backup, &destination);
+        return Err(err).context("Failed to activate the APM project artifact");
+    }
+
+    let resolved_placements = native_placements(&native_root, harness)?;
+    let mut resolved_json_merges: Vec<_> = claude_hooks_merge(&native_root, harness)?
+        .into_iter()
+        .collect();
+    resolved_json_merges.extend(lsp_merge(&native_root, harness)?);
+    let profile = ProfileConfig {
+        description: Some("APM project manifest".to_string()),
+        resolved_mcp_servers,
+        resolved_placements,
+        resolved_json_merges,
+        resolved_managed_regions: native_managed_regions(&native_root, harness)?,
+        handled_plugin_capabilities: captured.capabilities,
+        ..ProfileConfig::default()
+    };
+    if let Err(err) =
+        crate::profile_plan::replace_profile_config(PROJECT_PROFILE, harness, target, &profile)
+    {
+        remove_if_exists(&destination)?;
+        restore_bundle(&backup, &destination)?;
+        return Err(err).context("Failed to apply the APM project");
+    }
+
+    if let Err(err) = remove_if_exists(&backup) {
+        eprintln!(
+            "Warning: could not remove old APM project artifact {}: {err}",
+            backup.display()
+        );
+    }
+    println!("Synced APM project as profile '{PROJECT_PROFILE}'");
     Ok(())
 }
 
@@ -285,12 +468,6 @@ struct NativeCapture {
     capabilities: Vec<String>,
 }
 
-impl NativeCapture {
-    const fn is_empty(&self) -> bool {
-        self.capabilities.is_empty()
-    }
-}
-
 /// A repository-relative directory repoverlay copies out of the temporary APM
 /// project.
 struct NativeRoot {
@@ -298,34 +475,63 @@ struct NativeRoot {
     relative: &'static str,
     /// Plugin capability this directory satisfies.
     capability: &'static str,
-    /// Whether each direct child becomes a managed placement in the repository.
-    /// Claude hook scripts are kept in the durable artifact only, because Claude
-    /// runs them through the absolute command path in `settings.json`.
-    placed: bool,
+    placement: NativePlacement,
 }
 
-const fn root(relative: &'static str, capability: &'static str, placed: bool) -> NativeRoot {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NativePlacement {
+    None,
+    Root,
+    Children,
+}
+
+const fn root(
+    relative: &'static str,
+    capability: &'static str,
+    placement: NativePlacement,
+) -> NativeRoot {
     NativeRoot {
         relative,
         capability,
-        placed,
+        placement,
     }
 }
 
 /// The allowlisted target-native directories for a harness.
-fn native_roots(harness: AgentHarness) -> Vec<NativeRoot> {
-    match harness {
-        AgentHarness::Claude => vec![
-            root(".claude/commands", "commands", true),
-            root(".claude/rules", "instructions", true),
-            root(".claude/hooks", "hooks", false),
-        ],
-        AgentHarness::Copilot => vec![
-            root(".github/prompts", "commands", true),
-            root(".github/instructions", "instructions", true),
-            root(".github/hooks", "hooks", true),
-        ],
+fn native_roots(harness: AgentHarness, include_bundle_capabilities: bool) -> Vec<NativeRoot> {
+    let mut roots = Vec::new();
+    if include_bundle_capabilities {
+        roots.extend(match harness {
+            AgentHarness::Claude => vec![
+                root(".claude/skills", "skills", NativePlacement::Children),
+                root(".claude/agents", "agents", NativePlacement::Children),
+            ],
+            AgentHarness::Copilot => vec![
+                root(".agents/skills", "skills", NativePlacement::Children),
+                root(".github/agents", "agents", NativePlacement::Children),
+            ],
+        });
+    } else if harness == AgentHarness::Claude {
+        roots.push(root(".claude/skills/apm-lsp", "lsp", NativePlacement::Root));
     }
+
+    match harness {
+        AgentHarness::Claude => roots.extend([
+            root(".claude/commands", "commands", NativePlacement::Children),
+            root(".claude/rules", "instructions", NativePlacement::Children),
+            root(".claude/hooks", "hooks", NativePlacement::None),
+        ]),
+        AgentHarness::Copilot => roots.extend([
+            root(".github/prompts", "commands", NativePlacement::Children),
+            root(
+                ".github/instructions",
+                "instructions",
+                NativePlacement::Children,
+            ),
+            root(".github/hooks", "hooks", NativePlacement::Children),
+        ]),
+    }
+    roots
 }
 
 /// Copy the allowlisted target-native APM output into `capture_dir`.
@@ -339,10 +545,11 @@ fn capture_native_output(
     harness: AgentHarness,
     capture_dir: &Path,
     native_root: &Path,
+    include_bundle_capabilities: bool,
 ) -> Result<NativeCapture> {
     let mut capabilities: Vec<String> = Vec::new();
     let files_root = capture_dir.join(NATIVE_FILES_DIR);
-    for root in native_roots(harness) {
+    for root in native_roots(harness, include_bundle_capabilities) {
         let source = project.join(root.relative);
         if !source.is_dir() || fs::read_dir(&source)?.next().is_none() {
             continue;
@@ -362,6 +569,17 @@ fn capture_native_output(
         }
     }
 
+    if harness == AgentHarness::Copilot {
+        capture_native_file(
+            project,
+            capture_dir,
+            ".github/lsp.json",
+            "lsp",
+            &mut capabilities,
+        )?;
+    }
+    capture_compiled_context(project, harness, capture_dir)?;
+
     if harness == AgentHarness::Claude
         && let Some(hooks) = claude_settings_hooks(project)?
     {
@@ -375,6 +593,104 @@ fn capture_native_output(
     }
 
     Ok(NativeCapture { capabilities })
+}
+
+fn capture_native_file(
+    project: &Path,
+    capture_dir: &Path,
+    relative: &str,
+    capability: &str,
+    capabilities: &mut Vec<String>,
+) -> Result<()> {
+    let source = project.join(relative);
+    if !source.is_file() {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(&source)?;
+    if metadata.file_type().is_symlink() {
+        bail!(
+            "Refusing to capture symlinked APM output {}",
+            source.display()
+        );
+    }
+    let destination = capture_dir.join(NATIVE_FILES_DIR).join(relative);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(&source, &destination)?;
+    if !capabilities.iter().any(|known| known == capability) {
+        capabilities.push(capability.to_string());
+    }
+    Ok(())
+}
+
+fn capture_compiled_context(
+    project: &Path,
+    harness: AgentHarness,
+    capture_dir: &Path,
+) -> Result<()> {
+    let mut targets = Vec::new();
+    match harness {
+        AgentHarness::Claude => {
+            if project.join("CLAUDE.md").is_file() {
+                targets.push(PathBuf::from("CLAUDE.md"));
+            }
+        }
+        AgentHarness::Copilot => {
+            collect_named_files(project, project, OsStr::new("AGENTS.md"), &mut targets)?;
+            let copilot = PathBuf::from(".github/copilot-instructions.md");
+            if project.join(&copilot).is_file() {
+                targets.push(copilot);
+            }
+        }
+    }
+    targets.sort();
+    targets.dedup();
+    for relative in targets {
+        let source = project.join(&relative);
+        let destination = capture_dir.join(NATIVE_FILES_DIR).join(&relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&source, &destination)?;
+    }
+    Ok(())
+}
+
+fn collect_named_files(
+    root: &Path,
+    directory: &Path,
+    name: &OsStr,
+    files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            bail!(
+                "Refusing to capture symlinked APM output {}",
+                path.display()
+            );
+        }
+        if metadata.is_dir() {
+            let relative = path.strip_prefix(root)?;
+            if matches!(
+                relative.components().next(),
+                Some(std::path::Component::Normal(first))
+                    if first == OsStr::new(".git")
+                        || first == OsStr::new(".repoverlay")
+                        || first == OsStr::new("apm_modules")
+                        || first == OsStr::new("build")
+            ) {
+                continue;
+            }
+            collect_named_files(root, &path, name, files)?;
+        } else if path.file_name() == Some(name) {
+            files.push(path.strip_prefix(root)?.to_path_buf());
+        }
+    }
+    Ok(())
 }
 
 /// Read the top-level `hooks` object from the temporary project's Claude
@@ -432,7 +748,10 @@ fn rewrite_project_paths(
     project: &Path,
     native_root: &Path,
 ) -> Result<serde_json::Value> {
-    let project = project.to_string_lossy().into_owned();
+    let project = fs::canonicalize(project)
+        .unwrap_or_else(|_| project.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
     let native = native_root
         .join(NATIVE_FILES_DIR)
         .to_string_lossy()
@@ -488,10 +807,20 @@ fn reject_foreign_temp_path(text: &str, project: &str, temp_dir: &str) -> Result
 fn native_placements(native_root: &Path, harness: AgentHarness) -> Result<Vec<ResolvedPlacement>> {
     let files_root = native_root.join(NATIVE_FILES_DIR);
     let mut placements = Vec::new();
-    for root in native_roots(harness).iter().filter(|root| root.placed) {
+    for root in native_roots(harness, true)
+        .iter()
+        .filter(|root| root.placement != NativePlacement::None)
+    {
         let relative = root.relative;
         let source_root = files_root.join(relative);
         if !source_root.is_dir() {
+            continue;
+        }
+        if root.placement == NativePlacement::Root {
+            placements.push(ResolvedPlacement {
+                source: source_root,
+                target: PathBuf::from(relative),
+            });
             continue;
         }
         let mut entries = fs::read_dir(&source_root)
@@ -507,6 +836,78 @@ fn native_placements(native_root: &Path, harness: AgentHarness) -> Result<Vec<Re
         }
     }
     Ok(placements)
+}
+
+fn lsp_merge(native_root: &Path, harness: AgentHarness) -> Result<Option<ResolvedJsonMerge>> {
+    if harness != AgentHarness::Copilot {
+        return Ok(None);
+    }
+    let path = native_root.join(NATIVE_FILES_DIR).join(".github/lsp.json");
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", path.display())),
+    };
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    let servers = value
+        .get("lspServers")
+        .and_then(serde_json::Value::as_object)
+        .context("APM Copilot LSP output must contain an object named 'lspServers'")?
+        .clone();
+    let owned_paths = servers
+        .keys()
+        .map(|name| crate::profile_plan::json_pointer(&["lspServers", name]))
+        .collect();
+    Ok(Some(ResolvedJsonMerge {
+        target: PathBuf::from(".github/lsp.json"),
+        value: serde_json::json!({ "lspServers": servers }),
+        owned_paths,
+    }))
+}
+
+fn native_managed_regions(
+    native_root: &Path,
+    harness: AgentHarness,
+) -> Result<Vec<crate::profile::ResolvedManagedRegion>> {
+    let files_root = native_root.join(NATIVE_FILES_DIR);
+    if !files_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut regions = Vec::new();
+    match harness {
+        AgentHarness::Claude => {
+            let source = files_root.join("CLAUDE.md");
+            if source.is_file() {
+                regions.push(crate::profile::ResolvedManagedRegion {
+                    source,
+                    target: PathBuf::from("CLAUDE.md"),
+                });
+            }
+        }
+        AgentHarness::Copilot => {
+            let mut targets = Vec::new();
+            collect_named_files(
+                &files_root,
+                &files_root,
+                OsStr::new("AGENTS.md"),
+                &mut targets,
+            )?;
+            let copilot = PathBuf::from(".github/copilot-instructions.md");
+            if files_root.join(&copilot).is_file() {
+                targets.push(copilot);
+            }
+            targets.sort();
+            targets.dedup();
+            regions.extend(targets.into_iter().map(|target| {
+                crate::profile::ResolvedManagedRegion {
+                    source: files_root.join(&target),
+                    target,
+                }
+            }));
+        }
+    }
+    Ok(regions)
 }
 
 /// Build the `.claude/settings.json` merge for captured Claude hooks, owning one
@@ -783,6 +1184,9 @@ if [ "$1" = install ]; then
     printf '%s\n' "{\"mcpServers\":{\"demo\":{\"command\":\"$skills_root/skills/demo/bin/server\",\"env\":{\"TOKEN\":\"\${TOKEN}\"},\"headers\":{\"Authorization\":\"Bearer \${TOKEN}\"}}}}" > "$config"
     exit 0
 fi
+if [ "$1" = compile ]; then
+    exit 0
+fi
 while [ "$1" != "--output" ]; do shift; done
 output=$2
 test -f .mcp.json
@@ -833,7 +1237,10 @@ printf '%s\n' '{"mcpServers":{"demo":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/serve
             false,
         )
         .unwrap_err();
-        assert!(format!("{mcp_conflict:#}").contains("already managed"));
+        assert!(
+            format!("{mcp_conflict:#}").contains("already managed"),
+            "{mcp_conflict:#}"
+        );
 
         assert!(target.join(".claude/skills/demo/SKILL.md").is_file());
         let artifact_root = crate::state::external_state_dir_for_target(&target)
@@ -940,13 +1347,25 @@ if [ "$1" = install ]; then
         printf '%s\n' '#!/bin/sh' > .github/hooks/demo.sh
         chmod +x .github/hooks/demo.sh
         printf '{"hooks":[{"command":"%s/.github/hooks/demo.sh"}]}' "$PWD" > .github/hooks/demo.json
+        printf '%s\n' '{"lspServers":{"rust":{"command":"rust-analyzer"}}}' > .github/lsp.json
     else
-        mkdir -p .claude/commands .claude/rules .claude/hooks
+        mkdir -p .claude/commands .claude/rules .claude/hooks .claude/skills/apm-lsp/.claude-plugin
         printf '%s\n' '# command' > .claude/commands/demo.md
         printf '%s\n' 'rule body' > .claude/rules/demo.md
         printf '%s\n' '#!/bin/sh' > .claude/hooks/run.sh
         chmod +x .claude/hooks/run.sh
         printf '{"model":"temporary","hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"%s/.claude/hooks/run.sh"}]}]}}' "$PWD" > .claude/settings.json
+        printf '%s\n' '{"name":"apm-lsp","lspServers":{"rust":{"command":"rust-analyzer"}}}' > .claude/skills/apm-lsp/.claude-plugin/plugin.json
+    fi
+    exit 0
+fi
+if [ "$1" = compile ]; then
+    if [ "$3" = copilot ]; then
+        printf '%s\n' '# Generated Copilot context' > AGENTS.md
+        mkdir -p .github
+        printf '%s\n' 'Generated Copilot instructions.' > .github/copilot-instructions.md
+    else
+        printf '%s\n' '# Generated Claude context' > CLAUDE.md
     fi
     exit 0
 fi
@@ -1019,6 +1438,13 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
             fs::read_to_string(target.join(".claude/rules/demo.md")).unwrap(),
             "rule body\n"
         );
+        assert!(
+            target
+                .join(".claude/skills/apm-lsp/.claude-plugin/plugin.json")
+                .is_file()
+        );
+        let claude_context = fs::read_to_string(target.join("CLAUDE.md")).unwrap();
+        assert!(claude_context.contains("# Generated Claude context"));
         let settings: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(target.join(".claude/settings.json")).unwrap(),
         )
@@ -1055,6 +1481,8 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
             "user command\n"
         );
         assert!(!target.join(".claude/rules/demo.md").exists());
+        assert!(!target.join(".claude/skills/apm-lsp").exists());
+        assert!(!target.join("CLAUDE.md").exists());
         let settings: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(target.join(".claude/settings.json")).unwrap(),
         )
@@ -1095,6 +1523,16 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
             fs::read_to_string(target.join(".github/instructions/demo.instructions.md")).unwrap(),
             "---\napplyTo: \"**\"\n---\nrule body\n"
         );
+        let lsp: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(target.join(".github/lsp.json")).unwrap())
+                .unwrap();
+        assert_eq!(lsp["lspServers"]["rust"]["command"], "rust-analyzer");
+        assert!(
+            fs::read_to_string(target.join("AGENTS.md"))
+                .unwrap()
+                .contains("# Generated Copilot context")
+        );
+        assert!(target.join(".github/copilot-instructions.md").is_file());
         let hook: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(target.join(".github/hooks/demo.json")).unwrap(),
         )
@@ -1112,6 +1550,7 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
         // Restore rebuilds the placements after `git clean` removes them.
         fs::remove_dir_all(target.join(".repoverlay")).unwrap();
         fs::remove_dir_all(target.join(".github")).unwrap();
+        fs::remove_file(target.join("AGENTS.md")).unwrap();
         assert_eq!(crate::profile_plan::restore_profiles(&target).unwrap(), 1);
         assert_eq!(
             fs::read_to_string(target.join(".github/prompts/demo.prompt.md")).unwrap(),
@@ -1127,6 +1566,9 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
         .unwrap();
         assert!(!target.join(".github/prompts/demo.prompt.md").exists());
         assert!(!target.join(".github/hooks/demo.json").exists());
+        assert!(!target.join(".github/lsp.json").exists());
+        assert!(!target.join("AGENTS.md").exists());
+        assert!(!target.join(".github/copilot-instructions.md").exists());
         remove_if_exists(
             &crate::state::external_state_dir_for_target(&target)
                 .unwrap()
@@ -1150,5 +1592,105 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
             rewrite_project_paths(&value, &project, &native).unwrap(),
             value
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_replays_manifest_and_atomically_replaces_project_profile() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = native_target(temp.path());
+        fs::write(
+            target.join("apm.yml"),
+            "name: project\nversion: 1.0.0\ndependencies:\n  apm: []\n",
+        )
+        .unwrap();
+        fs::write(
+            target.join("apm.lock.yaml"),
+            "lockfile_version: '1'\ndependencies: []\n",
+        )
+        .unwrap();
+        fs::write(target.join("generation.txt"), "one\n").unwrap();
+        fs::write(target.join("CLAUDE.md"), "# User context\n").unwrap();
+
+        let apm = temp.path().join("apm-sync");
+        fs::write(
+            &apm,
+            r#"#!/bin/sh
+set -eu
+operation=$1
+shift
+target=
+root=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --target) target=$2; shift 2 ;;
+        --root) root=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+test -n "$root"
+generation=$(cat generation.txt)
+if [ "$operation" = install ]; then
+    cp apm.lock.yaml "$root/apm.lock.yaml"
+    if [ "$target" = claude ]; then
+        mkdir -p "$root/.claude/skills/demo" "$root/.claude/skills/apm-lsp/.claude-plugin"
+        printf '%s\n' "$generation" > "$root/.claude/skills/demo/SKILL.md"
+        printf '%s\n' '{"name":"apm-lsp","lspServers":{"rust":{"command":"rust-analyzer"}}}' > "$root/.claude/skills/apm-lsp/.claude-plugin/plugin.json"
+    fi
+    exit 0
+fi
+if [ "$operation" = compile ]; then
+    printf '# Generated %s\n' "$generation" > "$root/CLAUDE.md"
+    exit 0
+fi
+exit 1
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&apm).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&apm, permissions).unwrap();
+
+        sync_with_apm(AgentHarness::Claude, &target, apm.as_os_str(), false).unwrap();
+        assert_eq!(
+            fs::read_to_string(target.join(".claude/skills/demo/SKILL.md")).unwrap(),
+            "one\n"
+        );
+        let first = fs::read_to_string(target.join("CLAUDE.md")).unwrap();
+        assert!(first.contains("# User context"));
+        assert!(first.contains("# Generated one"));
+
+        fs::write(target.join("generation.txt"), "two\n").unwrap();
+        sync_with_apm(AgentHarness::Claude, &target, apm.as_os_str(), false).unwrap();
+        assert_eq!(
+            fs::read_to_string(target.join(".claude/skills/demo/SKILL.md")).unwrap(),
+            "two\n"
+        );
+        let second = fs::read_to_string(target.join("CLAUDE.md")).unwrap();
+        assert!(second.contains("# User context"));
+        assert!(second.contains("# Generated two"));
+        assert!(!second.contains("# Generated one"));
+        assert_eq!(
+            second
+                .matches("repoverlay:profile:apm-project:begin")
+                .count(),
+            1
+        );
+
+        crate::profile_plan::remove_profile(PROJECT_PROFILE, AgentHarness::Claude, &target)
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(target.join("CLAUDE.md")).unwrap(),
+            "# User context\n"
+        );
+        assert!(!target.join(".claude/skills/demo").exists());
+        remove_if_exists(
+            &crate::state::external_state_dir_for_target(&target)
+                .unwrap()
+                .join("apm"),
+        )
+        .unwrap();
     }
 }

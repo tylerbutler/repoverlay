@@ -53,6 +53,26 @@ The external backup exists so that overlays can be restored after `git clean` or
 
 State files are written in [CCL format](https://ccl.tylerbutler.com/) and track the overlay name, source, applied timestamp, and list of files with their link types.
 
+### APM isolation and ownership
+
+`repoverlay apm install` resolves one package in a temporary APM project.
+`repoverlay apm sync` reads the target repository's pinned `apm.yml` and
+`apm.lock.yaml`, but sends all generated output to an isolated root by using
+APM's `--root` and `--frozen` options.
+
+repoverlay copies the allowlisted output into its external state directory before
+applying it. Skills, agents, commands, prompts, instructions, and hook files use
+the normal profile placement and backup actions. MCP and Copilot LSP entries use
+per-entry JSON ownership. Compiled context uses marker-delimited regions so it can
+coexist with repository text and other profiles.
+
+Repeated project syncs replace the `apm-project` profile as a transaction. The
+new output is resolved first. If its application fails, repoverlay restores the
+previous profile snapshot and durable artifact.
+
+See [Using APM packages and projects](/guides/profiles/#using-apm-packages-and-projects)
+for commands and supported output.
+
 ### CCL compatibility and migrations
 
 repoverlay treats these CCL files as user-facing data contracts:

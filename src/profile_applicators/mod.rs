@@ -134,7 +134,23 @@ impl AgentHarness {
                 repo_target.join(".claude").join("settings.json"),
                 repo_target.join(".claude").join("settings.local.json"),
             ],
-            Self::Copilot => vec![repo_target.join(".mcp.json")],
+            Self::Copilot => vec![
+                repo_target.join(".mcp.json"),
+                repo_target.join(".github").join("lsp.json"),
+            ],
+        }
+    }
+
+    /// Whether a repository-relative path is an allowed compiled-context file.
+    pub(crate) fn allows_managed_region_target(self, target: &Path) -> bool {
+        match self {
+            Self::Claude => target == Path::new("CLAUDE.md"),
+            Self::Copilot => {
+                target == Path::new(".github").join("copilot-instructions.md")
+                    || (target.file_name() == Some(std::ffi::OsStr::new("AGENTS.md"))
+                        && !target.starts_with(".git")
+                        && !target.starts_with(".repoverlay"))
+            }
         }
     }
 
@@ -333,6 +349,37 @@ fn plan_resolved_actions(
             target,
             value: merge.value.clone(),
             owned_paths: merge.owned_paths.clone(),
+        });
+    }
+
+    let mut regions: Vec<PathBuf> = Vec::new();
+    for region in &profile.resolved_managed_regions {
+        if !context.harness.allows_managed_region_target(&region.target) {
+            bail!(
+                "Resolved managed-region target '{}' is not allowed for {}",
+                region.target.display(),
+                context.harness
+            );
+        }
+        let target = resolve_repo_relative(&region.target, &context.target)?;
+        if regions.contains(&target) {
+            bail!(
+                "Resolved managed-region target '{}' is claimed twice in one profile",
+                region.target.display()
+            );
+        }
+        regions.push(target.clone());
+        actions.push(ProfileAction::WriteManagedRegion {
+            bodies: vec![crate::profile_plan::InstructionBody::File {
+                path: region.source.clone(),
+                base_dir: region
+                    .source
+                    .parent()
+                    .unwrap_or_else(|| Path::new(""))
+                    .to_path_buf(),
+            }],
+            target,
+            marker_id: context.profile_name.clone(),
         });
     }
     Ok(())

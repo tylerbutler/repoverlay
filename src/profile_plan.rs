@@ -147,6 +147,59 @@ pub(crate) fn apply_profile_config(
     )
 }
 
+/// Replace an applied in-memory profile, restoring the previous snapshot if the
+/// new profile cannot be applied.
+pub(crate) fn replace_profile_config(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+    profile: &crate::profile::ProfileConfig,
+) -> Result<ProfileState> {
+    let state_path = crate::profile::profile_state_path(target, name, harness)?;
+    if !state_path.exists() {
+        return apply_profile_config(name, harness, target, profile);
+    }
+
+    remove_profile(name, harness, target)?;
+    match apply_profile_config(name, harness, target, profile) {
+        Ok(state) => Ok(state),
+        Err(apply_err) => {
+            let manifest =
+                external_profile_dir(target, name, harness)?.join(PROFILE_SNAPSHOT_MANIFEST);
+            let rollback = (|| -> Result<()> {
+                let content = fs::read_to_string(&manifest).with_context(|| {
+                    format!(
+                        "Failed to read previous profile snapshot: {}",
+                        manifest.display()
+                    )
+                })?;
+                let mut snapshot: ProfileSnapshot =
+                    serde_json::from_str(&content).with_context(|| {
+                        format!(
+                            "Failed to parse previous profile snapshot: {}",
+                            manifest.display()
+                        )
+                    })?;
+                snapshot.removed_at = None;
+                crate::state::atomic_write(&manifest, &serde_json::to_string_pretty(&snapshot)?)?;
+                if !restore_profile_from_snapshot(target, &snapshot)? {
+                    bail!("Previous profile state still exists during rollback");
+                }
+                Ok(())
+            })();
+            match rollback {
+                Ok(()) => {
+                    Err(apply_err.context("Failed to replace profile; restored previous profile"))
+                }
+                Err(rollback_err) => Err(apply_err.context(format!(
+                    "Failed to replace profile and could not restore the previous profile: \
+                     {rollback_err:#}"
+                ))),
+            }
+        }
+    }
+}
+
 fn ensure_profile_not_applied(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
     crate::profile::validate_profile_state_component(name)?;
     let state_path = crate::profile::profile_state_path(target, name, harness)?;
@@ -1209,16 +1262,19 @@ fn restore_merge_json_backup(
     Ok(())
 }
 
-/// Validate that a managed-region target is the one allowed shared file for the
-/// harness (`<repo>/AGENTS.md` for Copilot, `<repo>/CLAUDE.md` for Claude),
-/// refusing to touch anything else.
+/// Validate that a managed-region target is an allowed shared context file.
 fn ensure_removable_managed_region(
     harness: AgentHarness,
     repo_target: &Path,
     file: &ProfileFileEntry,
 ) -> Result<()> {
-    let allowed = harness.managed_region_path(repo_target);
-    if file.target != allowed {
+    let relative = file.target.strip_prefix(repo_target).with_context(|| {
+        format!(
+            "Managed-region target is outside the repository: {}",
+            file.target.display()
+        )
+    })?;
+    if !harness.allows_managed_region_target(relative) {
         bail!(
             "Refusing to modify managed region outside the allowed path: {}",
             file.target.display()
@@ -2176,11 +2232,10 @@ pub(crate) struct RestorableProfile {
 
 /// List profiles that `restore_profiles` would re-establish for `target`.
 pub(crate) fn list_restorable_profiles(target: &Path) -> Result<Vec<RestorableProfile>> {
-    let target = crate::resolve::canonicalize_path(target, "Target directory")?;
-    Ok(load_external_profile_snapshots(&target)?
+    Ok(load_external_profile_snapshots(target)?
         .into_iter()
         .filter(|snapshot| {
-            crate::profile::profile_state_path(&target, &snapshot.name, snapshot.harness)
+            crate::profile::profile_state_path(target, &snapshot.name, snapshot.harness)
                 .map(|path| !path.exists())
                 .unwrap_or(false)
         })
@@ -2196,11 +2251,10 @@ pub(crate) fn list_restorable_profiles(target: &Path) -> Result<Vec<RestorablePr
 /// Profiles whose in-repo state still exists are left untouched. Returns the
 /// number of profiles restored.
 pub(crate) fn restore_profiles(target: &Path) -> Result<usize> {
-    let target = crate::resolve::canonicalize_path(target, "Target directory")?;
-    let snapshots = load_external_profile_snapshots(&target)?;
+    let snapshots = load_external_profile_snapshots(target)?;
     let mut restored = 0;
     for snapshot in snapshots {
-        if restore_profile_from_snapshot(&target, &snapshot)? {
+        if restore_profile_from_snapshot(target, &snapshot)? {
             restored += 1;
         }
     }
@@ -2351,6 +2405,42 @@ mod tests {
         let replaced = upsert_managed_region(&content, "alpha", "A2");
         assert!(replaced.contains("A2"));
         assert!(replaced.contains("B body"));
+    }
+
+    #[test]
+    fn replace_profile_restores_previous_snapshot_when_new_plan_fails() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let old = ProfileConfig {
+            instructions: vec![InstructionConfig {
+                content: Some("Old context".to_string()),
+                ..InstructionConfig::default()
+            }],
+            ..ProfileConfig::default()
+        };
+        apply_profile_config("apm-project", AgentHarness::Claude, temp.path(), &old).unwrap();
+
+        let invalid = ProfileConfig {
+            resolved_managed_regions: vec![crate::profile::ResolvedManagedRegion {
+                source: temp.path().join("missing.md"),
+                target: PathBuf::from("README.md"),
+            }],
+            ..ProfileConfig::default()
+        };
+        let err =
+            replace_profile_config("apm-project", AgentHarness::Claude, temp.path(), &invalid)
+                .unwrap_err();
+        assert!(format!("{err:#}").contains("restored previous profile"));
+        let context = fs::read_to_string(temp.path().join("CLAUDE.md")).unwrap();
+        assert!(context.contains("Old context"));
+        assert!(
+            crate::profile::profile_state_path(temp.path(), "apm-project", AgentHarness::Claude,)
+                .unwrap()
+                .is_file()
+        );
+
+        remove_profile("apm-project", AgentHarness::Claude, temp.path()).unwrap();
+        let _ =
+            fs::remove_dir_all(crate::state::external_state_dir_for_target(temp.path()).unwrap());
     }
 
     #[test]

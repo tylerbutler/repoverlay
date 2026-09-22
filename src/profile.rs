@@ -34,6 +34,10 @@ pub(crate) struct ProfileConfig {
     /// captured from an APM install. Runtime-only.
     #[serde(skip)]
     pub(crate) resolved_json_merges: Vec<ResolvedJsonMerge>,
+    /// Managed markdown regions supplied by an in-memory profile, such as
+    /// compiled context captured from an APM install. Runtime-only.
+    #[serde(skip)]
+    pub(crate) resolved_managed_regions: Vec<ResolvedManagedRegion>,
     /// Plugin-bundle capabilities another mechanism already handled, so the
     /// applicator must not report them as skipped. Runtime-only.
     #[serde(skip)]
@@ -57,6 +61,15 @@ pub(crate) struct ResolvedJsonMerge {
     pub(crate) value: serde_json::Value,
     /// RFC 6901 pointers this merge owns.
     pub(crate) owned_paths: Vec<String>,
+}
+
+/// A durable markdown source inserted into a managed repository file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedManagedRegion {
+    /// Absolute path inside the durable artifact.
+    pub(crate) source: PathBuf,
+    /// Repository-relative target path.
+    pub(crate) target: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -162,6 +175,10 @@ pub(crate) fn merge_profile_config(
         resolved_json_merges: merge_list(
             &base.resolved_json_merges,
             &override_profile.resolved_json_merges,
+        ),
+        resolved_managed_regions: merge_list(
+            &base.resolved_managed_regions,
+            &override_profile.resolved_managed_regions,
         ),
         handled_plugin_capabilities: merge_list(
             &base.handled_plugin_capabilities,

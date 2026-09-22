@@ -32,3 +32,4 @@ repoverlay lets you **define overlay sources** — local directories or GitHub r
 - **Create & share** — package your configs into overlays and share them via GitHub
 - **Overlay configuration** — rename files, symlink directories atomically, and more via `repoverlay.ccl`
 - **Profiles** — compose overlays with AI agent capabilities (instructions, skills, MCP servers) and apply them per-harness, persistently or just for one agent session; see the [profiles guide](/guides/profiles/)
+- **APM integration** — install individual APM packages or reproduce a pinned APM project with managed LSP configuration and compiled context; see [Using APM packages and projects](/guides/profiles/#using-apm-packages-and-projects)
