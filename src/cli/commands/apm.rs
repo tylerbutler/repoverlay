@@ -265,10 +265,7 @@ fn sync_with_apm(
         "compile",
     )?;
 
-    if fs::read(&manifest_path)? != manifest_before
-        || fs::read(&lock_path)? != lock_before
-        || fs::read(output.path().join("apm.lock.yaml"))? != lock_before
-    {
+    if fs::read(&manifest_path)? != manifest_before || fs::read(&lock_path)? != lock_before {
         bail!(
             "APM changed apm.yml or apm.lock.yaml during read-only sync; update the project with \
              APM, commit the result, and retry"
@@ -721,7 +718,8 @@ fn rewrite_hook_files(directory: &Path, project: &Path, native_root: &Path) -> R
     Ok(())
 }
 
-/// Replace temporary-project prefixes with the durable artifact location.
+/// Replace temporary-project and Claude hook-script prefixes with the durable
+/// artifact location.
 ///
 /// Relative commands stay relative. An absolute path that points into a
 /// temporary directory outside this install's project is rejected, because it
@@ -752,7 +750,12 @@ fn rewrite_value(
     Ok(match value {
         serde_json::Value::String(text) => {
             reject_foreign_temp_path(text, project, temp_dir)?;
-            serde_json::Value::String(text.replace(project, native))
+            let hooks = format!("{native}/.claude/hooks/");
+            serde_json::Value::String(
+                text.replace(project, native)
+                    .replace("${CLAUDE_PROJECT_DIR}/.claude/hooks/", &hooks)
+                    .replace("$CLAUDE_PROJECT_DIR/.claude/hooks/", &hooks),
+            )
         }
         serde_json::Value::Array(items) => serde_json::Value::Array(
             items
@@ -1322,12 +1325,12 @@ if [ "$1" = install ]; then
         printf '{"hooks":[{"command":"%s/.github/hooks/demo.sh"}]}' "$PWD" > .github/hooks/demo.json
         printf '%s\n' '{"lspServers":{"rust":{"command":"rust-analyzer"}}}' > .github/lsp.json
     else
-        mkdir -p .claude/commands .claude/rules .claude/hooks .claude/skills/apm-lsp/.claude-plugin
+        mkdir -p .claude/commands .claude/rules .claude/hooks/demo .claude/skills/apm-lsp/.claude-plugin
         printf '%s\n' '# command' > .claude/commands/demo.md
         printf '%s\n' 'rule body' > .claude/rules/demo.md
-        printf '%s\n' '#!/bin/sh' > .claude/hooks/run.sh
-        chmod +x .claude/hooks/run.sh
-        printf '{"model":"temporary","hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"%s/.claude/hooks/run.sh"}]}]}}' "$PWD" > .claude/settings.json
+        printf '%s\n' '#!/bin/sh' 'printf "hook ran\n"' > .claude/hooks/demo/run.sh
+        chmod +x .claude/hooks/demo/run.sh
+        printf '%s\n' '{"model":"temporary","hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"\"${CLAUDE_PROJECT_DIR}/.claude/hooks/demo/run.sh\""}]}]}}' > .claude/settings.json
         printf '%s\n' '{"name":"apm-lsp","lspServers":{"rust":{"command":"rust-analyzer"}}}' > .claude/skills/apm-lsp/.claude-plugin/plugin.json
     fi
     exit 0
@@ -1427,10 +1430,20 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
         let command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
+        assert!(!command.contains("${CLAUDE_PROJECT_DIR}"));
+        assert!(!target.join(".claude/hooks").exists());
+        let hook = Command::new("sh")
+            .args(["-c", command])
+            .current_dir(&target)
+            .env("CLAUDE_PROJECT_DIR", &target)
+            .output()
+            .unwrap();
         assert!(
-            Path::new(command).is_file(),
-            "hook script {command} is missing"
+            hook.status.success(),
+            "hook failed: {}",
+            String::from_utf8_lossy(&hook.stderr)
         );
+        assert_eq!(hook.stdout, b"hook ran\n");
 
         let state = crate::profile::load_profile_state(
             &target,
@@ -1570,6 +1583,163 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
             rewrite_project_paths(&value, &project, &native).unwrap(),
             value
         );
+    }
+
+    #[test]
+    fn claude_project_hook_paths_use_the_artifact_without_rewriting_other_repo_paths() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let project = temp.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let native = temp.path().join("artifact with spaces");
+        let script = native.join("files/.claude/hooks/demo/run.sh");
+        let value = serde_json::json!({
+            "hooks": [
+                {"command": "\"${CLAUDE_PROJECT_DIR}/.claude/hooks/demo/run.sh\""},
+                {"command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/demo/run.sh\""},
+                {"command": format!("\"{}/.claude/hooks/demo/run.sh\"", project.display())},
+                {"command": "cat \"${CLAUDE_PROJECT_DIR}/config.json\""},
+                {"command": "./relative.sh"}
+            ]
+        });
+        let rewritten = rewrite_project_paths(&value, &project, &native).unwrap();
+
+        assert_eq!(
+            rewritten["hooks"][0]["command"],
+            format!("\"{}\"", script.display())
+        );
+        assert_eq!(
+            rewritten["hooks"][1]["command"],
+            format!("sh \"{}\"", script.display())
+        );
+        assert_eq!(
+            rewritten["hooks"][2]["command"],
+            format!("\"{}\"", script.display())
+        );
+        assert_eq!(rewritten["hooks"][3], value["hooks"][3]);
+        assert_eq!(rewritten["hooks"][4], value["hooks"][4]);
+    }
+
+    #[cfg(unix)]
+    fn frozen_apm_stub(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let apm = dir.join("apm-frozen");
+        fs::write(
+            &apm,
+            r#"#!/bin/sh
+set -eu
+operation=$1
+shift
+root=
+frozen=false
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --frozen) frozen=true; shift ;;
+        --target) test "$2" = copilot; shift 2 ;;
+        --root) root=$2; shift 2 ;;
+        *) exit 1 ;;
+    esac
+done
+test -n "$root"
+if [ "$operation" = install ]; then
+    test "$frozen" = true
+    case "$(cat sync-mode)" in
+        manifest) printf '# changed\n' >> apm.yml ;;
+        lock) printf '# changed\n' >> apm.lock.yaml ;;
+        fail) exit 1 ;;
+    esac
+    sed 's|.claude/skills/demo|.agents/skills/demo|g' apm.lock.yaml > "$root/apm.lock.yaml"
+    mkdir -p "$root/.agents/skills/demo"
+    printf '%s\n' '# Demo skill' > "$root/.agents/skills/demo/SKILL.md"
+    exit 0
+fi
+test "$operation" = compile
+printf '%s\n' '# Generated Copilot context' > "$root/AGENTS.md"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&apm, fs::Permissions::from_mode(0o755)).unwrap();
+        apm
+    }
+
+    #[cfg(unix)]
+    fn frozen_target(dir: &Path, mode: &str) -> PathBuf {
+        let target = native_target(dir);
+        fs::write(
+            target.join("apm.yml"),
+            "name: project\nversion: 1.0.0\ndependencies:\n  apm:\n    - owner/demo\n",
+        )
+        .unwrap();
+        fs::write(
+            target.join("apm.lock.yaml"),
+            "lockfile_version: '1'\ndependencies:\n  - repo_url: owner/demo\n    name: demo\n    resolved_commit: 0123456789012345678901234567890123456789\n    deployed_files:\n      - .claude/skills/demo/SKILL.md\n    deployed_file_hashes:\n      .claude/skills/demo/SKILL.md: sha256:demo\n",
+        )
+        .unwrap();
+        fs::write(target.join("sync-mode"), mode).unwrap();
+        target
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_accepts_frozen_deployment_metadata_changes() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = frozen_target(temp.path(), "metadata");
+        let apm = frozen_apm_stub(temp.path());
+        let manifest_before = fs::read(target.join("apm.yml")).unwrap();
+        let lock_before = fs::read(target.join("apm.lock.yaml")).unwrap();
+
+        sync_with_apm(AgentHarness::Copilot, &target, apm.as_os_str(), false).unwrap();
+
+        assert_eq!(fs::read(target.join("apm.yml")).unwrap(), manifest_before);
+        assert_eq!(fs::read(target.join("apm.lock.yaml")).unwrap(), lock_before);
+        assert_eq!(
+            fs::read_to_string(target.join(".agents/skills/demo/SKILL.md")).unwrap(),
+            "# Demo skill\n"
+        );
+        assert!(
+            fs::read_to_string(target.join("AGENTS.md"))
+                .unwrap()
+                .contains("# Generated Copilot context")
+        );
+        crate::profile_plan::remove_profile(PROJECT_PROFILE, AgentHarness::Copilot, &target)
+            .unwrap();
+        remove_if_exists(
+            &crate::state::external_state_dir_for_target(&target)
+                .unwrap()
+                .join("apm"),
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_rejects_source_changes_and_frozen_install_failure_before_apply() {
+        for mode in ["manifest", "lock", "fail"] {
+            let temp = tempfile::TempDir::new().unwrap();
+            let target = frozen_target(temp.path(), mode);
+            let apm = frozen_apm_stub(temp.path());
+
+            let err =
+                sync_with_apm(AgentHarness::Copilot, &target, apm.as_os_str(), false).unwrap_err();
+
+            let expected = if mode == "fail" {
+                "APM install failed"
+            } else {
+                "APM changed apm.yml or apm.lock.yaml"
+            };
+            assert!(format!("{err:#}").contains(expected), "{err:#}");
+            assert!(!target.join(".agents").exists());
+            assert!(!target.join("AGENTS.md").exists());
+            assert!(
+                !crate::profile::profile_state_path(
+                    &target,
+                    PROJECT_PROFILE,
+                    AgentHarness::Copilot
+                )
+                .unwrap()
+                .exists()
+            );
+        }
     }
 
     #[cfg(unix)]

@@ -199,6 +199,9 @@ replays the target repository's pinned manifest with APM's `--root` and `--froze
 options, so local APM inputs remain readable while all generated output stays outside
 the repository. Sync then compiles context and atomically replaces the `apm-project`
 profile, restoring the previous snapshot if application fails.
+Sync checks that the repository's manifest and lockfile remain unchanged, but
+allows APM to update deployment metadata in the temporary lockfile. APM's frozen
+install enforces the dependency pins.
 
 Both paths capture allowlisted target-native output (commands or prompts,
 instructions, hooks, LSP configuration, and compiled context) into
@@ -207,6 +210,9 @@ servers as a plugin bundle; project sync captures their deployed native output
 directly. Captured output reaches the plan through runtime-only resolved placements,
 JSON merges, and managed regions. These reuse the ordinary profile action,
 conflict, removal, and restore mechanisms. Hooks need `--allow-hooks`.
+Apply and restore check placement ownership before executing actions, including
+directory overlaps. Claude hook-script paths use the durable artifact, including
+APM's `${CLAUDE_PROJECT_DIR}/.claude/hooks/` references.
 
 ### Profile apply
 

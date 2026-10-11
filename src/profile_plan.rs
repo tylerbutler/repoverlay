@@ -238,7 +238,7 @@ fn apply_profile_config_with_harness_home(
     };
     let plan = applicator.plan(profile, &context)?;
     preflight_plan(&plan, &context.profile_asset_dir)?;
-    check_mcp_ownership_conflicts(&plan, target)?;
+    check_profile_ownership_conflicts(&plan.actions, target)?;
     let mut state = ProfileState {
         name: name.to_string(),
         harness,
@@ -969,15 +969,37 @@ fn protected_json_pointers(
     protected
 }
 
-/// Reject applying a profile whose planned JSON merge would manage JSON-pointer
-/// paths already owned by another applied profile, including another harness.
+/// Reject placements and JSON-pointer paths already owned by another applied
+/// profile, including another harness.
 ///
 /// Precise pointer tracking is used when the other profile's backup metadata is
 /// readable; otherwise we conservatively reject any other profile that already
 /// manages the same JSON target.
-fn check_mcp_ownership_conflicts(plan: &ProfilePlan, target: &Path) -> Result<()> {
+fn check_profile_ownership_conflicts(actions: &[ProfileAction], target: &Path) -> Result<()> {
     let existing = list_profile_states(target)?;
-    for action in &plan.actions {
+    for action in actions {
+        if let ProfileAction::PlacePluginDir {
+            target: placement_target,
+            ..
+        } = action
+        {
+            for state in &existing {
+                for file in &state.files {
+                    if placement_target.starts_with(&file.target)
+                        || file.target.starts_with(placement_target)
+                    {
+                        bail!(
+                            "{} overlaps {} already managed by applied profile '{}' for {}; \
+                             remove that profile first",
+                            placement_target.display(),
+                            file.target.display(),
+                            state.name,
+                            state.harness
+                        );
+                    }
+                }
+            }
+        }
         let ProfileAction::MergeJson {
             target: json_target,
             value: planned_value,
@@ -2312,6 +2334,7 @@ fn restore_profile_from_snapshot(target: &Path, snapshot: &ProfileSnapshot) -> R
             }
         }
     }
+    check_profile_ownership_conflicts(&actions, target)?;
 
     let mut state = ProfileState {
         name: name.to_string(),
@@ -2497,6 +2520,182 @@ mod tests {
         let config_dir = target.join(".repoverlay");
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(config_dir.join("config.ccl"), content).unwrap();
+    }
+
+    fn native_placement_profile(source: &Path, target: &str) -> ProfileConfig {
+        ProfileConfig {
+            resolved_placements: vec![crate::profile::ResolvedPlacement {
+                source: source.to_path_buf(),
+                target: PathBuf::from(target),
+            }],
+            ..ProfileConfig::default()
+        }
+    }
+
+    #[test]
+    fn native_placements_reject_targets_owned_by_other_profiles_before_writes() {
+        for (harness, relative) in [
+            (AgentHarness::Claude, ".claude/commands/demo.md"),
+            (AgentHarness::Claude, ".claude/rules/demo.md"),
+            (AgentHarness::Claude, ".claude/agents/demo.md"),
+            (AgentHarness::Copilot, ".github/prompts/demo.prompt.md"),
+            (
+                AgentHarness::Copilot,
+                ".github/instructions/demo.instructions.md",
+            ),
+        ] {
+            let temp = tempfile::TempDir::new().unwrap();
+            let repo = temp.path();
+            let target = repo.join(relative);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(&target, "user file").unwrap();
+            let first_source = repo.join("first.md");
+            let second_source = repo.join("second.md");
+            fs::write(&first_source, "first profile").unwrap();
+            fs::write(&second_source, "second profile").unwrap();
+            apply_profile_config(
+                "first",
+                harness,
+                repo,
+                &native_placement_profile(&first_source, relative),
+            )
+            .unwrap();
+            let unique = target.parent().unwrap().join("unique.md");
+            let mut second = native_placement_profile(&second_source, relative);
+            second.resolved_placements.insert(
+                0,
+                crate::profile::ResolvedPlacement {
+                    source: second_source,
+                    target: unique.strip_prefix(repo).unwrap().to_path_buf(),
+                },
+            );
+
+            let err = apply_profile_config("second", harness, repo, &second).unwrap_err();
+
+            assert!(format!("{err:#}").contains("already managed"), "{err:#}");
+            assert!(format!("{err:#}").contains("'first'"), "{err:#}");
+            assert_eq!(fs::read_to_string(&target).unwrap(), "first profile");
+            assert!(!unique.exists());
+            assert!(
+                !crate::profile::profile_state_path(repo, "second", harness)
+                    .unwrap()
+                    .exists()
+            );
+            remove_profile("first", harness, repo).unwrap();
+            assert_eq!(fs::read_to_string(&target).unwrap(), "user file");
+        }
+    }
+
+    #[test]
+    fn native_placements_reject_shared_hook_script_directories() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path();
+        let first_source = repo.join("first-scripts");
+        let second_source = repo.join("second-scripts");
+        fs::create_dir(&first_source).unwrap();
+        fs::create_dir(&second_source).unwrap();
+        fs::write(first_source.join("first.sh"), "first script").unwrap();
+        fs::write(second_source.join("second.sh"), "second script").unwrap();
+        let relative = ".github/hooks/scripts";
+        apply_profile_config(
+            "first",
+            AgentHarness::Copilot,
+            repo,
+            &native_placement_profile(&first_source, relative),
+        )
+        .unwrap();
+
+        let err = apply_profile_config(
+            "second",
+            AgentHarness::Copilot,
+            repo,
+            &native_placement_profile(&second_source, relative),
+        )
+        .unwrap_err();
+
+        assert!(format!("{err:#}").contains("already managed"), "{err:#}");
+        assert_eq!(
+            fs::read_to_string(repo.join(relative).join("first.sh")).unwrap(),
+            "first script"
+        );
+        assert!(!repo.join(relative).join("second.sh").exists());
+        remove_profile("first", AgentHarness::Copilot, repo).unwrap();
+        assert!(!repo.join(relative).exists());
+    }
+
+    #[test]
+    fn native_placements_allow_distinct_targets_in_the_same_root() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path();
+        let source = repo.join("command.md");
+        fs::write(&source, "command").unwrap();
+        let first = ".claude/commands/demo.md";
+        let second = ".claude/commands/demo.md-other";
+        for (name, relative) in [("first", first), ("second", second)] {
+            apply_profile_config(
+                name,
+                AgentHarness::Claude,
+                repo,
+                &native_placement_profile(&source, relative),
+            )
+            .unwrap();
+        }
+
+        remove_profile("first", AgentHarness::Claude, repo).unwrap();
+        assert!(!repo.join(first).exists());
+        assert_eq!(fs::read_to_string(repo.join(second)).unwrap(), "command");
+        remove_profile("second", AgentHarness::Claude, repo).unwrap();
+        assert!(!repo.join(second).exists());
+    }
+
+    #[test]
+    fn restoring_native_placements_rejects_targets_owned_by_an_active_profile() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path();
+        let first_source = repo.join("first.md");
+        let second_source = repo.join("second.md");
+        fs::write(&first_source, "first profile").unwrap();
+        fs::write(&second_source, "second profile").unwrap();
+        let harness = AgentHarness::Claude;
+        let relative = ".claude/commands/demo.md";
+        apply_profile_config(
+            "first",
+            harness,
+            repo,
+            &native_placement_profile(&first_source, relative),
+        )
+        .unwrap();
+        fs::remove_file(crate::profile::profile_state_path(repo, "first", harness).unwrap())
+            .unwrap();
+        fs::remove_file(repo.join(relative)).unwrap();
+        apply_profile_config(
+            "second",
+            harness,
+            repo,
+            &native_placement_profile(&second_source, relative),
+        )
+        .unwrap();
+
+        let err = restore_profiles(repo).unwrap_err();
+
+        assert!(format!("{err:#}").contains("already managed"), "{err:#}");
+        assert!(format!("{err:#}").contains("'second'"), "{err:#}");
+        assert_eq!(
+            fs::read_to_string(repo.join(relative)).unwrap(),
+            "second profile"
+        );
+        assert!(
+            !crate::profile::profile_state_path(repo, "first", harness)
+                .unwrap()
+                .exists()
+        );
+        remove_profile("second", harness, repo).unwrap();
+        assert_eq!(restore_profiles(repo).unwrap(), 1);
+        assert_eq!(
+            fs::read_to_string(repo.join(relative)).unwrap(),
+            "first profile"
+        );
+        remove_profile("first", harness, repo).unwrap();
     }
 
     #[test]

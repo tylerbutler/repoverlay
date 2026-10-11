@@ -233,7 +233,7 @@ You can also reproduce a repository's complete pinned APM project without lettin
 repoverlay apm sync
 ```
 
-Sync requires `apm.yml`, `apm.lock.yaml`, and APM 0.31 or later. It runs `apm install --frozen` and `apm compile` with an isolated output root, then applies the result as the `apm-project` profile. Re-running sync replaces that profile and restores the previous version if the new application fails. The source manifest and lockfile remain unchanged.
+Sync requires `apm.yml`, `apm.lock.yaml`, and APM 0.31 or later. It runs `apm install --frozen` and `apm compile` with an isolated output root, then applies the result as the `apm-project` profile. Re-running sync replaces that profile and restores the previous version if the new application fails. The source manifest and lockfile remain unchanged. APM can update harness-specific deployment metadata in the temporary lockfile; its frozen install enforces the dependency pins.
 
 The default harness is Claude. Use `--harness copilot` for Copilot. Package installation copies the target repository's Git remote and any `policy` block into its temporary project. Project sync runs from the target repository, so APM can resolve local `.apm/` primitives and relative inputs while enforcing the repository's policy. Remove generated profiles with:
 
@@ -264,7 +264,7 @@ repoverlay apm install owner/package --allow-hooks
 repoverlay apm sync --allow-hooks
 ```
 
-Each skill, agent, command, prompt, instruction, and hook file is managed on its own. Copilot LSP servers and Claude hook events use per-entry JSON ownership. Compiled context uses marker-delimited regions, so existing repository content and other profile regions remain intact. A pre-existing managed file is backed up and restored when you remove the profile, and two profiles cannot claim the same target. Claude hook scripts stay in the durable artifact, and the recorded command paths point there, so no stored command refers to the temporary project.
+Each skill, agent, command, prompt, instruction, and hook placement has its own ownership record. Copilot LSP servers and Claude hook events use per-entry JSON ownership. Compiled context uses marker-delimited regions, so existing repository content and other profile regions remain intact. repoverlay backs up pre-existing placement targets and restores them when you remove the profile. It rejects overlapping profile-owned placements before apply or restore changes files. This includes shared directories such as `.github/hooks/scripts`. Claude hook scripts stay in the durable artifact. repoverlay rewrites `${CLAUDE_PROJECT_DIR}/.claude/hooks/` references and temporary-project paths to that artifact, while leaving references to other repository files unchanged.
 
 repoverlay installs LSP configuration only. The configured language-server executables must already be available to the harness.
 
