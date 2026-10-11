@@ -151,6 +151,7 @@ fn dedent_block(s: &str) -> String {
         .join("\n")
 }
 
+/// Merge persisted profile settings, leaving runtime-resolved inputs at their defaults.
 pub(crate) fn merge_profile_config(
     base: &ProfileConfig,
     override_profile: &ProfileConfig,
@@ -163,27 +164,7 @@ pub(crate) fn merge_profile_config(
         overlays: merge_list(&base.overlays, &override_profile.overlays),
         instructions: merge_list(&base.instructions, &override_profile.instructions),
         plugins: merge_list(&base.plugins, &override_profile.plugins),
-        resolved_mcp_servers: if override_profile.resolved_mcp_servers.is_empty() {
-            base.resolved_mcp_servers.clone()
-        } else {
-            override_profile.resolved_mcp_servers.clone()
-        },
-        resolved_placements: merge_list(
-            &base.resolved_placements,
-            &override_profile.resolved_placements,
-        ),
-        resolved_json_merges: merge_list(
-            &base.resolved_json_merges,
-            &override_profile.resolved_json_merges,
-        ),
-        resolved_managed_regions: merge_list(
-            &base.resolved_managed_regions,
-            &override_profile.resolved_managed_regions,
-        ),
-        handled_plugin_capabilities: merge_list(
-            &base.handled_plugin_capabilities,
-            &override_profile.handled_plugin_capabilities,
-        ),
+        ..ProfileConfig::default()
     }
 }
 

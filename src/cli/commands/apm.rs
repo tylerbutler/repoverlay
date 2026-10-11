@@ -153,42 +153,7 @@ fn install_with_apm(
         .with_context(|| format!("Failed to create {}", package_root.display()))?;
     fs::write(package_root.join(SOURCE_MARKER), format!("{identity}\n"))?;
 
-    let harness_root = package_root.join(&harness_name);
-    fs::create_dir_all(&harness_root)
-        .with_context(|| format!("Failed to create {}", harness_root.display()))?;
-    ensure_managed_directory(&destination)?;
-    let suffix = std::process::id();
-    let staging = harness_root.join(format!(".{key}.new-{suffix}"));
-    let backup = harness_root.join(format!(".{key}.old-{suffix}"));
-    remove_if_exists(&staging)?;
-    fs::create_dir(&staging)?;
-    if let Err(err) = crate::overlay_repo::copy_dir_recursive(&bundle, &staging) {
-        let _ = remove_if_exists(&staging);
-        return Err(err).context("Failed to stage the APM plugin bundle");
-    }
-    if let Err(err) =
-        crate::profile_plan::copy_tree_no_symlinks(capture.path(), &staging.join(NATIVE_DIR))
-    {
-        let _ = remove_if_exists(&staging);
-        return Err(err).context("Failed to stage the target-native APM output");
-    }
-
-    remove_if_exists(&backup)?;
-    if destination.exists()
-        && let Err(err) = fs::rename(&destination, &backup)
-    {
-        let _ = remove_if_exists(&staging);
-        return Err(err).with_context(|| {
-            format!(
-                "Failed to preserve existing bundle {}",
-                destination.display()
-            )
-        });
-    }
-    if let Err(err) = fs::rename(&staging, &destination) {
-        let _ = restore_bundle(&backup, &destination);
-        return Err(err).context("Failed to activate the new APM bundle");
-    }
+    let backup = stage_artifact(&destination, &key, capture.path(), Some(&bundle))?;
 
     let resolved_placements = native_placements(&native_root, harness)?;
     let mut resolved_json_merges: Vec<_> = claude_hooks_merge(&native_root, harness)?
@@ -324,38 +289,7 @@ fn sync_with_apm(
     fs::create_dir_all(&package_root)
         .with_context(|| format!("Failed to create {}", package_root.display()))?;
     fs::write(package_root.join(SOURCE_MARKER), format!("{PROJECT_KEY}\n"))?;
-    let harness_root = package_root.join(&harness_name);
-    fs::create_dir_all(&harness_root)
-        .with_context(|| format!("Failed to create {}", harness_root.display()))?;
-    ensure_managed_directory(&destination)?;
-    let suffix = std::process::id();
-    let staging = harness_root.join(format!(".{PROJECT_KEY}.new-{suffix}"));
-    let backup = harness_root.join(format!(".{PROJECT_KEY}.old-{suffix}"));
-    remove_if_exists(&staging)?;
-    fs::create_dir(&staging)?;
-    if let Err(err) =
-        crate::profile_plan::copy_tree_no_symlinks(capture.path(), &staging.join(NATIVE_DIR))
-    {
-        let _ = remove_if_exists(&staging);
-        return Err(err).context("Failed to stage the APM project output");
-    }
-
-    remove_if_exists(&backup)?;
-    if destination.exists()
-        && let Err(err) = fs::rename(&destination, &backup)
-    {
-        let _ = remove_if_exists(&staging);
-        return Err(err).with_context(|| {
-            format!(
-                "Failed to preserve existing APM project artifact {}",
-                destination.display()
-            )
-        });
-    }
-    if let Err(err) = fs::rename(&staging, &destination) {
-        let _ = restore_bundle(&backup, &destination);
-        return Err(err).context("Failed to activate the APM project artifact");
-    }
+    let backup = stage_artifact(&destination, PROJECT_KEY, capture.path(), None)?;
 
     let resolved_placements = native_placements(&native_root, harness)?;
     let mut resolved_json_merges: Vec<_> = claude_hooks_merge(&native_root, harness)?
@@ -387,6 +321,65 @@ fn sync_with_apm(
     }
     println!("Synced APM project as profile '{PROJECT_PROFILE}'");
     Ok(())
+}
+
+fn stage_artifact(
+    destination: &Path,
+    key: &str,
+    capture: &Path,
+    bundle: Option<&Path>,
+) -> Result<PathBuf> {
+    let harness_root = destination
+        .parent()
+        .context("APM artifact has no parent directory")?;
+    fs::create_dir_all(harness_root)
+        .with_context(|| format!("Failed to create {}", harness_root.display()))?;
+    ensure_managed_directory(destination)?;
+    let suffix = std::process::id();
+    let staging = harness_root.join(format!(".{key}.new-{suffix}"));
+    let backup = harness_root.join(format!(".{key}.old-{suffix}"));
+    remove_if_exists(&staging)?;
+    fs::create_dir(&staging)?;
+    let staged = (|| -> Result<()> {
+        if let Some(bundle) = bundle {
+            crate::overlay_repo::copy_dir_recursive(bundle, &staging)
+                .context("Failed to stage the APM plugin bundle")?;
+        }
+        crate::profile_plan::copy_tree_no_symlinks(capture, &staging.join(NATIVE_DIR))
+            .context("Failed to stage the target-native APM output")?;
+        remove_if_exists(&backup)?;
+        if destination.exists() {
+            fs::rename(destination, &backup).with_context(|| {
+                format!(
+                    "Failed to preserve existing APM artifact {}",
+                    destination.display()
+                )
+            })?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = staged {
+        remove_if_exists(&staging).with_context(|| {
+            format!(
+                "APM staging failed ({err:#}); failed to remove {}",
+                staging.display()
+            )
+        })?;
+        return Err(err);
+    }
+    if let Err(err) = fs::rename(&staging, destination) {
+        restore_bundle(&backup, destination).with_context(|| {
+            format!("APM activation failed ({err}); failed to restore the previous artifact")
+        })?;
+        remove_if_exists(&staging).with_context(|| {
+            format!(
+                "APM activation failed ({err}); failed to remove {}",
+                staging.display()
+            )
+        })?;
+        return Err(err).context("Failed to activate the APM artifact");
+    }
+    Ok(backup)
 }
 
 fn run_apm(apm: &OsStr, directory: &Path, args: &[&str], operation: &str) -> Result<()> {
@@ -475,25 +468,15 @@ struct NativeRoot {
     relative: &'static str,
     /// Plugin capability this directory satisfies.
     capability: &'static str,
-    placement: NativePlacement,
+    /// Claude hook scripts stay in the artifact and run through absolute paths.
+    placed: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NativePlacement {
-    None,
-    Root,
-    Children,
-}
-
-const fn root(
-    relative: &'static str,
-    capability: &'static str,
-    placement: NativePlacement,
-) -> NativeRoot {
+const fn root(relative: &'static str, capability: &'static str, placed: bool) -> NativeRoot {
     NativeRoot {
         relative,
         capability,
-        placement,
+        placed,
     }
 }
 
@@ -503,32 +486,28 @@ fn native_roots(harness: AgentHarness, include_bundle_capabilities: bool) -> Vec
     if include_bundle_capabilities {
         roots.extend(match harness {
             AgentHarness::Claude => vec![
-                root(".claude/skills", "skills", NativePlacement::Children),
-                root(".claude/agents", "agents", NativePlacement::Children),
+                root(".claude/skills", "skills", true),
+                root(".claude/agents", "agents", true),
             ],
             AgentHarness::Copilot => vec![
-                root(".agents/skills", "skills", NativePlacement::Children),
-                root(".github/agents", "agents", NativePlacement::Children),
+                root(".agents/skills", "skills", true),
+                root(".github/agents", "agents", true),
             ],
         });
     } else if harness == AgentHarness::Claude {
-        roots.push(root(".claude/skills/apm-lsp", "lsp", NativePlacement::Root));
+        roots.push(root(".claude/skills/apm-lsp", "lsp", true));
     }
 
     match harness {
         AgentHarness::Claude => roots.extend([
-            root(".claude/commands", "commands", NativePlacement::Children),
-            root(".claude/rules", "instructions", NativePlacement::Children),
-            root(".claude/hooks", "hooks", NativePlacement::None),
+            root(".claude/commands", "commands", true),
+            root(".claude/rules", "instructions", true),
+            root(".claude/hooks", "hooks", false),
         ]),
         AgentHarness::Copilot => roots.extend([
-            root(".github/prompts", "commands", NativePlacement::Children),
-            root(
-                ".github/instructions",
-                "instructions",
-                NativePlacement::Children,
-            ),
-            root(".github/hooks", "hooks", NativePlacement::Children),
+            root(".github/prompts", "commands", true),
+            root(".github/instructions", "instructions", true),
+            root(".github/hooks", "hooks", true),
         ]),
     }
     roots
@@ -629,24 +608,7 @@ fn capture_compiled_context(
     harness: AgentHarness,
     capture_dir: &Path,
 ) -> Result<()> {
-    let mut targets = Vec::new();
-    match harness {
-        AgentHarness::Claude => {
-            if project.join("CLAUDE.md").is_file() {
-                targets.push(PathBuf::from("CLAUDE.md"));
-            }
-        }
-        AgentHarness::Copilot => {
-            collect_named_files(project, project, OsStr::new("AGENTS.md"), &mut targets)?;
-            let copilot = PathBuf::from(".github/copilot-instructions.md");
-            if project.join(&copilot).is_file() {
-                targets.push(copilot);
-            }
-        }
-    }
-    targets.sort();
-    targets.dedup();
-    for relative in targets {
+    for relative in context_targets(project, harness)? {
         let source = project.join(&relative);
         let destination = capture_dir.join(NATIVE_FILES_DIR).join(&relative);
         if let Some(parent) = destination.parent() {
@@ -655,6 +617,27 @@ fn capture_compiled_context(
         fs::copy(&source, &destination)?;
     }
     Ok(())
+}
+
+fn context_targets(root: &Path, harness: AgentHarness) -> Result<Vec<PathBuf>> {
+    let mut targets = Vec::new();
+    match harness {
+        AgentHarness::Claude => {
+            if root.join("CLAUDE.md").is_file() {
+                targets.push(PathBuf::from("CLAUDE.md"));
+            }
+        }
+        AgentHarness::Copilot => {
+            collect_named_files(root, root, OsStr::new("AGENTS.md"), &mut targets)?;
+            let copilot = PathBuf::from(".github/copilot-instructions.md");
+            if root.join(&copilot).is_file() {
+                targets.push(copilot);
+            }
+        }
+    }
+    targets.sort();
+    targets.dedup();
+    Ok(targets)
 }
 
 fn collect_named_files(
@@ -809,18 +792,11 @@ fn native_placements(native_root: &Path, harness: AgentHarness) -> Result<Vec<Re
     let mut placements = Vec::new();
     for root in native_roots(harness, true)
         .iter()
-        .filter(|root| root.placement != NativePlacement::None)
+        .filter(|root| root.placed)
     {
         let relative = root.relative;
         let source_root = files_root.join(relative);
         if !source_root.is_dir() {
-            continue;
-        }
-        if root.placement == NativePlacement::Root {
-            placements.push(ResolvedPlacement {
-                source: source_root,
-                target: PathBuf::from(relative),
-            });
             continue;
         }
         let mut entries = fs::read_dir(&source_root)
@@ -874,40 +850,13 @@ fn native_managed_regions(
     if !files_root.is_dir() {
         return Ok(Vec::new());
     }
-    let mut regions = Vec::new();
-    match harness {
-        AgentHarness::Claude => {
-            let source = files_root.join("CLAUDE.md");
-            if source.is_file() {
-                regions.push(crate::profile::ResolvedManagedRegion {
-                    source,
-                    target: PathBuf::from("CLAUDE.md"),
-                });
-            }
-        }
-        AgentHarness::Copilot => {
-            let mut targets = Vec::new();
-            collect_named_files(
-                &files_root,
-                &files_root,
-                OsStr::new("AGENTS.md"),
-                &mut targets,
-            )?;
-            let copilot = PathBuf::from(".github/copilot-instructions.md");
-            if files_root.join(&copilot).is_file() {
-                targets.push(copilot);
-            }
-            targets.sort();
-            targets.dedup();
-            regions.extend(targets.into_iter().map(|target| {
-                crate::profile::ResolvedManagedRegion {
-                    source: files_root.join(&target),
-                    target,
-                }
-            }));
-        }
-    }
-    Ok(regions)
+    Ok(context_targets(&files_root, harness)?
+        .into_iter()
+        .map(|target| crate::profile::ResolvedManagedRegion {
+            source: files_root.join(&target),
+            target,
+        })
+        .collect())
 }
 
 /// Build the `.claude/settings.json` merge for captured Claude hooks, owning one
@@ -1087,6 +1036,30 @@ fn package_key(identity: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_failure_preserves_previous_artifact_and_cleans_up() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let destination = temp.path().join("project");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("previous.txt"), "previous").unwrap();
+        let bundle = temp.path().join("bundle");
+        fs::create_dir(&bundle).unwrap();
+        fs::write(bundle.join("new.txt"), "new").unwrap();
+        let missing_bundle = temp.path().join("missing-bundle");
+        let missing_capture = temp.path().join("missing-capture");
+
+        for bundle in [Some(missing_bundle.as_path()), Some(bundle.as_path()), None] {
+            let err =
+                stage_artifact(&destination, "project", &missing_capture, bundle).unwrap_err();
+            assert!(format!("{err:#}").contains("Failed to stage"));
+            assert_eq!(
+                fs::read_to_string(destination.join("previous.txt")).unwrap(),
+                "previous"
+            );
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+        }
+    }
 
     #[test]
     fn package_key_uses_full_package_identity() {
@@ -1362,8 +1335,9 @@ fi
 if [ "$1" = compile ]; then
     if [ "$3" = copilot ]; then
         printf '%s\n' '# Generated Copilot context' > AGENTS.md
-        mkdir -p .github
+        mkdir -p .github examples
         printf '%s\n' 'Generated Copilot instructions.' > .github/copilot-instructions.md
+        printf '%s\n' 'Generated nested context.' > examples/AGENTS.md
     else
         printf '%s\n' '# Generated Claude context' > CLAUDE.md
     fi
@@ -1533,6 +1507,7 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
                 .contains("# Generated Copilot context")
         );
         assert!(target.join(".github/copilot-instructions.md").is_file());
+        assert!(target.join("examples/AGENTS.md").is_file());
         let hook: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(target.join(".github/hooks/demo.json")).unwrap(),
         )
@@ -1551,12 +1526,14 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
         fs::remove_dir_all(target.join(".repoverlay")).unwrap();
         fs::remove_dir_all(target.join(".github")).unwrap();
         fs::remove_file(target.join("AGENTS.md")).unwrap();
+        fs::remove_file(target.join("examples/AGENTS.md")).unwrap();
         assert_eq!(crate::profile_plan::restore_profiles(&target).unwrap(), 1);
         assert_eq!(
             fs::read_to_string(target.join(".github/prompts/demo.prompt.md")).unwrap(),
             "# prompt\n"
         );
         assert!(target.join(".github/hooks/demo.json").is_file());
+        assert!(target.join("examples/AGENTS.md").is_file());
 
         crate::profile_plan::remove_profile(
             "apm-owner-native-package",
@@ -1569,6 +1546,7 @@ printf '%s\n' 'x' > "$bundle/instructions/a.md"
         assert!(!target.join(".github/lsp.json").exists());
         assert!(!target.join("AGENTS.md").exists());
         assert!(!target.join(".github/copilot-instructions.md").exists());
+        assert!(!target.join("examples/AGENTS.md").exists());
         remove_if_exists(
             &crate::state::external_state_dir_for_target(&target)
                 .unwrap()
