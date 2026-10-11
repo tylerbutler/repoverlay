@@ -1,0 +1,7 @@
+kind: Added
+body: |-
+    Add pinned APM project sync, LSP configuration, and compiled context support
+
+    Use `repoverlay apm sync` to reproduce a repository's locked APM project without modifying its manifest or lockfile. APM package installs and project syncs now manage target-native LSP output and generated context for Claude and Copilot.
+time: 2026-09-22T08:43:39-07:00
+component: apm
