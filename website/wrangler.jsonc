@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "repoverlay-docs",
+	"name": "repoverlay",
 	"compatibility_date": "2026-10-11",
 	"workers_dev": true,
 	"assets": {
