@@ -159,6 +159,88 @@ mkdir -p my-plugin/.claude-plugin my-plugin/skills
 Add skills under `my-plugin/skills/<skill>/SKILL.md`. Then use a local path
 (`= ./my-plugin`) to refer to the plugin in a profile.
 
+## Using APM packages and projects
+
+repoverlay can turn [APM](https://github.com/microsoft/apm) output into a
+repository profile. APM remains responsible for dependency resolution, policy,
+lockfiles, and target conversion. repoverlay owns the generated files, conflict
+checks, removal, and recovery.
+
+### Install one package
+
+Install a package without adding it to the repository's APM manifest:
+
+```bash
+repoverlay apm install tylerbutler/apm-base
+repoverlay apm install tylerbutler/apm-base --harness copilot
+```
+
+The generated profile name starts with `apm-`, for example
+`apm-tylerbutler-apm-base`.
+
+### Sync a pinned project manifest
+
+Use `apm sync` when the repository already has an `apm.yml` and
+`apm.lock.yaml`:
+
+```bash
+repoverlay apm sync
+repoverlay apm sync --harness copilot
+```
+
+Sync requires APM 0.31 or later. repoverlay runs the equivalent of a frozen APM
+install and compile with an isolated output root. APM can read local `.apm/`
+primitives and relative inputs, but it does not write generated output, manifest
+changes, or lockfile changes into the repository.
+APM can update harness-specific deployment metadata in the temporary lockfile.
+Its frozen install enforces the dependency pins.
+
+The result is the `apm-project` profile. Re-running sync resolves the new output
+before replacing the active profile. If application fails, repoverlay restores
+the previous profile.
+
+### Supported APM output
+
+| APM output | Claude | Copilot |
+| --- | --- | --- |
+| Skills | `.claude/skills/` | `.agents/skills/` |
+| Agents | `.claude/agents/` | `.github/agents/` |
+| MCP servers | Merged into `.mcp.json` | Merged into `.mcp.json` |
+| LSP servers | `.claude/skills/apm-lsp/` | Merged into `.github/lsp.json` |
+| Commands or prompts | `.claude/commands/` | `.github/prompts/` |
+| Instructions | `.claude/rules/` | `.github/instructions/` |
+| Compiled context | Managed region in `CLAUDE.md` | Managed regions in `AGENTS.md` and `.github/copilot-instructions.md` |
+| Hooks | Merged into `.claude/settings.json` | `.github/hooks/` |
+
+repoverlay installs LSP configuration, not the language-server executable. Install
+the executable separately and make it available to the selected harness.
+
+Hooks run commands in the repository and require explicit consent:
+
+```bash
+repoverlay apm install owner/package --allow-hooks
+repoverlay apm sync --allow-hooks
+```
+
+Claude hook scripts stay in the external artifact. repoverlay rewrites hook-script
+references under `${CLAUDE_PROJECT_DIR}/.claude/hooks/` to that artifact, while
+leaving references to other repository files unchanged.
+
+Apply and restore reject placements that overlap targets owned by another
+profile before changing files. This includes shared directories such as
+`.github/hooks/scripts`. Remove the conflicting profile before applying its
+replacement.
+
+Remove APM-generated profiles with the normal profile command:
+
+```bash
+repoverlay profile remove apm-tylerbutler-apm-base --harness claude
+repoverlay profile remove apm-project --harness claude
+```
+
+APM profiles use the same external snapshots as configured profiles, so
+`repoverlay restore` can rebuild them after `git clean`.
+
 ## Inspecting profiles
 
 List configured profiles (with descriptions):
