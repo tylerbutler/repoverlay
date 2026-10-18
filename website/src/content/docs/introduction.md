@@ -32,3 +32,4 @@ An overlay source is a local directory or a GitHub repository. Define a source, 
 - Put your configuration files in overlays and share them through GitHub.
 - Use `repoverlay.ccl` to rename files, create directory symlinks as a unit, and control other overlay settings.
 - Use profiles to combine overlays with AI agent instructions, skills, and MCP servers. Apply a profile to a specific harness until removal or for one agent session. See the [profiles guide](/guides/profiles/).
+- **APM integration** — install individual APM packages or reproduce a pinned APM project with managed LSP configuration and compiled context; see [Using APM packages and projects](/guides/profiles/#using-apm-packages-and-projects)
