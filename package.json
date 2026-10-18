@@ -6,6 +6,6 @@
     "fix:policy": "repopo check --fix"
   },
   "devDependencies": {
-    "repopo": "^0.9.0"
+    "repopo": "^0.10.0"
   }
 }
