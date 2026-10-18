@@ -1,7 +1,0 @@
-kind: Added
-body: |-
-    Sync locked APM projects with `repoverlay apm sync`
-
-    Reproduce a repository's locked APM project without changing its manifest or lockfile. Apply the project's packages, LSP configuration, and generated context for Claude or Copilot.
-time: 2026-09-22T08:43:39-07:00
-component: apm
