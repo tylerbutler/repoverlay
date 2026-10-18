@@ -238,6 +238,10 @@ repoverlay profile remove apm-tylerbutler-apm-base --harness claude
 repoverlay profile remove apm-project --harness claude
 ```
 
+Use `repoverlay remove --all` to remove applied overlays and profiles, including
+APM profiles. Add `--dry-run` to preview the removal. A live agent session's
+profile lock blocks bulk removal.
+
 APM profiles use the same external snapshots as configured profiles, so
 `repoverlay restore` can rebuild them after `git clean`.
 

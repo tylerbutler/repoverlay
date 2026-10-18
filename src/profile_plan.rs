@@ -664,30 +664,33 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
     Ok(inspected)
 }
 
-pub(crate) fn remove_profile(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
-    crate::profile::validate_profile_state_component(name)?;
-
+pub(crate) fn check_profile_removal_lock(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+) -> Result<crate::profile::LockState> {
     let lock_path = crate::profile::profile_lock_path(target, name, harness)?;
-    match crate::profile::inspect_lock(&lock_path)? {
-        crate::profile::LockState::Live => {
-            bail!(
-                "Profile '{name}' is currently in use by an ephemeral '{harness}' session; \
-                 stop that session before removing the profile"
-            );
-        }
-        crate::profile::LockState::Stale => {
-            // The owning session died without releasing the lock (e.g. SIGKILL or
-            // power loss). Recover it so removal can proceed.
-            std::fs::remove_file(&lock_path).with_context(|| {
-                format!(
-                    "Failed to remove stale profile lock: {}",
-                    lock_path.display()
-                )
-            })?;
-        }
-        crate::profile::LockState::Absent => {}
+    let lock_state = crate::profile::inspect_lock(&lock_path)?;
+    if lock_state == crate::profile::LockState::Live {
+        bail!(
+            "Profile '{name}' is currently in use by an ephemeral '{harness}' session; \
+             stop that session before removing the profile"
+        );
     }
+    Ok(lock_state)
+}
 
+pub(crate) fn remove_profile(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
+    if check_profile_removal_lock(name, harness, target)? == crate::profile::LockState::Stale {
+        // Recover the lock left by a session that died before releasing it.
+        let lock_path = crate::profile::profile_lock_path(target, name, harness)?;
+        std::fs::remove_file(&lock_path).with_context(|| {
+            format!(
+                "Failed to remove stale profile lock: {}",
+                lock_path.display()
+            )
+        })?;
+    }
     remove_profile_inner(name, harness, target)
 }
 

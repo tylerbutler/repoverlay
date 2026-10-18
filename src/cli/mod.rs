@@ -118,7 +118,7 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Remove applied overlay(s)
+    /// Remove applied overlays, or all overlays and profiles with --all
     Remove {
         /// Name of the overlay to remove
         name: Option<String>,
@@ -127,7 +127,7 @@ enum Commands {
         #[arg(short, long)]
         target: Option<PathBuf>,
 
-        /// Remove all applied overlays
+        /// Remove all applied overlays and profiles, including APM profiles
         #[arg(long)]
         all: bool,
 

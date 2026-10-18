@@ -158,7 +158,7 @@ Local overlays that use symlinks do not need updates. The symlinks point to the 
 # Remove a specific overlay
 repoverlay remove my-overlay
 
-# Remove all applied overlays
+# Remove all applied overlays and profiles, including APM profiles
 repoverlay remove --all
 
 # Interactive selection
@@ -169,6 +169,11 @@ repoverlay remove my-overlay --dry-run
 ```
 
 When you remove an overlay, repoverlay deletes its symlinks or copies, git exclude entries, and state files. If exclude cleanup fails, repoverlay still removes managed files and state where possible. The command returns a non-zero exit code so you can repair `.git/info/exclude`.
+
+`remove --all` also removes applied profiles, including those created by APM.
+It restores profile-owned content before removing remaining overlays.
+Use `remove --all --dry-run` to preview both lists. A live agent session's
+profile lock blocks bulk removal before it changes files.
 
 ## Switching overlays
 
@@ -183,7 +188,8 @@ repoverlay switch https://github.com/user/ai-configs/tree/main/rust
 The `switch` command removes **all** existing overlays before it applies the new one. To keep existing overlays and add another, use `repoverlay apply` instead.
 :::
 
-This is the same as `repoverlay remove --all` followed by `repoverlay apply`, but in one atomic operation.
+Unlike `repoverlay remove --all`, `switch` removes only overlays and leaves
+profiles applied.
 
 ### When to use switch
 

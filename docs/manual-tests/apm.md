@@ -151,6 +151,33 @@ the profile and managed output from the external snapshot without changing
 the pinned manifest or lockfile. JSON file statuses must be `ok`. After removal,
 expect no applied profiles and exit code 1.
 
+### TC-06: Remove APM profiles with --all (requires network)
+
+Run after TC-05. The tracked manifest and lockfile remain available for sync.
+
+```bash
+repoverlay apm sync --harness "$HARNESS"
+test ! -d .repoverlay/overlays
+repoverlay remove --all --dry-run
+repoverlay status --quiet --name apm-project
+echo "Exit code: $?"
+repoverlay remove --all
+repoverlay profile status
+repoverlay status --quiet
+echo "Exit code: $?"
+repoverlay restore
+repoverlay status --quiet
+echo "Exit code: $?"
+cmp apm.yml "$TEST_DIR/expected.yml"
+cmp apm.lock.yaml "$TEST_DIR/expected.lock.yaml"
+```
+
+The dry run must list `apm-project` and its harness without changing managed
+output or state. Expect exit code 0 before removal. Bulk removal must succeed
+even without overlay state and remove the APM profile and its managed output.
+Expect exit code 1 after removal and after restore; explicit removal must prevent
+restore from reapplying the profile. Both input comparisons must succeed.
+
 ## Cleanup
 
 Exit the test shell to restore your environment. Remove only the disposable

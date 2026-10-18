@@ -58,7 +58,7 @@ Overlay config files into git repositories without committing them
 
 * `apm` — Manage APM packages and project manifests as repository profiles
 * `apply` — Apply an overlay to a git repository (scripting / power-user)
-* `remove` — Remove applied overlay(s)
+* `remove` — Remove applied overlays, or all overlays and profiles with --all
 * `status` — Show the status of applied overlays and profiles
 * `restore` — Restore overlays after git clean or other removal
 * `update` — Update applied overlays from remote sources
@@ -168,7 +168,7 @@ For interactive discovery and application, use `repoverlay browse` instead — i
 
 ## `repoverlay remove`
 
-Remove applied overlay(s)
+Remove applied overlays, or all overlays and profiles with --all
 
 **Usage:** `repoverlay remove [OPTIONS] [NAME]`
 
@@ -179,7 +179,7 @@ Remove applied overlay(s)
 ### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
-* `--all` — Remove all applied overlays
+* `--all` — Remove all applied overlays and profiles, including APM profiles
 * `--dry-run` — Show what would be removed without making changes
 * `-i`, `--interactive` — Interactive selection mode
 

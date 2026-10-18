@@ -147,6 +147,17 @@ repoverlay status --target "$TEST_DIR/target-repo"
 # Should still show overlay-a (unchanged)
 ```
 
+### TC-05: Bulk removal includes profiles and APM output
+
+Run [Profile TC-07 and TC-08](profile.md) to verify mixed overlay/profile removal,
+dry runs, user-content restoration, and live session lock protection.
+Run the preceding cases in that file first to create the test inputs.
+Repeat with Claude and Copilot.
+
+Run [APM TC-06](apm.md) after its preceding cases to verify that `remove --all`
+removes APM output even when no overlay state exists. This case requires APM
+and network access.
+
 ## Cleanup
 
 ```bash

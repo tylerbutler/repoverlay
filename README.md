@@ -15,7 +15,7 @@ Overlay config files into git repositories without committing them. Files are sy
 | Apply overlay (scripting) | `repoverlay apply <source>` |
 | Check status | `repoverlay status` |
 | Remove overlay | `repoverlay remove <name>` |
-| Remove all | `repoverlay remove --all` |
+| Remove all overlays and profiles | `repoverlay remove --all` |
 | Update from remote | `repoverlay update` |
 | Restore after git clean | `repoverlay restore` |
 | Create overlay | `repoverlay create <name>` |
@@ -243,6 +243,11 @@ The default harness is Claude. Use `--harness copilot` for Copilot. Package inst
 repoverlay profile remove apm-tylerbutler-apm-base --harness claude
 repoverlay profile remove apm-project --harness claude
 ```
+
+Use `repoverlay remove --all` to remove applied overlays and profiles, including
+APM profiles. Add `--dry-run` to preview the removal. Bulk removal restores
+profile-owned content before removing remaining overlays and stops if a live
+agent session holds a profile lock.
 
 A package can be active for one harness at a time because both harnesses share `.mcp.json`. Remove the profile before reinstalling it or switching harnesses. APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages the durable artifact, repository placement, Git exclusion, removal, and restore.
 

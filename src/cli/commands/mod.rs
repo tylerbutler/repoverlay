@@ -73,9 +73,11 @@ pub(crate) fn handle_remove(
     dry_run: bool,
     interactive: bool,
 ) -> Result<()> {
-    // If name or --all is specified, use direct removal
-    if remove_all || name.is_some() {
-        return remove_overlay(target, name, remove_all, dry_run);
+    if remove_all {
+        return crate::remove::remove_all(target, dry_run);
+    }
+    if name.is_some() {
+        return remove_overlay(target, name, false, dry_run);
     }
 
     // If not interactive and no name specified, require explicit action.
@@ -85,7 +87,7 @@ pub(crate) fn handle_remove(
             "No overlay name specified.\n\n\
              Usage:\n  \
              repoverlay remove <name>        # Remove specific overlay\n  \
-             repoverlay remove --all         # Remove all overlays\n  \
+             repoverlay remove --all         # Remove all overlays and profiles\n  \
              repoverlay remove --interactive # Interactive selection"
         );
     }

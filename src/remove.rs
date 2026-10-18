@@ -13,6 +13,51 @@ use crate::state::{
 };
 use crate::update_git_exclude;
 
+/// Remove all applied profiles and overlays, restoring profile-owned content first.
+pub(crate) fn remove_all(target: &Path, dry_run: bool) -> Result<()> {
+    let target = canonicalize_path(target, "Target directory")?;
+    let mut profiles = crate::profile_plan::list_profile_states(&target)?;
+    if profiles.is_empty() {
+        return remove_overlay(&target, None, true, dry_run);
+    }
+
+    if dry_run {
+        println!(
+            "{} Dry run - would remove all overlays and profiles:",
+            "Note:".yellow()
+        );
+        for profile in profiles {
+            println!("  - Profile: {} ({})", profile.name, profile.harness);
+        }
+        for overlay in list_applied_overlays(&target)? {
+            println!("  - Overlay: {overlay}");
+        }
+        return Ok(());
+    }
+
+    // Check every lock before removing overlays another active profile may use.
+    for profile in &profiles {
+        crate::profile_plan::check_profile_removal_lock(&profile.name, profile.harness, &target)?;
+    }
+    // Unwind shared-file backups in reverse application order.
+    profiles.sort_by_key(|profile| std::cmp::Reverse(profile.applied_at));
+    for profile in profiles {
+        crate::profile_plan::remove_profile(&profile.name, profile.harness, &target).with_context(
+            || {
+                format!(
+                    "Failed to remove profile '{}' ({})",
+                    profile.name, profile.harness
+                )
+            },
+        )?;
+    }
+    if !list_applied_overlays(&target)?.is_empty() {
+        remove_overlay(&target, None, true, false)?;
+    }
+    println!("\n{} Removed all overlays and profiles", "✓".green().bold());
+    Ok(())
+}
+
 /// Remove applied overlay(s) from a target repository.
 ///
 /// # Workflow

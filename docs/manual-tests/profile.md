@@ -159,6 +159,53 @@ Expect exit code 1 after cleanup removes profile state. Restore must recover
 the profile and skill from the external snapshot. Its files must have
 `status: "ok"`, and the context file must contain one profile-managed region.
 
+### TC-07: Bulk removal with an applied profile and overlay
+
+```bash
+repoverlay profile apply manual-profile --harness "$HARNESS"
+repoverlay apply "$TEST_DIR/overlay" --name manual-overlay
+repoverlay remove --all --dry-run
+repoverlay profile status
+repoverlay status --quiet
+echo "Exit code: $?"
+repoverlay remove --all
+repoverlay profile status
+repoverlay status --quiet
+echo "Exit code: $?"
+cat "$CONTEXT"
+test ! -f .manual-overlay
+repoverlay restore
+repoverlay status --quiet
+echo "Exit code: $?"
+```
+
+The dry run must list the profile, its harness, and the overlay without changing
+files or state. Expect exit code 0 before removal. Bulk removal must remove both
+entries, restore the original user context, and remove the profile's skill.
+Expect exit code 1 after removal and after restore; explicit removal must prevent
+restore from reapplying either entry. The profile configuration must remain.
+
+### TC-08: Protect a live session from bulk removal
+
+```bash
+repoverlay profile apply manual-profile --harness "$HARNESS"
+repoverlay apply "$TEST_DIR/overlay" --name manual-overlay
+LOCK=".repoverlay/profiles/manual-profile.$HARNESS.lock"
+printf '%s\n' "$$" > "$LOCK"
+repoverlay remove --all
+echo "Exit code: $?"
+repoverlay status
+test -f .manual-overlay
+rm -- "$LOCK"
+repoverlay remove --all
+repoverlay status --quiet
+echo "Exit code: $?"
+```
+
+The first removal must fail because the test shell holds a live profile lock.
+Both entries and their files must remain. After removing the lock, bulk removal
+must succeed. Expect exit code 1 from the failed removal and the final status.
+
 ## Cleanup
 
 Exit the test shell to restore your environment. Remove only the disposable

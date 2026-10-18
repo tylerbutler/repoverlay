@@ -2765,36 +2765,39 @@ profiles =
 }
 
 #[test]
-fn profile_remove_fails_when_session_lock_present() {
-    let ctx = TestContext::new();
+fn profile_remove_and_remove_all_respect_session_locks() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
     ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
-    ctx.write_repo_config(
+    ctx.write_repo_config(&format!(
         r"
 profiles =
+  a-ready =
+    instructions =
+      =
+        content = Use concise responses.
   rust-dev =
+    overlays =
+      = {}
     instructions =
       =
         source = copilot-instructions.md
 ",
-    );
+        ctx.overlay_source()
+    ));
 
-    cargo_bin_cmd!("repoverlay")
-        .args([
-            "profile",
-            "apply",
-            "rust-dev",
-            "--harness",
-            "copilot",
-            "--target",
-            ctx.repo_path().to_str().unwrap(),
-        ])
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
-        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
-        .assert()
-        .success();
+    for name in ["a-ready", "rust-dev"] {
+        cargo_bin_cmd!("repoverlay")
+            .args(["profile", "apply", name, "--harness", "copilot"])
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+            .assert()
+            .success();
+    }
 
     let state_file = ctx
         .repo_path()
@@ -2825,9 +2828,44 @@ profiles =
         .failure()
         .stderr(predicate::str::contains("currently in use by an ephemeral"));
 
+    cargo_bin_cmd!("repoverlay")
+        .args(["remove", "--all"])
+        .arg("--target")
+        .arg(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("currently in use by an ephemeral"));
+
     // Lock blocked removal: state and managed file are left intact.
     assert_eq!(fs::read_to_string(&state_file).unwrap(), original_state);
     assert!(instruction_target.exists());
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/profiles/a-ready.copilot.ccl")
+            .exists()
+    );
+    assert!(ctx.file_exists(".envrc"));
+
+    fs::remove_file(&lock_file).unwrap();
+    cargo_bin_cmd!("repoverlay")
+        .args(["remove", "--all"])
+        .arg("--target")
+        .arg(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+    assert!(!instruction_target.exists());
+    assert!(!ctx.file_exists(".envrc"));
+    assert!(!state_file.exists());
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/a-ready.copilot.ccl")
+            .exists()
+    );
+    assert!(ctx.file_exists(".repoverlay/config.ccl"));
 }
 
 #[cfg(unix)]
@@ -3648,7 +3686,7 @@ fn status_shows_multiple_overlays() {
 
 #[cfg(unix)]
 #[test]
-fn status_reports_apm_profiles_in_all_modes() {
+fn apm_profiles_support_status_and_remove_all() {
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::TempDir::new().unwrap();
@@ -3724,17 +3762,15 @@ esac
                     .clone();
                 serde_json::from_slice::<serde_json::Value>(&output).unwrap()
             };
-            let profile_name = if operation == "install" {
-                cmd(&["apm", "install", "owner/demo", "--harness", harness])
-                    .assert()
-                    .success();
-                "apm-owner-demo"
+            let (apply_args, profile_name) = if operation == "install" {
+                (
+                    vec!["apm", "install", "owner/demo", "--harness", harness],
+                    "apm-owner-demo",
+                )
             } else {
-                cmd(&["apm", "sync", "--harness", harness])
-                    .assert()
-                    .success();
-                "apm-project"
+                (vec!["apm", "sync", "--harness", harness], "apm-project")
             };
+            cmd(&apply_args).assert().success();
             let command_target = if harness == "claude" {
                 ".claude/commands/demo.md"
             } else {
@@ -3785,6 +3821,22 @@ esac
                     .iter()
                     .any(|file| file["target"] == command_target && file["status"] == "missing")
             );
+            fs::write(ctx.repo_path().join(command_target), "# Demo\n").unwrap();
+
+            cmd(&["remove", "--all", "--dry-run"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains(harness));
+            assert!(ctx.file_exists(command_target));
+            assert_eq!(status_json(&[])["profiles"][0]["name"], profile_name);
+            cmd(&["remove", "--all"]).assert().success();
+            assert!(!ctx.file_exists(command_target));
+            cmd(&["restore"]).assert().success();
+            cmd(&["status", "--quiet"]).assert().code(1);
+            assert_eq!(status_json(&[])["profiles"], serde_json::json!([]));
+
+            cmd(&apply_args).assert().success();
 
             cmd(&["apply", ctx.overlay_source(), "--name", "mixed-overlay"])
                 .assert()
@@ -3818,6 +3870,21 @@ esac
                     .stderr(predicate::str::contains("not applied"))
                     .stderr(predicate::str::contains(profile_name));
             }
+            cmd(&["remove", "--all", "--dry-run"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains("mixed-overlay"));
+            assert!(ctx.file_exists(command_target));
+            assert!(ctx.file_exists(".envrc"));
+            cmd(&["remove", "--all"]).assert().success();
+            assert!(!ctx.file_exists(command_target));
+            assert!(!ctx.file_exists(".envrc"));
+            cmd(&["restore"]).assert().success();
+            cmd(&["status", "--quiet"]).assert().code(1);
+            let json = status_json(&[]);
+            assert_eq!(json["profiles"], serde_json::json!([]));
+            assert_eq!(json["overlays"], serde_json::json!([]));
         }
     }
 }
