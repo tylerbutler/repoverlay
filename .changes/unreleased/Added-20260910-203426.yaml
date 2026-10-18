@@ -1,7 +1,7 @@
 kind: Added
 body: |-
-    Install APM packages directly with `repoverlay apm install`
+    Install APM packages with `repoverlay apm install`
 
-    Resolve and pack the package in isolation, then apply supported skills, agents, and MCP servers through the existing profile lifecycle.
+    Install APM packages for Claude and Copilot. Supported content includes skills, agents, MCP servers, commands or prompts, instructions, hooks, LSP configuration, and generated context. Manage installed files as a profile, with conflict detection, removal, and restore. Hooks run commands in your repository and require `--allow-hooks`.
 time: 2026-09-10T20:34:26-07:00
 component: apm

@@ -107,7 +107,7 @@ Cloudflare dashboard. Configure these build settings:
 | --- | --- |
 | Production branch | `main` |
 | Root directory | `website` |
-| Build command | `pnpm build:site` |
+| Build command | Leave empty (Wrangler builds the site) |
 | Deploy command | `pnpm run deploy:site` |
 | Preview command | `pnpm exec wrangler preview` |
 | Build variable `NODE_VERSION` | `24` |
@@ -122,6 +122,8 @@ inputs outside `website/`.
 `website/wrangler.jsonc` serves `dist/` as static assets, uses the site's
 `404.html` for missing pages, and configures `repoverlay.tylerbutler.com` as a
 custom domain. Wrangler also enables the Worker's `workers.dev` address.
+Its `build.command` runs `pnpm build:site` before production and preview
+deployments. The empty `previews` block enables branch previews.
 
 Before the domain cutover, verify a Cloudflare preview while Netlify still serves
 the production site. Remove the existing Netlify CNAME for
@@ -129,8 +131,8 @@ the production site. Remove the existing Netlify CNAME for
 Cloudflare cannot create a custom domain while that CNAME exists. After you verify
 the custom domain, disable Netlify builds.
 
-To deploy from your machine, run `pnpm exec wrangler login`, `pnpm build:site`,
-and `pnpm run deploy:site` from `website/`. To check the deployment without
+To deploy from your machine, run `pnpm exec wrangler login` and
+`pnpm run deploy:site` from `website/`. To check the deployment without
 publishing, run `pnpm run deploy:site --dry-run`.
 
 ## Release Process
