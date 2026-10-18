@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.18.0 - 2026-10-18
+
+
+### Command: `apm`
+
+
+#### Added
+
+##### Install APM packages with `repoverlay apm install`
+
+Install APM packages for Claude and Copilot. Supported content includes skills, agents, MCP servers, commands or prompts, instructions, hooks, LSP configuration, and generated context. Manage installed files as a profile, with conflict detection, removal, and restore. Hooks run commands in your repository and require `--allow-hooks`.
+
+##### Sync locked APM projects with `repoverlay apm sync`
+
+Reproduce a repository's locked APM project without changing its manifest or lockfile. Apply the project's packages, LSP configuration, and generated context for Claude or Copilot.
+
+
 ## v0.17.1 - 2026-09-10
 
 
