@@ -9,6 +9,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: taiki-e/install-action@v2
+    - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # ratchet:taiki-e/install-action@v2
       with:
         tool: ${{ inputs.tools }}

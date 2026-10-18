@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ vars.RUNS_ON_SEMVER || vars.RUNS_ON || 'ubuntu-latest' }}
     if: github.event.pull_request.draft != true
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # ratchet:actions/checkout@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust
@@ -93,7 +93,7 @@ jobs:
     if: github.event.pull_request.draft != true
     steps:
       - name: Checkout PR
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # ratchet:actions/checkout@v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
 
       - uses: ./.github/actions/setup-rust
 
@@ -109,7 +109,7 @@ jobs:
 
       - name: Download main binary size artifact
         id: download-main-size
-        uses: dawidd6/action-download-artifact@b6e2e70617bc3265edd6dab6c906732b2f1ae151 # ratchet:dawidd6/action-download-artifact@v21
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477 # ratchet:dawidd6/action-download-artifact@v27
         with:
           workflow: ci.yml
           branch: main
@@ -164,10 +164,10 @@ jobs:
     runs-on: ${{ vars.RUNS_ON_CHANGELOG || vars.RUNS_ON || 'ubuntu-latest' }}
     if: github.event.pull_request.draft != true
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # ratchet:actions/checkout@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7.0.1
         with:
           fetch-depth: 0
-      - uses: tylerbutler/actions/changie-check@ee7def5950abcf0a519add705a95719ab345c05e # ratchet:tylerbutler/actions/changie-check@main
+      - uses: tylerbutler/actions/changie-check@ed7d5e5f1d4370a5ccf06503916e3c301102ab1c # ratchet:tylerbutler/actions/changie-check@main
         id: changelog
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
