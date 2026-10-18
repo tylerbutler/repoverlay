@@ -84,6 +84,57 @@ The CI workflow runs on pull requests and pushes to main:
 just ci   # Runs: test, lint, fmt-check
 ```
 
+## Website
+
+Use Node.js 24 and pnpm 11.9.0 to work on the Astro/Starlight website:
+
+```bash
+cd website
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Run `pnpm check:astro` to check the site and `pnpm build:site` to build it.
+The build reads `Cargo.toml` for the release announcement and includes
+`docs/cli-reference.md` from the repository. It does not need a Rust build.
+
+### Cloudflare Workers Builds
+
+Connect `tylerbutler/repoverlay` to a Worker named `repoverlay-docs` in the
+Cloudflare dashboard. Configure these build settings:
+
+| Setting | Value |
+| --- | --- |
+| Production branch | `main` |
+| Root directory | `website` |
+| Build command | Leave empty (Wrangler builds the site) |
+| Deploy command | `pnpm run deploy:site` |
+| Preview command | `pnpm exec wrangler preview` |
+| Build variable `NODE_VERSION` | `24` |
+| Build variable `PNPM_VERSION` | `11.9.0` |
+| Build watch include paths | `website/*`, `Cargo.toml`, `docs/cli-reference.md` |
+
+Enable preview builds for non-production branches. Cloudflare installs the
+dependencies and provides the deployment API token; no GitHub Actions deployment
+secrets are needed. Keep the full repository checkout so the build can read its
+inputs outside `website/`.
+
+`website/wrangler.jsonc` serves `dist/` as static assets, uses the site's
+`404.html` for missing pages, and configures `repoverlay.tylerbutler.com` as a
+custom domain. Wrangler also enables the Worker's `workers.dev` address.
+Its `build.command` runs `pnpm build:site` before production and preview
+deployments. The empty `previews` block enables branch previews.
+
+Before the domain cutover, verify a Cloudflare preview while Netlify still serves
+the production site. Remove the existing Netlify CNAME for
+`repoverlay.tylerbutler.com` from the Cloudflare zone, then run a production build.
+Cloudflare cannot create a custom domain while that CNAME exists. After you verify
+the custom domain, disable Netlify builds.
+
+To deploy from your machine, run `pnpm exec wrangler login` and
+`pnpm run deploy:site` from `website/`. To check the deployment without
+publishing, run `pnpm run deploy:site --dry-run`.
+
 ## Release Process
 
 This project uses a release pipeline with clear ownership boundaries: [changie](https://changie.dev/) owns changelog content, [release-plz](https://release-plz.ieni.dev/) owns crates.io publishing and release tags, and [cargo-dist](https://rust-lang.github.io/cargo-dist/) owns binary distribution and GitHub release hosting.

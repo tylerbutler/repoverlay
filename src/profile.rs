@@ -22,6 +22,54 @@ pub(crate) struct ProfileConfig {
     pub(crate) instructions: Vec<InstructionConfig>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) plugins: Vec<crate::plugin::PluginRef>,
+    /// Resolved MCP configuration supplied by an in-memory profile, such as an
+    /// APM install. It is never serialized into repoverlay configuration.
+    #[serde(skip)]
+    pub(crate) resolved_mcp_servers: serde_json::Map<String, serde_json::Value>,
+    /// Managed placements supplied by an in-memory profile, such as the
+    /// target-native output of an APM install. Runtime-only.
+    #[serde(skip)]
+    pub(crate) resolved_placements: Vec<ResolvedPlacement>,
+    /// JSON merges supplied by an in-memory profile, such as Claude hooks
+    /// captured from an APM install. Runtime-only.
+    #[serde(skip)]
+    pub(crate) resolved_json_merges: Vec<ResolvedJsonMerge>,
+    /// Managed markdown regions supplied by an in-memory profile, such as
+    /// compiled context captured from an APM install. Runtime-only.
+    #[serde(skip)]
+    pub(crate) resolved_managed_regions: Vec<ResolvedManagedRegion>,
+    /// Plugin-bundle capabilities another mechanism already handled, so the
+    /// applicator must not report them as skipped. Runtime-only.
+    #[serde(skip)]
+    pub(crate) handled_plugin_capabilities: Vec<String>,
+}
+
+/// A durable source placed at a repository-relative target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedPlacement {
+    /// Absolute path inside the durable artifact.
+    pub(crate) source: PathBuf,
+    /// Repository-relative target path.
+    pub(crate) target: PathBuf,
+}
+
+/// A JSON merge into a repository-relative target with explicit ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedJsonMerge {
+    /// Repository-relative target path.
+    pub(crate) target: PathBuf,
+    pub(crate) value: serde_json::Value,
+    /// RFC 6901 pointers this merge owns.
+    pub(crate) owned_paths: Vec<String>,
+}
+
+/// A durable markdown source inserted into a managed repository file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedManagedRegion {
+    /// Absolute path inside the durable artifact.
+    pub(crate) source: PathBuf,
+    /// Repository-relative target path.
+    pub(crate) target: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -103,6 +151,7 @@ fn dedent_block(s: &str) -> String {
         .join("\n")
 }
 
+/// Merge persisted profile settings, leaving runtime-resolved inputs at their defaults.
 pub(crate) fn merge_profile_config(
     base: &ProfileConfig,
     override_profile: &ProfileConfig,
@@ -115,6 +164,7 @@ pub(crate) fn merge_profile_config(
         overlays: merge_list(&base.overlays, &override_profile.overlays),
         instructions: merge_list(&base.instructions, &override_profile.instructions),
         plugins: merge_list(&base.plugins, &override_profile.plugins),
+        ..ProfileConfig::default()
     }
 }
 
@@ -510,6 +560,7 @@ profiles =
                 install: InstallMode::Managed,
                 scope: None,
             }],
+            ..ProfileConfig::default()
         };
         let overlay = ProfileConfig {
             description: None,
@@ -522,6 +573,7 @@ profiles =
                 install: InstallMode::Managed,
                 scope: None,
             }],
+            ..ProfileConfig::default()
         };
 
         let merged = merge_profile_config(&base, &overlay);

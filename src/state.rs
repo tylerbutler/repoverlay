@@ -600,7 +600,10 @@ pub(crate) fn external_state_dir() -> Result<PathBuf> {
 /// Uses a hash of the canonical target path to create a unique directory.
 pub(crate) fn external_state_dir_for_target(target: &Path) -> Result<PathBuf> {
     let base = external_state_dir()?;
-    let target_hash = hash_path(target);
+    let canonical = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
+    let target_hash = hash_path(&canonical);
     Ok(base.join(target_hash))
 }
 
