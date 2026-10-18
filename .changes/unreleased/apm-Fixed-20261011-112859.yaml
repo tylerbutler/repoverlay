@@ -1,0 +1,7 @@
+component: apm
+kind: Fixed
+body: |-
+    Fix APM hook paths, profile ownership, and frozen sync
+
+    Claude hook commands point to scripts in the durable artifact, including project-variable paths. Profile apply and restore reject overlapping native placements before changing files. Frozen project sync accepts harness-specific deployment metadata changes in the temporary lockfile while keeping repository inputs unchanged.
+time: 2026-10-11T11:28:59.794917319-07:00
