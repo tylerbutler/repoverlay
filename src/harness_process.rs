@@ -1,6 +1,6 @@
 //! Managed harness process execution.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use process_wrap::std::{ChildWrapper, CommandWrap};
 use std::process::{Command, ExitStatus};
 
@@ -104,7 +104,9 @@ impl HarnessProcess {
         // entire process group and can block or lose the harness exit status when a
         // same-group descendant is still alive.
         #[allow(unsafe_code)]
-        let status = unsafe { self.child.inner_child_mut() }.try_wait()?;
+        let status = unsafe { self.child.try_inner_child_mut() }
+            .context("Harness process has no native child")?
+            .try_wait()?;
         Ok(status)
     }
 
