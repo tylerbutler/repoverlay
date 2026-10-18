@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use crate::reference::SourceReference;
 use crate::{
     ApplyOptions, ConflictStrategy, apply_overlay, config, repair_git_exclude, restore_overlays,
-    show_status, show_status_json, status_has_overlays, switch_overlay, update_overlays,
+    show_status, show_status_json, status_has_entries, switch_overlay, update_overlays,
     version::{check_for_updates, version_string},
 };
 
@@ -140,13 +140,13 @@ enum Commands {
         interactive: bool,
     },
 
-    /// Show the status of applied overlays
+    /// Show the status of applied overlays and profiles
     Status {
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
         target: Option<PathBuf>,
 
-        /// Show only a specific overlay
+        /// Show only a specific overlay or profile
         #[arg(short, long)]
         name: Option<String>,
 
@@ -154,7 +154,7 @@ enum Commands {
         #[arg(long, conflicts_with = "quiet")]
         json: bool,
 
-        /// Quiet mode: exit code only (0 = overlays applied, 1 = none)
+        /// Quiet mode: exit code only (0 = overlays or profiles applied, 1 = none)
         #[arg(short, long, conflicts_with = "json")]
         quiet: bool,
     },
@@ -875,14 +875,14 @@ pub(crate) fn run() -> Result<()> {
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             if quiet {
-                let has_overlays = status_has_overlays(&target, name.as_deref())?;
-                if !has_overlays {
+                let has_entries = status_has_entries(&target, name.as_deref())?;
+                if !has_entries {
                     std::process::exit(1);
                 }
             } else if json {
                 show_status_json(&target, name.as_deref())?;
             } else {
-                show_status(&target, name)?;
+                show_status(&target, name.as_deref())?;
 
                 // Auto-repair git exclude entries if they're out of sync
                 // Only run in interactive (non-quiet, non-json) mode
@@ -2812,7 +2812,7 @@ directories =
             )
             .unwrap();
 
-            let result = show_status(repo.path(), Some("overlay-a".to_string()));
+            let result = show_status(repo.path(), Some("overlay-a"));
             assert!(result.is_ok());
         }
 
@@ -2831,7 +2831,7 @@ directories =
             )
             .unwrap();
 
-            let result = show_status(repo.path(), Some("fake".to_string()));
+            let result = show_status(repo.path(), Some("fake"));
             assert!(result.is_err());
         }
     }

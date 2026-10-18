@@ -58,6 +58,8 @@ Here are the test files to dispatch (one agent each):
 | 12 | `docs/manual-tests/completions.md` | Shell completion generation |
 | 13 | `docs/manual-tests/library.md` | In-repo library import/export/list/remove workflows |
 | 14 | `docs/manual-tests/source-resolution.md` | Source priority, `--from`, and upstream fallback |
+| 15 | `docs/manual-tests/profile.md` | Profile apply, status, filtering, removal, and restore for Claude and Copilot |
+| 16 | `docs/manual-tests/apm.md` | APM package install, pinned project sync, status, removal, and restore |
 
 ## Step 3: Collect results and file issues
 

@@ -166,6 +166,15 @@ repoverlay status --target "$TEST_DIR/target-repo" --name nonexistent
 # Should show no results or error
 ```
 
+### TC-06: Status with applied profiles
+
+Run [Profile TC-01 through TC-03](profile.md) to check profile-only status,
+mixed overlay/profile status, name filters, JSON output, and quiet-mode exit
+codes. Repeat with Claude and Copilot.
+
+Run [APM TC-01 and TC-04](apm.md) to check status after package installation
+and pinned project sync. These cases require APM and network access.
+
 ## Cleanup
 
 ```bash

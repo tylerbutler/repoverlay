@@ -3646,6 +3646,182 @@ fn status_shows_multiple_overlays() {
         .stdout(predicate::str::contains("second-overlay"));
 }
 
+#[cfg(unix)]
+#[test]
+fn status_reports_apm_profiles_in_all_modes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::TempDir::new().unwrap();
+    let apm = root.path().join("apm");
+    fs::write(
+        &apm,
+        r#"#!/bin/sh
+set -eu
+operation=$1
+shift
+root=.
+harness=claude
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --root|--output) root=$2; shift 2 ;;
+        --target) harness=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+case "$operation" in
+    install) ;;
+    compile)
+        if [ "$harness" = claude ]; then
+            mkdir -p "$root/.claude/commands"
+            printf '# Demo\n' > "$root/.claude/commands/demo.md"
+        else
+            mkdir -p "$root/.github/prompts"
+            printf '# Demo\n' > "$root/.github/prompts/demo.prompt.md"
+        fi
+        ;;
+    pack)
+        mkdir -p "$root/demo/skills/demo"
+        printf '# Demo\n' > "$root/demo/skills/demo/SKILL.md"
+        ;;
+    *) exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&apm, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(root.path().to_path_buf()).chain(std::env::split_paths(&path)),
+    )
+    .unwrap();
+
+    for harness in ["claude", "copilot"] {
+        for operation in ["install", "sync"] {
+            let ctx = TestContext::new().with_overlay(&envrc_overlay());
+            ctx.create_repo_file("apm.yml", "name: project\nversion: 1.0.0\n");
+            ctx.create_repo_file("apm.lock.yaml", "dependencies: []\n");
+            let cmd = |args: &[&str]| {
+                let mut cmd = cargo_bin_cmd!("repoverlay");
+                cmd.args(args)
+                    .arg("--target")
+                    .arg(ctx.repo_path())
+                    .env("PATH", &path)
+                    .env("XDG_CONFIG_HOME", root.path().join("config"))
+                    .env("XDG_DATA_HOME", root.path().join("data"))
+                    .env("REPOVERLAY_CACHE_DIR", root.path().join("cache"))
+                    .env("REPOVERLAY_CLAUDE_HOME", root.path().join("claude"))
+                    .env("REPOVERLAY_COPILOT_HOME", root.path().join("copilot"))
+                    .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+                cmd
+            };
+            let status_json = |args: &[&str]| {
+                let output = cmd(&["status", "--json"])
+                    .args(args)
+                    .assert()
+                    .success()
+                    .get_output()
+                    .stdout
+                    .clone();
+                serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+            };
+            let profile_name = if operation == "install" {
+                cmd(&["apm", "install", "owner/demo", "--harness", harness])
+                    .assert()
+                    .success();
+                "apm-owner-demo"
+            } else {
+                cmd(&["apm", "sync", "--harness", harness])
+                    .assert()
+                    .success();
+                "apm-project"
+            };
+            let command_target = if harness == "claude" {
+                ".claude/commands/demo.md"
+            } else {
+                ".github/prompts/demo.prompt.md"
+            };
+            assert!(!ctx.repo_path().join(".repoverlay/overlays").exists());
+            cmd(&["status"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains(harness))
+                .stdout(predicate::str::contains(command_target))
+                .stdout(predicate::str::contains("No overlays").not());
+            cmd(&["status", "--quiet"]).assert().success().stdout("");
+            cmd(&["status", "--quiet", "--name", profile_name])
+                .assert()
+                .success()
+                .stdout("");
+            cmd(&["status", "--quiet", "--name", "missing"])
+                .assert()
+                .code(1)
+                .stdout("")
+                .stderr("");
+
+            let json = status_json(&[]);
+            assert_eq!(json["schema_version"], 1);
+            assert_eq!(json["overlays"], serde_json::json!([]));
+            let profiles = json["profiles"].as_array().unwrap();
+            assert_eq!(profiles.len(), 1);
+            assert_eq!(profiles[0]["name"], profile_name);
+            assert_eq!(profiles[0]["harness"], harness);
+            assert_eq!(profiles[0]["mode"], "persistent");
+            assert!(profiles[0]["applied_at"].is_string());
+            let files = profiles[0]["files"].as_array().unwrap();
+            let command = files
+                .iter()
+                .find(|file| file["target"] == command_target)
+                .unwrap();
+            assert!(command["source"].is_string());
+            assert_eq!(command["action"], "place-plugin-dir");
+            assert_eq!(command["status"], "ok");
+            fs::remove_file(ctx.repo_path().join(command_target)).unwrap();
+            let json = status_json(&[]);
+            assert!(
+                json["profiles"][0]["files"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|file| file["target"] == command_target && file["status"] == "missing")
+            );
+
+            cmd(&["apply", ctx.overlay_source(), "--name", "mixed-overlay"])
+                .assert()
+                .success();
+            cmd(&["status"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains("mixed-overlay"));
+            let json = status_json(&[]);
+            assert_eq!(json["overlays"].as_array().unwrap().len(), 1);
+            assert_eq!(json["profiles"].as_array().unwrap().len(), 1);
+            cmd(&["status", "--name", profile_name])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains("mixed-overlay").not());
+            let json = status_json(&["--name", profile_name]);
+            assert_eq!(json["profiles"][0]["name"], profile_name);
+            assert_eq!(json["overlays"], serde_json::json!([]));
+            let json = status_json(&["--name", "mixed-overlay"]);
+            assert_eq!(json["overlays"][0]["name"], "mixed-overlay");
+            assert_eq!(json["profiles"], serde_json::json!([]));
+            for args in [
+                &["status", "--name", "missing"][..],
+                &["status", "--json", "--name", "missing"][..],
+            ] {
+                cmd(args)
+                    .assert()
+                    .failure()
+                    .stderr(predicate::str::contains("not applied"))
+                    .stderr(predicate::str::contains(profile_name));
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Status --json / --quiet Tests
 // ============================================================================
@@ -3666,6 +3842,7 @@ fn status_json_no_overlays() {
 
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["overlays"].as_array().unwrap().len(), 0);
+    assert_eq!(json["profiles"], serde_json::json!([]));
 }
 
 #[test]

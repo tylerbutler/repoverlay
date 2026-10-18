@@ -235,6 +235,8 @@ repoverlay apm sync
 
 Sync requires `apm.yml`, `apm.lock.yaml`, and APM 0.31 or later. It runs `apm install --frozen` and `apm compile` with an isolated output root, then applies the result as the `apm-project` profile. Re-running sync replaces that profile and restores the previous version if the new application fails. The source manifest and lockfile remain unchanged. APM can update harness-specific deployment metadata in the temporary lockfile; its frozen install enforces the dependency pins.
 
+Use `repoverlay status` to see applied overlays and profiles, including APM profiles and their managed files. Filter with `--name <profile>`, or use `--json` for separate `overlays` and `profiles` arrays. `status --quiet` returns exit code 0 if a matching overlay or profile is applied, or 1 if none match.
+
 The default harness is Claude. Use `--harness copilot` for Copilot. Package installation copies the target repository's Git remote and any `policy` block into its temporary project. Project sync runs from the target repository, so APM can resolve local `.apm/` primitives and relative inputs while enforcing the repository's policy. Remove generated profiles with:
 
 ```bash

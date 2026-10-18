@@ -52,7 +52,7 @@ pub(crate) use resolve::{
     list_overlays_from_cached_repo, resolve_source, try_upgrade_github_source,
 };
 pub(crate) use restore::restore_overlays;
-pub(crate) use status::{show_status, show_status_json, status_has_overlays};
+pub(crate) use status::{show_status, show_status_json, status_has_entries};
 pub(crate) use switch::switch_overlay;
 pub(crate) use update::update_overlays;
 
