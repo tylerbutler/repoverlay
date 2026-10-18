@@ -2942,6 +2942,89 @@ profiles =
 
 #[cfg(unix)]
 #[test]
+fn profile_owned_overlays_block_standalone_removal_and_switch() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+    let root = tempfile::TempDir::new().unwrap();
+    let independent = common::create_overlay_dir(&[(".independent", "keep")]);
+    let replacement = common::create_overlay_dir(&[(".replacement", "new")]);
+    ctx.write_repo_config(&format!(
+        "profiles =\n  owner =\n    overlays =\n      = {}\n",
+        ctx.overlay_source()
+    ));
+    let cmd = |args: &[&str]| {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.args(args)
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .env("XDG_DATA_HOME", root.path().join("data"))
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+        cmd
+    };
+    cmd(&[
+        "apply",
+        independent.path().to_str().unwrap(),
+        "--name",
+        "a-independent",
+    ])
+    .assert()
+    .success();
+    cmd(&["profile", "apply", "owner", "--harness", "copilot"])
+        .assert()
+        .success();
+    let output = cmd(&["status", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let state: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let owned = state["profiles"][0]["overlays"][0].as_str().unwrap();
+    let lock = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/owner.copilot.lock");
+    for locked in [false, true] {
+        if locked {
+            fs::write(&lock, std::process::id().to_string()).unwrap();
+        }
+        for dry_run in [false, true] {
+            for args in [
+                vec!["remove", owned],
+                vec!["switch", replacement.path().to_str().unwrap()],
+                vec!["apply", ctx.overlay_source(), "--name", owned, "--force"],
+            ] {
+                let mut command = cmd(&args);
+                if dry_run {
+                    command.arg("--dry-run");
+                }
+                // Applying with --dry-run does not remove or replace anything.
+                if args[0] == "apply" && dry_run {
+                    continue;
+                }
+                command
+                    .assert()
+                    .failure()
+                    .stderr(predicate::str::contains(if locked {
+                        "currently in use"
+                    } else {
+                        "managed by profile 'owner'"
+                    }));
+                assert!(ctx.file_exists(".envrc"));
+                assert!(ctx.file_exists(".independent"));
+                assert!(!ctx.file_exists(".replacement"));
+            }
+        }
+    }
+    fs::remove_file(lock).unwrap();
+    cmd(&["profile", "remove", "owner", "--harness", "copilot"])
+        .assert()
+        .success();
+    assert!(!ctx.file_exists(".envrc"));
+    assert!(ctx.file_exists(".independent"));
+}
+
+#[cfg(unix)]
+#[test]
 fn profile_remove_recovers_stale_session_lock() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();

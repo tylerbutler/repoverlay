@@ -13,15 +13,13 @@ pub(crate) mod source;
 pub(crate) mod sync;
 
 use anyhow::{Context, Result, bail};
-use colored::Colorize;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::selection::{FlatSelectionConfig, SelectableItem, ToSelectableItem, select_flat};
 use crate::state::{OverlaySource, SourceResolver};
 use crate::{
-    OVERLAYS_DIR, STATE_DIR, canonicalize_path, list_applied_overlays, remove_overlay,
-    remove_single_overlay, selection::is_interactive, state, validate_git_repo,
+    canonicalize_path, list_applied_overlays, remove_overlay, selection::is_interactive, state,
+    validate_git_repo,
 };
 
 /// Canonicalize and validate an optional target path (defaults to current directory).
@@ -94,57 +92,64 @@ pub(crate) fn handle_remove(
 
     // Interactive selection
     let target = canonicalize_path(target, "Target directory")?;
-    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-
-    if !overlays_dir.exists() {
-        bail!("No overlays are currently applied in: {}", target.display());
-    }
-
     let applied_overlays = list_applied_overlays(&target)?;
-    if applied_overlays.is_empty() {
-        bail!("No overlays are currently applied in: {}", target.display());
+    let profiles = crate::profile_plan::list_profile_states(&target)?;
+    if applied_overlays.is_empty() && profiles.is_empty() {
+        bail!(
+            "No overlays or profiles are currently applied in: {}",
+            target.display()
+        );
     }
 
-    let items: Vec<SelectableItem> = applied_overlays
+    let mut items: Vec<SelectableItem> = applied_overlays
         .iter()
-        .map(|name| name.to_selectable_item(&target))
+        .map(|name| {
+            let mut item = name.to_selectable_item(&target);
+            item.id = format!("overlay:{name}");
+            if let Some(profile) = profiles
+                .iter()
+                .find(|profile| profile.overlays.contains(&name.to_string()))
+            {
+                item.disabled = true;
+                item.description = Some(format!(
+                    "Managed by profile '{}' ({}); select that profile",
+                    profile.name, profile.harness
+                ));
+            }
+            item
+        })
         .collect();
+    items.extend(profiles.iter().map(|profile| SelectableItem {
+        id: format!("profile:{}:{}", profile.harness, profile.name),
+        label: format!("{} (profile, {})", profile.name, profile.harness),
+        description: Some(format!("Applied {}", profile.applied_at.to_rfc3339())),
+        preselected: false,
+        disabled: false,
+    }));
 
     let result = select_flat(
         &items,
         &FlatSelectionConfig {
-            prompt: "Select overlay(s) to remove:".into(),
+            prompt: "Select overlay(s) or profile(s) to remove:".into(),
         },
     )?;
 
     if result.cancelled || result.selected_ids.is_empty() {
-        bail!("No overlays selected for removal");
+        bail!("No overlays or profiles selected for removal");
     }
 
-    let remove_all = result.selected_ids.len() == applied_overlays.len();
-
-    for overlay_name in &result.selected_ids {
-        if dry_run {
-            println!(
-                "{} Dry run - would remove overlay '{overlay_name}'",
-                "Note:".yellow()
-            );
-        } else {
-            remove_single_overlay(&target, &overlays_dir, overlay_name)?;
-        }
-    }
-
-    if !dry_run {
-        if remove_all {
-            fs::remove_dir_all(target.join(STATE_DIR))?;
-            println!("\n{} Removed all overlays", "✓".green().bold());
-        } else {
-            let remaining = list_applied_overlays(&target)?;
-            if remaining.is_empty() {
-                fs::remove_dir_all(target.join(STATE_DIR))?;
-            }
-        }
-    }
-
-    Ok(())
+    let overlays = applied_overlays
+        .into_iter()
+        .filter(|name| result.selected_ids.contains(&format!("overlay:{name}")))
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+    let profiles = profiles
+        .into_iter()
+        .filter(|profile| {
+            result
+                .selected_ids
+                .contains(&format!("profile:{}:{}", profile.harness, profile.name))
+        })
+        .collect();
+    crate::remove::remove_selected(&target, &overlays, profiles, dry_run)
 }

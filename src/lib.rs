@@ -1056,6 +1056,17 @@ pub(crate) fn apply_multiple_overlays(
     // Phase 1: Check for conflicts between selected overlays
     check_overlay_conflicts(sources)?;
 
+    if matches!(
+        conflict_strategy,
+        ConflictStrategy::Force | ConflictStrategy::Interactive
+    ) {
+        for resolved in sources {
+            let config = load_overlay_config(&resolved.path)?;
+            let name = determine_overlay_name(&config, &resolved.path, None)?;
+            remove::check_overlay_removal(&target, &[name.as_str()])?;
+        }
+    }
+
     // Phase 2: Check for conflicts with already-applied overlays
     let mut existing_targets = load_all_overlay_targets(&target)?;
     for resolved in sources {
@@ -1150,9 +1161,11 @@ pub(crate) fn apply_multiple_overlays(
                     }
 
                     // Clean up .repoverlay directory if no overlays remain
-                    let remaining = list_applied_overlays(&target).unwrap_or_default();
+                    let remaining = list_applied_overlays(&target)?;
                     if remaining.is_empty() {
-                        let _ = fs::remove_dir_all(target.join(STATE_DIR));
+                        remove::cleanup_state_dir(&target).with_context(
+                            || "Failed to clean up overlay state after batch rollback",
+                        )?;
                     }
                 }
 

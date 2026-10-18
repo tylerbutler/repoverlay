@@ -745,7 +745,7 @@ fn remove_profile_inner(name: &str, harness: AgentHarness, target: &Path) -> Res
             .join(format!("{overlay}.ccl"));
         match overlay_state_path.try_exists() {
             Ok(false) => (),
-            Ok(true) => crate::remove_overlay(target, Some(overlay.clone()), false, false)?,
+            Ok(true) => crate::remove::remove_profile_overlay(target, overlay, name, harness)?,
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(

@@ -242,6 +242,12 @@ Use `repoverlay remove --all` to remove applied overlays and profiles, including
 APM profiles. Add `--dry-run` to preview the removal. A live agent session's
 profile lock blocks bulk removal.
 
+Use `repoverlay remove --interactive` to select individual overlays or profiles.
+Select the owning profile to remove a profile-owned overlay. Standalone removal,
+forced replacement, and `switch` reject profile-owned overlays before removal.
+Removing an overlay preserves unrelated profile state, configuration, and library
+files.
+
 APM profiles use the same external snapshots as configured profiles, so
 `repoverlay restore` can rebuild them after `git clean`.
 

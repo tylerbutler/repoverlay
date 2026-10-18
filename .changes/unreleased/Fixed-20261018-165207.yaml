@@ -1,0 +1,9 @@
+kind: Fixed
+body: |-
+    Preserve profile ownership during overlay removal
+
+    Include profiles in interactive removal and preserve unrelated profile state,
+    backups, configuration, and library files. Block standalone removal, switching,
+    and forced replacement of profile-owned overlays, with live-session lock
+    checks before changes. Preserve profile state during batch-apply rollback.
+time: 2026-10-18T16:52:07-07:00

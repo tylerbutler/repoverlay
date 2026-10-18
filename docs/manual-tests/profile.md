@@ -206,6 +206,28 @@ The first removal must fail because the test shell holds a live profile lock.
 Both entries and their files must remain. After removing the lock, bulk removal
 must succeed. Expect exit code 1 from the failed removal and the final status.
 
+### TC-09: Select profiles and overlays for removal
+
+Run in an interactive terminal.
+
+```bash
+repoverlay profile apply manual-profile --harness "$HARNESS"
+repoverlay apply "$TEST_DIR/overlay" --name manual-overlay
+repoverlay remove --interactive
+repoverlay profile status
+test -f ".repoverlay/profiles/manual-profile.$HARNESS.ccl"
+test -f .repoverlay/config.ccl
+repoverlay remove --interactive --dry-run
+repoverlay remove --interactive
+repoverlay status --quiet
+echo "Exit code: $?"
+```
+
+In the first menu, select only `manual-overlay`. The profile must remain applied
+with its skill and context region intact. In the dry run, select the remaining
+profile. It must remain applied. Select that profile in the last menu to remove
+it. Expect final exit code 1. The configuration must remain.
+
 ## Cleanup
 
 Exit the test shell to restore your environment. Remove only the disposable

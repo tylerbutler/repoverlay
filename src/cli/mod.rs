@@ -118,7 +118,7 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Remove applied overlays, or all overlays and profiles with --all
+    /// Remove applied overlays and profiles
     Remove {
         /// Name of the overlay to remove
         name: Option<String>,
