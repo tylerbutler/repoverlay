@@ -41,6 +41,8 @@ repoverlay apm install "$PACKAGE" --harness "$HARNESS"
 test ! -f apm.yml
 test ! -d .repoverlay/overlays
 repoverlay profile status --harness "$HARNESS"
+repoverlay profile list
+repoverlay profile show "$PROFILE"
 repoverlay status
 repoverlay status --name "$PROFILE"
 repoverlay status --json --name "$PROFILE"
@@ -56,7 +58,9 @@ or adding a configured profile. Status must include the generated profile,
 selected harness, and managed file paths despite the absence of overlay state.
 JSON must contain `overlays: []` and one `profiles` entry with files marked
 `status: "ok"`. Both quiet commands must return 0 with no text. Git must not
-list generated files as untracked.
+list generated files as untracked. `profile list` must include the generated
+profile and applied harness. `profile show` must show its applied state and
+managed files without requiring a configured definition.
 
 ### TC-02: Reject duplicate installation and harness switching (requires network)
 

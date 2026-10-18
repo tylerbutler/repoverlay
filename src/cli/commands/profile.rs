@@ -1,5 +1,6 @@
 use anyhow::Result;
 use colored::Colorize;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::cli::ProfileCommand;
@@ -12,41 +13,72 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
         ProfileCommand::List { target } => {
             let target = resolve_target(target)?;
             let config = config::load_config(Some(&target))?;
-            if config.profiles.is_empty() {
-                println!("No profiles configured.");
+            let states = crate::profile_plan::list_profile_states(&target)?;
+            let names: BTreeSet<_> = config
+                .profiles
+                .keys()
+                .chain(states.iter().map(|state| &state.name))
+                .collect();
+            if names.is_empty() {
+                println!("No profiles configured or applied.");
                 return Ok(());
             }
 
-            for (name, profile) in &config.profiles {
-                match &profile.description {
-                    Some(description) => println!("{} - {description}", name.bold()),
-                    None => println!("{}", name.bold()),
+            for name in names {
+                let profile = config.profiles.get(name);
+                let source = if profile.is_some() {
+                    "configured"
+                } else {
+                    "applied state"
+                };
+                let harnesses: Vec<_> = states
+                    .iter()
+                    .filter(|state| &state.name == name)
+                    .map(|state| state.harness.as_str())
+                    .collect();
+                print!("{} [{source}; ", name.bold());
+                if harnesses.is_empty() {
+                    print!("not applied");
+                } else {
+                    print!("applied: {}", harnesses.join(", "));
                 }
+                print!("]");
+                if let Some(description) = profile.and_then(|profile| profile.description.as_ref())
+                {
+                    print!(" - {description}");
+                }
+                println!();
             }
             Ok(())
         }
         ProfileCommand::Show { name, target } => {
             let target = resolve_target(target)?;
             let config = config::load_config(Some(&target))?;
-            let profile = config
-                .profiles
-                .get(&name)
-                .ok_or_else(|| anyhow::anyhow!("Profile '{name}' not found"))?;
+            let profile = config.profiles.get(&name);
+            let states: Vec<_> = crate::profile_plan::list_profile_states(&target)?
+                .into_iter()
+                .filter(|state| state.name == name)
+                .collect();
+            anyhow::ensure!(
+                profile.is_some() || !states.is_empty(),
+                "Profile '{name}' not found"
+            );
 
             println!("{}", name.bold());
-            if let Some(description) = &profile.description {
-                println!("  Description: {description}");
-            }
-            print_list("Overlays", &profile.overlays);
-            print_list(
-                "Instructions",
-                &profile
-                    .instructions
-                    .iter()
-                    .map(crate::profile::InstructionConfig::label)
-                    .collect::<Vec<_>>(),
-            );
-            if !profile.plugins.is_empty() {
+            if let Some(profile) = profile {
+                println!("  Source: configured");
+                if let Some(description) = &profile.description {
+                    println!("  Description: {description}");
+                }
+                print_list("Overlays", &profile.overlays);
+                print_list(
+                    "Instructions",
+                    &profile
+                        .instructions
+                        .iter()
+                        .map(crate::profile::InstructionConfig::label)
+                        .collect::<Vec<_>>(),
+                );
                 print_list(
                     "Plugins",
                     &profile
@@ -55,6 +87,28 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
                         .map(format_plugin_for_show)
                         .collect::<Vec<_>>(),
                 );
+            } else {
+                println!("  Source: applied state (not configured)");
+            }
+            for state in states {
+                println!("  Applied: {} ({:?})", state.harness, state.mode);
+                println!("    Applied at: {}", state.applied_at.to_rfc3339());
+                print_list("Applied overlays", &state.overlays);
+                print_list(
+                    "Applied plugins",
+                    &state
+                        .plugins
+                        .iter()
+                        .map(|plugin| plugin.reference.clone())
+                        .collect::<Vec<_>>(),
+                );
+                if !state.files.is_empty() {
+                    println!("    Managed files:");
+                    for file in state.files {
+                        let path = file.target.strip_prefix(&target).unwrap_or(&file.target);
+                        println!("      - {} ({})", path.display(), file.action);
+                    }
+                }
             }
             Ok(())
         }

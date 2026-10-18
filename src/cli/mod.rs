@@ -608,14 +608,14 @@ pub(crate) enum MarketplaceCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum ProfileCommand {
-    /// List configured profiles
+    /// List configured and applied profiles, including APM profiles
     List {
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
         target: Option<PathBuf>,
     },
 
-    /// Show a configured profile
+    /// Show a profile's configuration and applied state
     Show {
         /// Profile name
         name: String,

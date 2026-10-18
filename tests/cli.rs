@@ -473,6 +473,78 @@ profiles =
 }
 
 #[test]
+fn profile_discovery_combines_configured_and_applied_harnesses() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let data_dir = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  active =
+    instructions =
+      =
+        content = Shared profile.
+  unapplied =
+    description = Available but not installed
+",
+    );
+    let cmd = |args: &[&str]| {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.args(args)
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("XDG_DATA_HOME", data_dir.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+        cmd
+    };
+    for harness in ["claude", "copilot"] {
+        cmd(&["profile", "apply", "active", "--harness", harness])
+            .assert()
+            .success();
+    }
+    let output = cmd(&["profile", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "active [configured; applied: claude, copilot]",
+        ))
+        .stdout(predicate::str::contains(
+            "unapplied [configured; not applied]",
+        ))
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("active "))
+            .count(),
+        1
+    );
+    ctx.write_repo_config("profiles =\n  unapplied =\n    description = Still available\n");
+    cmd(&["profile", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "active [applied state; applied: claude, copilot]",
+        ));
+    cmd(&["profile", "show", "active"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Source: applied state"))
+        .stdout(predicate::str::contains("Applied: claude"))
+        .stdout(predicate::str::contains("Applied: copilot"))
+        .stdout(predicate::str::contains("CLAUDE.md"))
+        .stdout(predicate::str::contains("AGENTS.md"));
+    cmd(&["profile", "show", "missing"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Profile 'missing' not found"));
+}
+
+#[test]
 fn profile_list_uses_current_directory_as_default_target() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
@@ -3776,6 +3848,17 @@ esac
             } else {
                 ".github/prompts/demo.prompt.md"
             };
+            cmd(&["profile", "list"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains(format!("applied: {harness}")));
+            cmd(&["profile", "show", profile_name])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Source: applied state"))
+                .stdout(predicate::str::contains(harness))
+                .stdout(predicate::str::contains(command_target));
             assert!(!ctx.repo_path().join(".repoverlay/overlays").exists());
             cmd(&["status"])
                 .assert()

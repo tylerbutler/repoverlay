@@ -598,8 +598,8 @@ Manage repository profiles
 
 ### Subcommands
 
-* `list` — List configured profiles
-* `show` — Show a configured profile
+* `list` — List configured and applied profiles, including APM profiles
+* `show` — Show a profile's configuration and applied state
 * `apply` — Apply a profile persistently
 * `status` — Show applied profile state
 * `remove` — Remove an applied profile
@@ -608,7 +608,7 @@ Manage repository profiles
 
 ## `repoverlay profile list`
 
-List configured profiles
+List configured and applied profiles, including APM profiles
 
 **Usage:** `repoverlay profile list [OPTIONS]`
 
@@ -620,7 +620,7 @@ List configured profiles
 
 ## `repoverlay profile show`
 
-Show a configured profile
+Show a profile's configuration and applied state
 
 **Usage:** `repoverlay profile show [OPTIONS] <NAME>`
 

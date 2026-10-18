@@ -247,13 +247,16 @@ APM profiles use the same external snapshots as configured profiles, so
 
 ## Inspecting profiles
 
-List configured profiles (with descriptions):
+List configured and applied profiles, including APM-generated profiles:
 
 ```bash
 repoverlay profile list
 ```
 
-Show the resolved contents of one profile:
+The list shows each profile once, with its configuration source and applied
+harnesses. Configured profiles remain visible when they are not applied.
+
+Show a profile's configuration and applied state:
 
 ```bash
 repoverlay profile show rust-dev
@@ -263,6 +266,7 @@ Example output:
 
 ```text
 rust-dev
+  Source: configured
   Description: Rust development profile
   Overlays:
     - rust-base
@@ -295,7 +299,7 @@ repoverlay profile status --harness copilot
 ```
 
 Use `repoverlay status` to inspect applied profiles alongside overlays, including
-APM profiles that do not appear in `profile list`. It shows each profile's harness
+APM-generated profiles. It shows each profile's harness
 and managed files. Use `--name <profile>` to filter, `--json` for separate
 `overlays` and `profiles` arrays, or `--quiet` to check whether a matching overlay
 or profile is applied.

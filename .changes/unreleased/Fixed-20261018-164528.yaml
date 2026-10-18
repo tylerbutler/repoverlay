@@ -1,0 +1,8 @@
+kind: Fixed
+body: |-
+    Include APM profiles in profile discovery
+
+    Combine configured and applied profiles in `profile list`, with one entry
+    per name and all applied harnesses. Let `profile show` inspect generated
+    profiles without a configured definition, including their managed files.
+time: 2026-10-18T16:45:28-07:00
