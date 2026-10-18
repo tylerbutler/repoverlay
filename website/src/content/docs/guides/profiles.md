@@ -290,6 +290,12 @@ repoverlay profile status
 repoverlay profile status --harness copilot
 ```
 
+Use `repoverlay status` to inspect applied profiles alongside overlays, including
+APM profiles that do not appear in `profile list`. It shows each profile's harness
+and managed files. Use `--name <profile>` to filter, `--json` for separate
+`overlays` and `profiles` arrays, or `--quiet` to check whether a matching overlay
+or profile is applied.
+
 Remove it when you finish:
 
 ```bash

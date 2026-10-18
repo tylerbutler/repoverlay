@@ -5,9 +5,11 @@ use std::path::Path;
 
 use crate::OverlayName;
 use crate::canonicalize_path;
+use crate::profile::{ProfileMode, ProfileState};
+use crate::profile_applicators::AgentHarness;
 use crate::state::{
-    EntryType, LinkType, OVERLAYS_DIR, OverlaySource, ResolvedVia, STATE_DIR,
-    list_applied_overlays, load_overlay_state, normalize_overlay_name,
+    EntryType, LinkType, OverlaySource, ResolvedVia, list_applied_overlays, load_overlay_state,
+    normalize_overlay_name,
 };
 
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
@@ -16,15 +18,7 @@ const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
 struct JsonStatusOutput {
     schema_version: u32,
     overlays: Vec<JsonStatusOverlay>,
-}
-
-impl JsonStatusOutput {
-    const fn new(overlays: Vec<JsonStatusOverlay>) -> Self {
-        Self {
-            schema_version: STATUS_JSON_SCHEMA_VERSION,
-            overlays,
-        }
-    }
+    profiles: Vec<JsonStatusProfile>,
 }
 
 #[derive(Serialize)]
@@ -72,65 +66,78 @@ struct JsonStatusFile {
     status: &'static str,
 }
 
-/// Check whether overlays are currently applied (for `--quiet` mode).
-///
-/// If `filter_name` is `Some`, checks only whether that specific overlay is applied.
-/// Otherwise, checks whether any overlay is applied.
-///
-/// Returns `true` if at least one matching overlay is applied, `false` otherwise.
-pub(crate) fn status_has_overlays(target: &Path, filter_name: Option<&str>) -> Result<bool> {
+#[derive(Serialize)]
+struct JsonStatusProfile {
+    name: String,
+    harness: AgentHarness,
+    mode: ProfileMode,
+    applied_at: String,
+    overlays: Vec<String>,
+    files: Vec<JsonStatusProfileFile>,
+}
+
+#[derive(Serialize)]
+struct JsonStatusProfileFile {
+    source: String,
+    target: String,
+    action: String,
+    status: &'static str,
+}
+
+/// Check whether a matching overlay or profile is applied (for `--quiet` mode).
+pub(crate) fn status_has_entries(target: &Path, filter_name: Option<&str>) -> Result<bool> {
     let target = canonicalize_path(target, "Target directory")?;
-    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-    if !overlays_dir.exists() {
-        return Ok(false);
-    }
     let applied = list_applied_overlays(&target)?;
+    let profiles = crate::profile_plan::list_profile_states(&target)?;
     filter_name.map_or_else(
-        || Ok(!applied.is_empty()),
-        |name| Ok(applied.iter().any(|o| o == name)),
+        || Ok(!applied.is_empty() || !profiles.is_empty()),
+        |name| {
+            Ok(applied.iter().any(|o| o == name)
+                || profiles.iter().any(|profile| profile.name == name))
+        },
     )
 }
 
-/// Output overlay status as JSON for scripting and CI integration.
-pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Result<()> {
-    let target = canonicalize_path(target, "Target directory")?;
-    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-
-    if !overlays_dir.exists() {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&JsonStatusOutput::new(vec![]))?
-        );
-        return Ok(());
-    }
-
-    let applied_overlays = list_applied_overlays(&target)?;
-    if applied_overlays.is_empty() {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&JsonStatusOutput::new(vec![]))?
-        );
-        return Ok(());
-    }
-
-    // Filter if name provided
-    let names: Vec<&OverlayName> = if let Some(filter) = filter_name {
-        let normalized = normalize_overlay_name(filter)?;
-        if !applied_overlays.iter().any(|n| n == normalized.as_str()) {
-            let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
+fn list_status_entries(
+    target: &Path,
+    filter_name: Option<&str>,
+) -> Result<(Vec<OverlayName>, Vec<ProfileState>)> {
+    let mut overlays = list_applied_overlays(target)?;
+    let mut profiles = crate::profile_plan::list_profile_states(target)?;
+    if let Some(filter) = filter_name
+        && (!overlays.is_empty() || !profiles.is_empty())
+    {
+        let normalized = normalize_overlay_name(filter);
+        let matches_overlay = |name: &OverlayName| {
+            normalized
+                .as_ref()
+                .is_ok_and(|filter| name.as_str() == filter)
+        };
+        if !overlays.iter().any(matches_overlay)
+            && !profiles.iter().any(|profile| profile.name == filter)
+        {
+            normalized?;
+            let names: Vec<&str> = overlays
+                .iter()
+                .map(OverlayName::as_str)
+                .chain(profiles.iter().map(|profile| profile.name.as_str()))
+                .collect();
             bail!(
-                "Overlay '{}' is not applied. Available: {}",
+                "Overlay or profile '{}' is not applied. Available: {}",
                 filter,
                 names.join(", ")
             );
         }
-        applied_overlays
-            .iter()
-            .filter(|n| n.as_str() == normalized.as_str())
-            .collect()
-    } else {
-        applied_overlays.iter().collect()
-    };
+        overlays.retain(matches_overlay);
+        profiles.retain(|profile| profile.name == filter);
+    }
+    Ok((overlays, profiles))
+}
+
+/// Output overlay and profile status as JSON for scripting and CI integration.
+pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Result<()> {
+    let target = canonicalize_path(target, "Target directory")?;
+    let (names, profile_states) = list_status_entries(&target, filter_name)?;
 
     let mut overlays = Vec::new();
     for overlay_name in &names {
@@ -163,9 +170,39 @@ pub(crate) fn show_status_json(target: &Path, filter_name: Option<&str>) -> Resu
         });
     }
 
+    let profiles = profile_states
+        .into_iter()
+        .map(|state| JsonStatusProfile {
+            name: state.name,
+            harness: state.harness,
+            mode: state.mode,
+            applied_at: state.applied_at.to_rfc3339(),
+            overlays: state.overlays,
+            files: state
+                .files
+                .iter()
+                .map(|entry| JsonStatusProfileFile {
+                    source: path_to_json_string(&entry.source),
+                    target: path_to_json_string(
+                        entry.target.strip_prefix(&target).unwrap_or(&entry.target),
+                    ),
+                    action: entry.action.clone(),
+                    status: if entry.target.exists() || entry.target.is_symlink() {
+                        "ok"
+                    } else {
+                        "missing"
+                    },
+                })
+                .collect(),
+        })
+        .collect();
     println!(
         "{}",
-        serde_json::to_string_pretty(&JsonStatusOutput::new(overlays))?
+        serde_json::to_string_pretty(&JsonStatusOutput {
+            schema_version: STATUS_JSON_SCHEMA_VERSION,
+            overlays,
+            profiles,
+        })?
     );
     Ok(())
 }
@@ -272,51 +309,68 @@ fn path_to_json_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// Show the status of applied overlays.
-pub(crate) fn show_status(target: &Path, filter_name: Option<String>) -> Result<()> {
+/// Show the status of applied overlays and profiles.
+pub(crate) fn show_status(target: &Path, filter_name: Option<&str>) -> Result<()> {
     let target = canonicalize_path(target, "Target directory")?;
+    let (applied_overlays, profiles) = list_status_entries(&target, filter_name)?;
 
-    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-
-    if !overlays_dir.exists() {
-        println!("{} No overlays are currently applied.", "Status:".bold());
+    if applied_overlays.is_empty() && profiles.is_empty() {
+        println!(
+            "{} No overlays or profiles are currently applied.",
+            "Status:".bold()
+        );
         return Ok(());
     }
 
-    let applied_overlays = list_applied_overlays(&target)?;
-    if applied_overlays.is_empty() {
-        println!("{} No overlays are currently applied.", "Status:".bold());
-        return Ok(());
+    if !applied_overlays.is_empty() && filter_name.is_none() {
+        println!(
+            "{} ({} overlay(s) applied)",
+            "Overlay Status".bold(),
+            applied_overlays.len()
+        );
+        println!();
     }
-
-    // If filtering by name, show just that overlay
-    if let Some(filter) = filter_name {
-        let normalized = normalize_overlay_name(&filter)?;
-
-        if !applied_overlays.iter().any(|n| n == normalized.as_str()) {
-            let names: Vec<&str> = applied_overlays.iter().map(OverlayName::as_str).collect();
-            bail!(
-                "Overlay '{}' is not applied. Available: {}",
-                filter,
-                names.join(", ")
-            );
-        }
-
-        show_single_overlay_status(&target, &normalized)?;
-        return Ok(());
-    }
-
-    // Show summary header
-    println!(
-        "{} ({} overlay(s) applied)",
-        "Overlay Status".bold(),
-        applied_overlays.len()
-    );
-    println!();
 
     for overlay_name in &applied_overlays {
         show_single_overlay_status(&target, overlay_name.as_str())?;
         println!();
+    }
+
+    if !profiles.is_empty() {
+        println!(
+            "{} ({} profile(s) applied)",
+            "Profile Status".bold(),
+            profiles.len()
+        );
+        println!();
+        for profile in profiles {
+            println!(
+                "  {} {} ({})",
+                "Profile:".bold(),
+                profile.name.cyan(),
+                profile.harness
+            );
+            println!(
+                "    Updated: {}",
+                profile.applied_at.format("%Y-%m-%d %H:%M:%S UTC")
+            );
+            println!("    Files:   {}", profile.files.len());
+            for entry in profile.files {
+                let status = if entry.target.exists() || entry.target.is_symlink() {
+                    "✓".green()
+                } else {
+                    "✗".red()
+                };
+                let path = entry.target.strip_prefix(&target).unwrap_or(&entry.target);
+                println!(
+                    "      {} {} ({})",
+                    status,
+                    path.display(),
+                    entry.action.dimmed()
+                );
+            }
+            println!();
+        }
     }
 
     Ok(())
@@ -481,7 +535,7 @@ mod tests {
             .unwrap();
 
             let canonical = repo.path().canonicalize().unwrap();
-            show_status(&canonical, Some("filtered-test".to_string())).unwrap();
+            show_status(&canonical, Some("filtered-test")).unwrap();
         }
 
         #[test]
@@ -502,7 +556,7 @@ mod tests {
             .unwrap();
 
             let canonical = repo.path().canonicalize().unwrap();
-            let result = show_status(&canonical, Some("nonexistent".to_string()));
+            let result = show_status(&canonical, Some("nonexistent"));
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
             assert!(err.contains("not applied"));
@@ -510,7 +564,7 @@ mod tests {
         }
     }
 
-    mod status_has_overlays_tests {
+    mod status_has_entries_tests {
         use super::*;
         use crate::{ApplyOptions, apply_overlay};
 
@@ -518,7 +572,7 @@ mod tests {
         fn no_overlays_returns_false() {
             let repo = create_test_repo();
             let canonical = repo.path().canonicalize().unwrap();
-            assert!(!status_has_overlays(&canonical, None).unwrap());
+            assert!(!status_has_entries(&canonical, None).unwrap());
         }
 
         #[test]
@@ -539,11 +593,11 @@ mod tests {
             .unwrap();
 
             let canonical = repo.path().canonicalize().unwrap();
-            assert!(status_has_overlays(&canonical, None).unwrap());
+            assert!(status_has_entries(&canonical, None).unwrap());
             // Filter by name should also match
-            assert!(status_has_overlays(&canonical, Some("check-test")).unwrap());
+            assert!(status_has_entries(&canonical, Some("check-test")).unwrap());
             // Non-existent name should return false
-            assert!(!status_has_overlays(&canonical, Some("nonexistent")).unwrap());
+            assert!(!status_has_entries(&canonical, Some("nonexistent")).unwrap());
         }
     }
 
