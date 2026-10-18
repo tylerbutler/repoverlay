@@ -86,7 +86,7 @@ just ci   # Runs: test, lint, fmt-check
 
 ## Website
 
-Use Node.js 24 and pnpm 11.9.0 to work on the Astro/Starlight website:
+Use Node.js 24 and pnpm 12.14.0 to work on the Astro/Starlight website:
 
 ```bash
 cd website
@@ -111,7 +111,7 @@ Cloudflare dashboard. Configure these build settings:
 | Deploy command | `pnpm run deploy:site` |
 | Preview command | `pnpm exec wrangler preview` |
 | Build variable `NODE_VERSION` | `24` |
-| Build variable `PNPM_VERSION` | `11.9.0` |
+| Build variable `PNPM_VERSION` | `12.14.0` |
 | Build watch include paths | `website/*`, `Cargo.toml`, `docs/cli-reference.md` |
 
 Enable preview builds for non-production branches. Cloudflare installs the
