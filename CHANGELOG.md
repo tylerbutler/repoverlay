@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.18.1 - 2026-10-19
+
+
+### Command: `remove`
+
+
+#### Fixed
+
+##### Remove applied profiles with remove --all
+
+Include APM profiles in bulk removal and dry-run previews. Restore profile-owned content before removing remaining overlays, and reject bulk removal while a live agent session holds a profile lock.
+
+
+### Command: `status`
+
+
+#### Fixed
+
+##### Include applied profiles in status output
+
+Show APM and other applied profiles with their harness and managed files. Include profiles in JSON output, quiet-mode exit codes, and name filters.
+
+
+### Command: `update`
+
+
+#### Fixed
+
+##### Refresh APM profiles through update
+
+Refresh package profiles through APM using their recorded references and pins, and sync project profiles from frozen inputs. Support profile name filters, previews without APM subprocesses, explicit hook consent, and session locks. Preserve the previous profile if replacement fails and return failure for plugin-resolution errors. Older APM state reports how to recover missing source information without guessing a package version.
+
+
+
+
+
+#### Fixed
+
+##### Include APM profiles in profile discovery
+
+Combine configured and applied profiles in `profile list`, with one entry per name and all applied harnesses. Let `profile show` inspect generated profiles without a configured definition, including their managed files.
+
+##### Preserve profile ownership during overlay removal
+
+Include profiles in interactive removal and preserve unrelated profile state, backups, configuration, and library files. Block standalone removal, switching, and forced replacement of profile-owned overlays, with live-session lock checks before changes. Preserve profile state during batch-apply rollback. Include profile-owned overlays in removal previews.
+
+##### Repair missing profile output and report recovery failures
+
+Restore missing files from profile snapshots even when applied state remains. Preserve existing files, user edits, and original removal backups. Include failed profile recovery in the summary and return a nonzero exit code. Respect profile session locks when restoring or updating owned overlays.
+
+
 ## v0.18.0 - 2026-10-18
 
 

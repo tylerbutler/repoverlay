@@ -1,9 +1,0 @@
-kind: Fixed
-body: |-
-    Repair missing profile output and report recovery failures
-
-    Restore missing files from profile snapshots even when applied state remains.
-    Preserve existing files, user edits, and original removal backups. Include
-    failed profile recovery in the summary and return a nonzero exit code.
-    Respect profile session locks when restoring or updating owned overlays.
-time: 2026-10-18T17:01:20-07:00
