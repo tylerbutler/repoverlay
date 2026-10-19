@@ -41,6 +41,8 @@ repoverlay apm install "$PACKAGE" --harness "$HARNESS"
 test ! -f apm.yml
 test ! -d .repoverlay/overlays
 repoverlay profile status --harness "$HARNESS"
+repoverlay profile list
+repoverlay profile show "$PROFILE"
 repoverlay status
 repoverlay status --name "$PROFILE"
 repoverlay status --json --name "$PROFILE"
@@ -56,7 +58,9 @@ or adding a configured profile. Status must include the generated profile,
 selected harness, and managed file paths despite the absence of overlay state.
 JSON must contain `overlays: []` and one `profiles` entry with files marked
 `status: "ok"`. Both quiet commands must return 0 with no text. Git must not
-list generated files as untracked.
+list generated files as untracked. `profile list` must include the generated
+profile and applied harness. `profile show` must show its applied state and
+managed files without requiring a configured definition.
 
 ### TC-02: Reject duplicate installation and harness switching (requires network)
 
@@ -150,6 +154,64 @@ Expect exit code 1 after cleanup removes the profile state. Restore must recover
 the profile and managed output from the external snapshot without changing
 the pinned manifest or lockfile. JSON file statuses must be `ok`. After removal,
 expect no applied profiles and exit code 1.
+
+### TC-06: Remove APM profiles with --all (requires network)
+
+Run after TC-05. The tracked manifest and lockfile remain available for sync.
+
+```bash
+repoverlay apm sync --harness "$HARNESS"
+test ! -d .repoverlay/overlays
+repoverlay remove --all --dry-run
+repoverlay status --quiet --name apm-project
+echo "Exit code: $?"
+repoverlay remove --all
+repoverlay profile status
+repoverlay status --quiet
+echo "Exit code: $?"
+repoverlay restore
+repoverlay status --quiet
+echo "Exit code: $?"
+cmp apm.yml "$TEST_DIR/expected.yml"
+cmp apm.lock.yaml "$TEST_DIR/expected.lock.yaml"
+```
+
+The dry run must list `apm-project` and its harness without changing managed
+output or state. Expect exit code 0 before removal. Bulk removal must succeed
+even without overlay state and remove the APM profile and its managed output.
+Expect exit code 1 after removal and after restore; explicit removal must prevent
+restore from reapplying the profile. Both input comparisons must succeed.
+
+### TC-07: Refresh a package without losing its pin (requires network)
+
+```bash
+repoverlay apm install "$PACKAGE" --harness "$HARNESS"
+repoverlay profile list
+repoverlay profile show "$PROFILE"
+repoverlay update "$PROFILE" --dry-run
+repoverlay update "$PROFILE"
+repoverlay profile show "$PROFILE"
+repoverlay profile remove "$PROFILE" --harness "$HARNESS"
+```
+
+The list must identify the APM origin. Show and the dry run must retain the full
+package reference, including `#v1.0.0`. Refresh must succeed without creating
+`apm.yml` changes or losing removal state.
+
+### TC-08: Refresh a pinned project through update (requires network)
+
+```bash
+repoverlay apm sync --harness "$HARNESS"
+repoverlay update apm-project --dry-run
+repoverlay update apm-project
+repoverlay update
+cmp apm.yml "$TEST_DIR/expected.yml"
+cmp apm.lock.yaml "$TEST_DIR/expected.lock.yaml"
+repoverlay remove --all
+```
+
+Both updates must refresh the project without a missing-configuration warning.
+The input comparisons must succeed.
 
 ## Cleanup
 

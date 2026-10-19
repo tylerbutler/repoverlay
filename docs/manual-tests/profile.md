@@ -159,6 +159,94 @@ Expect exit code 1 after cleanup removes profile state. Restore must recover
 the profile and skill from the external snapshot. Its files must have
 `status: "ok"`, and the context file must contain one profile-managed region.
 
+### TC-07: Bulk removal with an applied profile and overlay
+
+```bash
+repoverlay profile apply manual-profile --harness "$HARNESS"
+repoverlay apply "$TEST_DIR/overlay" --name manual-overlay
+repoverlay remove --all --dry-run
+repoverlay profile status
+repoverlay status --quiet
+echo "Exit code: $?"
+repoverlay remove --all
+repoverlay profile status
+repoverlay status --quiet
+echo "Exit code: $?"
+cat "$CONTEXT"
+test ! -f .manual-overlay
+repoverlay restore
+repoverlay status --quiet
+echo "Exit code: $?"
+```
+
+The dry run must list the profile, its harness, and the overlay without changing
+files or state. Expect exit code 0 before removal. Bulk removal must remove both
+entries, restore the original user context, and remove the profile's skill.
+Expect exit code 1 after removal and after restore; explicit removal must prevent
+restore from reapplying either entry. The profile configuration must remain.
+
+### TC-08: Protect a live session from bulk removal
+
+```bash
+repoverlay profile apply manual-profile --harness "$HARNESS"
+repoverlay apply "$TEST_DIR/overlay" --name manual-overlay
+LOCK=".repoverlay/profiles/manual-profile.$HARNESS.lock"
+printf '%s\n' "$$" > "$LOCK"
+repoverlay remove --all
+echo "Exit code: $?"
+repoverlay status
+test -f .manual-overlay
+rm -- "$LOCK"
+repoverlay remove --all
+repoverlay status --quiet
+echo "Exit code: $?"
+```
+
+The first removal must fail because the test shell holds a live profile lock.
+Both entries and their files must remain. After removing the lock, bulk removal
+must succeed. Expect exit code 1 from the failed removal and the final status.
+
+### TC-09: Select profiles and overlays for removal
+
+Run in an interactive terminal.
+
+```bash
+repoverlay profile apply manual-profile --harness "$HARNESS"
+repoverlay apply "$TEST_DIR/overlay" --name manual-overlay
+repoverlay remove --interactive
+repoverlay profile status
+test -f ".repoverlay/profiles/manual-profile.$HARNESS.ccl"
+test -f .repoverlay/config.ccl
+repoverlay remove --interactive --dry-run
+repoverlay remove --interactive
+repoverlay status --quiet
+echo "Exit code: $?"
+```
+
+In the first menu, select only `manual-overlay`. The profile must remain applied
+with its skill and context region intact. In the dry run, select the remaining
+profile. It must remain applied. Select that profile in the last menu to remove
+it. Expect final exit code 1. The configuration must remain.
+
+### TC-10: Repair missing profile files while state remains
+
+```bash
+repoverlay profile apply manual-profile --harness "$HARNESS"
+SKILL=.claude/skills/demo/SKILL.md
+if [ "$HARNESS" = copilot ]; then SKILL=.agents/skills/demo/SKILL.md; fi
+rm -- "$SKILL"
+repoverlay restore --dry-run
+test ! -f "$SKILL"
+repoverlay restore
+test -f "$SKILL"
+repoverlay status --name manual-profile
+repoverlay profile remove manual-profile --harness "$HARNESS"
+```
+
+The dry run must include `manual-profile` without restoring the file. Recovery
+must restore the skill while retaining the original state and removal backups.
+Removal must restore the user context.
+
 ## Cleanup
 
 Exit the test shell to restore your environment. Remove only the disposable

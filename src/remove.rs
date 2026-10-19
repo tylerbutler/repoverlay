@@ -13,6 +13,156 @@ use crate::state::{
 };
 use crate::update_git_exclude;
 
+/// Remove all applied profiles and overlays, restoring profile-owned content first.
+pub(crate) fn remove_all(target: &Path, dry_run: bool) -> Result<()> {
+    let target = canonicalize_path(target, "Target directory")?;
+    let profiles = crate::profile_plan::list_profile_states(&target)?;
+    if profiles.is_empty() {
+        return remove_overlay(&target, None, true, dry_run);
+    }
+    let overlays = list_applied_overlays(&target)?
+        .into_iter()
+        .filter(|overlay| {
+            !profiles
+                .iter()
+                .any(|profile| profile.overlays.contains(&overlay.to_string()))
+        })
+        .map(|overlay| overlay.to_string())
+        .collect::<Vec<_>>();
+    remove_selected(&target, &overlays, profiles, dry_run)?;
+    if !dry_run {
+        println!("\n{} Removed all overlays and profiles", "✓".green().bold());
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_selected(
+    target: &Path,
+    overlays: &[String],
+    mut profiles: Vec<crate::profile::ProfileState>,
+    dry_run: bool,
+) -> Result<()> {
+    if dry_run {
+        println!(
+            "{} Dry run - would remove overlays and profiles:",
+            "Note:".yellow()
+        );
+        for profile in profiles {
+            println!("  - Profile: {} ({})", profile.name, profile.harness);
+            for overlay in profile.overlays {
+                println!(
+                    "  - Overlay: {overlay} (owned by profile '{}')",
+                    profile.name
+                );
+            }
+        }
+        for overlay in overlays {
+            println!("  - Overlay: {overlay}");
+        }
+        return Ok(());
+    }
+
+    // Check every lock before removing overlays another active profile may use.
+    for profile in &profiles {
+        crate::profile_plan::check_profile_removal_lock(&profile.name, profile.harness, target)?;
+    }
+    check_overlay_removal(
+        target,
+        &overlays.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    // Unwind shared-file backups in reverse application order.
+    profiles.sort_by_key(|profile| std::cmp::Reverse(profile.applied_at));
+    for profile in profiles {
+        crate::profile_plan::remove_profile(&profile.name, profile.harness, target).with_context(
+            || {
+                format!(
+                    "Failed to remove profile '{}' ({})",
+                    profile.name, profile.harness
+                )
+            },
+        )?;
+    }
+    for overlay in overlays {
+        remove_overlay(target, Some(overlay.clone()), false, false)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn check_overlay_removal(target: &Path, names: &[&str]) -> Result<()> {
+    check_overlay_owners(target, names, None)
+}
+
+pub(crate) fn check_overlay_reapply(target: &Path, names: &[&str]) -> Result<()> {
+    for profile in crate::profile_plan::list_profile_states(target)? {
+        if profile
+            .overlays
+            .iter()
+            .any(|overlay| names.contains(&overlay.as_str()))
+        {
+            crate::profile_plan::check_profile_removal_lock(
+                &profile.name,
+                profile.harness,
+                target,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_overlay_for_reapply(target: &Path, name: &str) -> Result<()> {
+    check_overlay_reapply(target, &[name])?;
+    remove_single_overlay_files(target, &target.join(STATE_DIR).join(OVERLAYS_DIR), name)
+}
+
+fn check_overlay_owners(
+    target: &Path,
+    names: &[&str],
+    owner: Option<(&str, crate::profile_applicators::AgentHarness)>,
+) -> Result<()> {
+    for profile in crate::profile_plan::list_profile_states(target)? {
+        if owner == Some((profile.name.as_str(), profile.harness)) {
+            continue;
+        }
+        if let Some(overlay) = profile
+            .overlays
+            .iter()
+            .find(|overlay| names.contains(&overlay.as_str()))
+        {
+            crate::profile_plan::check_profile_removal_lock(
+                &profile.name,
+                profile.harness,
+                target,
+            )?;
+            bail!(
+                "Overlay '{overlay}' is managed by profile '{}' ({}); remove it with \
+                 `repoverlay profile remove {} --harness {}` or select the profile in \
+                 `repoverlay remove --interactive`",
+                profile.name,
+                profile.harness,
+                profile.name,
+                profile.harness
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_profile_overlay(
+    target: &Path,
+    overlay: &str,
+    profile: &str,
+    harness: crate::profile_applicators::AgentHarness,
+) -> Result<()> {
+    let overlay = normalize_overlay_name(overlay)?;
+    check_overlay_owners(target, &[&overlay], Some((profile, harness)))?;
+    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+    remove_single_overlay_files(target, &overlays_dir, &overlay)?;
+    if list_applied_overlays(target)?.is_empty() {
+        cleanup_state_dir(target)?;
+    }
+    Ok(())
+}
+
 /// Remove applied overlay(s) from a target repository.
 ///
 /// # Workflow
@@ -41,6 +191,22 @@ pub(crate) fn remove_overlay(
     if dry_run {
         let target = canonicalize_path(target, "Target directory")?;
         let applied_overlays = list_applied_overlays(&target)?;
+        let names = if remove_all {
+            applied_overlays
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        } else {
+            name.as_deref()
+                .map(normalize_overlay_name)
+                .transpose()?
+                .into_iter()
+                .collect()
+        };
+        check_overlay_removal(
+            &target,
+            &names.iter().map(String::as_str).collect::<Vec<_>>(),
+        )?;
 
         if remove_all {
             println!("{} Dry run - would remove all overlays:", "Note:".yellow());
@@ -69,6 +235,13 @@ pub(crate) fn remove_overlay(
     }
 
     if remove_all {
+        check_overlay_removal(
+            &target,
+            &applied_overlays
+                .iter()
+                .map(OverlayName::as_str)
+                .collect::<Vec<_>>(),
+        )?;
         // Remove all overlays
         let mut errors = Vec::new();
         for overlay_name in &applied_overlays {
@@ -113,7 +286,7 @@ pub(crate) fn remove_overlay(
 /// Removes `overlays/` dir and `meta.ccl` but leaves `library/`, `config.ccl`,
 /// and any other non-state contents of `.repoverlay/` intact. If the state
 /// directory is empty after cleanup, removes it too.
-fn cleanup_state_dir(target: &Path) -> Result<()> {
+pub(crate) fn cleanup_state_dir(target: &Path) -> Result<()> {
     let state_dir = target.join(STATE_DIR);
 
     // Remove overlays/ subdirectory
@@ -136,6 +309,11 @@ fn cleanup_state_dir(target: &Path) -> Result<()> {
 
 /// Remove a single overlay by name.
 pub(crate) fn remove_single_overlay(target: &Path, overlays_dir: &Path, name: &str) -> Result<()> {
+    check_overlay_removal(target, &[name])?;
+    remove_single_overlay_files(target, overlays_dir, name)
+}
+
+fn remove_single_overlay_files(target: &Path, overlays_dir: &Path, name: &str) -> Result<()> {
     debug!("remove_single_overlay: {name}");
     let state_file = overlays_dir.join(format!("{name}.ccl"));
 
@@ -300,6 +478,64 @@ mod tests {
             .output()
             .expect("Failed to init git repo");
         dir
+    }
+
+    #[test]
+    fn selected_removal_preserves_unselected_profiles_and_repository_configuration() {
+        let repo = create_test_repo();
+        let target = repo.path().canonicalize().unwrap();
+        let profile = crate::profile::ProfileConfig {
+            instructions: vec![crate::profile::InstructionConfig {
+                content: Some("Keep this profile.".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        crate::profile_plan::apply_profile_config(
+            "retained",
+            crate::profile_applicators::AgentHarness::Claude,
+            &target,
+            &profile,
+        )
+        .unwrap();
+        fs::write(target.join(".repoverlay/config.ccl"), "profiles =\n").unwrap();
+        fs::create_dir_all(target.join(".repoverlay/library")).unwrap();
+        fs::write(target.join(".repoverlay/library/keep"), "library").unwrap();
+        let overlay = TempDir::new().unwrap();
+        fs::write(overlay.path().join(".standalone"), "overlay").unwrap();
+        crate::apply_overlay(
+            overlay.path().to_str().unwrap(),
+            &target,
+            &crate::ApplyOptions {
+                name_override: Some("standalone".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        remove_selected(&target, &["standalone".into()], Vec::new(), false).unwrap();
+        assert!(!target.join(".standalone").exists());
+        assert!(
+            target
+                .join(".repoverlay/profiles/retained.claude.ccl")
+                .exists()
+        );
+        assert!(target.join("CLAUDE.md").exists());
+        assert_eq!(
+            fs::read_to_string(target.join(".repoverlay/config.ccl")).unwrap(),
+            "profiles =\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join(".repoverlay/library/keep")).unwrap(),
+            "library"
+        );
+
+        let profiles = crate::profile_plan::list_profile_states(&target).unwrap();
+        remove_selected(&target, &[], profiles.clone(), true).unwrap();
+        assert!(target.join("CLAUDE.md").exists());
+        remove_selected(&target, &[], profiles, false).unwrap();
+        assert!(!target.join("CLAUDE.md").exists());
+        assert!(target.join(".repoverlay/config.ccl").exists());
+        assert!(target.join(".repoverlay/library/keep").exists());
     }
 
     // Tests for remove_single_overlay

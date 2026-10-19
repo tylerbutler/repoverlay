@@ -155,13 +155,24 @@ pub(crate) fn replace_profile_config(
     target: &Path,
     profile: &crate::profile::ProfileConfig,
 ) -> Result<ProfileState> {
+    replace_profile_with(name, harness, target, || {
+        apply_profile_config(name, harness, target, profile)
+    })
+}
+
+fn replace_profile_with(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+    apply: impl FnOnce() -> Result<ProfileState>,
+) -> Result<ProfileState> {
     let state_path = crate::profile::profile_state_path(target, name, harness)?;
     if !state_path.exists() {
-        return apply_profile_config(name, harness, target, profile);
+        return apply();
     }
 
     remove_profile(name, harness, target)?;
-    match apply_profile_config(name, harness, target, profile) {
+    match apply() {
         Ok(state) => Ok(state),
         Err(apply_err) => {
             let manifest =
@@ -238,7 +249,7 @@ fn apply_profile_config_with_harness_home(
     };
     let plan = applicator.plan(profile, &context)?;
     preflight_plan(&plan, &context.profile_asset_dir)?;
-    check_profile_ownership_conflicts(&plan.actions, target)?;
+    check_profile_ownership_conflicts(&plan.actions, target, None)?;
     let mut state = ProfileState {
         name: name.to_string(),
         harness,
@@ -257,6 +268,7 @@ fn apply_profile_config_with_harness_home(
                 resolved_commit: p.resolved_commit.clone(),
             })
             .collect(),
+        apm: profile.apm.clone(),
     };
 
     // Keep a copy of the resolved actions so a successful apply can write a
@@ -539,7 +551,12 @@ pub(crate) fn profile_exclude_entries(target: &Path, state: &ProfileState) -> Ve
 /// (`remove` then `apply`). Resolution failures (for example a marketplace that
 /// is no longer registered) are reported and that profile is left untouched, so
 /// `update` never tears down a profile it cannot reconstruct.
-pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usize> {
+pub(crate) fn update_profile_plugins(
+    target: &Path,
+    name: Option<&str>,
+    dry_run: bool,
+    allow_hooks: bool,
+) -> Result<usize> {
     use crate::plugin::{InstallMode, PluginRef, ResolvedPlugin, resolve_plugin};
 
     // Match the canonical target used by `profile apply`/`remove`, so the
@@ -550,7 +567,7 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
     let states = crate::profile::list_applied_profile_states(target)?;
     let persistent: Vec<_> = states
         .into_iter()
-        .filter(|s| s.mode == ProfileMode::Persistent)
+        .filter(|s| s.mode == ProfileMode::Persistent && name.is_none_or(|name| s.name == name))
         .collect();
     if persistent.is_empty() {
         return Ok(0);
@@ -559,13 +576,30 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
     let config = crate::config::load_config(Some(target))?;
     let cache = crate::cache::CacheManager::new()?;
     let inspected = persistent.len();
+    if !dry_run {
+        for state in &persistent {
+            check_profile_removal_lock(&state.name, state.harness, target)?;
+        }
+    }
+    let mut failures = Vec::new();
 
     for state in persistent {
+        if state.apm.is_some()
+            || (!config.profiles.contains_key(&state.name)
+                && crate::cli::commands::apm::is_apm_profile(target, &state)?)
+        {
+            if let Err(err) =
+                crate::cli::commands::apm::update_profile(target, &state, dry_run, allow_hooks)
+            {
+                eprintln!("  ! {} ({}): {err:#}", state.name, state.harness);
+                failures.push(format!("{} ({}): {err:#}", state.name, state.harness));
+            }
+            continue;
+        }
         let Some(profile) = config.profiles.get(&state.name) else {
-            println!(
-                "  ? profile '{}' ({}) is no longer in config; skipping plugin update",
-                state.name, state.harness
-            );
+            failures.push(format!(
+                "Profile '{}' ({}) is no longer configured; restore its configuration before updating",
+                state.name, state.harness));
             continue;
         };
 
@@ -621,6 +655,10 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
                 "  ! skipping re-apply of '{}' ({}) due to resolution errors",
                 state.name, state.harness
             );
+            failures.push(format!(
+                "{} ({}) plugin resolution failed",
+                state.name, state.harness
+            ));
             continue;
         }
         if !changed {
@@ -638,56 +676,56 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
             continue;
         }
 
-        remove_profile(&state.name, state.harness, target).with_context(|| {
-            format!(
-                "Failed to remove '{}' ({}) before re-applying updated plugins",
-                state.name, state.harness
+        if let Err(err) = replace_profile_with(&state.name, state.harness, target, || {
+            apply_profile(
+                &state.name,
+                state.harness,
+                target,
+                ProfileMode::Persistent,
+                None,
             )
-        })?;
-        apply_profile(
-            &state.name,
-            state.harness,
-            target,
-            ProfileMode::Persistent,
-            None,
-        )
-        .with_context(|| {
-            format!(
-                "'{}' ({}) was removed but could not be re-applied with updated plugins; \
-                 re-apply it manually with `repoverlay profile apply`",
-                state.name, state.harness
-            )
-        })?;
+        }) {
+            failures.push(format!("{} ({}): {err:#}", state.name, state.harness));
+            continue;
+        }
         println!("  ✓ re-applied '{}' ({})", state.name, state.harness);
     }
 
+    anyhow::ensure!(
+        failures.is_empty(),
+        "Profile update failed:\n{}",
+        failures.join("\n")
+    );
     Ok(inspected)
 }
 
-pub(crate) fn remove_profile(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
-    crate::profile::validate_profile_state_component(name)?;
-
+pub(crate) fn check_profile_removal_lock(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+) -> Result<crate::profile::LockState> {
     let lock_path = crate::profile::profile_lock_path(target, name, harness)?;
-    match crate::profile::inspect_lock(&lock_path)? {
-        crate::profile::LockState::Live => {
-            bail!(
-                "Profile '{name}' is currently in use by an ephemeral '{harness}' session; \
-                 stop that session before removing the profile"
-            );
-        }
-        crate::profile::LockState::Stale => {
-            // The owning session died without releasing the lock (e.g. SIGKILL or
-            // power loss). Recover it so removal can proceed.
-            std::fs::remove_file(&lock_path).with_context(|| {
-                format!(
-                    "Failed to remove stale profile lock: {}",
-                    lock_path.display()
-                )
-            })?;
-        }
-        crate::profile::LockState::Absent => {}
+    let lock_state = crate::profile::inspect_lock(&lock_path)?;
+    if lock_state == crate::profile::LockState::Live {
+        bail!(
+            "Profile '{name}' is currently in use by an ephemeral '{harness}' session; \
+             stop that session before removing the profile"
+        );
     }
+    Ok(lock_state)
+}
 
+pub(crate) fn remove_profile(name: &str, harness: AgentHarness, target: &Path) -> Result<()> {
+    if check_profile_removal_lock(name, harness, target)? == crate::profile::LockState::Stale {
+        // Recover the lock left by a session that died before releasing it.
+        let lock_path = crate::profile::profile_lock_path(target, name, harness)?;
+        std::fs::remove_file(&lock_path).with_context(|| {
+            format!(
+                "Failed to remove stale profile lock: {}",
+                lock_path.display()
+            )
+        })?;
+    }
     remove_profile_inner(name, harness, target)
 }
 
@@ -742,7 +780,7 @@ fn remove_profile_inner(name: &str, harness: AgentHarness, target: &Path) -> Res
             .join(format!("{overlay}.ccl"));
         match overlay_state_path.try_exists() {
             Ok(false) => (),
-            Ok(true) => crate::remove_overlay(target, Some(overlay.clone()), false, false)?,
+            Ok(true) => crate::remove::remove_profile_overlay(target, overlay, name, harness)?,
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
@@ -975,8 +1013,15 @@ fn protected_json_pointers(
 /// Precise pointer tracking is used when the other profile's backup metadata is
 /// readable; otherwise we conservatively reject any other profile that already
 /// manages the same JSON target.
-fn check_profile_ownership_conflicts(actions: &[ProfileAction], target: &Path) -> Result<()> {
-    let existing = list_profile_states(target)?;
+fn check_profile_ownership_conflicts(
+    actions: &[ProfileAction],
+    target: &Path,
+    owner: Option<(&str, AgentHarness)>,
+) -> Result<()> {
+    let existing: Vec<_> = list_profile_states(target)?
+        .into_iter()
+        .filter(|state| owner != Some((state.name.as_str(), state.harness)))
+        .collect();
     for action in actions {
         if let ProfileAction::PlacePluginDir {
             target: placement_target,
@@ -2033,6 +2078,8 @@ struct ProfileSnapshot {
     profile_fingerprint: String,
     #[serde(default)]
     plugins: Vec<crate::profile::ProfilePluginEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apm: Option<crate::profile::ApmProfileSource>,
     #[serde(default)]
     skipped: Vec<SkippedCapability>,
     /// Overlay state names this profile applied. Overlay files themselves are
@@ -2176,6 +2223,7 @@ fn save_external_profile_snapshot(
         applied_at: state.applied_at,
         profile_fingerprint: state.profile_fingerprint.clone(),
         plugins: state.plugins.clone(),
+        apm: state.apm.clone(),
         skipped: state.skipped.clone(),
         overlays: state.overlays.clone(),
         actions: snapshot_actions,
@@ -2254,49 +2302,45 @@ pub(crate) struct RestorableProfile {
 
 /// List profiles that `restore_profiles` would re-establish for `target`.
 pub(crate) fn list_restorable_profiles(target: &Path) -> Result<Vec<RestorableProfile>> {
-    Ok(load_external_profile_snapshots(target)?
-        .into_iter()
-        .filter(|snapshot| {
-            crate::profile::profile_state_path(target, &snapshot.name, snapshot.harness)
-                .map(|path| !path.exists())
-                .unwrap_or(false)
-        })
-        .map(|snapshot| RestorableProfile {
-            name: snapshot.name,
-            harness: snapshot.harness,
-        })
-        .collect())
+    let mut restorable = Vec::new();
+    for snapshot in load_external_profile_snapshots(target)? {
+        let state_path =
+            crate::profile::profile_state_path(target, &snapshot.name, snapshot.harness)?;
+        let blobs_dir = external_profile_dir(target, &snapshot.name, snapshot.harness)?
+            .join(PROFILE_SNAPSHOT_BLOBS);
+        if !state_path.try_exists()?
+            || !missing_profile_actions(&snapshot_actions(&snapshot, &blobs_dir))?.is_empty()
+        {
+            restorable.push(RestorableProfile {
+                name: snapshot.name,
+                harness: snapshot.harness,
+            });
+        }
+    }
+    Ok(restorable)
 }
 
 /// Re-establish every profile recorded in the external snapshots for `target`.
 ///
-/// Profiles whose in-repo state still exists are left untouched. Returns the
-/// number of profiles restored.
+/// Repair missing outputs without replacing existing files or removal backups.
+/// Returns the number of profiles restored or repaired.
 pub(crate) fn restore_profiles(target: &Path) -> Result<usize> {
     let snapshots = load_external_profile_snapshots(target)?;
     let mut restored = 0;
     for snapshot in snapshots {
-        if restore_profile_from_snapshot(target, &snapshot)? {
+        if restore_profile_from_snapshot(target, &snapshot).with_context(|| {
+            format!(
+                "Failed to restore profile '{}' ({})",
+                snapshot.name, snapshot.harness
+            )
+        })? {
             restored += 1;
         }
     }
     Ok(restored)
 }
 
-/// Rebuild a single profile from its external snapshot.
-///
-/// Returns `Ok(false)` (and does nothing) when the profile's in-repo state still
-/// exists. Sources are redirected at the snapshot's `blobs/` directory and the
-/// shared apply executor is re-run, regenerating in-repo state and backups.
-fn restore_profile_from_snapshot(target: &Path, snapshot: &ProfileSnapshot) -> Result<bool> {
-    let name = snapshot.name.as_str();
-    let harness = snapshot.harness;
-    let state_path = crate::profile::profile_state_path(target, name, harness)?;
-    if state_path.exists() {
-        return Ok(false);
-    }
-
-    let blobs_dir = external_profile_dir(target, name, harness)?.join(PROFILE_SNAPSHOT_BLOBS);
+fn snapshot_actions(snapshot: &ProfileSnapshot, blobs_dir: &Path) -> Vec<ProfileAction> {
     let mut actions = Vec::with_capacity(snapshot.actions.len());
     for action in &snapshot.actions {
         match action {
@@ -2334,7 +2378,155 @@ fn restore_profile_from_snapshot(target: &Path, snapshot: &ProfileSnapshot) -> R
             }
         }
     }
-    check_profile_ownership_conflicts(&actions, target)?;
+    actions
+}
+
+fn missing_profile_actions(actions: &[ProfileAction]) -> Result<Vec<ProfileAction>> {
+    let mut missing = Vec::new();
+    for action in actions {
+        let needs_restore = match action {
+            ProfileAction::WriteFile { source, target }
+            | ProfileAction::PlacePluginDir { source, target } => {
+                restore_missing_tree(source, target, true)?
+            }
+            ProfileAction::MergeJson { target, .. }
+            | ProfileAction::WriteManagedRegion { target, .. } => !target.try_exists()?,
+            _ => false,
+        };
+        if needs_restore {
+            missing.push(action.clone());
+        }
+    }
+    Ok(missing)
+}
+
+fn restore_missing_tree(source: &Path, target: &Path, dry_run: bool) -> Result<bool> {
+    let metadata = fs::symlink_metadata(source).with_context(|| {
+        format!(
+            "Failed to inspect profile snapshot source {}",
+            source.display()
+        )
+    })?;
+    anyhow::ensure!(
+        !metadata.file_type().is_symlink(),
+        "Symlinked profile snapshot source: {}",
+        source.display()
+    );
+    reject_symlink_profile_target(target)?;
+    let mut changed = !target.try_exists()?;
+    if metadata.is_dir() {
+        if changed && !dry_run {
+            fs::create_dir_all(target)?;
+        }
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            changed |=
+                restore_missing_tree(&entry.path(), &target.join(entry.file_name()), dry_run)?;
+        }
+    } else if changed && !dry_run {
+        let parent = target.parent().context("Profile target has no parent")?;
+        fs::create_dir_all(parent)?;
+        let staged = tempfile::NamedTempFile::new_in(parent)?;
+        fs::copy(source, staged.path())?;
+        staged.persist_noclobber(target).with_context(|| {
+            format!(
+                "Failed to restore missing profile file {}",
+                target.display()
+            )
+        })?;
+    }
+    Ok(changed)
+}
+
+fn repair_active_profile(
+    target: &Path,
+    snapshot: &ProfileSnapshot,
+    actions: &[ProfileAction],
+    blobs_dir: &Path,
+) -> Result<bool> {
+    let missing = missing_profile_actions(actions)?;
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    let name = snapshot.name.as_str();
+    let harness = snapshot.harness;
+    check_profile_removal_lock(name, harness, target)?;
+    check_profile_ownership_conflicts(&missing, target, Some((name, harness)))?;
+    let mut state = crate::profile::load_profile_state(target, name, harness)?;
+    for action in missing {
+        let (ProfileAction::WriteFile {
+            target: action_target,
+            ..
+        }
+        | ProfileAction::PlacePluginDir {
+            target: action_target,
+            ..
+        }
+        | ProfileAction::MergeJson {
+            target: action_target,
+            ..
+        }
+        | ProfileAction::WriteManagedRegion {
+            target: action_target,
+            ..
+        }) = &action
+        else {
+            unreachable!("missing_profile_actions only returns file actions");
+        };
+        let relative = action_target
+            .strip_prefix(target)
+            .context("Profile snapshot target is outside the repository")?;
+        crate::path_safety::check_no_symlink_ancestors(target, relative)?;
+        let file = state
+            .files
+            .iter()
+            .find(|file| file.target == *action_target)
+            .context("Profile snapshot target is absent from applied state")?;
+        match &action {
+            ProfileAction::WriteFile {
+                source,
+                target: file_target,
+            } => {
+                ensure_regular_profile_source(source, blobs_dir)?;
+                restore_missing_tree(source, file_target, false)?;
+            }
+            ProfileAction::PlacePluginDir {
+                source,
+                target: file_target,
+            } => {
+                ensure_plugin_dir_under_managed_root(harness, target, file_target)?;
+                restore_missing_tree(source, file_target, false)?;
+            }
+            ProfileAction::MergeJson {
+                target: json_target,
+                value,
+                owned_paths,
+            } => {
+                ensure_removable_profile_json(harness, target, file)?;
+                merge_json_value(json_target, value, owned_paths)?;
+            }
+            ProfileAction::WriteManagedRegion { .. } => {
+                ensure_removable_managed_region(harness, target, file)?;
+                execute_profile_action(action, 0, name, harness, target, blobs_dir, &mut state)?;
+            }
+            _ => unreachable!("missing_profile_actions only returns file actions"),
+        }
+    }
+    // Retain the original state and backups so removal still restores displaced user content.
+    Ok(true)
+}
+
+fn restore_profile_from_snapshot(target: &Path, snapshot: &ProfileSnapshot) -> Result<bool> {
+    let name = snapshot.name.as_str();
+    let harness = snapshot.harness;
+    let state_path = crate::profile::profile_state_path(target, name, harness)?;
+    let blobs_dir = external_profile_dir(target, name, harness)?.join(PROFILE_SNAPSHOT_BLOBS);
+    let actions = snapshot_actions(snapshot, &blobs_dir);
+    if state_path.try_exists()? {
+        return repair_active_profile(target, snapshot, &actions, &blobs_dir);
+    }
+    check_profile_removal_lock(name, harness, target)?;
+    check_profile_ownership_conflicts(&actions, target, None)?;
 
     let mut state = ProfileState {
         name: name.to_string(),
@@ -2349,6 +2541,7 @@ fn restore_profile_from_snapshot(target: &Path, snapshot: &ProfileSnapshot) -> R
         files: Vec::new(),
         skipped: snapshot.skipped.clone(),
         plugins: snapshot.plugins.clone(),
+        apm: snapshot.apm.clone(),
     };
 
     let restore_result = (|| -> Result<()> {
@@ -2530,6 +2723,101 @@ mod tests {
             }],
             ..ProfileConfig::default()
         }
+    }
+
+    #[test]
+    fn restore_repairs_missing_plugin_files_without_replacing_edits_or_backups() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path();
+        let source = repo.join("plugin");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "managed skill").unwrap();
+        fs::write(source.join("notes.md"), "managed notes").unwrap();
+        let native = repo.join(".claude/skills/demo");
+        fs::create_dir_all(&native).unwrap();
+        fs::write(native.join("SKILL.md"), "original user skill").unwrap();
+        apply_profile_config(
+            "repair",
+            AgentHarness::Claude,
+            repo,
+            &native_placement_profile(&source, ".claude/skills/demo"),
+        )
+        .unwrap();
+        let state_path =
+            crate::profile::profile_state_path(repo, "repair", AgentHarness::Claude).unwrap();
+        let state_before = fs::read(&state_path).unwrap();
+        fs::remove_file(native.join("SKILL.md")).unwrap();
+        fs::write(native.join("notes.md"), "user edit").unwrap();
+        assert_eq!(list_restorable_profiles(repo).unwrap().len(), 1);
+        assert!(!native.join("SKILL.md").exists());
+        assert_eq!(restore_profiles(repo).unwrap(), 1);
+        assert_eq!(
+            fs::read_to_string(native.join("SKILL.md")).unwrap(),
+            "managed skill"
+        );
+        assert_eq!(
+            fs::read_to_string(native.join("notes.md")).unwrap(),
+            "user edit"
+        );
+        assert_eq!(fs::read(&state_path).unwrap(), state_before);
+        assert_eq!(restore_profiles(repo).unwrap(), 0);
+        remove_profile("repair", AgentHarness::Claude, repo).unwrap();
+        assert_eq!(
+            fs::read_to_string(native.join("SKILL.md")).unwrap(),
+            "original user skill"
+        );
+        assert!(!native.join("notes.md").exists());
+    }
+
+    #[test]
+    fn restore_repairs_missing_context_and_json_with_original_ownership_and_locks() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let repo = temp.path();
+        fs::write(
+            repo.join(".mcp.json"),
+            r#"{"mcpServers":{"demo":{"command":"user"}}}"#,
+        )
+        .unwrap();
+        let profile = ProfileConfig {
+            instructions: vec![InstructionConfig {
+                content: Some("Managed instructions.".into()),
+                ..Default::default()
+            }],
+            resolved_mcp_servers: serde_json::from_value(
+                serde_json::json!({"demo": {"command": "managed"}}),
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        apply_profile_config("repair", AgentHarness::Claude, repo, &profile).unwrap();
+        let state =
+            crate::profile::load_profile_state(repo, "repair", AgentHarness::Claude).unwrap();
+        let json_backup = state
+            .files
+            .iter()
+            .find(|file| file.action == "merge-json")
+            .unwrap()
+            .source
+            .clone();
+        let backup_before = fs::read(&json_backup).unwrap();
+        fs::remove_file(repo.join("CLAUDE.md")).unwrap();
+        fs::remove_file(repo.join(".mcp.json")).unwrap();
+        let lock = crate::profile::profile_lock_path(repo, "repair", AgentHarness::Claude).unwrap();
+        fs::write(&lock, std::process::id().to_string()).unwrap();
+        assert!(format!("{:#}", restore_profiles(repo).unwrap_err()).contains("currently in use"));
+        assert!(!repo.join("CLAUDE.md").exists());
+        fs::remove_file(lock).unwrap();
+        assert_eq!(restore_profiles(repo).unwrap(), 1);
+        assert!(
+            fs::read_to_string(repo.join("CLAUDE.md"))
+                .unwrap()
+                .contains("Managed instructions.")
+        );
+        assert_eq!(fs::read(&json_backup).unwrap(), backup_before);
+        remove_profile("repair", AgentHarness::Claude, repo).unwrap();
+        let json: Value =
+            serde_json::from_str(&fs::read_to_string(repo.join(".mcp.json")).unwrap()).unwrap();
+        assert_eq!(json["mcpServers"]["demo"]["command"], "user");
     }
 
     #[test]
@@ -2752,6 +3040,7 @@ profiles =
                 }],
                 skipped: Vec::new(),
                 plugins: Vec::new(),
+                apm: None,
             },
         )
         .unwrap();

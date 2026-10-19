@@ -238,18 +238,37 @@ repoverlay profile remove apm-tylerbutler-apm-base --harness claude
 repoverlay profile remove apm-project --harness claude
 ```
 
+Use `repoverlay remove --all` to remove applied overlays and profiles, including
+APM profiles. Add `--dry-run` to preview the removal. A live agent session's
+profile lock blocks bulk removal.
+
+Use `repoverlay remove --interactive` to select individual overlays or profiles.
+Select the owning profile to remove a profile-owned overlay. Standalone removal,
+forced replacement, and `switch` reject profile-owned overlays before removal.
+Removing an overlay preserves unrelated profile state, configuration, and library
+files.
+
 APM profiles use the same external snapshots as configured profiles, so
-`repoverlay restore` can rebuild them after `git clean`.
+`repoverlay restore` can rebuild them after `git clean`. It also repairs missing
+profile files when applied state remains, including files inside managed plugin
+directories. Repair preserves existing files and the original removal backups.
+Use `--dry-run` to preview recovery. A live profile lock blocks recovery, and a
+failed profile recovery returns a nonzero exit code.
 
 ## Inspecting profiles
 
-List configured profiles (with descriptions):
+List configured and applied profiles, including APM-generated profiles:
 
 ```bash
 repoverlay profile list
 ```
 
-Show the resolved contents of one profile:
+The list shows each profile once, with its configuration source and applied
+harnesses. Configured profiles remain visible when they are not applied.
+APM profiles show their APM origin. `profile show` includes the recorded package
+reference or project inputs beside the applied files.
+
+Show a profile's configuration and applied state:
 
 ```bash
 repoverlay profile show rust-dev
@@ -259,6 +278,7 @@ Example output:
 
 ```text
 rust-dev
+  Source: configured
   Description: Rust development profile
   Overlays:
     - rust-base
@@ -291,7 +311,7 @@ repoverlay profile status --harness copilot
 ```
 
 Use `repoverlay status` to inspect applied profiles alongside overlays, including
-APM profiles that do not appear in `profile list`. It shows each profile's harness
+APM-generated profiles. It shows each profile's harness
 and managed files. Use `--name <profile>` to filter, `--json` for separate
 `overlays` and `profiles` arrays, or `--quiet` to check whether a matching overlay
 or profile is applied.
@@ -311,9 +331,25 @@ Removal deletes the harness files and merged configuration entries that the prof
 
 repoverlay pins managed plugins to their resolved commit when you apply a profile. It records that commit in profile state.
 
-Run `repoverlay update` without an overlay name filter to resolve managed plugins again for every persistent profile. If a plugin source has changed, repoverlay applies the profile again. It does not change delegate plugins or plugins pinned to a fixed `ref`.
+Run `repoverlay update` to resolve managed plugins again for persistent profiles.
+If a plugin source has changed, repoverlay applies the profile again. Use
+`repoverlay update <profile>` to update one profile across its applied harnesses.
+It does not change delegate plugins or plugins pinned to a fixed `ref`. A failed
+application restores the previous profile.
 
 Use `repoverlay update --dry-run` to preview which profiles need a new application.
+
+For APM profiles, `update` refreshes installed packages through APM using their
+recorded references, including version pins. It refreshes `apm-project` through
+the frozen sync workflow without changing `apm.yml` or `apm.lock.yaml`. APM dry
+runs show the planned refresh without running APM. Add `--allow-hooks` if the
+refreshed output contains hooks. Live profile locks block updates, and failed
+profile updates return a nonzero exit code.
+
+APM profiles created before repoverlay recorded their origin need one explicit
+refresh. Run `repoverlay apm sync` for a project. For a package, remove the profile
+and reinstall the original package reference, including its pin. `update` reports
+the required action instead of guessing a missing reference.
 
 ### Ephemeral mode
 

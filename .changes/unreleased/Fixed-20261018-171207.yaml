@@ -1,0 +1,12 @@
+kind: Fixed
+body: |-
+    Refresh APM profiles through update
+
+    Refresh package profiles through APM using their recorded references and pins,
+    and sync project profiles from frozen inputs. Support profile name filters,
+    previews without APM subprocesses, explicit hook consent, and session locks.
+    Preserve the previous profile if replacement fails and return failure for
+    plugin-resolution errors. Older APM state reports how to recover missing
+    source information without guessing a package version.
+time: 2026-10-18T17:12:07-07:00
+component: update

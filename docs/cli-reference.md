@@ -58,10 +58,10 @@ Overlay config files into git repositories without committing them
 
 * `apm` — Manage APM packages and project manifests as repository profiles
 * `apply` — Apply an overlay to a git repository (scripting / power-user)
-* `remove` — Remove applied overlay(s)
+* `remove` — Remove applied overlays and profiles
 * `status` — Show the status of applied overlays and profiles
-* `restore` — Restore overlays after git clean or other removal
-* `update` — Update applied overlays from remote sources
+* `restore` — Restore overlays and missing profile files from recovery snapshots
+* `update` — Update applied overlays, profile plugins, and APM profiles
 * `create` — Create a new overlay from files in a repository
 * `move` — Move an overlay to a new location
 * `switch` — Switch to a different overlay (removes all existing overlays first)
@@ -168,7 +168,7 @@ For interactive discovery and application, use `repoverlay browse` instead — i
 
 ## `repoverlay remove`
 
-Remove applied overlay(s)
+Remove applied overlays and profiles
 
 **Usage:** `repoverlay remove [OPTIONS] [NAME]`
 
@@ -179,7 +179,7 @@ Remove applied overlay(s)
 ### Options
 
 * `-t`, `--target <TARGET>` — Target repository directory (defaults to current directory)
-* `--all` — Remove all applied overlays
+* `--all` — Remove all applied overlays and profiles, including APM profiles
 * `--dry-run` — Show what would be removed without making changes
 * `-i`, `--interactive` — Interactive selection mode
 
@@ -202,7 +202,7 @@ Show the status of applied overlays and profiles
 
 ## `repoverlay restore`
 
-Restore overlays after git clean or other removal
+Restore overlays and missing profile files from recovery snapshots
 
 **Usage:** `repoverlay restore [OPTIONS]`
 
@@ -219,13 +219,13 @@ Restore overlays after git clean or other removal
 
 ## `repoverlay update`
 
-Update applied overlays from remote sources
+Update applied overlays, profile plugins, and APM profiles
 
 **Usage:** `repoverlay update [OPTIONS] [NAME]`
 
 ### Arguments
 
-* `<NAME>` — Name of the overlay to update (updates all GitHub overlays if not specified)
+* `<NAME>` — Name of the overlay or profile to update (updates all if not specified)
 
 ### Options
 
@@ -235,6 +235,7 @@ Update applied overlays from remote sources
 * `--skip-conflicts` — Skip conflicting files silently during update
 * `-i`, `--interactive` — Prompt interactively for each conflict during update
 * `--merge` — Deep merge conflicting JSON files instead of failing
+* `--allow-hooks` — Allow refreshed APM profiles to install hooks that run repository commands
 
 
 
@@ -598,8 +599,8 @@ Manage repository profiles
 
 ### Subcommands
 
-* `list` — List configured profiles
-* `show` — Show a configured profile
+* `list` — List configured and applied profiles, including APM profiles
+* `show` — Show a profile's configuration and applied state
 * `apply` — Apply a profile persistently
 * `status` — Show applied profile state
 * `remove` — Remove an applied profile
@@ -608,7 +609,7 @@ Manage repository profiles
 
 ## `repoverlay profile list`
 
-List configured profiles
+List configured and applied profiles, including APM profiles
 
 **Usage:** `repoverlay profile list [OPTIONS]`
 
@@ -620,7 +621,7 @@ List configured profiles
 
 ## `repoverlay profile show`
 
-Show a configured profile
+Show a profile's configuration and applied state
 
 **Usage:** `repoverlay profile show [OPTIONS] <NAME>`
 

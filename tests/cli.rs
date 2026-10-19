@@ -473,6 +473,78 @@ profiles =
 }
 
 #[test]
+fn profile_discovery_combines_configured_and_applied_harnesses() {
+    let ctx = TestContext::new();
+    let config_dir = tempfile::TempDir::new().unwrap();
+    let data_dir = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config(
+        r"
+profiles =
+  active =
+    instructions =
+      =
+        content = Shared profile.
+  unapplied =
+    description = Available but not installed
+",
+    );
+    let cmd = |args: &[&str]| {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.args(args)
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("XDG_DATA_HOME", data_dir.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+        cmd
+    };
+    for harness in ["claude", "copilot"] {
+        cmd(&["profile", "apply", "active", "--harness", harness])
+            .assert()
+            .success();
+    }
+    let output = cmd(&["profile", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "active [configured; applied: claude, copilot]",
+        ))
+        .stdout(predicate::str::contains(
+            "unapplied [configured; not applied]",
+        ))
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("active "))
+            .count(),
+        1
+    );
+    ctx.write_repo_config("profiles =\n  unapplied =\n    description = Still available\n");
+    cmd(&["profile", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "active [applied state; applied: claude, copilot]",
+        ));
+    cmd(&["profile", "show", "active"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Source: applied state"))
+        .stdout(predicate::str::contains("Applied: claude"))
+        .stdout(predicate::str::contains("Applied: copilot"))
+        .stdout(predicate::str::contains("CLAUDE.md"))
+        .stdout(predicate::str::contains("AGENTS.md"));
+    cmd(&["profile", "show", "missing"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Profile 'missing' not found"));
+}
+
+#[test]
 fn profile_list_uses_current_directory_as_default_target() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
@@ -826,6 +898,41 @@ profiles =
         !exclude_after.contains("# repoverlay:profile:rust-dev@copilot"),
         "git exclude should drop the profile section after remove, got: {exclude_after}"
     );
+}
+
+#[test]
+fn restore_profile_failure_sets_exit_status_and_failure_summary() {
+    let ctx = TestContext::new();
+    let root = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config("profiles =\n  broken =\n    instructions =\n      =\n        content = Managed instructions.\n");
+    let cmd = |args: &[&str]| {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.args(args)
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .env("XDG_DATA_HOME", root.path().join("data"))
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+        cmd
+    };
+    cmd(&["profile", "apply", "broken", "--harness", "copilot"])
+        .assert()
+        .success();
+    fs::remove_file(
+        ctx.repo_path()
+            .join(".repoverlay/profiles/broken.copilot.ccl"),
+    )
+    .unwrap();
+    fs::remove_file(ctx.repo_path().join("AGENTS.md")).unwrap();
+    fs::create_dir(ctx.repo_path().join("AGENTS.md")).unwrap();
+    cmd(&["restore"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to restore profiles"))
+        .stdout(predicate::str::contains("Failed: none").not())
+        .stdout(predicate::str::contains("profiles:"));
+    assert!(!ctx.file_exists(".repoverlay/profiles/broken.copilot.ccl"));
+    assert!(ctx.repo_path().join("AGENTS.md").is_dir());
 }
 
 #[test]
@@ -2765,36 +2872,39 @@ profiles =
 }
 
 #[test]
-fn profile_remove_fails_when_session_lock_present() {
-    let ctx = TestContext::new();
+fn profile_remove_and_remove_all_respect_session_locks() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
     let config_dir = tempfile::TempDir::new().unwrap();
     let copilot_home = tempfile::TempDir::new().unwrap();
     ctx.create_repo_file(".repoverlay/copilot-instructions.md", "Use Rust 2024.");
-    ctx.write_repo_config(
+    ctx.write_repo_config(&format!(
         r"
 profiles =
+  a-ready =
+    instructions =
+      =
+        content = Use concise responses.
   rust-dev =
+    overlays =
+      = {}
     instructions =
       =
         source = copilot-instructions.md
 ",
-    );
+        ctx.overlay_source()
+    ));
 
-    cargo_bin_cmd!("repoverlay")
-        .args([
-            "profile",
-            "apply",
-            "rust-dev",
-            "--harness",
-            "copilot",
-            "--target",
-            ctx.repo_path().to_str().unwrap(),
-        ])
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
-        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
-        .assert()
-        .success();
+    for name in ["a-ready", "rust-dev"] {
+        cargo_bin_cmd!("repoverlay")
+            .args(["profile", "apply", name, "--harness", "copilot"])
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+            .assert()
+            .success();
+    }
 
     let state_file = ctx
         .repo_path()
@@ -2825,9 +2935,140 @@ profiles =
         .failure()
         .stderr(predicate::str::contains("currently in use by an ephemeral"));
 
+    cargo_bin_cmd!("repoverlay")
+        .args(["remove", "--all"])
+        .arg("--target")
+        .arg(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("currently in use by an ephemeral"));
+
     // Lock blocked removal: state and managed file are left intact.
     assert_eq!(fs::read_to_string(&state_file).unwrap(), original_state);
     assert!(instruction_target.exists());
+    assert!(
+        ctx.repo_path()
+            .join(".repoverlay/profiles/a-ready.copilot.ccl")
+            .exists()
+    );
+    assert!(ctx.file_exists(".envrc"));
+
+    fs::remove_file(&lock_file).unwrap();
+    cargo_bin_cmd!("repoverlay")
+        .args(["remove", "--all"])
+        .arg("--target")
+        .arg(ctx.repo_path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+        .assert()
+        .success();
+    assert!(!instruction_target.exists());
+    assert!(!ctx.file_exists(".envrc"));
+    assert!(!state_file.exists());
+    assert!(
+        !ctx.repo_path()
+            .join(".repoverlay/profiles/a-ready.copilot.ccl")
+            .exists()
+    );
+    assert!(ctx.file_exists(".repoverlay/config.ccl"));
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_owned_overlays_block_standalone_removal_and_switch() {
+    let ctx = TestContext::new().with_overlay(&envrc_overlay());
+    let root = tempfile::TempDir::new().unwrap();
+    let independent = common::create_overlay_dir(&[(".independent", "keep")]);
+    let replacement = common::create_overlay_dir(&[(".replacement", "new")]);
+    ctx.write_repo_config(&format!(
+        "profiles =\n  owner =\n    overlays =\n      = {}\n",
+        ctx.overlay_source()
+    ));
+    let cmd = |args: &[&str]| {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.args(args)
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .env("XDG_DATA_HOME", root.path().join("data"))
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+        cmd
+    };
+    cmd(&[
+        "apply",
+        independent.path().to_str().unwrap(),
+        "--name",
+        "a-independent",
+    ])
+    .assert()
+    .success();
+    cmd(&["profile", "apply", "owner", "--harness", "copilot"])
+        .assert()
+        .success();
+    let output = cmd(&["status", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let state: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let owned = state["profiles"][0]["overlays"][0].as_str().unwrap();
+    cmd(&["remove", "--all", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("Overlay: {owned}")));
+    let lock = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/owner.copilot.lock");
+    for locked in [false, true] {
+        if locked {
+            fs::write(&lock, std::process::id().to_string()).unwrap();
+        }
+        for dry_run in [false, true] {
+            for args in [
+                vec!["remove", owned],
+                vec!["switch", replacement.path().to_str().unwrap()],
+                vec!["apply", ctx.overlay_source(), "--name", owned, "--force"],
+            ] {
+                let mut command = cmd(&args);
+                if dry_run {
+                    command.arg("--dry-run");
+                }
+                // Applying with --dry-run does not remove or replace anything.
+                if args[0] == "apply" && dry_run {
+                    continue;
+                }
+                command
+                    .assert()
+                    .failure()
+                    .stderr(predicate::str::contains(if locked {
+                        "currently in use"
+                    } else {
+                        "managed by profile 'owner'"
+                    }));
+                assert!(ctx.file_exists(".envrc"));
+                assert!(ctx.file_exists(".independent"));
+                assert!(!ctx.file_exists(".replacement"));
+            }
+        }
+    }
+    cmd(&["restore"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("currently in use"));
+    assert!(ctx.file_exists(".independent"));
+    assert!(ctx.file_exists(".envrc"));
+    fs::remove_file(lock).unwrap();
+    cmd(&["restore"]).assert().success();
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.file_exists(".independent"));
+    cmd(&["profile", "remove", "owner", "--harness", "copilot"])
+        .assert()
+        .success();
+    assert!(!ctx.file_exists(".envrc"));
+    assert!(ctx.file_exists(".independent"));
 }
 
 #[cfg(unix)]
@@ -3648,7 +3889,11 @@ fn status_shows_multiple_overlays() {
 
 #[cfg(unix)]
 #[test]
-fn status_reports_apm_profiles_in_all_modes() {
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "Shell parameter expansion in the APM fixture"
+)]
+fn apm_profiles_support_status_and_remove_all() {
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::TempDir::new().unwrap();
@@ -3659,6 +3904,9 @@ fn status_reports_apm_profiles_in_all_modes() {
 set -eu
 operation=$1
 shift
+if [ -n "${REPOVERLAY_APM_TEST_LOG:-}" ]; then
+    printf '%s %s\n' "$operation" "$*" >> "$REPOVERLAY_APM_TEST_LOG"
+fi
 root=.
 harness=claude
 while [ "$#" -gt 0 ]; do
@@ -3669,14 +3917,23 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 case "$operation" in
-    install) ;;
+    install)
+        if [ "${REPOVERLAY_APM_TEST_FAIL:-0}" = 1 ]; then exit 9; fi
+        ;;
     compile)
         if [ "$harness" = claude ]; then
             mkdir -p "$root/.claude/commands"
-            printf '# Demo\n' > "$root/.claude/commands/demo.md"
+            printf '# Demo %s\n' "${REPOVERLAY_APM_TEST_CONTENT:-1}" > "$root/.claude/commands/demo.md"
+            if [ "${REPOVERLAY_APM_TEST_HOOKS:-0}" = 1 ]; then
+                printf '{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo managed-hook"}]}]}}' > "$root/.claude/settings.json"
+            fi
         else
             mkdir -p "$root/.github/prompts"
-            printf '# Demo\n' > "$root/.github/prompts/demo.prompt.md"
+            printf '# Demo %s\n' "${REPOVERLAY_APM_TEST_CONTENT:-1}" > "$root/.github/prompts/demo.prompt.md"
+            if [ "${REPOVERLAY_APM_TEST_HOOKS:-0}" = 1 ]; then
+                mkdir -p "$root/.github/hooks"
+                printf '{"version":1,"hooks":{}}' > "$root/.github/hooks/demo.json"
+            fi
         fi
         ;;
     pack)
@@ -3698,6 +3955,7 @@ esac
     for harness in ["claude", "copilot"] {
         for operation in ["install", "sync"] {
             let ctx = TestContext::new().with_overlay(&envrc_overlay());
+            let apm_log = root.path().join(format!("apm-{harness}-{operation}.log"));
             ctx.create_repo_file("apm.yml", "name: project\nversion: 1.0.0\n");
             ctx.create_repo_file("apm.lock.yaml", "dependencies: []\n");
             let cmd = |args: &[&str]| {
@@ -3712,6 +3970,7 @@ esac
                     .env("REPOVERLAY_CLAUDE_HOME", root.path().join("claude"))
                     .env("REPOVERLAY_COPILOT_HOME", root.path().join("copilot"))
                     .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+                cmd.env("REPOVERLAY_APM_TEST_LOG", &apm_log);
                 cmd
             };
             let status_json = |args: &[&str]| {
@@ -3724,22 +3983,114 @@ esac
                     .clone();
                 serde_json::from_slice::<serde_json::Value>(&output).unwrap()
             };
-            let profile_name = if operation == "install" {
-                cmd(&["apm", "install", "owner/demo", "--harness", harness])
-                    .assert()
-                    .success();
-                "apm-owner-demo"
+            let (apply_args, profile_name) = if operation == "install" {
+                (
+                    vec!["apm", "install", "owner/demo#v1.2.3", "--harness", harness],
+                    "apm-owner-demo",
+                )
             } else {
-                cmd(&["apm", "sync", "--harness", harness])
-                    .assert()
-                    .success();
-                "apm-project"
+                (vec!["apm", "sync", "--harness", harness], "apm-project")
             };
+            cmd(&apply_args).assert().success();
             let command_target = if harness == "claude" {
                 ".claude/commands/demo.md"
             } else {
                 ".github/prompts/demo.prompt.md"
             };
+            cmd(&["profile", "list"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains(format!("applied: {harness}")));
+            cmd(&["profile", "show", profile_name])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Source: applied state"))
+                .stdout(predicate::str::contains(harness))
+                .stdout(predicate::str::contains(command_target));
+            let state_path = ctx
+                .repo_path()
+                .join(format!(".repoverlay/profiles/{profile_name}.{harness}.ccl",));
+            let before = fs::read(&state_path).unwrap();
+            let log_before = fs::read(&apm_log).unwrap();
+            cmd(&["update", profile_name, "--dry-run"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("dry run"))
+                .stdout(predicate::str::contains(profile_name));
+            assert_eq!(fs::read(&state_path).unwrap(), before);
+            assert_eq!(fs::read(&apm_log).unwrap(), log_before);
+            let lock = state_path.with_extension("lock");
+            fs::write(&lock, std::process::id().to_string()).unwrap();
+            cmd(&["update", profile_name])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("currently in use"));
+            assert_eq!(fs::read(&state_path).unwrap(), before);
+            assert_eq!(fs::read(&apm_log).unwrap(), log_before);
+            fs::remove_file(lock).unwrap();
+            cmd(&["update", profile_name])
+                .env("REPOVERLAY_APM_TEST_CONTENT", "2")
+                .assert()
+                .success();
+            assert_eq!(
+                fs::read_to_string(ctx.repo_path().join(command_target)).unwrap(),
+                "# Demo 2\n"
+            );
+            let before = fs::read(&state_path).unwrap();
+            cmd(&["update", profile_name])
+                .env("REPOVERLAY_APM_TEST_FAIL", "1")
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("APM install failed"));
+            assert_eq!(fs::read(&state_path).unwrap(), before);
+            cmd(&["update", profile_name])
+                .env("REPOVERLAY_APM_TEST_HOOKS", "1")
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("--allow-hooks"));
+            assert_eq!(fs::read(&state_path).unwrap(), before);
+            cmd(&["update", profile_name, "--allow-hooks"])
+                .env("REPOVERLAY_APM_TEST_HOOKS", "1")
+                .assert()
+                .success();
+            cmd(&["update"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("no longer in config").not());
+            let calls = fs::read_to_string(&apm_log).unwrap();
+            if operation == "install" {
+                assert!(
+                    calls
+                        .lines()
+                        .filter(|line| line.starts_with("install "))
+                        .all(|line| line.ends_with("-- owner/demo#v1.2.3"))
+                );
+                cmd(&["profile", "show", profile_name])
+                    .assert()
+                    .success()
+                    .stdout(predicate::str::contains("APM package: owner/demo#v1.2.3"));
+            } else {
+                assert!(
+                    calls
+                        .lines()
+                        .filter(|line| line.starts_with("install "))
+                        .all(|line| line.contains("--frozen"))
+                );
+            }
+            let current_state = fs::read_to_string(&state_path).unwrap();
+            let (legacy, _) = current_state.split_once("\napm =").unwrap();
+            fs::write(&state_path, legacy).unwrap();
+            cmd(&["update", profile_name])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(if operation == "install" {
+                    "original package reference"
+                } else {
+                    "apm sync --harness"
+                }));
+            assert_eq!(fs::read_to_string(&state_path).unwrap(), legacy);
+            fs::write(&state_path, current_state).unwrap();
             assert!(!ctx.repo_path().join(".repoverlay/overlays").exists());
             cmd(&["status"])
                 .assert()
@@ -3785,6 +4136,36 @@ esac
                     .iter()
                     .any(|file| file["target"] == command_target && file["status"] == "missing")
             );
+            let state_path = ctx
+                .repo_path()
+                .join(format!(".repoverlay/profiles/{profile_name}.{harness}.ccl",));
+            let original_state = fs::read(&state_path).unwrap();
+            cmd(&["restore", "--dry-run"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name));
+            assert!(!ctx.file_exists(command_target));
+            cmd(&["restore"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Restored 1 profile"));
+            assert!(ctx.file_exists(command_target));
+            assert_eq!(fs::read(&state_path).unwrap(), original_state);
+
+            cmd(&["remove", "--all", "--dry-run"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains(harness));
+            assert!(ctx.file_exists(command_target));
+            assert_eq!(status_json(&[])["profiles"][0]["name"], profile_name);
+            cmd(&["remove", "--all"]).assert().success();
+            assert!(!ctx.file_exists(command_target));
+            cmd(&["restore"]).assert().success();
+            cmd(&["status", "--quiet"]).assert().code(1);
+            assert_eq!(status_json(&[])["profiles"], serde_json::json!([]));
+
+            cmd(&apply_args).assert().success();
 
             cmd(&["apply", ctx.overlay_source(), "--name", "mixed-overlay"])
                 .assert()
@@ -3818,6 +4199,21 @@ esac
                     .stderr(predicate::str::contains("not applied"))
                     .stderr(predicate::str::contains(profile_name));
             }
+            cmd(&["remove", "--all", "--dry-run"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name))
+                .stdout(predicate::str::contains("mixed-overlay"));
+            assert!(ctx.file_exists(command_target));
+            assert!(ctx.file_exists(".envrc"));
+            cmd(&["remove", "--all"]).assert().success();
+            assert!(!ctx.file_exists(command_target));
+            assert!(!ctx.file_exists(".envrc"));
+            cmd(&["restore"]).assert().success();
+            cmd(&["status", "--quiet"]).assert().code(1);
+            let json = status_json(&[]);
+            assert_eq!(json["profiles"], serde_json::json!([]));
+            assert_eq!(json["overlays"], serde_json::json!([]));
         }
     }
 }
@@ -8429,25 +8825,33 @@ profiles =
   rust-dev =
     plugins =
       = ./plugins/rust
+  other =
+    instructions =
+      =
+        content = Keep this profile unchanged.
 ",
     );
     git_commit_all(ctx.repo_path(), "init");
 
-    cargo_bin_cmd!("repoverlay")
-        .args([
-            "profile",
-            "apply",
-            "rust-dev",
-            "--harness",
-            "copilot",
-            "--target",
-            ctx.repo_path().to_str().unwrap(),
-        ])
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
-        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
-        .assert()
-        .success();
+    let cmd = |args: &[&str]| {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.args(args)
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+        cmd
+    };
+    for name in ["rust-dev", "other"] {
+        cmd(&["profile", "apply", name, "--harness", "copilot"])
+            .assert()
+            .success();
+    }
+    let other_state = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/other.copilot.ccl");
+    let other_before = fs::read(&other_state).unwrap();
 
     assert_eq!(fs::read_to_string(&placed).unwrap(), "# v1");
 
@@ -8455,17 +8859,44 @@ profiles =
     ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# v2");
     git_commit_all(ctx.repo_path(), "bump skill");
 
-    cargo_bin_cmd!("repoverlay")
-        .args(["update", "--target", ctx.repo_path().to_str().unwrap()])
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
-        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+    cmd(&["update", "rust-dev", "--dry-run"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("other").not());
+    assert_eq!(fs::read_to_string(&placed).unwrap(), "# v1");
+    cmd(&["update", "rust-dev"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("other").not());
+    assert_eq!(fs::read(&other_state).unwrap(), other_before);
 
     assert_eq!(
         fs::read_to_string(&placed).unwrap(),
         "# v2",
         "update should re-place the changed plugin skill"
     );
+    cmd(&["update"]).assert().success();
+
+    ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# v3");
+    ctx.write_repo_config(
+        "profiles =\n  rust-dev =\n    plugins =\n      = ./plugins/rust\n    instructions =\n      =\n        content = <!-- repoverlay:profile:invalid:begin -->\n",
+    );
+    git_commit_all(
+        ctx.repo_path(),
+        "update source with invalid profile instructions",
+    );
+    cmd(&["update", "rust-dev"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("restored previous profile"));
+    assert_eq!(fs::read_to_string(&placed).unwrap(), "# v2");
+    assert!(ctx.file_exists(".repoverlay/profiles/rust-dev.copilot.ccl"));
+    assert_eq!(fs::read(&other_state).unwrap(), other_before);
+
+    ctx.write_repo_config("profiles =\n  rust-dev =\n    plugins =\n      = missing/plugin\n");
+    cmd(&["update", "rust-dev"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("plugin resolution failed"));
+    assert_eq!(fs::read_to_string(&placed).unwrap(), "# v2");
 }

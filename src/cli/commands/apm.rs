@@ -7,7 +7,9 @@ use std::process::Command;
 use crate::cli::ApmCommand;
 use crate::cli::commands::resolve_target;
 use crate::plugin::PluginRef;
-use crate::profile::{ProfileConfig, ResolvedJsonMerge, ResolvedPlacement};
+use crate::profile::{
+    ApmProfileSource, ProfileConfig, ProfileState, ResolvedJsonMerge, ResolvedPlacement,
+};
 use crate::profile_applicators::AgentHarness;
 
 const SOURCE_MARKER: &str = ".repoverlay-apm-source";
@@ -72,6 +74,17 @@ fn install_with_apm(
     apm: &OsStr,
     allow_hooks: bool,
 ) -> Result<()> {
+    install_package(package, harness, target, apm, allow_hooks, false)
+}
+
+fn install_package(
+    package: &str,
+    harness: AgentHarness,
+    target: &Path,
+    apm: &OsStr,
+    allow_hooks: bool,
+    replace: bool,
+) -> Result<()> {
     validate_package(package)?;
     let identity = package_identity(package);
     let key = package_key(identity)?;
@@ -80,11 +93,14 @@ fn install_with_apm(
         .into_iter()
         .find(|state| state.name == profile_name)
     {
-        bail!(
-            "APM package '{package}' is already installed for {}; remove profile \
+        if !replace || state.harness != harness {
+            bail!(
+                "APM package '{package}' is already installed for {}; remove profile \
              '{profile_name}' before installing it for {harness}",
-            state.harness
-        )
+                state.harness
+            );
+        }
+        crate::profile_plan::check_profile_removal_lock(&profile_name, harness, target)?;
     }
     if let Some(snapshot) = crate::profile_plan::list_restorable_profiles(target)?
         .into_iter()
@@ -163,6 +179,9 @@ fn install_with_apm(
     let resolved_managed_regions = native_managed_regions(&native_root, harness)?;
     let profile = ProfileConfig {
         description: Some(format!("APM package {package}")),
+        apm: Some(ApmProfileSource::Package {
+            reference: package.to_string(),
+        }),
         plugins: vec![PluginRef::Local {
             source: destination.clone(),
         }],
@@ -174,7 +193,7 @@ fn install_with_apm(
         ..ProfileConfig::default()
     };
     if let Err(err) =
-        crate::profile_plan::apply_profile_config(&profile_name, harness, target, &profile)
+        crate::profile_plan::replace_profile_config(&profile_name, harness, target, &profile)
     {
         remove_if_exists(&destination)?;
         restore_bundle(&backup, &destination)?;
@@ -187,8 +206,87 @@ fn install_with_apm(
             backup.display()
         );
     }
-    println!("Installed APM package '{package}' as profile '{profile_name}'");
+    let action = if replace { "Updated" } else { "Installed" };
+    println!("{action} APM package '{package}' as profile '{profile_name}'");
     Ok(())
+}
+
+pub(crate) fn is_apm_profile(target: &Path, state: &ProfileState) -> Result<bool> {
+    if state.apm.is_some() {
+        return Ok(true);
+    }
+    let Some(key) = state.name.strip_prefix("apm-") else {
+        return Ok(false);
+    };
+    crate::profile::validate_profile_state_component(key)?;
+    let marker = crate::state::external_state_dir_for_target(target)?
+        .join("apm")
+        .join(key)
+        .join(SOURCE_MARKER);
+    marker
+        .try_exists()
+        .with_context(|| format!("Failed to inspect APM source {}", marker.display()))
+}
+
+pub(crate) fn update_profile(
+    target: &Path,
+    state: &ProfileState,
+    dry_run: bool,
+    allow_hooks: bool,
+) -> Result<()> {
+    let source = state.apm.as_ref().with_context(|| {
+        if state.name == PROJECT_PROFILE {
+            return format!(
+                "Profile '{}' has no recorded APM source; run `repoverlay apm sync --harness {}` \
+                 once before using `update`",
+                state.name, state.harness
+            );
+        }
+        format!(
+            "Profile '{}' ({}) has no recorded APM package reference. Remove it with \
+             `repoverlay profile remove {} --harness {}` and reinstall the original package \
+             reference, including its version pin, before using `update`",
+            state.name, state.harness, state.name, state.harness
+        )
+    })?;
+    if dry_run {
+        match source {
+            ApmProfileSource::Package { reference } => println!(
+                "  (dry run) '{}' ({}) would refresh APM package '{reference}'",
+                state.name, state.harness
+            ),
+            ApmProfileSource::Project => println!(
+                "  (dry run) '{}' ({}) would sync the pinned APM project",
+                state.name, state.harness
+            ),
+        }
+        return Ok(());
+    }
+    crate::profile_plan::check_profile_removal_lock(&state.name, state.harness, target)?;
+    match source {
+        ApmProfileSource::Package { reference } => {
+            anyhow::ensure!(
+                state.name == format!("apm-{}", package_key(package_identity(reference))?),
+                "APM package reference does not match profile '{}'",
+                state.name
+            );
+            install_package(
+                reference,
+                state.harness,
+                target,
+                OsStr::new("apm"),
+                allow_hooks,
+                true,
+            )
+        }
+        ApmProfileSource::Project => {
+            anyhow::ensure!(
+                state.name == PROJECT_PROFILE,
+                "APM project profile name is invalid"
+            );
+            sync_with_apm(state.harness, target, OsStr::new("apm"), allow_hooks)
+        }
+    }
 }
 
 fn sync_with_apm(
@@ -224,13 +322,16 @@ fn sync_with_apm(
     }
     if let Some(state) = crate::profile_plan::list_profile_states(target)?
         .into_iter()
-        .find(|state| state.name == PROJECT_PROFILE && state.harness != harness)
+        .find(|state| state.name == PROJECT_PROFILE)
     {
-        bail!(
-            "The APM project is installed for {}; remove profile '{PROJECT_PROFILE}' before \
+        if state.harness != harness {
+            bail!(
+                "The APM project is installed for {}; remove profile '{PROJECT_PROFILE}' before \
              syncing it for {harness}",
-            state.harness
-        )
+                state.harness
+            );
+        }
+        crate::profile_plan::check_profile_removal_lock(PROJECT_PROFILE, harness, target)?;
     }
 
     let harness_name = harness.to_string();
@@ -295,6 +396,7 @@ fn sync_with_apm(
     resolved_json_merges.extend(lsp_merge(&native_root, harness)?);
     let profile = ProfileConfig {
         description: Some("APM project manifest".to_string()),
+        apm: Some(ApmProfileSource::Project),
         resolved_mcp_servers,
         resolved_placements,
         resolved_json_merges,

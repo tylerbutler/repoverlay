@@ -15,7 +15,7 @@ Overlay config files into git repositories without committing them. Files are sy
 | Apply overlay (scripting) | `repoverlay apply <source>` |
 | Check status | `repoverlay status` |
 | Remove overlay | `repoverlay remove <name>` |
-| Remove all | `repoverlay remove --all` |
+| Remove all overlays and profiles | `repoverlay remove --all` |
 | Update from remote | `repoverlay update` |
 | Restore after git clean | `repoverlay restore` |
 | Create overlay | `repoverlay create <name>` |
@@ -217,7 +217,7 @@ repoverlay copilot --profile rust-dev -- --help
 repoverlay claude --profile rust-dev
 ```
 
-Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copilot) or `.claude/skills/` (Claude), plugin MCP servers merge into the repo's `.mcp.json`, and instruction files are written into a managed region of `CLAUDE.md` (Claude) or `AGENTS.md` (Copilot). Claude can also *delegate* plugin enablement to its own settings instead of placing files. A full `repoverlay update` re-resolves applied profiles' managed plugins and re-applies any whose source changed.
+Capabilities are placed repo-local: plugin skills go to `.agents/skills/` (Copilot) or `.claude/skills/` (Claude), plugin MCP servers merge into the repo's `.mcp.json`, and instruction files are written into a managed region of `CLAUDE.md` (Claude) or `AGENTS.md` (Copilot). Claude can also *delegate* plugin enablement to its own settings instead of placing files. `repoverlay update` re-resolves applied profiles' managed plugins and re-applies any whose source changed. Add a profile name to limit the update. Failed applications restore the previous profile.
 
 ### APM packages
 
@@ -244,7 +244,19 @@ repoverlay profile remove apm-tylerbutler-apm-base --harness claude
 repoverlay profile remove apm-project --harness claude
 ```
 
+Use `repoverlay remove --all` to remove applied overlays and profiles, including
+APM profiles. Add `--dry-run` to preview the removal. Bulk removal restores
+profile-owned content before removing remaining overlays and stops if a live
+agent session holds a profile lock.
+
 A package can be active for one harness at a time because both harnesses share `.mcp.json`. Remove the profile before reinstalling it or switching harnesses. APM remains responsible for dependency resolution, lockfiles, package integrity, and policy checks. repoverlay manages the durable artifact, repository placement, Git exclusion, removal, and restore.
+
+`profile list` and `profile show` include APM profiles and their applied harnesses.
+Use `repoverlay update <profile>` to refresh an APM package from its recorded
+reference, including its version pin, or to sync the pinned APM project.
+Add `--dry-run` to preview without running APM. Refreshed hooks require
+`--allow-hooks`. Profiles installed before origin tracking need an explicit
+project sync or package reinstall before `update` can refresh them.
 
 repoverlay applies the target-native output APM writes for the selected harness:
 
