@@ -1,9 +1,0 @@
-kind: Fixed
-body: |-
-    Remove applied profiles with remove --all
-
-    Include APM profiles in bulk removal and dry-run previews. Restore
-    profile-owned content before removing remaining overlays, and reject
-    bulk removal while a live agent session holds a profile lock.
-time: 2026-10-18T16:25:35-07:00
-component: remove

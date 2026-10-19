@@ -1,8 +1,0 @@
-kind: Fixed
-body: |-
-    Include applied profiles in status output
-
-    Show APM and other applied profiles with their harness and managed files.
-    Include profiles in JSON output, quiet-mode exit codes, and name filters.
-time: 2026-10-18T16:07:16-07:00
-component: status
