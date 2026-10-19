@@ -3885,6 +3885,10 @@ fn status_shows_multiple_overlays() {
 
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "Shell parameter expansion in the APM fixture"
+)]
 fn apm_profiles_support_status_and_remove_all() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -3896,6 +3900,9 @@ fn apm_profiles_support_status_and_remove_all() {
 set -eu
 operation=$1
 shift
+if [ -n "${REPOVERLAY_APM_TEST_LOG:-}" ]; then
+    printf '%s %s\n' "$operation" "$*" >> "$REPOVERLAY_APM_TEST_LOG"
+fi
 root=.
 harness=claude
 while [ "$#" -gt 0 ]; do
@@ -3906,14 +3913,23 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 case "$operation" in
-    install) ;;
+    install)
+        if [ "${REPOVERLAY_APM_TEST_FAIL:-0}" = 1 ]; then exit 9; fi
+        ;;
     compile)
         if [ "$harness" = claude ]; then
             mkdir -p "$root/.claude/commands"
-            printf '# Demo\n' > "$root/.claude/commands/demo.md"
+            printf '# Demo %s\n' "${REPOVERLAY_APM_TEST_CONTENT:-1}" > "$root/.claude/commands/demo.md"
+            if [ "${REPOVERLAY_APM_TEST_HOOKS:-0}" = 1 ]; then
+                printf '{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"echo managed-hook"}]}]}}' > "$root/.claude/settings.json"
+            fi
         else
             mkdir -p "$root/.github/prompts"
-            printf '# Demo\n' > "$root/.github/prompts/demo.prompt.md"
+            printf '# Demo %s\n' "${REPOVERLAY_APM_TEST_CONTENT:-1}" > "$root/.github/prompts/demo.prompt.md"
+            if [ "${REPOVERLAY_APM_TEST_HOOKS:-0}" = 1 ]; then
+                mkdir -p "$root/.github/hooks"
+                printf '{"version":1,"hooks":{}}' > "$root/.github/hooks/demo.json"
+            fi
         fi
         ;;
     pack)
@@ -3935,6 +3951,7 @@ esac
     for harness in ["claude", "copilot"] {
         for operation in ["install", "sync"] {
             let ctx = TestContext::new().with_overlay(&envrc_overlay());
+            let apm_log = root.path().join(format!("apm-{harness}-{operation}.log"));
             ctx.create_repo_file("apm.yml", "name: project\nversion: 1.0.0\n");
             ctx.create_repo_file("apm.lock.yaml", "dependencies: []\n");
             let cmd = |args: &[&str]| {
@@ -3949,6 +3966,7 @@ esac
                     .env("REPOVERLAY_CLAUDE_HOME", root.path().join("claude"))
                     .env("REPOVERLAY_COPILOT_HOME", root.path().join("copilot"))
                     .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+                cmd.env("REPOVERLAY_APM_TEST_LOG", &apm_log);
                 cmd
             };
             let status_json = |args: &[&str]| {
@@ -3963,7 +3981,7 @@ esac
             };
             let (apply_args, profile_name) = if operation == "install" {
                 (
-                    vec!["apm", "install", "owner/demo", "--harness", harness],
+                    vec!["apm", "install", "owner/demo#v1.2.3", "--harness", harness],
                     "apm-owner-demo",
                 )
             } else {
@@ -3986,6 +4004,89 @@ esac
                 .stdout(predicate::str::contains("Source: applied state"))
                 .stdout(predicate::str::contains(harness))
                 .stdout(predicate::str::contains(command_target));
+            let state_path = ctx
+                .repo_path()
+                .join(format!(".repoverlay/profiles/{profile_name}.{harness}.ccl",));
+            let before = fs::read(&state_path).unwrap();
+            let log_before = fs::read(&apm_log).unwrap();
+            cmd(&["update", profile_name, "--dry-run"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("dry run"))
+                .stdout(predicate::str::contains(profile_name));
+            assert_eq!(fs::read(&state_path).unwrap(), before);
+            assert_eq!(fs::read(&apm_log).unwrap(), log_before);
+            let lock = state_path.with_extension("lock");
+            fs::write(&lock, std::process::id().to_string()).unwrap();
+            cmd(&["update", profile_name])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("currently in use"));
+            assert_eq!(fs::read(&state_path).unwrap(), before);
+            assert_eq!(fs::read(&apm_log).unwrap(), log_before);
+            fs::remove_file(lock).unwrap();
+            cmd(&["update", profile_name])
+                .env("REPOVERLAY_APM_TEST_CONTENT", "2")
+                .assert()
+                .success();
+            assert_eq!(
+                fs::read_to_string(ctx.repo_path().join(command_target)).unwrap(),
+                "# Demo 2\n"
+            );
+            let before = fs::read(&state_path).unwrap();
+            cmd(&["update", profile_name])
+                .env("REPOVERLAY_APM_TEST_FAIL", "1")
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("APM install failed"));
+            assert_eq!(fs::read(&state_path).unwrap(), before);
+            cmd(&["update", profile_name])
+                .env("REPOVERLAY_APM_TEST_HOOKS", "1")
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains("--allow-hooks"));
+            assert_eq!(fs::read(&state_path).unwrap(), before);
+            cmd(&["update", profile_name, "--allow-hooks"])
+                .env("REPOVERLAY_APM_TEST_HOOKS", "1")
+                .assert()
+                .success();
+            cmd(&["update"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("no longer in config").not());
+            let calls = fs::read_to_string(&apm_log).unwrap();
+            if operation == "install" {
+                assert!(
+                    calls
+                        .lines()
+                        .filter(|line| line.starts_with("install "))
+                        .all(|line| line.ends_with("-- owner/demo#v1.2.3"))
+                );
+                cmd(&["profile", "show", profile_name])
+                    .assert()
+                    .success()
+                    .stdout(predicate::str::contains("APM package: owner/demo#v1.2.3"));
+            } else {
+                assert!(
+                    calls
+                        .lines()
+                        .filter(|line| line.starts_with("install "))
+                        .all(|line| line.contains("--frozen"))
+                );
+            }
+            let current_state = fs::read_to_string(&state_path).unwrap();
+            let (legacy, _) = current_state.split_once("\napm =").unwrap();
+            fs::write(&state_path, legacy).unwrap();
+            cmd(&["update", profile_name])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(if operation == "install" {
+                    "original package reference"
+                } else {
+                    "apm sync --harness"
+                }));
+            assert_eq!(fs::read_to_string(&state_path).unwrap(), legacy);
+            fs::write(&state_path, current_state).unwrap();
             assert!(!ctx.repo_path().join(".repoverlay/overlays").exists());
             cmd(&["status"])
                 .assert()
@@ -8720,25 +8821,33 @@ profiles =
   rust-dev =
     plugins =
       = ./plugins/rust
+  other =
+    instructions =
+      =
+        content = Keep this profile unchanged.
 ",
     );
     git_commit_all(ctx.repo_path(), "init");
 
-    cargo_bin_cmd!("repoverlay")
-        .args([
-            "profile",
-            "apply",
-            "rust-dev",
-            "--harness",
-            "copilot",
-            "--target",
-            ctx.repo_path().to_str().unwrap(),
-        ])
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
-        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
-        .assert()
-        .success();
+    let cmd = |args: &[&str]| {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.args(args)
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", config_dir.path())
+            .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+        cmd
+    };
+    for name in ["rust-dev", "other"] {
+        cmd(&["profile", "apply", name, "--harness", "copilot"])
+            .assert()
+            .success();
+    }
+    let other_state = ctx
+        .repo_path()
+        .join(".repoverlay/profiles/other.copilot.ccl");
+    let other_before = fs::read(&other_state).unwrap();
 
     assert_eq!(fs::read_to_string(&placed).unwrap(), "# v1");
 
@@ -8746,17 +8855,44 @@ profiles =
     ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# v2");
     git_commit_all(ctx.repo_path(), "bump skill");
 
-    cargo_bin_cmd!("repoverlay")
-        .args(["update", "--target", ctx.repo_path().to_str().unwrap()])
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .env("REPOVERLAY_COPILOT_HOME", copilot_home.path())
-        .env("REPOVERLAY_NO_UPDATE_CHECK", "1")
+    cmd(&["update", "rust-dev", "--dry-run"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("other").not());
+    assert_eq!(fs::read_to_string(&placed).unwrap(), "# v1");
+    cmd(&["update", "rust-dev"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("other").not());
+    assert_eq!(fs::read(&other_state).unwrap(), other_before);
 
     assert_eq!(
         fs::read_to_string(&placed).unwrap(),
         "# v2",
         "update should re-place the changed plugin skill"
     );
+    cmd(&["update"]).assert().success();
+
+    ctx.create_repo_file("plugins/rust/skills/fmt/SKILL.md", "# v3");
+    ctx.write_repo_config(
+        "profiles =\n  rust-dev =\n    plugins =\n      = ./plugins/rust\n    instructions =\n      =\n        content = <!-- repoverlay:profile:invalid:begin -->\n",
+    );
+    git_commit_all(
+        ctx.repo_path(),
+        "update source with invalid profile instructions",
+    );
+    cmd(&["update", "rust-dev"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("restored previous profile"));
+    assert_eq!(fs::read_to_string(&placed).unwrap(), "# v2");
+    assert!(ctx.file_exists(".repoverlay/profiles/rust-dev.copilot.ccl"));
+    assert_eq!(fs::read(&other_state).unwrap(), other_before);
+
+    ctx.write_repo_config("profiles =\n  rust-dev =\n    plugins =\n      = missing/plugin\n");
+    cmd(&["update", "rust-dev"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("plugin resolution failed"));
+    assert_eq!(fs::read_to_string(&placed).unwrap(), "# v2");
 }

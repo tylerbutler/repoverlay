@@ -28,6 +28,11 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
                 let profile = config.profiles.get(name);
                 let source = if profile.is_some() {
                     "configured"
+                } else if states
+                    .iter()
+                    .any(|state| &state.name == name && state.apm.is_some())
+                {
+                    "APM"
                 } else {
                     "applied state"
                 };
@@ -88,11 +93,29 @@ pub(crate) fn handle_profile_command(command: ProfileCommand) -> Result<()> {
                         .collect::<Vec<_>>(),
                 );
             } else {
-                println!("  Source: applied state (not configured)");
+                let origin = if states.iter().any(|state| state.apm.is_some()) {
+                    "APM; not configured"
+                } else {
+                    "not configured"
+                };
+                println!("  Source: applied state ({origin})");
             }
             for state in states {
-                println!("  Applied: {} ({:?})", state.harness, state.mode);
+                let mode = match state.mode {
+                    crate::profile::ProfileMode::Persistent => "persistent",
+                    crate::profile::ProfileMode::Ephemeral => "ephemeral",
+                };
+                println!("  Applied: {} ({mode})", state.harness);
                 println!("    Applied at: {}", state.applied_at.to_rfc3339());
+                match state.apm {
+                    Some(crate::profile::ApmProfileSource::Package { reference }) => {
+                        println!("    APM package: {reference}");
+                    }
+                    Some(crate::profile::ApmProfileSource::Project) => {
+                        println!("    APM project: apm.yml (apm.lock.yaml)");
+                    }
+                    None => {}
+                }
                 print_list("Applied overlays", &state.overlays);
                 print_list(
                     "Applied plugins",

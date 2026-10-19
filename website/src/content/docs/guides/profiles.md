@@ -265,6 +265,8 @@ repoverlay profile list
 
 The list shows each profile once, with its configuration source and applied
 harnesses. Configured profiles remain visible when they are not applied.
+APM profiles show their APM origin. `profile show` includes the recorded package
+reference or project inputs beside the applied files.
 
 Show a profile's configuration and applied state:
 
@@ -329,9 +331,25 @@ Removal deletes the harness files and merged configuration entries that the prof
 
 repoverlay pins managed plugins to their resolved commit when you apply a profile. It records that commit in profile state.
 
-Run `repoverlay update` without an overlay name filter to resolve managed plugins again for every persistent profile. If a plugin source has changed, repoverlay applies the profile again. It does not change delegate plugins or plugins pinned to a fixed `ref`.
+Run `repoverlay update` to resolve managed plugins again for persistent profiles.
+If a plugin source has changed, repoverlay applies the profile again. Use
+`repoverlay update <profile>` to update one profile across its applied harnesses.
+It does not change delegate plugins or plugins pinned to a fixed `ref`. A failed
+application restores the previous profile.
 
 Use `repoverlay update --dry-run` to preview which profiles need a new application.
+
+For APM profiles, `update` refreshes installed packages through APM using their
+recorded references, including version pins. It refreshes `apm-project` through
+the frozen sync workflow without changing `apm.yml` or `apm.lock.yaml`. APM dry
+runs show the planned refresh without running APM. Add `--allow-hooks` if the
+refreshed output contains hooks. Live profile locks block updates, and failed
+profile updates return a nonzero exit code.
+
+APM profiles created before repoverlay recorded their origin need one explicit
+refresh. Run `repoverlay apm sync` for a project. For a package, remove the profile
+and reinstall the original package reference, including its pin. `update` reports
+the required action instead of guessing a missing reference.
 
 ### Ephemeral mode
 

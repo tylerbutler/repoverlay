@@ -186,9 +186,9 @@ enum Commands {
         merge: bool,
     },
 
-    /// Update applied overlays from remote sources
+    /// Update applied overlays, profile plugins, and APM profiles
     Update {
-        /// Name of the overlay to update (updates all GitHub overlays if not specified)
+        /// Name of the overlay or profile to update (updates all if not specified)
         name: Option<String>,
 
         /// Target repository directory (defaults to current directory)
@@ -214,6 +214,10 @@ enum Commands {
         /// Deep merge conflicting JSON files instead of failing
         #[arg(long, env = "REPOVERLAY_MERGE")]
         merge: bool,
+
+        /// Allow refreshed APM profiles to install hooks that run repository commands
+        #[arg(long)]
+        allow_hooks: bool,
     },
 
     /// Create a new overlay from files in a repository
@@ -915,26 +919,40 @@ pub(crate) fn run() -> Result<()> {
             skip_conflicts,
             interactive,
             merge,
+            allow_hooks,
         } => {
             let target = target.unwrap_or_else(|| PathBuf::from("."));
             let conflict_strategy = conflict_strategy(force, skip_conflicts, interactive);
-            // Profile plugin re-resolution only runs for a full `update` (no
-            // overlay name filter); a name filter scopes the command to one
-            // overlay and should not silently churn applied profiles.
-            let profiles_checked = if name.is_none() {
-                crate::profile_plan::update_profile_plugins(&target, dry_run)?
+            let applied_profiles = crate::profile_plan::list_profile_states(&target)?;
+            let named_profile = name
+                .as_ref()
+                .is_some_and(|name| applied_profiles.iter().any(|state| &state.name == name));
+            let profiles_checked = if name.is_none() || named_profile {
+                crate::profile_plan::update_profile_plugins(
+                    &target,
+                    name.as_deref(),
+                    dry_run,
+                    allow_hooks,
+                )?
             } else {
                 0
             };
-            let overlays_dir = target.join(crate::STATE_DIR).join(crate::OVERLAYS_DIR);
-            let have_overlays = overlays_dir.exists()
-                && !crate::list_applied_overlays(&target)
-                    .unwrap_or_default()
-                    .is_empty();
-            if name.is_some() || have_overlays {
+            let overlays = crate::list_applied_overlays(&target)?;
+            let have_overlays = if let Some(name) = &name {
+                let normalized = crate::state::normalize_overlay_name(name)?;
+                overlays
+                    .iter()
+                    .any(|overlay| overlay.as_str() == normalized)
+            } else {
+                !overlays.is_empty()
+            };
+            if (name.is_some() && !named_profile) || have_overlays {
                 update_overlays(&target, name, dry_run, conflict_strategy, merge)?;
             } else if profiles_checked == 0 {
-                bail!("No overlays are currently applied in: {}", target.display());
+                bail!(
+                    "No overlays or persistent profiles are currently applied in: {}",
+                    target.display()
+                );
             }
         }
         Commands::Create {

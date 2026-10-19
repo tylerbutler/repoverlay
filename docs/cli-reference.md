@@ -61,7 +61,7 @@ Overlay config files into git repositories without committing them
 * `remove` — Remove applied overlays and profiles
 * `status` — Show the status of applied overlays and profiles
 * `restore` — Restore overlays and missing profile files from recovery snapshots
-* `update` — Update applied overlays from remote sources
+* `update` — Update applied overlays, profile plugins, and APM profiles
 * `create` — Create a new overlay from files in a repository
 * `move` — Move an overlay to a new location
 * `switch` — Switch to a different overlay (removes all existing overlays first)
@@ -219,13 +219,13 @@ Restore overlays and missing profile files from recovery snapshots
 
 ## `repoverlay update`
 
-Update applied overlays from remote sources
+Update applied overlays, profile plugins, and APM profiles
 
 **Usage:** `repoverlay update [OPTIONS] [NAME]`
 
 ### Arguments
 
-* `<NAME>` — Name of the overlay to update (updates all GitHub overlays if not specified)
+* `<NAME>` — Name of the overlay or profile to update (updates all if not specified)
 
 ### Options
 
@@ -235,6 +235,7 @@ Update applied overlays from remote sources
 * `--skip-conflicts` — Skip conflicting files silently during update
 * `-i`, `--interactive` — Prompt interactively for each conflict during update
 * `--merge` — Deep merge conflicting JSON files instead of failing
+* `--allow-hooks` — Allow refreshed APM profiles to install hooks that run repository commands
 
 
 

@@ -42,6 +42,15 @@ pub(crate) struct ProfileConfig {
     /// applicator must not report them as skipped. Runtime-only.
     #[serde(skip)]
     pub(crate) handled_plugin_capabilities: Vec<String>,
+    #[serde(skip)]
+    pub(crate) apm: Option<ApmProfileSource>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub(crate) enum ApmProfileSource {
+    Package { reference: String },
+    Project,
 }
 
 /// A durable source placed at a repository-relative target.
@@ -396,6 +405,8 @@ pub(crate) struct ProfileState {
     pub(crate) skipped: Vec<SkippedCapability>,
     #[serde(default)]
     pub(crate) plugins: Vec<ProfilePluginEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) apm: Option<ApmProfileSource>,
 }
 
 /// Provenance for a managed plugin that was resolved, cached, and decomposed
@@ -607,6 +618,7 @@ profiles =
             files: Vec::new(),
             skipped: Vec::new(),
             plugins: Vec::new(),
+            apm: None,
         };
 
         save_profile_state(temp.path(), &state).unwrap();
@@ -630,6 +642,7 @@ profiles =
             files: Vec::new(),
             skipped: Vec::new(),
             plugins: Vec::new(),
+            apm: None,
         };
 
         save_profile_state(temp.path(), &state).unwrap();

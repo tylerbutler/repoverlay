@@ -155,13 +155,24 @@ pub(crate) fn replace_profile_config(
     target: &Path,
     profile: &crate::profile::ProfileConfig,
 ) -> Result<ProfileState> {
+    replace_profile_with(name, harness, target, || {
+        apply_profile_config(name, harness, target, profile)
+    })
+}
+
+fn replace_profile_with(
+    name: &str,
+    harness: AgentHarness,
+    target: &Path,
+    apply: impl FnOnce() -> Result<ProfileState>,
+) -> Result<ProfileState> {
     let state_path = crate::profile::profile_state_path(target, name, harness)?;
     if !state_path.exists() {
-        return apply_profile_config(name, harness, target, profile);
+        return apply();
     }
 
     remove_profile(name, harness, target)?;
-    match apply_profile_config(name, harness, target, profile) {
+    match apply() {
         Ok(state) => Ok(state),
         Err(apply_err) => {
             let manifest =
@@ -257,6 +268,7 @@ fn apply_profile_config_with_harness_home(
                 resolved_commit: p.resolved_commit.clone(),
             })
             .collect(),
+        apm: profile.apm.clone(),
     };
 
     // Keep a copy of the resolved actions so a successful apply can write a
@@ -539,7 +551,12 @@ pub(crate) fn profile_exclude_entries(target: &Path, state: &ProfileState) -> Ve
 /// (`remove` then `apply`). Resolution failures (for example a marketplace that
 /// is no longer registered) are reported and that profile is left untouched, so
 /// `update` never tears down a profile it cannot reconstruct.
-pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usize> {
+pub(crate) fn update_profile_plugins(
+    target: &Path,
+    name: Option<&str>,
+    dry_run: bool,
+    allow_hooks: bool,
+) -> Result<usize> {
     use crate::plugin::{InstallMode, PluginRef, ResolvedPlugin, resolve_plugin};
 
     // Match the canonical target used by `profile apply`/`remove`, so the
@@ -550,7 +567,7 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
     let states = crate::profile::list_applied_profile_states(target)?;
     let persistent: Vec<_> = states
         .into_iter()
-        .filter(|s| s.mode == ProfileMode::Persistent)
+        .filter(|s| s.mode == ProfileMode::Persistent && name.is_none_or(|name| s.name == name))
         .collect();
     if persistent.is_empty() {
         return Ok(0);
@@ -559,13 +576,30 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
     let config = crate::config::load_config(Some(target))?;
     let cache = crate::cache::CacheManager::new()?;
     let inspected = persistent.len();
+    if !dry_run {
+        for state in &persistent {
+            check_profile_removal_lock(&state.name, state.harness, target)?;
+        }
+    }
+    let mut failures = Vec::new();
 
     for state in persistent {
+        if state.apm.is_some()
+            || (!config.profiles.contains_key(&state.name)
+                && crate::cli::commands::apm::is_apm_profile(target, &state)?)
+        {
+            if let Err(err) =
+                crate::cli::commands::apm::update_profile(target, &state, dry_run, allow_hooks)
+            {
+                eprintln!("  ! {} ({}): {err:#}", state.name, state.harness);
+                failures.push(format!("{} ({}): {err:#}", state.name, state.harness));
+            }
+            continue;
+        }
         let Some(profile) = config.profiles.get(&state.name) else {
-            println!(
-                "  ? profile '{}' ({}) is no longer in config; skipping plugin update",
-                state.name, state.harness
-            );
+            failures.push(format!(
+                "Profile '{}' ({}) is no longer configured; restore its configuration before updating",
+                state.name, state.harness));
             continue;
         };
 
@@ -621,6 +655,10 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
                 "  ! skipping re-apply of '{}' ({}) due to resolution errors",
                 state.name, state.harness
             );
+            failures.push(format!(
+                "{} ({}) plugin resolution failed",
+                state.name, state.harness
+            ));
             continue;
         }
         if !changed {
@@ -638,29 +676,26 @@ pub(crate) fn update_profile_plugins(target: &Path, dry_run: bool) -> Result<usi
             continue;
         }
 
-        remove_profile(&state.name, state.harness, target).with_context(|| {
-            format!(
-                "Failed to remove '{}' ({}) before re-applying updated plugins",
-                state.name, state.harness
+        if let Err(err) = replace_profile_with(&state.name, state.harness, target, || {
+            apply_profile(
+                &state.name,
+                state.harness,
+                target,
+                ProfileMode::Persistent,
+                None,
             )
-        })?;
-        apply_profile(
-            &state.name,
-            state.harness,
-            target,
-            ProfileMode::Persistent,
-            None,
-        )
-        .with_context(|| {
-            format!(
-                "'{}' ({}) was removed but could not be re-applied with updated plugins; \
-                 re-apply it manually with `repoverlay profile apply`",
-                state.name, state.harness
-            )
-        })?;
+        }) {
+            failures.push(format!("{} ({}): {err:#}", state.name, state.harness));
+            continue;
+        }
         println!("  ✓ re-applied '{}' ({})", state.name, state.harness);
     }
 
+    anyhow::ensure!(
+        failures.is_empty(),
+        "Profile update failed:\n{}",
+        failures.join("\n")
+    );
     Ok(inspected)
 }
 
@@ -2043,6 +2078,8 @@ struct ProfileSnapshot {
     profile_fingerprint: String,
     #[serde(default)]
     plugins: Vec<crate::profile::ProfilePluginEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apm: Option<crate::profile::ApmProfileSource>,
     #[serde(default)]
     skipped: Vec<SkippedCapability>,
     /// Overlay state names this profile applied. Overlay files themselves are
@@ -2186,6 +2223,7 @@ fn save_external_profile_snapshot(
         applied_at: state.applied_at,
         profile_fingerprint: state.profile_fingerprint.clone(),
         plugins: state.plugins.clone(),
+        apm: state.apm.clone(),
         skipped: state.skipped.clone(),
         overlays: state.overlays.clone(),
         actions: snapshot_actions,
@@ -2503,6 +2541,7 @@ fn restore_profile_from_snapshot(target: &Path, snapshot: &ProfileSnapshot) -> R
         files: Vec::new(),
         skipped: snapshot.skipped.clone(),
         plugins: snapshot.plugins.clone(),
+        apm: snapshot.apm.clone(),
     };
 
     let restore_result = (|| -> Result<()> {
@@ -3001,6 +3040,7 @@ profiles =
                 }],
                 skipped: Vec::new(),
                 plugins: Vec::new(),
+                apm: None,
             },
         )
         .unwrap();
