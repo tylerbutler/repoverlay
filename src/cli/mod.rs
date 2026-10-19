@@ -159,7 +159,7 @@ enum Commands {
         quiet: bool,
     },
 
-    /// Restore overlays after git clean or other removal
+    /// Restore overlays and missing profile files from recovery snapshots
     Restore {
         /// Target repository directory (defaults to current directory)
         #[arg(short, long)]
@@ -854,6 +854,7 @@ pub(crate) fn run() -> Result<()> {
                     merge,
                     source_filter: from_source,
                     dry_run,
+                    reapply: false,
                 },
             )?;
         }

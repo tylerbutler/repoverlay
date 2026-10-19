@@ -12,7 +12,6 @@ use crate::apply_overlay;
 use crate::cache::CacheManager;
 use crate::canonicalize_path;
 use crate::github::GitHubSource;
-use crate::remove_single_overlay;
 use crate::state::{
     OVERLAYS_DIR, OverlaySource, STATE_DIR, SourceResolver, list_applied_overlays,
     load_overlay_state, normalize_overlay_name,
@@ -168,6 +167,14 @@ pub(crate) fn update_overlays(
         return Ok(());
     }
 
+    crate::remove::check_overlay_reapply(
+        &target,
+        &updates_available
+            .iter()
+            .map(|(name, ..)| name.as_str())
+            .collect::<Vec<_>>(),
+    )?;
+
     println!();
 
     // Apply updates
@@ -175,10 +182,6 @@ pub(crate) fn update_overlays(
         let state = load_overlay_state(&target, normalized_name.as_str())?;
 
         if let OverlaySource::GitHub { url, git_ref, .. } = &state.source {
-            // Remove old overlay
-            let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-            remove_single_overlay(&target, &overlays_dir, normalized_name.as_str())?;
-
             // Re-apply with update
             apply_overlay(
                 url,
@@ -187,6 +190,7 @@ pub(crate) fn update_overlays(
                     name_override: Some(state.name.clone()),
                     ref_override: Some(git_ref.clone()),
                     update_cache: true,
+                    reapply: true,
                     conflict_strategy,
                     merge,
                     ..ApplyOptions::default()

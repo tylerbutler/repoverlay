@@ -249,7 +249,11 @@ Removing an overlay preserves unrelated profile state, configuration, and librar
 files.
 
 APM profiles use the same external snapshots as configured profiles, so
-`repoverlay restore` can rebuild them after `git clean`.
+`repoverlay restore` can rebuild them after `git clean`. It also repairs missing
+profile files when applied state remains, including files inside managed plugin
+directories. Repair preserves existing files and the original removal backups.
+Use `--dry-run` to preview recovery. A live profile lock blocks recovery, and a
+failed profile recovery returns a nonzero exit code.
 
 ## Inspecting profiles
 

@@ -901,6 +901,41 @@ profiles =
 }
 
 #[test]
+fn restore_profile_failure_sets_exit_status_and_failure_summary() {
+    let ctx = TestContext::new();
+    let root = tempfile::TempDir::new().unwrap();
+    ctx.write_repo_config("profiles =\n  broken =\n    instructions =\n      =\n        content = Managed instructions.\n");
+    let cmd = |args: &[&str]| {
+        let mut cmd = cargo_bin_cmd!("repoverlay");
+        cmd.args(args)
+            .arg("--target")
+            .arg(ctx.repo_path())
+            .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .env("XDG_DATA_HOME", root.path().join("data"))
+            .env("REPOVERLAY_NO_UPDATE_CHECK", "1");
+        cmd
+    };
+    cmd(&["profile", "apply", "broken", "--harness", "copilot"])
+        .assert()
+        .success();
+    fs::remove_file(
+        ctx.repo_path()
+            .join(".repoverlay/profiles/broken.copilot.ccl"),
+    )
+    .unwrap();
+    fs::remove_file(ctx.repo_path().join("AGENTS.md")).unwrap();
+    fs::create_dir(ctx.repo_path().join("AGENTS.md")).unwrap();
+    cmd(&["restore"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to restore profiles"))
+        .stdout(predicate::str::contains("Failed: none").not())
+        .stdout(predicate::str::contains("profiles:"));
+    assert!(!ctx.file_exists(".repoverlay/profiles/broken.copilot.ccl"));
+    assert!(ctx.repo_path().join("AGENTS.md").is_dir());
+}
+
+#[test]
 fn restore_rebuilds_profile_after_git_clean() {
     let ctx = TestContext::new();
     let config_dir = tempfile::TempDir::new().unwrap();
@@ -3015,7 +3050,16 @@ fn profile_owned_overlays_block_standalone_removal_and_switch() {
             }
         }
     }
+    cmd(&["restore"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("currently in use"));
+    assert!(ctx.file_exists(".independent"));
+    assert!(ctx.file_exists(".envrc"));
     fs::remove_file(lock).unwrap();
+    cmd(&["restore"]).assert().success();
+    assert!(ctx.file_exists(".envrc"));
+    assert!(ctx.file_exists(".independent"));
     cmd(&["profile", "remove", "owner", "--harness", "copilot"])
         .assert()
         .success();
@@ -3987,7 +4031,21 @@ esac
                     .iter()
                     .any(|file| file["target"] == command_target && file["status"] == "missing")
             );
-            fs::write(ctx.repo_path().join(command_target), "# Demo\n").unwrap();
+            let state_path = ctx
+                .repo_path()
+                .join(format!(".repoverlay/profiles/{profile_name}.{harness}.ccl",));
+            let original_state = fs::read(&state_path).unwrap();
+            cmd(&["restore", "--dry-run"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(profile_name));
+            assert!(!ctx.file_exists(command_target));
+            cmd(&["restore"])
+                .assert()
+                .success()
+                .stdout(predicate::str::contains("Restored 1 profile"));
+            assert!(ctx.file_exists(command_target));
+            assert_eq!(fs::read(&state_path).unwrap(), original_state);
 
             cmd(&["remove", "--all", "--dry-run"])
                 .assert()

@@ -60,7 +60,7 @@ Overlay config files into git repositories without committing them
 * `apply` — Apply an overlay to a git repository (scripting / power-user)
 * `remove` — Remove applied overlays and profiles
 * `status` — Show the status of applied overlays and profiles
-* `restore` — Restore overlays after git clean or other removal
+* `restore` — Restore overlays and missing profile files from recovery snapshots
 * `update` — Update applied overlays from remote sources
 * `create` — Create a new overlay from files in a repository
 * `move` — Move an overlay to a new location
@@ -202,7 +202,7 @@ Show the status of applied overlays and profiles
 
 ## `repoverlay restore`
 
-Restore overlays after git clean or other removal
+Restore overlays and missing profile files from recovery snapshots
 
 **Usage:** `repoverlay restore [OPTIONS]`
 

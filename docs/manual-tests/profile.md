@@ -228,6 +228,25 @@ with its skill and context region intact. In the dry run, select the remaining
 profile. It must remain applied. Select that profile in the last menu to remove
 it. Expect final exit code 1. The configuration must remain.
 
+### TC-10: Repair missing profile files while state remains
+
+```bash
+repoverlay profile apply manual-profile --harness "$HARNESS"
+SKILL=.claude/skills/demo/SKILL.md
+if [ "$HARNESS" = copilot ]; then SKILL=.agents/skills/demo/SKILL.md; fi
+rm -- "$SKILL"
+repoverlay restore --dry-run
+test ! -f "$SKILL"
+repoverlay restore
+test -f "$SKILL"
+repoverlay status --name manual-profile
+repoverlay profile remove manual-profile --harness "$HARNESS"
+```
+
+The dry run must include `manual-profile` without restoring the file. Recovery
+must restore the skill while retaining the original state and removal backups.
+Removal must restore the user context.
+
 ## Cleanup
 
 Exit the test shell to restore your environment. Remove only the disposable

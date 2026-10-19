@@ -156,6 +156,8 @@ pub(crate) struct ApplyOptions {
     pub(crate) ref_override: Option<String>,
     /// Refresh cached GitHub sources before resolving.
     pub(crate) update_cache: bool,
+    /// Replace an existing application during restore/update, checking profile locks.
+    pub(crate) reapply: bool,
     /// How conflicts with existing files and overlays are handled.
     pub(crate) conflict_strategy: ConflictStrategy,
     /// Merge JSON files on conflict instead of failing.
@@ -667,19 +669,23 @@ pub(crate) fn apply_resolved_overlay(
     let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
     let overlay_state_path = overlays_dir.join(format!("{normalized_name}.ccl"));
     if overlay_state_path.exists() {
-        match conflict_strategy {
-            ConflictStrategy::Force | ConflictStrategy::Interactive => {
-                println!(
-                    "  {} Removing existing overlay '{}'",
-                    "Force:".yellow(),
-                    overlay_name
-                );
-                remove_single_overlay(target, &overlays_dir, &normalized_name)?;
-            }
-            ConflictStrategy::Fail | ConflictStrategy::SkipConflicts => {
-                bail!(
-                    "Overlay '{overlay_name}' is already applied. Run 'repoverlay remove {normalized_name}' first, or use --force."
-                );
+        if options.reapply {
+            remove::remove_overlay_for_reapply(target, &normalized_name)?;
+        } else {
+            match conflict_strategy {
+                ConflictStrategy::Force | ConflictStrategy::Interactive => {
+                    println!(
+                        "  {} Removing existing overlay '{}'",
+                        "Force:".yellow(),
+                        overlay_name
+                    );
+                    remove_single_overlay(target, &overlays_dir, &normalized_name)?;
+                }
+                ConflictStrategy::Fail | ConflictStrategy::SkipConflicts => {
+                    bail!(
+                        "Overlay '{overlay_name}' is already applied. Run 'repoverlay remove {normalized_name}' first, or use --force."
+                    );
+                }
             }
         }
     }
@@ -1056,14 +1062,20 @@ pub(crate) fn apply_multiple_overlays(
     // Phase 1: Check for conflicts between selected overlays
     check_overlay_conflicts(sources)?;
 
-    if matches!(
-        conflict_strategy,
-        ConflictStrategy::Force | ConflictStrategy::Interactive
-    ) {
+    if options.reapply
+        || matches!(
+            conflict_strategy,
+            ConflictStrategy::Force | ConflictStrategy::Interactive
+        )
+    {
         for resolved in sources {
             let config = load_overlay_config(&resolved.path)?;
             let name = determine_overlay_name(&config, &resolved.path, None)?;
-            remove::check_overlay_removal(&target, &[name.as_str()])?;
+            if options.reapply {
+                remove::check_overlay_reapply(&target, &[name.as_str()])?;
+            } else {
+                remove::check_overlay_removal(&target, &[name.as_str()])?;
+            }
         }
     }
 
@@ -1079,23 +1091,28 @@ pub(crate) fn apply_multiple_overlays(
             .join(format!("{overlay_name}.ccl"));
 
         if overlay_state_path.exists() {
-            match conflict_strategy {
-                ConflictStrategy::Force | ConflictStrategy::Interactive => {
-                    println!(
-                        "  {} Removing existing overlay '{}' (batch mode)",
-                        "Force:".yellow(),
-                        overlay_name
-                    );
-                    let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
-                    remove_single_overlay(&target, &overlays_dir, &overlay_name)?;
-                    // Reload targets so subsequent conflict checks see fresh state
-                    existing_targets = load_all_overlay_targets(&target)?;
-                }
-                ConflictStrategy::Fail | ConflictStrategy::SkipConflicts => {
-                    bail!(
-                        "Overlay '{overlay_name}' is already applied. \
-                         Run 'repoverlay remove {overlay_name}' first, or use --force."
-                    );
+            if options.reapply {
+                remove::remove_overlay_for_reapply(&target, &overlay_name)?;
+                existing_targets = load_all_overlay_targets(&target)?;
+            } else {
+                match conflict_strategy {
+                    ConflictStrategy::Force | ConflictStrategy::Interactive => {
+                        println!(
+                            "  {} Removing existing overlay '{}' (batch mode)",
+                            "Force:".yellow(),
+                            overlay_name
+                        );
+                        let overlays_dir = target.join(STATE_DIR).join(OVERLAYS_DIR);
+                        remove_single_overlay(&target, &overlays_dir, &overlay_name)?;
+                        // Reload targets so subsequent conflict checks see fresh state
+                        existing_targets = load_all_overlay_targets(&target)?;
+                    }
+                    ConflictStrategy::Fail | ConflictStrategy::SkipConflicts => {
+                        bail!(
+                            "Overlay '{overlay_name}' is already applied. \
+                             Run 'repoverlay remove {overlay_name}' first, or use --force."
+                        );
+                    }
                 }
             }
         }

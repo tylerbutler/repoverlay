@@ -86,6 +86,28 @@ pub(crate) fn check_overlay_removal(target: &Path, names: &[&str]) -> Result<()>
     check_overlay_owners(target, names, None)
 }
 
+pub(crate) fn check_overlay_reapply(target: &Path, names: &[&str]) -> Result<()> {
+    for profile in crate::profile_plan::list_profile_states(target)? {
+        if profile
+            .overlays
+            .iter()
+            .any(|overlay| names.contains(&overlay.as_str()))
+        {
+            crate::profile_plan::check_profile_removal_lock(
+                &profile.name,
+                profile.harness,
+                target,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_overlay_for_reapply(target: &Path, name: &str) -> Result<()> {
+    check_overlay_reapply(target, &[name])?;
+    remove_single_overlay_files(target, &target.join(STATE_DIR).join(OVERLAYS_DIR), name)
+}
+
 fn check_overlay_owners(
     target: &Path,
     names: &[&str],

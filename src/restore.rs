@@ -98,6 +98,20 @@ pub(crate) fn restore_overlays(
 
     println!();
 
+    for profile in &restorable_profiles {
+        crate::profile_plan::check_profile_removal_lock(&profile.name, profile.harness, &target)?;
+    }
+    crate::remove::check_overlay_reapply(
+        &target,
+        &external_states
+            .iter()
+            .map(|state| crate::state::normalize_overlay_name(&state.name))
+            .collect::<Result<Vec<_>>>()?
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    )?;
+
     // Restore each overlay
     let mut restored = Vec::new();
     let mut failures = Vec::new();
@@ -105,21 +119,22 @@ pub(crate) fn restore_overlays(
     for state in external_states {
         let (source_str, ref_override) = state.source.reapply_reference();
         let ref_override = ref_override.map(str::to_string);
-
         // Re-apply the overlay. Always use Force since restore's purpose is to
         // re-create missing/broken symlinks from external backup state.
-        match apply_overlay(
+        let result = apply_overlay(
             &source_str,
             &target,
             &ApplyOptions {
                 name_override: Some(state.name.clone()),
                 ref_override,
                 update_cache: true,
+                reapply: true,
                 conflict_strategy: ConflictStrategy::Force,
                 merge,
                 ..ApplyOptions::default()
             },
-        ) {
+        );
+        match result {
             Ok(()) => {
                 println!("  {} Restored '{}'", "✓".green(), state.name);
                 restored.push(state.name.clone());
@@ -146,9 +161,11 @@ pub(crate) fn restore_overlays(
                     "  {} Restored {count} profile(s).",
                     "Profiles:".cyan().bold()
                 );
+                restored.push(format!("{count} profile(s)"));
             }
             Err(e) => {
-                eprintln!("  {} Failed to restore profiles: {}", "Error:".red(), e);
+                eprintln!("  {} Failed to restore profiles: {e:#}", "Error:".red());
+                failures.push(("profiles".to_string(), format!("{e:#}")));
             }
         }
     }
@@ -179,8 +196,13 @@ pub(crate) fn restore_overlays(
         } else {
             restored.join(", ")
         };
+        let kind = if failures.iter().any(|(name, _)| name == "profiles") {
+            "item(s)"
+        } else {
+            "overlay(s)"
+        };
         bail!(
-            "Failed to restore {} overlay(s): {failed_names}. Restored: {restored_names}",
+            "Failed to restore {} {kind}: {failed_names}. Restored: {restored_names}",
             failures.len()
         );
     }
