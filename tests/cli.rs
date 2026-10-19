@@ -3015,6 +3015,10 @@ fn profile_owned_overlays_block_standalone_removal_and_switch() {
         .clone();
     let state: serde_json::Value = serde_json::from_slice(&output).unwrap();
     let owned = state["profiles"][0]["overlays"][0].as_str().unwrap();
+    cmd(&["remove", "--all", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("Overlay: {owned}")));
     let lock = ctx
         .repo_path()
         .join(".repoverlay/profiles/owner.copilot.lock");

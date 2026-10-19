@@ -49,6 +49,12 @@ pub(crate) fn remove_selected(
         );
         for profile in profiles {
             println!("  - Profile: {} ({})", profile.name, profile.harness);
+            for overlay in profile.overlays {
+                println!(
+                    "  - Overlay: {overlay} (owned by profile '{}')",
+                    profile.name
+                );
+            }
         }
         for overlay in overlays {
             println!("  - Overlay: {overlay}");
