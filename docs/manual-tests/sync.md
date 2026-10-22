@@ -87,9 +87,6 @@ echo "Exit code: $?"
 
 ### TC-03: Sync --all with only local overlays applied
 
-> **Known issue:** [#205](https://github.com/tylerbutler/repoverlay/issues/205) —
-> `sync --all` does not gracefully skip local-source overlays.
-
 **Steps:**
 
 ```bash
@@ -114,15 +111,11 @@ repoverlay sync --all --target ./target-repo
 echo "Exit code: $?"
 ```
 
-**Expected Output (after #205 is fixed):**
+**Expected Output:**
 
 - Messages indicating each overlay skipped (local sources not syncable)
-- Summary like "Synced 0 overlay(s), skipped 2"
-
-**Current Output:**
-
-- `Error: Failed to pull overlay repository` — attempts remote pull instead of skipping
-- Non-zero exit code
+- Summary `Synced 0 overlay(s), skipped 2`
+- Exit code 0; no remote pull
 
 **Verify:**
 

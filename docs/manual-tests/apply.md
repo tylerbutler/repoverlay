@@ -133,8 +133,8 @@ repoverlay apply ./my-overlay --target ./target-dry --dry-run
 
 **Expected Output:**
 
-- Shows what would be applied without making changes
-- Lists files that would be created
+- Prints `Would apply overlay from:` with the local source path
+- Reports `Dry run - no changes made.`; does not list individual files
 
 **Verify:**
 

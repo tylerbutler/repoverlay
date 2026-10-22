@@ -87,8 +87,8 @@ repoverlay restore --target "$TEST_DIR/target-repo" --dry-run
 
 **Expected Output:**
 
-- Shows what would be restored without making changes
-- Lists files that would be recreated
+- Lists `my-overlay` and its source under `Found 1 overlay(s) to restore:`
+- Reports `Dry run - no changes made.`; does not list individual files
 
 **Verify:**
 
