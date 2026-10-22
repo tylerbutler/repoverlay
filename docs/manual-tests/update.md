@@ -31,7 +31,7 @@ repoverlay apply ./my-overlay --target ./target-repo
 
 ## Test Cases
 
-### TC-01: Apply local overlay, modify source, run update
+### TC-01: Local symlinks reflect source edits without update
 
 **Steps:**
 
@@ -41,26 +41,29 @@ cd "$TEST_DIR"
 # Modify the overlay source file to simulate an update
 echo "version 2" > my-overlay/.config
 
+cat "$TEST_DIR/target-repo/.config"
+# Should already contain "version 2", before update runs
+
 # Run update
 repoverlay update --target ./target-repo
 ```
 
 **Expected Output:**
 
-- Message indicating overlay updated or files refreshed
+- Reports `my-overlay is a local overlay (not updatable)`
+- Reports `All overlays are up to date.` and exits with code 0
 
 **Verify:**
 
 ```bash
 cat "$TEST_DIR/target-repo/.config"
-# For symlink mode: should already reflect "version 2" (symlinks auto-update)
-# For copy mode: update would replace the copied file with new content
+# Should still contain "version 2" through the existing symlink
 
 repoverlay status --target "$TEST_DIR/target-repo"
 # Should show my-overlay as applied
 ```
 
-### TC-02: Update with --dry-run
+### TC-02: Update --dry-run skips local overlays
 
 **Steps:**
 
@@ -70,17 +73,25 @@ cd "$TEST_DIR"
 # Modify source again
 echo "version 3" > my-overlay/.config
 
+cp "$TEST_DIR/target-repo/.repoverlay/overlays/my-overlay.ccl" "$TEST_DIR/state-before-dry-run.ccl"
 repoverlay update --target ./target-repo --dry-run
 ```
 
 **Expected Output:**
 
-- Shows what would be updated without making changes
-- Lists any files that would change
+- Reports `my-overlay is a local overlay (not updatable)`
+- Reports `All overlays are up to date.` and exits with code 0
+- Does not replace files or change overlay state; local overlays have no remote update to preview
 
 **Verify:**
 
 ```bash
+cat "$TEST_DIR/target-repo/.config"
+# Should contain "version 3" because the source edit is visible through the symlink
+
+cmp "$TEST_DIR/state-before-dry-run.ccl" "$TEST_DIR/target-repo/.repoverlay/overlays/my-overlay.ccl"
+# Should succeed; dry-run did not change overlay state
+
 repoverlay status --target "$TEST_DIR/target-repo"
 # Should show my-overlay still applied (dry-run made no state changes)
 ```
@@ -108,8 +119,8 @@ repoverlay update my-overlay --target ./target-repo
 
 **Expected Output:**
 
-- Only my-overlay is updated
-- other-overlay is not affected
+- Reports only `my-overlay` as a local overlay that is not updatable
+- Does not process `other-overlay`; both overlays remain unchanged
 
 **Verify:**
 
@@ -131,7 +142,8 @@ repoverlay update --target ./target-repo
 
 **Expected Output:**
 
-- Message indicating no remote overlays to update, or that local overlays are up to date
+- Reports both local overlays as not updatable
+- Reports `All overlays are up to date.` and exits with code 0
 
 **Verify:**
 

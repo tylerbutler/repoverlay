@@ -7,17 +7,24 @@
 
 ## Setup
 
+Run in a new shell. Local sources must be directories inside the current Git
+repository. Use a filesystem path, not a `file://` URL.
+
 ```bash
 TEST_DIR=$(mktemp -d)
+export XDG_CONFIG_HOME="$TEST_DIR/config"
+export XDG_DATA_HOME="$TEST_DIR/data"
+export XDG_CACHE_HOME="$TEST_DIR/cache"
+export REPOVERLAY_CACHE_DIR="$TEST_DIR/cache"
+export REPOVERLAY_NO_UPDATE_CHECK=1
 cd "$TEST_DIR"
 
 # Create a target git repository
 mkdir target-repo && cd target-repo
 git init
 git commit --allow-empty -m "init"
-cd "$TEST_DIR"
 
-# Create a local directory to use as a source
+# Keep the local source inside target-repo
 mkdir -p local-source/my-overlay
 cat > local-source/my-overlay/repoverlay.ccl << 'CCL'
 overlay =
@@ -25,35 +32,32 @@ overlay =
 CCL
 echo "overlay content" > local-source/my-overlay/.config
 
-# Initialize local-source as a git repo (sources typically need to be git repos)
-cd local-source
-git init
-git add . && git commit -m "init overlay source"
-cd "$TEST_DIR"
+printf 'Disposable test directory: %s\n' "$TEST_DIR"
 ```
 
 ## Test Cases
 
-### TC-01: source add with a file:// URL
+### TC-01: source add with an absolute local path
 
 **Steps:**
 
 ```bash
-cd "$TEST_DIR"
+cd "$TEST_DIR/target-repo"
 
-repoverlay source add "file://$TEST_DIR/local-source" --name local
+repoverlay source add "$TEST_DIR/target-repo/local-source" --name local
 ```
 
 **Expected Output:**
 
 - Success message indicating source added
-- Source name "local" configured
+- Source name "local" configured in `target-repo/.repoverlay/config.ccl`
+- Repository-relative path `local-source`
 
 **Verify:**
 
 ```bash
 repoverlay source list
-# Should show "local" source pointing to the file:// URL
+# Should show "local (path: local-source)" under Repository sources
 ```
 
 ### TC-02: source list
@@ -61,7 +65,7 @@ repoverlay source list
 **Steps:**
 
 ```bash
-cd "$TEST_DIR"
+cd "$TEST_DIR/target-repo"
 
 repoverlay source list
 ```
@@ -75,14 +79,14 @@ repoverlay source list
 
 Visual inspection that the source list includes:
 - Source name ("local")
-- Source URL or path
+- Repository-relative path (`local-source`)
 
 ### TC-03: source remove
 
 **Steps:**
 
 ```bash
-cd "$TEST_DIR"
+cd "$TEST_DIR/target-repo"
 
 repoverlay source remove local
 ```
@@ -95,28 +99,28 @@ repoverlay source remove local
 
 ```bash
 repoverlay source list
-# Should NOT show "local" source anymore (empty list or other sources only)
+# Should report "No overlay sources configured."
 ```
 
-### TC-04: source add duplicate (file:// URL)
+### TC-04: source add duplicate local path
 
 **Steps:**
 
 ```bash
-cd "$TEST_DIR"
+cd "$TEST_DIR/target-repo"
 
-# Add the source back using file:// URL
-repoverlay source add "file://$TEST_DIR/local-source" --name local
+# Add the source back
+repoverlay source add "$TEST_DIR/target-repo/local-source" --name local
 
 # Try adding the same source again
-repoverlay source add "file://$TEST_DIR/local-source" --name local
+repoverlay source add "$TEST_DIR/target-repo/local-source" --name local
 echo "Exit code: $?"
 ```
 
 **Expected Output:**
 
-- Error message indicating source already exists, or updates the existing source
-- Behavior should be clear and predictable
+- First add succeeds
+- Second add reports `Source 'local' already exists` and exits with code 1
 
 **Verify:**
 
@@ -130,7 +134,7 @@ repoverlay source list
 **Steps:**
 
 ```bash
-cd "$TEST_DIR"
+cd "$TEST_DIR/target-repo"
 
 # Replace with a real GitHub URL
 repoverlay source add https://github.com/OWNER/REPO --name github-source
@@ -149,6 +153,5 @@ repoverlay source list
 
 ## Cleanup
 
-```bash
-rm -rf "$TEST_DIR"
-```
+Exit the test shell to restore your environment. Remove only the disposable
+directory printed during Setup after you record the results.
