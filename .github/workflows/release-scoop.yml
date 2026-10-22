@@ -1,0 +1,54 @@
+name: Update Scoop bucket
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-scoop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Scoop manifest
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION="${TAG#v}"
+          ASSET_URL="https://github.com/tylerbutler/repoverlay/releases/download/${TAG}/repoverlay-x86_64-pc-windows-msvc.zip"
+
+          # Download checksum file
+          HASH=$(curl -sL "${ASSET_URL}.sha256" | awk '{print $1}')
+
+          # Generate updated manifest
+          cat > manifest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "description": "Overlay config files into git repositories without committing them",
+            "homepage": "https://github.com/tylerbutler/repoverlay",
+            "license": "MIT",
+            "architecture": {
+              "64bit": {
+                "url": "${ASSET_URL}",
+                "hash": "${HASH}"
+              }
+            },
+            "bin": "repoverlay.exe",
+            "checkver": {
+              "github": "https://github.com/tylerbutler/repoverlay"
+            },
+            "autoupdate": {
+              "architecture": {
+                "64bit": {
+                  "url": "https://github.com/tylerbutler/repoverlay/releases/download/v\$version/repoverlay-x86_64-pc-windows-msvc.zip"
+                }
+              }
+            }
+          }
+          EOF
+
+          # Push to scoop-bucket repo
+          gh api repos/tylerbutler/scoop-bucket/contents/repoverlay.json \
+            --method PUT \
+            --field message="Update repoverlay to ${VERSION}" \
+            --field content="$(base64 -w0 manifest.json)" \
+            --field sha="$(gh api repos/tylerbutler/scoop-bucket/contents/repoverlay.json --jq .sha)"
